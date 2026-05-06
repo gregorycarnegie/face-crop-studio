@@ -256,6 +256,14 @@ pub fn gpu_pill(ui: &mut Ui, label: &str) {
     painter.galley(r.min + Vec2::new(22.0, (total_h - galley.size().y) / 2.0), galley, P::LIME);
 }
 
+// ── Field label ───────────────────────────────────────────────────────────────
+
+pub fn field_label(ui: &mut Ui, text: &str) {
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(text).size(10.0).color(P::INK3).family(egui::FontFamily::Monospace));
+    ui.add_space(2.0);
+}
+
 // ── Separators ────────────────────────────────────────────────────────────────
 
 pub fn tb_sep(ui: &mut Ui) {

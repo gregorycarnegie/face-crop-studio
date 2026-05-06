@@ -2,8 +2,9 @@
 
 use crate::theme::P;
 use crate::types::{App2, InspectorTab};
+use crate::ui::shape::shape_controls;
 use crate::ui::widgets::{
-    color_swatch_input, panel_header, segmented_control, slider_with_label, toggle_row,
+    color_swatch_input, field_label, panel_header, segmented_control, slider_with_label, toggle_row,
 };
 use egui::{Sense, Stroke, Ui, Vec2};
 
@@ -103,9 +104,10 @@ fn stat_cell(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32, 
 
 fn crop_tab(ui: &mut Ui, app: &mut App2) {
     panel_01_crop_framing(ui, app);
-    panel_02_positioning(ui, app);
-    panel_03_crops_ready(ui, app);
-    panel_04_enhancement(ui, app);
+    panel_02_crop_shape(ui, app);
+    panel_03_positioning(ui, app);
+    panel_04_crops_ready(ui, app);
+    panel_05_enhancement(ui, app);
 }
 
 fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
@@ -198,9 +200,24 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
     separator_line(ui);
 }
 
-fn panel_02_positioning(ui: &mut Ui, app: &mut App2) {
+fn panel_02_crop_shape(ui: &mut Ui, app: &mut App2) {
+    let open = &mut app.panel_state.crop_shape;
+    let toggled = panel_header(ui, "02", "Crop shape", *open);
+    if toggled { *open = !*open; }
+    if !*open { return; }
+
+    ui.add_space(4.0);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
+        shape_controls(ui, app);
+        ui.add_space(6.0);
+    });
+    separator_line(ui);
+}
+
+fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
     let open = &mut app.panel_state.positioning;
-    let toggled = panel_header(ui, "02", "Positioning", *open);
+    let toggled = panel_header(ui, "03", "Positioning", *open);
     if toggled { *open = !*open; }
     if !*open { return; }
 
@@ -252,11 +269,11 @@ fn panel_02_positioning(ui: &mut Ui, app: &mut App2) {
     separator_line(ui);
 }
 
-fn panel_03_crops_ready(ui: &mut Ui, app: &mut App2) {
+fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
     let n_ready = app.selected_faces.len();
     let label = format!("Crops  {} ready", n_ready);
     let open = &mut app.panel_state.crops_ready;
-    let toggled = panel_header(ui, "03", &label, *open);
+    let toggled = panel_header(ui, "04", &label, *open);
     if toggled { *open = !*open; }
     if !*open { return; }
 
@@ -310,9 +327,9 @@ fn panel_03_crops_ready(ui: &mut Ui, app: &mut App2) {
     separator_line(ui);
 }
 
-fn panel_04_enhancement(ui: &mut Ui, app: &mut App2) {
+fn panel_05_enhancement(ui: &mut Ui, app: &mut App2) {
     let open = &mut app.panel_state.enhancement;
-    let toggled = panel_header(ui, "04", "Enhancement", *open);
+    let toggled = panel_header(ui, "05", "Enhancement", *open);
     if toggled { *open = !*open; }
     if !*open { return; }
 
@@ -392,12 +409,6 @@ fn enhance_tab(ui: &mut Ui, app: &mut App2) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn field_label(ui: &mut Ui, text: &str) {
-    ui.add_space(2.0);
-    ui.label(egui::RichText::new(text).size(10.0).color(P::INK3).family(egui::FontFamily::Monospace));
-    ui.add_space(2.0);
-}
 
 fn separator_line(ui: &mut Ui) {
     let (_, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 1.0), Sense::hover());

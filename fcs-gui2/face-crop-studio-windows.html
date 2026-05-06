@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Face Crop Studio — Windows Desktop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0f1c;
+    --bg-1:#101729;
+    --bg-2:#15203a;
+    --surface:#0f1626;
+    --surface-2:#131c30;
+    --rule:#1d2742;
+    --rule-2:#2a365a;
+    --ink:#f5f4ee;
+    --ink-2:#a4adc7;
+    --ink-3:#6c7491;
+    --peach:#ffb89a;
+    --peach-deep:#ff8556;
+    --cyan:#7be0d6;
+    --lime:#d8f06a;
+    --rose:#ff6b8b;
+    --display:'Plus Jakarta Sans',-apple-system,system-ui,sans-serif;
+    --sans:'Plus Jakarta Sans',-apple-system,'Segoe UI',system-ui,sans-serif;
+    --mono:'DM Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;height:100%;overflow:hidden}
+
+  /* Desktop wallpaper background to give Windows-app feel */
+  body{
+    background:
+      radial-gradient(1200px 800px at 20% 10%, #2a3a5a 0%, transparent 50%),
+      radial-gradient(900px 700px at 90% 90%, #4a3050 0%, transparent 50%),
+      linear-gradient(135deg,#0d1424,#1a2238 60%, #251a30);
+    display:grid;place-items:center;padding:24px;
+    min-height:100vh;
+  }
+
+  /* ===== APP WINDOW (Windows 11 chrome) ===== */
+  .app-window{
+    width:min(1480px,100%);
+    height:min(920px,calc(100vh - 48px));
+    border-radius:10px;
+    background:var(--bg);
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,.05),
+      0 50px 120px -30px rgba(0,0,0,.85),
+      0 30px 60px -20px rgba(0,0,0,.6);
+    display:grid;
+    grid-template-rows:36px 32px 52px 1fr 28px;
+    overflow:hidden;
+    position:relative;
+  }
+  .app-window::before{
+    content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+    background-size:96px 96px;
+    -webkit-mask-image: radial-gradient(1400px 900px at 50% 0%, black, transparent 80%);
+    mask-image:radial-gradient(1400px 900px at 50% 0%, black, transparent 80%);
+  }
+  .app-window > *{position:relative;z-index:1}
+
+  /* ===== TITLE BAR ===== */
+  .titlebar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 0 0 12px;
+    background:linear-gradient(180deg,rgba(255,255,255,.025),transparent);
+    border-bottom:1px solid var(--rule);
+    -webkit-app-region:drag;
+    -moz-app-region:drag;
+  }
+  .title-l{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--ink-2);font-weight:500}
+  .logo{
+    width:18px;height:18px;border-radius:50%;
+    background:conic-gradient(from 220deg, var(--peach), var(--rose), var(--cyan), var(--lime), var(--peach));
+    position:relative;flex-shrink:0
+  }
+  .logo::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--bg)}
+  .logo::before{content:"";position:absolute;inset:7px;border-radius:50%;background:var(--peach);box-shadow:0 0 4px var(--peach)}
+  .title-l .name{color:var(--ink);font-weight:600}
+  .title-l .sep{color:var(--rule-2)}
+  .title-l .doc{font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+  .title-l .doc .mod{color:var(--peach)}
+  .title-r{display:flex;-webkit-app-region:no-drag;-moz-app-region:no-drag}
+  .winbtn{
+    width:46px;height:36px;display:grid;place-items:center;
+    color:var(--ink-2);transition:.12s;
+  }
+  .winbtn:hover{background:rgba(255,255,255,.06);color:var(--ink)}
+  .winbtn.close:hover{background:#e81123;color:#fff}
+  .winbtn svg{width:11px;height:11px}
+
+  /* ===== MENU BAR ===== */
+  .menubar{
+    display:flex;align-items:center;gap:2px;padding:0 8px;
+    background:rgba(255,255,255,.012);
+    border-bottom:1px solid var(--rule);
+    font-size:13px;
+  }
+  .menu-item{
+    padding:6px 10px;border-radius:5px;color:var(--ink-2);font-weight:500;
+    cursor:default;-webkit-user-select:none;user-select:none;
+  }
+  .menu-item:hover{background:rgba(255,255,255,.06);color:var(--ink)}
+  .menu-item u{text-decoration:none;border-bottom:1px dotted var(--ink-3)}
+  .menu-spacer{flex:1}
+  .menu-r{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);padding-right:6px}
+  .menu-r .pulse{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 6px var(--lime);animation:pulse 1.6s ease infinite}
+  @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
+
+  /* ===== TOOLBAR (ribbon-ish) ===== */
+  .toolbar{
+    display:flex;align-items:center;gap:8px;padding:8px 12px;
+    background:rgba(15,22,38,.6);
+    border-bottom:1px solid var(--rule);
+    overflow-x:auto;
+  }
+  .tb-group{display:flex;gap:4px;align-items:center}
+  .tb-sep{width:1px;height:24px;background:var(--rule);margin:0 4px}
+  .btn{
+    padding:8px 13px;border-radius:8px;font-weight:600;font-size:12.5px;
+    display:inline-flex;align-items:center;gap:7px;line-height:1;transition:.12s;
+    border:1px solid transparent;font-family:inherit;cursor:pointer;color:inherit;background:none;
+    white-space:nowrap;
+  }
+  .btn-primary{
+    color:var(--bg);background:linear-gradient(135deg,var(--cyan),#5dc8be);
+    box-shadow:0 6px 16px -8px rgba(123,224,214,.5)
+  }
+  .btn-primary:hover{filter:brightness(1.06)}
+  .btn-peach{
+    color:var(--bg);background:linear-gradient(135deg,var(--peach),var(--peach-deep));
+    box-shadow:0 6px 16px -8px rgba(255,133,86,.5)
+  }
+  .btn-peach:hover{filter:brightness(1.06)}
+  .btn-ghost{color:var(--ink);border-color:var(--rule-2);background:rgba(255,255,255,.02)}
+  .btn-ghost:hover{background:rgba(255,255,255,.06)}
+  .btn-danger{color:var(--rose);border-color:rgba(255,107,139,.25);background:rgba(255,107,139,.05)}
+  .btn-danger:hover{background:rgba(255,107,139,.12)}
+  .btn-icon{padding:8px;min-width:32px;justify-content:center}
+  .btn .arr{transition:.18s}
+  .btn:hover .arr{transform:translateX(2px)}
+  .toolbar .right{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .gpu-pill{
+    display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;
+    font-family:var(--mono);font-size:10.5px;color:var(--lime);
+    background:rgba(216,240,106,.08);border:1px solid rgba(216,240,106,.3)
+  }
+  .gpu-pill .d{width:6px;height:6px;border-radius:50%;background:var(--lime);box-shadow:0 0 6px var(--lime)}
+
+  /* ===== MAIN GRID: sidebar | canvas | inspector ===== */
+  .main{
+    display:grid;
+    grid-template-columns:300px 1fr 340px;
+    min-height:0;
+    background:var(--bg);
+  }
+  .sidebar{
+    border-right:1px solid var(--rule);
+    background:var(--surface);
+    display:flex;flex-direction:column;min-height:0;
+  }
+  .canvas-col{
+    display:flex;flex-direction:column;min-width:0;background:var(--bg-1);
+  }
+  .inspector{
+    border-left:1px solid var(--rule);
+    background:var(--surface);
+    display:flex;flex-direction:column;min-height:0;
+  }
+
+  /* SIDEBAR TABS */
+  .sb-tabs{
+    display:flex;border-bottom:1px solid var(--rule);
+    background:rgba(0,0,0,.2);font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  }
+  .sb-tab{
+    flex:1;padding:9px 0;text-align:center;color:var(--ink-3);
+    border-bottom:2px solid transparent;cursor:pointer;transition:.12s;
+  }
+  .sb-tab:hover{color:var(--ink-2)}
+  .sb-tab.active{color:var(--peach);border-bottom-color:var(--peach);background:rgba(255,184,154,.04)}
+  .sb-scroll{flex:1;overflow-y:auto;padding:4px 0}
+  .sb-scroll::-webkit-scrollbar,.in-scroll::-webkit-scrollbar,.log-body::-webkit-scrollbar{width:8px}
+  .sb-scroll::-webkit-scrollbar-thumb,.in-scroll::-webkit-scrollbar-thumb,.log-body::-webkit-scrollbar-thumb{background:var(--rule-2);border-radius:8px}
+
+  /* PANEL (collapsible) */
+  .panel{border-bottom:1px solid var(--rule)}
+  .panel:last-child{border-bottom:0}
+  .p-head{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:11px 14px;cursor:pointer;-webkit-user-select:none;user-select:none;gap:10px;
+  }
+  .p-head h3{
+    margin:0;font-size:12.5px;font-weight:600;color:var(--ink);
+    display:flex;align-items:center;gap:9px;letter-spacing:.01em
+  }
+  .p-head h3 .num{
+    font-family:var(--mono);font-size:9.5px;color:var(--ink-3);
+    border:1px solid var(--rule-2);padding:1px 5px;border-radius:4px;letter-spacing:.08em
+  }
+  .p-head .chev{color:var(--ink-3);transition:.18s;font-size:10px}
+  .panel.open .p-head .chev{transform:rotate(90deg);color:var(--peach)}
+  .p-body{padding:0 14px 14px;display:none}
+  .panel.open .p-body{display:block}
+
+  /* DROP ZONE */
+  .dropzone{
+    margin:8px;padding:14px;border-radius:11px;
+    background:linear-gradient(180deg,rgba(123,224,214,.08),rgba(255,184,154,.04));
+    border:1.5px dashed rgba(123,224,214,.35);
+    text-align:center;cursor:pointer;transition:.15s
+  }
+  .dropzone:hover{border-color:var(--cyan);background:linear-gradient(180deg,rgba(123,224,214,.12),rgba(255,184,154,.06))}
+  .dropzone .ic{
+    width:34px;height:34px;border-radius:10px;margin:0 auto 8px;
+    background:rgba(123,224,214,.16);display:grid;place-items:center;color:var(--cyan)
+  }
+  .dropzone h4{margin:0;font-size:13px;font-weight:600}
+  .dropzone p{margin:3px 0 8px;color:var(--ink-3);font-size:11.5px;line-height:1.4}
+  .dropzone .chips{display:flex;gap:5px;justify-content:center;flex-wrap:wrap}
+  .chip{
+    padding:5px 9px;border-radius:6px;font-family:var(--mono);font-size:10.5px;
+    background:rgba(255,255,255,.04);color:var(--ink-2);border:1px solid var(--rule)
+  }
+
+  /* FILE TREE / QUEUE LIST */
+  .tree{padding:4px 8px}
+  .tree-grp{
+    font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--ink-3);
+    text-transform:uppercase;padding:8px 8px 4px;display:flex;align-items:center;justify-content:space-between
+  }
+  .tree-grp .count{color:var(--peach)}
+  .tree-row{
+    display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;
+    font-size:12.5px;color:var(--ink-2);cursor:pointer;transition:.1s
+  }
+  .tree-row:hover{background:rgba(255,255,255,.04);color:var(--ink)}
+  .tree-row.active{background:rgba(255,184,154,.1);color:var(--peach)}
+  .tree-row.active .ix{color:var(--peach)}
+  .tree-row .ix{
+    width:22px;font-family:var(--mono);font-size:10px;color:var(--ink-3);text-align:right;flex-shrink:0
+  }
+  .tree-row .ic{
+    width:18px;height:18px;display:grid;place-items:center;color:var(--ink-3);flex-shrink:0
+  }
+  .tree-row.active .ic{color:var(--peach)}
+  .tree-row .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11.5px}
+  .tree-row .badge{
+    font-family:var(--mono);font-size:9.5px;padding:1px 5px;border-radius:3px;flex-shrink:0;
+  }
+  .tree-row .badge.ok{background:rgba(216,240,106,.12);color:var(--lime)}
+  .tree-row .badge.run{background:rgba(255,184,154,.14);color:var(--peach)}
+  .tree-row .badge.skip{background:rgba(108,116,145,.18);color:var(--ink-3)}
+  .tree-row .badge.err{background:rgba(255,107,139,.14);color:var(--rose)}
+
+  /* ===== CANVAS COLUMN ===== */
+  .canvas-head{
+    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+    padding:10px 14px;border-bottom:1px solid var(--rule);
+    font-family:var(--mono);font-size:11px;color:var(--ink-3);background:rgba(0,0,0,.15);
+  }
+  .canvas-head .left{display:flex;align-items:center;gap:9px}
+  .canvas-head .left b{color:var(--ink);font-family:var(--sans);font-weight:600;font-size:13px}
+  .canvas-head .ctlrow{display:flex;gap:5px;flex-wrap:wrap}
+  .ctl{
+    padding:4px 9px;border-radius:6px;font-family:var(--mono);font-size:10.5px;
+    background:rgba(255,255,255,.04);color:var(--ink-2);border:1px solid var(--rule);
+    display:inline-flex;gap:5px;align-items:center
+  }
+  .ctl b{color:var(--ink);font-weight:500}
+  .ctl.peach{border-color:rgba(255,184,154,.4);color:var(--peach)}
+  .ctl.peach b{color:var(--peach)}
+  .ctl.cyan{border-color:rgba(123,224,214,.4);color:var(--cyan)}
+  .ctl.cyan b{color:var(--cyan)}
+
+  .stage-wrap{
+    flex:1;padding:18px;display:grid;place-items:center;min-height:0;position:relative;overflow:hidden;
+  }
+  .stage{
+    width:100%;max-width:780px;aspect-ratio:3/2;border-radius:14px;
+    background:#0a121f;border:1px solid var(--rule);
+    position:relative;overflow:hidden;
+    box-shadow:0 30px 80px -40px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.02) inset
+  }
+  .stage svg{width:100%;height:100%;display:block}
+  .stage .frm{
+    position:absolute;border:2px solid var(--peach);border-radius:5px;cursor:pointer;
+    box-shadow:0 0 0 2px rgba(0,0,0,.4),0 0 22px rgba(255,184,154,.25)
+  }
+  .stage .frm.alt{border-color:var(--cyan);box-shadow:0 0 0 2px rgba(0,0,0,.4),0 0 22px rgba(123,224,214,.25)}
+  .stage .frm.unsel{border-color:var(--ink-3);border-style:dashed;box-shadow:none;opacity:.65}
+  .stage .frm::before{
+    content:attr(data-c);position:absolute;top:-20px;left:-2px;
+    font-family:var(--mono);font-size:9.5px;background:var(--peach);color:var(--bg);
+    padding:2px 6px;border-radius:3px;font-weight:600
+  }
+  .stage .frm.alt::before{background:var(--cyan)}
+  .stage .frm.unsel::before{background:var(--ink-3);color:var(--bg)}
+  .stage .frm .lm{position:absolute;width:4px;height:4px;background:var(--lime);border-radius:50%;box-shadow:0 0 4px var(--lime)}
+  .stage .crop-handle{
+    position:absolute;width:9px;height:9px;background:var(--peach);border:1px solid var(--bg);border-radius:2px;
+  }
+
+  /* CANVAS BOTTOM BAR (zoom + faces) */
+  .canvas-bottom{
+    border-top:1px solid var(--rule);background:rgba(0,0,0,.2);
+    display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+    padding:8px 14px;gap:10px;
+  }
+  .face-chips{display:flex;gap:5px;flex-wrap:wrap}
+  .face-chip{
+    display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    background:rgba(255,184,154,.1);color:var(--peach);border:1px solid rgba(255,184,154,.3);
+    font-family:var(--mono);font-size:10.5px;cursor:pointer
+  }
+  .face-chip.alt{background:rgba(123,224,214,.1);color:var(--cyan);border-color:rgba(123,224,214,.3)}
+  .face-chip.off{background:rgba(255,255,255,.03);color:var(--ink-3);border-color:var(--rule)}
+  .face-chip .check{
+    width:12px;height:12px;border-radius:3px;background:var(--peach);color:var(--bg);
+    display:grid;place-items:center;font-size:9px;font-weight:700
+  }
+  .face-chip.alt .check{background:var(--cyan)}
+  .face-chip.off .check{background:transparent;border:1px solid var(--ink-3);color:transparent}
+  .zoom-row{display:flex;gap:3px;align-items:center;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+  .icobtn{
+    width:26px;height:26px;border-radius:6px;background:rgba(255,255,255,.04);
+    border:1px solid var(--rule);color:var(--ink-2);display:grid;place-items:center;font-size:12px;
+    cursor:pointer;transition:.1s
+  }
+  .icobtn:hover{color:var(--ink);border-color:var(--rule-2);background:rgba(255,255,255,.08)}
+
+  /* ===== INSPECTOR (right panel) ===== */
+  .in-tabs{
+    display:flex;border-bottom:1px solid var(--rule);
+    background:rgba(0,0,0,.2);font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  }
+  .in-tab{
+    flex:1;padding:9px 0;text-align:center;color:var(--ink-3);
+    border-bottom:2px solid transparent;cursor:pointer;transition:.12s;
+  }
+  .in-tab.active{color:var(--cyan);border-bottom-color:var(--cyan);background:rgba(123,224,214,.04)}
+  .in-scroll{flex:1;overflow-y:auto;padding:4px 0}
+
+  /* FORM FIELDS */
+  .field{margin-bottom:12px}
+  .field:last-child{margin-bottom:0}
+  .field label{
+    display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+    color:var(--ink-3);text-transform:uppercase;margin-bottom:5px
+  }
+  .field .hint{font-size:11px;color:var(--ink-3);margin-top:4px;line-height:1.4}
+  .input,.select{
+    width:100%;padding:7px 10px;background:rgba(0,0,0,.3);
+    border:1px solid var(--rule);border-radius:7px;color:var(--ink);font-size:12.5px;font-family:var(--sans)
+  }
+  .input:focus,.select:focus{outline:0;border-color:var(--cyan);box-shadow:0 0 0 2px rgba(123,224,214,.12)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+  .seg{
+    display:grid;grid-template-columns:repeat(4,1fr);gap:3px;
+    background:rgba(0,0,0,.3);padding:3px;border-radius:8px;border:1px solid var(--rule)
+  }
+  .seg button{
+    padding:6px 4px;border-radius:5px;font-size:11px;font-weight:500;color:var(--ink-2);
+    font-family:var(--mono);background:none;border:0;cursor:pointer;transition:.12s
+  }
+  .seg button.on{background:var(--peach);color:var(--bg);font-weight:600}
+  .seg button:hover:not(.on){background:rgba(255,255,255,.04);color:var(--ink)}
+  .slider-row{display:flex;align-items:center;gap:9px}
+  .slider-row .num{font-family:var(--mono);font-size:11.5px;color:var(--peach);min-width:36px;text-align:right}
+  .slider{
+    -webkit-appearance:none;appearance:none;flex:1;height:4px;background:var(--rule);border-radius:999px;outline:0
+  }
+  .slider::-webkit-slider-thumb{
+    -webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--peach);cursor:pointer;
+    box-shadow:0 0 0 3px rgba(255,184,154,.18)
+  }
+  .toggle-row{
+    display:flex;align-items:center;justify-content:space-between;padding:7px 0;
+    border-top:1px dashed var(--rule);font-size:12.5px;gap:10px
+  }
+  .toggle-row:first-child{border-top:0}
+  .toggle-row .desc{font-size:10.5px;color:var(--ink-3);margin-top:1px}
+  .switch{
+    width:30px;height:18px;background:var(--rule);border-radius:999px;position:relative;cursor:pointer;flex-shrink:0
+  }
+  .switch::after{
+    content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:var(--ink-3);
+    top:3px;left:3px;transition:.16s
+  }
+  .switch.on{background:rgba(123,224,214,.25)}
+  .switch.on::after{background:var(--cyan);left:15px;box-shadow:0 0 5px var(--cyan)}
+
+  /* COLOR SWATCH */
+  .color-row{display:flex;gap:6px;align-items:center}
+  .color-sw{
+    width:28px;height:28px;border-radius:7px;border:1px solid var(--rule);
+    background:#000;cursor:pointer;flex-shrink:0
+  }
+  .color-row .input{flex:1}
+
+  /* OUTPUT THUMB CARDS */
+  .out-list{display:flex;flex-direction:column;gap:8px;padding:10px 14px}
+  .out-card{
+    background:rgba(0,0,0,.25);border:1px solid var(--rule);border-radius:10px;padding:9px;
+    display:flex;gap:9px;align-items:center
+  }
+  .out-card .thumb{
+    width:60px;height:60px;border-radius:7px;overflow:hidden;flex-shrink:0;
+    border:1px solid var(--rule);background:var(--bg-2)
+  }
+  .out-card .thumb svg{width:100%;height:100%;display:block}
+  .out-card .meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .out-card .meta .nm{font-family:var(--mono);font-size:11px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .out-card .meta .sub{font-family:var(--mono);font-size:10px;color:var(--ink-3)}
+  .out-card .dl{
+    padding:5px 9px;border-radius:6px;font-family:var(--mono);font-size:10px;
+    background:rgba(216,240,106,.12);color:var(--lime);border:1px solid rgba(216,240,106,.3);
+    cursor:pointer
+  }
+
+  /* MINI STATS */
+  .mini-stats{
+    display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px 14px;
+    border-bottom:1px solid var(--rule)
+  }
+  .ms{
+    background:rgba(0,0,0,.2);border:1px solid var(--rule);border-radius:8px;padding:7px 9px
+  }
+  .ms .k{font-family:var(--mono);font-size:9.5px;color:var(--ink-3);letter-spacing:.12em;text-transform:uppercase}
+  .ms .v{font-size:18px;font-weight:700;letter-spacing:-.02em;margin-top:2px;line-height:1}
+  .ms.peach .v{color:var(--peach)}
+  .ms.cyan .v{color:var(--cyan)}
+  .ms.lime .v{color:var(--lime)}
+  .ms.rose .v{color:var(--rose)}
+  .ms .v small{font-size:11px;color:var(--ink-3);font-weight:500}
+
+  /* ===== STATUS BAR ===== */
+  .statusbar{
+    display:flex;align-items:center;gap:0;
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.25));
+    border-top:1px solid var(--rule);
+    font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+  }
+  .sb-cell{
+    padding:0 12px;height:100%;display:flex;align-items:center;gap:6px;
+    border-right:1px solid var(--rule);height:28px
+  }
+  .sb-cell:last-child{border-right:0}
+  .sb-cell b{color:var(--ink-2);font-weight:500}
+  .sb-cell .d{width:6px;height:6px;border-radius:50%}
+  .sb-cell.ok .d{background:var(--lime);box-shadow:0 0 5px var(--lime)}
+  .sb-cell.run .d{background:var(--peach);box-shadow:0 0 5px var(--peach);animation:pulse 1.6s infinite}
+  .sb-spacer{flex:1}
+  .sb-progress{
+    width:140px;height:5px;background:rgba(255,255,255,.06);border-radius:999px;overflow:hidden;
+    margin-right:6px
+  }
+  .sb-progress i{
+    display:block;height:100%;background:linear-gradient(90deg,var(--peach),var(--rose));
+    border-radius:999px;width:64%
+  }
+
+  /* small floating mini-log overlay on canvas */
+  .mini-log{
+    position:absolute;left:18px;bottom:18px;
+    background:rgba(15,22,38,.85);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    border:1px solid var(--rule);border-radius:10px;
+    padding:10px 12px;width:300px;
+    font-family:var(--mono);font-size:10.5px;
+  }
+  .mini-log h5{
+    margin:0 0 6px;font-family:var(--sans);font-size:11px;font-weight:600;color:var(--ink);
+    display:flex;justify-content:space-between;align-items:center
+  }
+  .mini-log h5 .tag{color:var(--cyan);font-family:var(--mono);font-size:9.5px;letter-spacing:.1em}
+  .mini-log .ln{padding:2px 0;color:var(--ink-3);display:flex;gap:6px}
+  .mini-log .ln .t{color:var(--ink-3);min-width:50px}
+  .mini-log .ln.ok .m{color:var(--lime)}
+  .mini-log .ln.warn .m{color:var(--peach)}
+  .mini-log .ln .m{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* tiny scrollbars in dark */
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--rule-2);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<div class="app-window">
+
+  <!-- ============ TITLE BAR ============ -->
+  <div class="titlebar">
+    <div class="title-l">
+      <span class="logo"></span>
+      <span class="name">Face Crop Studio</span>
+      <span class="sep">—</span>
+      <span class="doc">portrait_06.jpg<span class="mod"> ●</span></span>
+    </div>
+    <div class="title-r">
+      <button class="winbtn" title="Minimize">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 6h8"/></svg>
+      </button>
+      <button class="winbtn" title="Maximize">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1"><rect x="2" y="2" width="8" height="8"/></svg>
+      </button>
+      <button class="winbtn close" title="Close">
+        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1"><path d="M2 2l8 8M10 2l-8 8"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============ MENU BAR ============ -->
+  <div class="menubar">
+    <span class="menu-item"><u>F</u>ile</span>
+    <span class="menu-item"><u>E</u>dit</span>
+    <span class="menu-item"><u>V</u>iew</span>
+    <span class="menu-item"><u>D</u>etect</span>
+    <span class="menu-item"><u>T</u>ools</span>
+    <span class="menu-item"><u>W</u>indow</span>
+    <span class="menu-item"><u>H</u>elp</span>
+    <span class="menu-spacer"></span>
+    <span class="menu-r"><span class="pulse"></span>YuNet 640 · ready</span>
+  </div>
+
+  <!-- ============ TOOLBAR ============ -->
+  <div class="toolbar">
+    <div class="tb-group">
+      <button class="btn btn-primary">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="5"/><path d="M8 5v3l2 1.5" stroke-linecap="round"/></svg>
+        Detect faces <span class="arr">→</span>
+      </button>
+      <button class="btn btn-peach">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 2v9M5 8l3 3 3-3M3 14h10" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Export crops
+      </button>
+    </div>
+    <span class="tb-sep"></span>
+    <div class="tb-group">
+      <button class="btn btn-ghost btn-icon" title="Open">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h4l1 2h7v6H2z"/></svg>
+      </button>
+      <button class="btn btn-ghost btn-icon" title="Save">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3h8l3 3v9H3z M5 3v4h6V3 M5 11h6"/></svg>
+      </button>
+      <button class="btn btn-ghost btn-icon" title="Undo">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 5L2 8l3 3 M2 8h7a4 4 0 014 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="btn btn-ghost btn-icon" title="Redo">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 5l3 3-3 3 M14 8H7a4 4 0 00-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <span class="tb-sep"></span>
+    <div class="tb-group">
+      <button class="btn btn-ghost">↶ 90°</button>
+      <button class="btn btn-ghost">90° ↷</button>
+    </div>
+    <span class="tb-sep"></span>
+    <div class="tb-group">
+      <button class="btn btn-ghost">Select all</button>
+      <button class="btn btn-ghost">Select none</button>
+    </div>
+    <span class="tb-sep"></span>
+    <button class="btn btn-danger">Clear</button>
+    <div class="right">
+      <span class="gpu-pill"><span class="d"></span>GPU · wgpu/Vulkan</span>
+    </div>
+  </div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+
+    <!-- ===== LEFT SIDEBAR: queue / browser ===== -->
+    <aside class="sidebar">
+      <div class="sb-tabs">
+        <div class="sb-tab active">Queue</div>
+        <div class="sb-tab">Mapping</div>
+        <div class="sb-tab">History</div>
+      </div>
+
+      <div class="sb-scroll">
+
+        <div class="dropzone">
+          <div class="ic">
+            <svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 12V3M5 7l4-4 4 4M3 13v2h12v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h4>Drop images or folder</h4>
+          <p>JPG · PNG · WEBP · CSV · XLSX</p>
+          <div class="chips">
+            <span class="chip">Browse</span>
+            <span class="chip">Paste</span>
+          </div>
+        </div>
+
+        <div class="tree">
+          <div class="tree-grp"><span>In progress</span><span class="count">12 / 24</span></div>
+          <div class="tree-row active">
+            <span class="ix">06</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">portrait_06.jpg</span>
+            <span class="badge run">run</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">07</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">team_lead.jpg</span>
+            <span class="badge ok">2</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">08</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">conference_grp.png</span>
+            <span class="badge ok">5</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">09</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">badge_photo_09.jpg</span>
+            <span class="badge ok">1</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">10</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">linkedin_pic.webp</span>
+            <span class="badge skip">skip</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">11</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">scan_blurry.jpg</span>
+            <span class="badge err">err</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">12</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">passport_2024.jpg</span>
+            <span class="badge ok">1</span>
+          </div>
+
+          <div class="tree-grp"><span>Queued</span><span class="count">12</span></div>
+          <div class="tree-row">
+            <span class="ix">13</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">staff_directory_a.png</span>
+            <span class="badge skip">—</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">14</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">staff_directory_b.png</span>
+            <span class="badge skip">—</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">15</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">family_2025.jpg</span>
+            <span class="badge skip">—</span>
+          </div>
+          <div class="tree-row">
+            <span class="ix">16</span>
+            <span class="ic"><svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4" r="2"/><path d="M2 11c0-2 2-3 4-3s4 1 4 3"/></svg></span>
+            <span class="nm">avatar_dump_set3.zip</span>
+            <span class="badge skip">—</span>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- ===== CENTER: CANVAS ===== -->
+    <div class="canvas-col">
+      <div class="canvas-head">
+        <div class="left">
+          <b>portrait_06.jpg</b>
+          <span style="color:var(--ink-3)">·</span>
+          <span>1920 × 1280 · 412 KB</span>
+        </div>
+        <div class="ctlrow">
+          <span class="ctl">pad <b>18%</b></span>
+          <span class="ctl">aspect <b>1:1</b></span>
+          <span class="ctl peach">conf <b>0.62</b></span>
+          <span class="ctl cyan">preset <b>LinkedIn</b></span>
+          <span class="ctl">rot <b>0°</b></span>
+        </div>
+      </div>
+
+      <div class="stage-wrap">
+        <div class="stage">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0" stop-color="#2a3548"/>
+                <stop offset="1" stop-color="#0e1422"/>
+              </linearGradient>
+              <radialGradient id="spot" cx="50%" cy="35%" r="60%">
+                <stop offset="0" stop-color="rgba(255,255,255,.08)"/>
+                <stop offset="1" stop-color="transparent"/>
+              </radialGradient>
+            </defs>
+            <rect width="100" height="100" fill="url(#bg)"/>
+            <rect width="100" height="100" fill="url(#spot)"/>
+            <!-- three figures -->
+            <ellipse cx="28" cy="64" rx="14" ry="22" fill="#1f2735"/>
+            <circle cx="28" cy="38" r="9" fill="#caa888"/>
+            <ellipse cx="55" cy="60" rx="16" ry="26" fill="#1c2331"/>
+            <circle cx="55" cy="32" r="10" fill="#dbb892"/>
+            <ellipse cx="80" cy="64" rx="14" ry="22" fill="#1f2735"/>
+            <circle cx="80" cy="40" r="9" fill="#b89a7a"/>
+          </svg>
+
+          <span class="frm" style="left:19%;top:24%;width:18%;height:32%" data-c="0.97">
+            <span class="lm" style="left:30%;top:36%"></span>
+            <span class="lm" style="left:62%;top:36%"></span>
+            <span class="lm" style="left:48%;top:62%"></span>
+            <span class="lm" style="left:36%;top:74%"></span>
+            <span class="lm" style="left:60%;top:74%"></span>
+          </span>
+          <span class="frm alt" style="left:44%;top:18%;width:22%;height:36%" data-c="0.99">
+            <span class="lm" style="left:30%;top:34%"></span>
+            <span class="lm" style="left:62%;top:34%"></span>
+            <span class="lm" style="left:48%;top:62%"></span>
+            <span class="lm" style="left:36%;top:74%"></span>
+            <span class="lm" style="left:60%;top:74%"></span>
+            <span class="crop-handle" style="left:-5px;top:-5px"></span>
+            <span class="crop-handle" style="right:-5px;top:-5px"></span>
+            <span class="crop-handle" style="left:-5px;bottom:-5px"></span>
+            <span class="crop-handle" style="right:-5px;bottom:-5px"></span>
+          </span>
+          <span class="frm unsel" style="left:71%;top:26%;width:18%;height:30%" data-c="0.41"></span>
+
+          <!-- floating mini-log -->
+          <div class="mini-log">
+            <h5>Pipeline log <span class="tag">single.run</span></h5>
+            <div class="ln ok"><span class="t">14:02:17</span><span class="m">Loaded 1920×1280 · 412 KB</span></div>
+            <div class="ln"><span class="t">14:02:17</span><span class="m">YuNet · WebGPU backend</span></div>
+            <div class="ln ok"><span class="t">14:02:17</span><span class="m">Detected 3 faces in 24ms</span></div>
+            <div class="ln warn"><span class="t">14:02:17</span><span class="m">face_003 · 0.41 below floor</span></div>
+            <div class="ln"><span class="t">14:02:17</span><span class="m">2 selected · 1024² JPG q92</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="canvas-bottom">
+        <div class="face-chips">
+          <span class="face-chip"><span class="check">✓</span>face_001 · 0.97</span>
+          <span class="face-chip alt"><span class="check">✓</span>face_002 · 0.99</span>
+          <span class="face-chip off"><span class="check"></span>face_003 · 0.41</span>
+        </div>
+        <div class="zoom-row">
+          <button class="icobtn" title="Zoom out">−</button>
+          <button class="icobtn" title="Reset">100%</button>
+          <button class="icobtn" title="Zoom in">+</button>
+          <button class="icobtn" title="Fit screen">⛶</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== RIGHT INSPECTOR ===== -->
+    <aside class="inspector">
+      <div class="in-tabs">
+        <div class="in-tab active">Crop</div>
+        <div class="in-tab">Output</div>
+        <div class="in-tab">Enhance</div>
+      </div>
+
+      <!-- mini stats -->
+      <div class="mini-stats">
+        <div class="ms peach"><div class="k">Faces</div><div class="v">3</div></div>
+        <div class="ms cyan"><div class="k">Selected</div><div class="v">2</div></div>
+        <div class="ms lime"><div class="k">Detect</div><div class="v">24<small>ms</small></div></div>
+        <div class="ms rose"><div class="k">Source</div><div class="v" style="font-size:13px">1920×1280</div></div>
+      </div>
+
+      <div class="in-scroll">
+
+        <!-- CROP PRESET -->
+        <div class="panel open">
+          <div class="p-head">
+            <h3><span class="num">01</span>Crop framing</h3>
+            <span class="chev">▶</span>
+          </div>
+          <div class="p-body">
+            <div class="field">
+              <label>Preset</label>
+              <select class="select">
+                <option>LinkedIn (1:1)</option>
+                <option>Passport (35×45)</option>
+                <option>Instagram (4:5)</option>
+                <option>Headshot (3:4)</option>
+                <option>ID Card (3:4)</option>
+                <option>Avatar (1:1)</option>
+                <option>Custom…</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Aspect ratio</label>
+              <div class="seg">
+                <button>Free</button>
+                <button class="on">1:1</button>
+                <button>4:5</button>
+                <button>3:4</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Face height · 62%</label>
+              <div class="slider-row">
+                <input type="range" class="slider" min="10" max="100" value="62">
+                <span class="num">62%</span>
+              </div>
+              <div class="hint">Final size of the face inside the crop.</div>
+            </div>
+            <div class="field">
+              <label>Padding · 18%</label>
+              <div class="slider-row">
+                <input type="range" class="slider" min="0" max="60" value="18">
+                <span class="num">18%</span>
+              </div>
+            </div>
+            <div class="field row2">
+              <div>
+                <label>Width</label>
+                <input class="input" value="1024" />
+              </div>
+              <div>
+                <label>Height</label>
+                <input class="input" value="1024" />
+              </div>
+            </div>
+            <div class="field">
+              <label>Confidence floor · 0.62</label>
+              <div class="slider-row">
+                <input type="range" class="slider" min="0" max="100" value="62">
+                <span class="num">0.62</span>
+              </div>
+            </div>
+            <div class="field">
+              <label>Padding fill color</label>
+              <div class="color-row">
+                <span class="color-sw" style="background:#000"></span>
+                <input class="input" value="#000000" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- POSITIONING -->
+        <div class="panel open">
+          <div class="p-head">
+            <h3><span class="num">02</span>Positioning</h3>
+            <span class="chev">▶</span>
+          </div>
+          <div class="p-body">
+            <div class="field">
+              <label>Mode</label>
+              <div class="seg" style="grid-template-columns:repeat(3,1fr)">
+                <button>Center</button>
+                <button class="on">Thirds</button>
+                <button>Custom</button>
+              </div>
+            </div>
+            <div class="field row2">
+              <div>
+                <label>Offset X</label>
+                <input class="input" value="-12 px" />
+              </div>
+              <div>
+                <label>Offset Y</label>
+                <input class="input" value="0 px" />
+              </div>
+            </div>
+            <div class="toggle-row">
+              <span>Eye-line align</span>
+              <span class="switch on"></span>
+            </div>
+            <div class="toggle-row">
+              <span>Auto-orient via EXIF</span>
+              <span class="switch on"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- OUTPUT THUMBS -->
+        <div class="panel open">
+          <div class="p-head">
+            <h3><span class="num">03</span>Crops <span class="chip" style="font-size:9.5px;padding:1px 6px">2 ready</span></h3>
+            <span class="chev">▶</span>
+          </div>
+          <div class="out-list">
+            <div class="out-card">
+              <div class="thumb">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">
+                  <rect width="100" height="100" fill="#1c2331"/>
+                  <circle cx="50" cy="48" r="26" fill="#caa888"/>
+                  <ellipse cx="50" cy="92" rx="34" ry="22" fill="#caa888"/>
+                </svg>
+              </div>
+              <div class="meta">
+                <div class="nm">portrait_06_face1.jpg</div>
+                <div class="sub">1024² · q92 · 184 KB</div>
+                <div class="sub" style="color:var(--lime)">● ready</div>
+              </div>
+              <button class="dl">Save</button>
+            </div>
+            <div class="out-card">
+              <div class="thumb">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice">
+                  <rect width="100" height="100" fill="#1f2735"/>
+                  <circle cx="50" cy="46" r="28" fill="#dbb892"/>
+                  <ellipse cx="50" cy="92" rx="36" ry="22" fill="#dbb892"/>
+                </svg>
+              </div>
+              <div class="meta">
+                <div class="nm">portrait_06_face2.jpg</div>
+                <div class="sub">1024² · q92 · 192 KB</div>
+                <div class="sub" style="color:var(--lime)">● ready</div>
+              </div>
+              <button class="dl">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ENHANCEMENT -->
+        <div class="panel">
+          <div class="p-head">
+            <h3><span class="num">04</span>Enhancement</h3>
+            <span class="chev">▶</span>
+          </div>
+          <div class="p-body">
+            <div class="toggle-row"><span>Auto color</span><span class="switch on"></span></div>
+            <div class="toggle-row"><span>Skin smoothing</span><span class="switch"></span></div>
+            <div class="toggle-row"><span>Sharpen</span><span class="switch on"></span></div>
+            <div class="toggle-row"><span>Red-eye removal</span><span class="switch"></span></div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ STATUS BAR ============ -->
+  <div class="statusbar">
+    <div class="sb-cell ok"><span class="d"></span><b>Ready</b></div>
+    <div class="sb-cell">YuNet 640 · ONNX</div>
+    <div class="sb-cell">wgpu · Vulkan 1.3 · RTX 4070</div>
+    <div class="sb-cell run"><span class="d"></span>Batch <b>12 / 24</b></div>
+    <div class="sb-spacer"></div>
+    <div class="sb-cell">
+      <div class="sb-progress"><i></i></div>
+      <span>57%</span>
+    </div>
+    <div class="sb-cell">RAM <b>412 MB</b></div>
+    <div class="sb-cell">GPU <b>38%</b></div>
+    <div class="sb-cell">14:02:17</div>
+  </div>
+
+</div>
+
+<script>
+  // panel toggles
+  document.querySelectorAll('.p-head').forEach(h => {
+    h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
+  });
+  // segmented buttons
+  document.querySelectorAll('.seg').forEach(seg => {
+    seg.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => {
+        seg.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+        b.classList.add('on');
+      });
+    });
+  });
+  // switches
+  document.querySelectorAll('.switch').forEach(s => {
+    s.addEventListener('click', () => s.classList.toggle('on'));
+  });
+  // face chips
+  document.querySelectorAll('.face-chip').forEach(c => {
+    c.addEventListener('click', () => c.classList.toggle('off'));
+  });
+  // sidebar tabs
+  document.querySelectorAll('.sb-tabs').forEach(grp => {
+    grp.querySelectorAll('.sb-tab').forEach(t => {
+      t.addEventListener('click', () => {
+        grp.querySelectorAll('.sb-tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+      });
+    });
+  });
+  document.querySelectorAll('.in-tabs').forEach(grp => {
+    grp.querySelectorAll('.in-tab').forEach(t => {
+      t.addEventListener('click', () => {
+        grp.querySelectorAll('.in-tab').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+      });
+    });
+  });
+  // queue rows
+  document.querySelectorAll('.tree-row').forEach(r => {
+    r.addEventListener('click', () => {
+      document.querySelectorAll('.tree-row').forEach(x => x.classList.remove('active'));
+      r.classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>
