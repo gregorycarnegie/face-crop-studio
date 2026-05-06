@@ -16,7 +16,8 @@ fn main() -> eframe::Result<()> {
     options.viewport = options
         .viewport
         .with_inner_size([1480.0, 920.0])
-        .with_min_inner_size([1000.0, 640.0]);
+        .with_min_inner_size([1000.0, 640.0])
+        .with_decorations(false);
 
     if let Some(icon) = load_app_icon() {
         options.viewport = options.viewport.with_icon(Arc::new(icon));

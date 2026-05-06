@@ -51,10 +51,14 @@ pub fn apply(ctx: &Context) {
 fn setup_fonts(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
 
-    // Ensure monospace maps to something reasonable (DM Mono not embedded,
-    // falls back to the built-in egui monospace which is fine visually)
-    fonts.families.entry(FontFamily::Monospace).or_default();
-    fonts.families.entry(FontFamily::Proportional).or_default();
+    // Add Hack (embedded monospace) as a fallback for the proportional family.
+    // Ubuntu-Light only covers Latin/Cyrillic; Hack adds arrows, box-drawing,
+    // and geometric shapes so characters like → ─ □ ↶ ↷ render correctly.
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .push("Hack".into());
 
     // Register a named "mono" family used for badges, chips, labels
     fonts.families.insert(

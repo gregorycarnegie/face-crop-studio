@@ -5,21 +5,21 @@ use egui::{Color32, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 // ── Themed slider ─────────────────────────────────────────────────────────────
 
+const LABEL_W: f32 = 50.0;
+
 /// Draw a slider with the peach-thumb dark-track style and return changed flag.
 pub fn themed_slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32) -> bool {
-    let _w = ui.available_width() - 48.0;
-    let resp = ui.add(
-        egui::Slider::new(value, min..=max)
-            .show_value(false),
-    );
-    resp.changed()
+    ui.add(egui::Slider::new(value, min..=max).show_value(false)).changed()
 }
 
 /// Slider with inline value label on the right.
 pub fn slider_with_label(ui: &mut Ui, _label: &str, value: &mut f32, min: f32, max: f32, fmt: &str) -> bool {
     ui.horizontal(|ui| {
-        ui.set_min_width(ui.available_width());
-        let changed = themed_slider(ui, value, min, max);
+        let slider_w = (ui.available_width() - LABEL_W).max(60.0);
+        let changed = ui.add_sized(
+            [slider_w, 20.0],
+            egui::Slider::new(value, min..=max).show_value(false),
+        ).changed();
         let display = match fmt {
             "pct"  => format!("{:.0}%", value),
             "conf" => format!("{:.2}", value),
