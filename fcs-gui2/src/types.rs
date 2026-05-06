@@ -45,25 +45,38 @@ pub enum InspectorTab {
 pub enum BatchFileStatus {
     Pending,
     Processing,
-    Completed { faces_detected: usize, faces_exported: usize },
-    Failed { error: String },
+    Completed {
+        faces_detected: usize,
+        faces_exported: usize,
+    },
+    Failed {
+        error: String,
+    },
     Skipped,
 }
 
 impl BatchFileStatus {
     pub fn badge_label(&self) -> &str {
         match self {
-            Self::Pending   => "—",
+            Self::Pending => "—",
             Self::Processing => "run",
             Self::Completed { faces_exported, .. } => {
-                if *faces_exported == 0 { "skip" } else { "ok" }
+                if *faces_exported == 0 {
+                    "skip"
+                } else {
+                    "ok"
+                }
             }
             Self::Failed { .. } => "err",
             Self::Skipped => "skip",
         }
     }
     pub fn face_count(&self) -> Option<usize> {
-        if let Self::Completed { faces_exported, .. } = self { Some(*faces_exported) } else { None }
+        if let Self::Completed { faces_exported, .. } = self {
+            Some(*faces_exported)
+        } else {
+            None
+        }
     }
 }
 
@@ -77,7 +90,10 @@ pub struct BatchFile {
 // ── Detection quality ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DetectionOrigin { Detector, Manual }
+pub enum DetectionOrigin {
+    Detector,
+    Manual,
+}
 
 #[derive(Clone)]
 pub struct DetectionWithQuality {
@@ -91,11 +107,21 @@ pub struct DetectionWithQuality {
 }
 
 impl DetectionWithQuality {
-    pub fn active_bbox(&self) -> BoundingBox { self.current_bbox }
-    pub fn reset_bbox(&mut self) { self.current_bbox = self.original_bbox; }
-    pub fn set_bbox(&mut self, bbox: BoundingBox) { self.current_bbox = bbox; }
-    pub fn is_manual(&self) -> bool { matches!(self.origin, DetectionOrigin::Manual) }
-    pub fn is_modified(&self) -> bool { self.current_bbox != self.original_bbox }
+    pub fn active_bbox(&self) -> BoundingBox {
+        self.current_bbox
+    }
+    pub fn reset_bbox(&mut self) {
+        self.current_bbox = self.original_bbox;
+    }
+    pub fn set_bbox(&mut self, bbox: BoundingBox) {
+        self.current_bbox = bbox;
+    }
+    pub fn is_manual(&self) -> bool {
+        matches!(self.origin, DetectionOrigin::Manual)
+    }
+    pub fn is_modified(&self) -> bool {
+        self.current_bbox != self.original_bbox
+    }
 }
 
 // ── Cache keys ────────────────────────────────────────────────────────────────
@@ -160,7 +186,11 @@ fn encode_shape(shape: &CropShape) -> (u8, u32, u32, u8, u32) {
         CropShape::Ellipse => (1, 0, 0, 0, 0),
         CropShape::RoundedRectangle { radius_pct } => (2, radius_pct.to_bits(), 0, 0, 0),
         CropShape::ChamferedRectangle { size_pct } => (3, size_pct.to_bits(), 0, 0, 0),
-        CropShape::Polygon { sides, rotation_deg, corner_style } => {
+        CropShape::Polygon {
+            sides,
+            rotation_deg,
+            corner_style,
+        } => {
             let (ck, p1) = match corner_style {
                 PolygonCornerStyle::Sharp => (0u8, 0u32),
                 PolygonCornerStyle::Rounded { radius_pct } => (1, radius_pct.to_bits()),
@@ -169,12 +199,22 @@ fn encode_shape(shape: &CropShape) -> (u8, u32, u32, u8, u32) {
             };
             (4 + ck, p1, 0, *sides, rotation_deg.to_bits())
         }
-        CropShape::Star { points, inner_radius_pct, rotation_deg } => {
-            (8, inner_radius_pct.to_bits(), 0, *points, rotation_deg.to_bits())
-        }
-        CropShape::KochPolygon { sides, rotation_deg, iterations } => {
-            (9, *iterations as u32, 0, *sides, rotation_deg.to_bits())
-        }
+        CropShape::Star {
+            points,
+            inner_radius_pct,
+            rotation_deg,
+        } => (
+            8,
+            inner_radius_pct.to_bits(),
+            0,
+            *points,
+            rotation_deg.to_bits(),
+        ),
+        CropShape::KochPolygon {
+            sides,
+            rotation_deg,
+            iterations,
+        } => (9, *iterations as u32, 0, *sides, rotation_deg.to_bits()),
         CropShape::KochRectangle { iterations } => (10, *iterations as u32, 0, 0, 0),
     }
 }
@@ -224,7 +264,13 @@ impl PreviewState {
 // ── Webcam state ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WebcamStatus { Inactive, Starting, Active, Stopping, Error }
+pub enum WebcamStatus {
+    Inactive,
+    Starting,
+    Active,
+    Stopping,
+    Error,
+}
 
 pub struct WebcamState {
     pub status: WebcamStatus,
@@ -243,9 +289,16 @@ impl Default for WebcamState {
     fn default() -> Self {
         Self {
             status: WebcamStatus::Inactive,
-            device_index: 0, width: 640, height: 480, fps: 30,
-            frames_captured: 0, total_faces: 0, error_message: None,
-            show_overlay: true, auto_crop: false, stop_flag: None,
+            device_index: 0,
+            width: 640,
+            height: 480,
+            fps: 30,
+            frames_captured: 0,
+            total_faces: 0,
+            error_message: None,
+            show_overlay: true,
+            auto_crop: false,
+            stop_flag: None,
         }
     }
 }
@@ -253,13 +306,26 @@ impl Default for WebcamState {
 // ── Drag / interaction ────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
-pub struct ManualBoxDraft { pub start: egui::Pos2, pub current: egui::Pos2 }
+pub struct ManualBoxDraft {
+    pub start: egui::Pos2,
+    pub current: egui::Pos2,
+}
 
 #[derive(Clone, Copy)]
-pub struct ActiveBoxDrag { pub index: usize, pub handle: DragHandle, pub start_bbox: BoundingBox }
+pub struct ActiveBoxDrag {
+    pub index: usize,
+    pub handle: DragHandle,
+    pub start_bbox: BoundingBox,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DragHandle { Move, NorthWest, NorthEast, SouthWest, SouthEast }
+pub enum DragHandle {
+    Move,
+    NorthWest,
+    NorthEast,
+    SouthWest,
+    SouthEast,
+}
 
 #[derive(Clone, Copy, Default)]
 pub struct PointerSnapshot {
@@ -292,7 +358,13 @@ pub struct PanelState {
 }
 impl Default for PanelState {
     fn default() -> Self {
-        Self { crop_framing: true, crop_shape: true, positioning: true, crops_ready: true, enhancement: false }
+        Self {
+            crop_framing: true,
+            crop_shape: true,
+            positioning: true,
+            crops_ready: true,
+            enhancement: false,
+        }
     }
 }
 
@@ -307,13 +379,30 @@ pub struct DetectionJobSuccess {
 }
 
 pub enum JobMessage {
-    DetectionFinished { job_id: u64, cache_key: CacheKey, data: DetectionJobSuccess },
-    DetectionFailed { job_id: u64, error: String },
-    WebcamFrame { image: DynamicImage, frame_number: u32, detections: Vec<DetectionWithQuality> },
+    DetectionFinished {
+        job_id: u64,
+        cache_key: CacheKey,
+        data: DetectionJobSuccess,
+    },
+    DetectionFailed {
+        job_id: u64,
+        error: String,
+    },
+    WebcamFrame {
+        image: DynamicImage,
+        frame_number: u32,
+        detections: Vec<DetectionWithQuality>,
+    },
     WebcamError(String),
     WebcamStopped,
-    BatchProgress { index: usize, status: BatchFileStatus },
-    BatchComplete { completed: usize, failed: usize },
+    BatchProgress {
+        index: usize,
+        status: BatchFileStatus,
+    },
+    BatchComplete {
+        completed: usize,
+        failed: usize,
+    },
 }
 
 // ── Log line (mini-log overlay) ───────────────────────────────────────────────
@@ -326,7 +415,11 @@ pub struct LogLine {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LogKind { Info, Ok, Warn }
+pub enum LogKind {
+    Info,
+    Ok,
+    Warn,
+}
 
 // ── Mapping UI state ──────────────────────────────────────────────────────────
 
@@ -348,31 +441,46 @@ pub struct MappingUiState {
     pub entries: Vec<MappingEntry>,
 }
 impl Default for MappingUiState {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl MappingUiState {
     pub fn new() -> Self {
         Self {
-            file_path: None, base_dir: None,
-            detected_format: None, format_override: None,
+            file_path: None,
+            base_dir: None,
+            detected_format: None,
+            format_override: None,
             has_headers: true,
             delimiter_input: ",".to_string(),
-            sheet_name: String::new(), sql_table: String::new(), sql_query: String::new(),
+            sheet_name: String::new(),
+            sql_table: String::new(),
+            sql_query: String::new(),
             catalog: MappingCatalog::default(),
-            preview: None, preview_error: None,
-            source_column_idx: None, output_column_idx: None,
+            preview: None,
+            preview_error: None,
+            source_column_idx: None,
+            output_column_idx: None,
             entries: Vec::new(),
         }
     }
     pub fn set_file(&mut self, path: PathBuf) {
         use fcs_utils::mapping::detect_format;
         self.file_path = Some(path);
-        self.base_dir = self.file_path.as_ref().and_then(|p| p.parent().map(|x| x.to_path_buf()));
+        self.base_dir = self
+            .file_path
+            .as_ref()
+            .and_then(|p| p.parent().map(|x| x.to_path_buf()));
         self.detected_format = self.file_path.as_ref().map(|p| detect_format(p));
-        self.preview = None; self.preview_error = None;
-        self.source_column_idx = None; self.output_column_idx = None;
+        self.preview = None;
+        self.preview_error = None;
+        self.source_column_idx = None;
+        self.output_column_idx = None;
         self.entries.clear();
-        self.sheet_name.clear(); self.sql_table.clear(); self.sql_query.clear();
+        self.sheet_name.clear();
+        self.sql_table.clear();
+        self.sql_query.clear();
         self.delimiter_input = ",".to_string();
         self.refresh_catalog();
     }
@@ -408,30 +516,65 @@ impl MappingUiState {
             delimiter: self.delimiter_input.chars().next().map(|c| c as u8),
             ..Default::default()
         };
-        if !self.sheet_name.trim().is_empty() { opts.sheet_name = Some(self.sheet_name.trim().to_string()); }
-        if !self.sql_table.trim().is_empty()  { opts.sql_table  = Some(self.sql_table.trim().to_string()); }
-        if !self.sql_query.trim().is_empty()  { opts.sql_query  = Some(self.sql_query.trim().to_string()); }
+        if !self.sheet_name.trim().is_empty() {
+            opts.sheet_name = Some(self.sheet_name.trim().to_string());
+        }
+        if !self.sql_table.trim().is_empty() {
+            opts.sql_table = Some(self.sql_table.trim().to_string());
+        }
+        if !self.sql_query.trim().is_empty() {
+            opts.sql_query = Some(self.sql_query.trim().to_string());
+        }
         opts
     }
     pub fn load_entries(&mut self) -> anyhow::Result<()> {
-        let path = self.file_path.clone().ok_or_else(|| anyhow::anyhow!("No file selected"))?;
-        let src  = self.source_column_idx.map(ColumnSelector::Index).ok_or_else(|| anyhow::anyhow!("No source column"))?;
-        let out  = self.output_column_idx.map(ColumnSelector::Index).ok_or_else(|| anyhow::anyhow!("No output column"))?;
+        let path = self
+            .file_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No file selected"))?;
+        let src = self
+            .source_column_idx
+            .map(ColumnSelector::Index)
+            .ok_or_else(|| anyhow::anyhow!("No source column"))?;
+        let out = self
+            .output_column_idx
+            .map(ColumnSelector::Index)
+            .ok_or_else(|| anyhow::anyhow!("No output column"))?;
         match load_mapping_entries(&path, &self.read_options(), &src, &out) {
-            Ok(e) => { self.entries = e; self.preview_error = None; Ok(()) }
-            Err(e) => { self.preview_error = Some(e.to_string()); Err(e) }
+            Ok(e) => {
+                self.entries = e;
+                self.preview_error = None;
+                Ok(())
+            }
+            Err(e) => {
+                self.preview_error = Some(e.to_string());
+                Err(e)
+            }
         }
     }
     pub fn reload_preview(&mut self) -> anyhow::Result<()> {
-        let path = self.file_path.clone().ok_or_else(|| anyhow::anyhow!("No file selected"))?;
+        let path = self
+            .file_path
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No file selected"))?;
         match load_mapping_preview(&path, &self.read_options()) {
             Ok(p) => {
-                if self.source_column_idx.is_none() && !p.columns.is_empty() { self.source_column_idx = Some(0); }
-                if self.output_column_idx.is_none() && p.columns.len() > 1   { self.output_column_idx = Some(1); }
-                self.preview = Some(p); self.preview_error = None; self.entries.clear();
+                if self.source_column_idx.is_none() && !p.columns.is_empty() {
+                    self.source_column_idx = Some(0);
+                }
+                if self.output_column_idx.is_none() && p.columns.len() > 1 {
+                    self.output_column_idx = Some(1);
+                }
+                self.preview = Some(p);
+                self.preview_error = None;
+                self.entries.clear();
                 Ok(())
             }
-            Err(e) => { self.preview_error = Some(e.to_string()); self.preview = None; Err(e) }
+            Err(e) => {
+                self.preview_error = Some(e.to_string());
+                self.preview = None;
+                Err(e)
+            }
         }
     }
 }

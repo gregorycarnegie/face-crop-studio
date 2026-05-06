@@ -45,11 +45,16 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
     );
 
     // Filename + dimensions
-    let name = app.preview.image_path.as_deref()
+    let name = app
+        .preview
+        .image_path
+        .as_deref()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("No image");
-    let dims = app.preview.image_size
+    let dims = app
+        .preview
+        .image_size
         .map(|(w, h)| format!("{w} × {h}"))
         .unwrap_or_default();
 
@@ -61,7 +66,10 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
         P::INK,
     );
     if !dims.is_empty() {
-        let name_w = painter.layout_no_wrap(name.to_string(), egui::FontId::proportional(13.0), P::INK).size().x;
+        let name_w = painter
+            .layout_no_wrap(name.to_string(), egui::FontId::proportional(13.0), P::INK)
+            .size()
+            .x;
         painter.text(
             egui::pos2(r.min.x + 14.0 + name_w + 12.0, r.center().y),
             egui::Align2::LEFT_CENTER,
@@ -76,12 +84,19 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
     let chips_x = r.max.x - 360.0;
     let clip = egui::Rect::from_min_max(egui::pos2(chips_x, r.min.y), r.max);
     // We draw them inline via a separate child ui
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(clip).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(clip)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
     child.add_space(12.0);
     let conf = app.settings.detection.score_threshold;
     let preset = app.settings.crop.preset.clone();
     let face_h = app.settings.crop.face_height_pct;
-    let aspect = format!("{}:{}", app.settings.crop.output_width, app.settings.crop.output_height);
+    let aspect = format!(
+        "{}:{}",
+        app.settings.crop.output_width, app.settings.crop.output_height
+    );
 
     ctl_pill(&mut child, "preset ", &preset, Some(P::CYAN));
     child.add_space(4.0);
@@ -117,7 +132,12 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     // Stage background
     let painter = ui.painter();
     painter.rect_filled(image_rect, 12.0, P::BG);
-    painter.rect_stroke(image_rect, 12.0, Stroke::new(1.0, P::RULE), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        image_rect,
+        12.0,
+        Stroke::new(1.0, P::RULE),
+        egui::StrokeKind::Outside,
+    );
 
     // Draw image texture if available
     if let Some(texture) = &app.preview.texture {
@@ -177,7 +197,12 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             draw_face_box(painter, screen_rect, color, selected);
 
             // Confidence badge
-            draw_confidence_badge(painter, &format!("{:.2}", det.detection.score), screen_rect, color);
+            draw_confidence_badge(
+                painter,
+                &format!("{:.2}", det.detection.score),
+                screen_rect,
+                color,
+            );
 
             // Landmarks
             for lm in &det.detection.landmarks {
@@ -227,7 +252,9 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                         break;
                     }
                 }
-                if !clicked_any { app.selected_faces.clear(); }
+                if !clicked_any {
+                    app.selected_faces.clear();
+                }
             }
         }
     }
@@ -251,7 +278,12 @@ fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
     );
     let painter = ui.painter();
     painter.rect_filled(log_rect, 9.0, P::SURFACE.linear_multiply(0.85));
-    painter.rect_stroke(log_rect, 9.0, Stroke::new(1.0, P::RULE), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        log_rect,
+        9.0,
+        Stroke::new(1.0, P::RULE),
+        egui::StrokeKind::Outside,
+    );
 
     painter.text(
         egui::pos2(log_rect.min.x + pad, log_rect.min.y + 8.0),
@@ -272,7 +304,7 @@ fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
     for (i, line) in app.log_lines[start..].iter().enumerate() {
         let y = log_rect.min.y + header_h + i as f32 * line_h;
         let msg_color = match line.kind {
-            LogKind::Ok   => P::LIME,
+            LogKind::Ok => P::LIME,
             LogKind::Warn => P::PEACH,
             LogKind::Info => P::INK2,
         };
@@ -295,8 +327,10 @@ fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
 
 fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
     ui.painter().line_segment(
-        [egui::pos2(ui.min_rect().min.x, ui.min_rect().min.y),
-         egui::pos2(ui.min_rect().max.x, ui.min_rect().min.y)],
+        [
+            egui::pos2(ui.min_rect().min.x, ui.min_rect().min.y),
+            egui::pos2(ui.min_rect().max.x, ui.min_rect().min.y),
+        ],
         Stroke::new(1.0, P::RULE),
     );
 
@@ -313,12 +347,17 @@ fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
             let selected = app.selected_faces.contains(&i);
             let alt = i % 2 == 1;
             let resp = face_chip(ui, &label, selected, alt);
-            if resp.clicked() { to_toggle = Some(i); }
+            if resp.clicked() {
+                to_toggle = Some(i);
+            }
             ui.add_space(3.0);
         }
         if let Some(i) = to_toggle {
-            if app.selected_faces.contains(&i) { app.selected_faces.remove(&i); }
-            else { app.selected_faces.insert(i); }
+            if app.selected_faces.contains(&i) {
+                app.selected_faces.remove(&i);
+            } else {
+                app.selected_faces.insert(i);
+            }
         }
 
         // Zoom controls on right
@@ -326,24 +365,38 @@ fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
             ui.add_space(8.0);
             zoom_btn(ui, "⛶", "Fit");
             ui.add_space(2.0);
-            if zoom_btn(ui, "+", "Zoom in") { app.zoom = (app.zoom * 1.2).min(8.0); }
+            if zoom_btn(ui, "+", "Zoom in") {
+                app.zoom = (app.zoom * 1.2).min(8.0);
+            }
             ui.add_space(2.0);
             zoom_btn(ui, &format!("{:.0}%", app.zoom * 100.0), "Reset");
             ui.add_space(2.0);
-            if zoom_btn(ui, "−", "Zoom out") { app.zoom = (app.zoom / 1.2).max(0.1); }
+            if zoom_btn(ui, "−", "Zoom out") {
+                app.zoom = (app.zoom / 1.2).max(0.1);
+            }
         });
     });
 }
 
 fn zoom_btn(ui: &mut egui::Ui, label: &str, _tip: &str) -> bool {
     let font = egui::FontId::monospace(10.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, P::INK2);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, P::INK2);
     let w = (galley.size().x + 14.0).max(26.0);
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 26.0), Sense::click());
     let r = resp.rect;
-    let bg = if resp.hovered() { P::white_alpha(20) } else { P::white_alpha(10) };
+    let bg = if resp.hovered() {
+        P::white_alpha(20)
+    } else {
+        P::white_alpha(10)
+    };
     painter.rect_filled(r, 6.0, bg);
     painter.rect_stroke(r, 6.0, Stroke::new(1.0, P::RULE), egui::StrokeKind::Outside);
-    painter.galley(r.min + Vec2::new((w - galley.size().x) / 2.0, (26.0 - galley.size().y) / 2.0), galley, P::INK2);
+    painter.galley(
+        r.min + Vec2::new((w - galley.size().x) / 2.0, (26.0 - galley.size().y) / 2.0),
+        galley,
+        P::INK2,
+    );
     resp.clicked()
 }

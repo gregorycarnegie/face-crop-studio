@@ -8,14 +8,18 @@ use egui::{Color32, Frame, Sense, Stroke, Ui, Vec2};
 pub fn show(ui: &mut Ui, app: &mut App2) {
     egui::Panel::top("toolbar")
         .exact_size(52.0)
-        .frame(Frame::new()
-            .fill(P::SURFACE.linear_multiply(0.6))
-            .inner_margin(egui::Margin::symmetric(12, 8)))
+        .frame(
+            Frame::new()
+                .fill(P::SURFACE.linear_multiply(0.6))
+                .inner_margin(egui::Margin::symmetric(12, 8)),
+        )
         .show_inside(ui, |ui| {
             // Bottom border
             ui.painter().line_segment(
-                [egui::pos2(ui.min_rect().min.x, ui.min_rect().max.y - 1.0),
-                 egui::pos2(ui.min_rect().max.x, ui.min_rect().max.y - 1.0)],
+                [
+                    egui::pos2(ui.min_rect().min.x, ui.min_rect().max.y - 1.0),
+                    egui::pos2(ui.min_rect().max.x, ui.min_rect().max.y - 1.0),
+                ],
                 Stroke::new(1.0, P::RULE),
             );
 
@@ -30,15 +34,33 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
                 // Secondary action: Export
                 if primary_btn(ui, "Export crops", P::PEACH, bg_from_peach()) {
-                    // TODO: trigger export dialog
+                    if app.selected_faces.is_empty() && !app.batch_files.is_empty() {
+                        crate::core::export::start_batch_export(app);
+                    } else {
+                        crate::core::export::export_selected_faces(app);
+                    }
                 }
                 tb_sep(ui);
 
                 // Icon buttons
                 icon_btn(ui, "📂", "Open", || {
-                    // file open via rfd (non-blocking would need channels)
+                    if let Some(paths) = rfd::FileDialog::new()
+                        .add_filter(
+                            "Images",
+                            &["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"],
+                        )
+                        .pick_files()
+                    {
+                        let first = paths.first().cloned();
+                        app.enqueue_batch_paths(paths);
+                        if let Some(path) = first {
+                            app.load_image_path(path);
+                        }
+                    }
                 });
-                icon_btn(ui, "💾", "Save", || {});
+                icon_btn(ui, "💾", "Save", || {
+                    crate::core::export::export_selected_faces(app);
+                });
                 icon_btn(ui, "↩", "Undo", || {});
                 icon_btn(ui, "↪", "Redo", || {});
                 tb_sep(ui);
@@ -67,7 +89,10 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
                 // Right: GPU pill
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = app.gpu_status.adapter_name.as_deref()
+                    let label = app
+                        .gpu_status
+                        .adapter_name
+                        .as_deref()
                         .map(|n| format!("GPU · {n}"))
                         .unwrap_or_else(|| "GPU · wgpu".to_string());
                     gpu_pill(ui, &label);
@@ -82,9 +107,17 @@ fn primary_btn(ui: &mut egui::Ui, label: &str, fg: Color32, bg: Color32) -> bool
     let w = galley.size().x + 26.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
     let r = resp.rect;
-    let fill = if resp.hovered() { lighten(bg, 0.08) } else { bg };
+    let fill = if resp.hovered() {
+        lighten(bg, 0.08)
+    } else {
+        bg
+    };
     painter.rect_filled(r, 7.0, fill);
-    painter.galley(r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0), galley, fg);
+    painter.galley(
+        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
+        galley,
+        fg,
+    );
     resp.clicked()
 }
 
@@ -96,37 +129,87 @@ fn ghost_btn(ui: &mut egui::Ui, label: &str) -> bool {
     let r = resp.rect;
     if resp.hovered() {
         painter.rect_filled(r, 7.0, P::white_alpha(15));
-        painter.rect_stroke(r, 7.0, Stroke::new(1.0, P::RULE2), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            r,
+            7.0,
+            Stroke::new(1.0, P::RULE2),
+            egui::StrokeKind::Outside,
+        );
     } else {
-        painter.rect_stroke(r, 7.0, Stroke::new(1.0, P::RULE2), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            r,
+            7.0,
+            Stroke::new(1.0, P::RULE2),
+            egui::StrokeKind::Outside,
+        );
         painter.rect_filled(r, 7.0, P::white_alpha(5));
     }
-    painter.galley(r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0), galley, P::INK);
+    painter.galley(
+        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
+        galley,
+        P::INK,
+    );
     resp.clicked()
 }
 
-fn icon_btn(ui: &mut egui::Ui, icon: &str, _tooltip: &str, _action: impl FnOnce()) -> bool {
+fn icon_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str, action: impl FnOnce()) -> bool {
     let (resp, painter) = ui.allocate_painter(Vec2::splat(34.0), Sense::click());
     let r = resp.rect;
     if resp.hovered() {
         painter.rect_filled(r, 7.0, P::white_alpha(15));
     }
-    painter.rect_stroke(r, 7.0, Stroke::new(1.0, P::RULE2), egui::StrokeKind::Outside);
-    painter.text(r.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(14.0), P::INK2);
-    resp.clicked()
+    painter.rect_stroke(
+        r,
+        7.0,
+        Stroke::new(1.0, P::RULE2),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        r.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(14.0),
+        P::INK2,
+    );
+    let clicked = resp.clicked();
+    resp.on_hover_text(tooltip);
+    if clicked {
+        action();
+    }
+    clicked
 }
 
 fn danger_btn(ui: &mut egui::Ui, label: &str, action: impl FnOnce()) -> bool {
     let font = egui::FontId::proportional(12.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, P::ROSE);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, P::ROSE);
     let w = galley.size().x + 26.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
     let r = resp.rect;
-    let bg = if resp.hovered() { P::rose_alpha(30) } else { P::rose_alpha(12) };
+    let bg = if resp.hovered() {
+        P::rose_alpha(30)
+    } else {
+        P::rose_alpha(12)
+    };
     painter.rect_filled(r, 7.0, bg);
-    painter.rect_stroke(r, 7.0, Stroke::new(1.0, P::rose_alpha(64)), egui::StrokeKind::Outside);
-    painter.galley(r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0), galley, P::ROSE);
-    if resp.clicked() { action(); true } else { false }
+    painter.rect_stroke(
+        r,
+        7.0,
+        Stroke::new(1.0, P::rose_alpha(64)),
+        egui::StrokeKind::Outside,
+    );
+    painter.galley(
+        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
+        galley,
+        P::ROSE,
+    );
+    if resp.clicked() {
+        action();
+        true
+    } else {
+        false
+    }
 }
 
 fn lighten(c: Color32, amt: f32) -> Color32 {

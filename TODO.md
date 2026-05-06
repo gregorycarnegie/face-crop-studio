@@ -6,6 +6,10 @@
 
 - [x] Centralize remaining package-local Cargo dependency versions under workspace dependencies; keep native AVIF decode enabled so AVIF inputs load.
 
+### fcs-gui2 Follow-up
+
+- [x] Restore redesigned GUI basics: resizable frameless window, folder drag-and-drop queueing, working queue row controls, and crop export actions.
+
 ### CI / Installer Quality
 
 - [x] **CI**: Consolidate model-gen fallback — remove the redundant `Retry Model Gen` step; put a single clean fallback in the download step (both ci.yml and release.yml).

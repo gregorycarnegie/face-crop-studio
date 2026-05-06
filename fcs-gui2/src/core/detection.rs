@@ -21,7 +21,11 @@ use std::{
 pub fn build_detector(
     settings: &AppSettings,
     shared_gpu_context: Option<Arc<GpuContext>>,
-) -> (GpuStatusIndicator, Option<Arc<GpuContext>>, Result<YuNetDetector>) {
+) -> (
+    GpuStatusIndicator,
+    Option<Arc<GpuContext>>,
+    Result<YuNetDetector>,
+) {
     let (preprocessor, gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
         info!("Using shared GPU context from egui renderer");
         build_preprocessor_from_context(shared_ctx, settings)
@@ -30,7 +34,11 @@ pub fn build_detector(
     };
 
     let Some(model_path) = settings.model_path.as_deref() else {
-        return (gpu_status, gpu_context, Err(anyhow::anyhow!("no model path configured")));
+        return (
+            gpu_status,
+            gpu_context,
+            Err(anyhow::anyhow!("no model path configured")),
+        );
     };
 
     let preprocess: PreprocessConfig = settings.input.into();
@@ -39,8 +47,15 @@ pub fn build_detector(
 
     let build_cpu = || -> Result<YuNetDetector> {
         if let Some(pre) = &preprocessor {
-            YuNetDetector::with_preprocessor(model_path, preprocess.clone(), postprocess.clone(), Arc::clone(pre))
-                .with_context(|| format!("failed to load YuNet model with GPU preprocessing from {model_path}"))
+            YuNetDetector::with_preprocessor(
+                model_path,
+                preprocess.clone(),
+                postprocess.clone(),
+                Arc::clone(pre),
+            )
+            .with_context(|| {
+                format!("failed to load YuNet model with GPU preprocessing from {model_path}")
+            })
         } else {
             YuNetDetector::new(model_path, preprocess.clone(), postprocess.clone())
                 .with_context(|| format!("failed to load YuNet model from {model_path}"))
@@ -52,11 +67,22 @@ pub fn build_detector(
             .as_ref()
             .map(Arc::clone)
             .unwrap_or_else(|| Arc::new(CpuPreprocessor));
-        match YuNetDetector::with_gpu_preprocessor(model_path, preprocess.clone(), postprocess.clone(), pre)
-            .with_context(|| format!("failed GPU YuNet from {model_path}"))
+        match YuNetDetector::with_gpu_preprocessor(
+            model_path,
+            preprocess.clone(),
+            postprocess.clone(),
+            pre,
+        )
+        .with_context(|| format!("failed GPU YuNet from {model_path}"))
         {
-            Ok(d) => { info!("Using GPU inference"); Ok(d) }
-            Err(err) => { warn!("GPU inference failed ({err}); falling back"); build_cpu() }
+            Ok(d) => {
+                info!("Using GPU inference");
+                Ok(d)
+            }
+            Err(err) => {
+                warn!("GPU inference failed ({err}); falling back");
+                build_cpu()
+            }
         }
     } else {
         build_cpu()
@@ -67,7 +93,11 @@ pub fn build_detector(
 
 fn maybe_build_gpu_preprocessor(
     settings: &AppSettings,
-) -> (Option<Arc<dyn Preprocessor>>, Option<Arc<GpuContext>>, GpuStatusIndicator) {
+) -> (
+    Option<Arc<dyn Preprocessor>>,
+    Option<Arc<GpuContext>>,
+    GpuStatusIndicator,
+) {
     if !settings.gpu.preprocessing {
         let status = GpuStatusIndicator::disabled("GPU preprocessing disabled".to_string());
         return (None, None, status);
@@ -75,9 +105,7 @@ fn maybe_build_gpu_preprocessor(
     let options: GpuContextOptions = (&settings.gpu).into();
     match GpuContext::init_with_fallback(&options) {
         GpuAvailability::Available(ctx) => build_preprocessor_from_context(ctx, settings),
-        GpuAvailability::Disabled { reason } => {
-            (None, None, GpuStatusIndicator::disabled(reason))
-        }
+        GpuAvailability::Disabled { reason } => (None, None, GpuStatusIndicator::disabled(reason)),
         GpuAvailability::Unavailable { error } => {
             (None, None, GpuStatusIndicator::error(error.to_string()))
         }
@@ -87,9 +115,17 @@ fn maybe_build_gpu_preprocessor(
 fn build_preprocessor_from_context(
     context: Arc<GpuContext>,
     settings: &AppSettings,
-) -> (Option<Arc<dyn Preprocessor>>, Option<Arc<GpuContext>>, GpuStatusIndicator) {
+) -> (
+    Option<Arc<dyn Preprocessor>>,
+    Option<Arc<GpuContext>>,
+    GpuStatusIndicator,
+) {
     if !settings.gpu.enabled || !settings.gpu.preprocessing {
-        return (None, None, GpuStatusIndicator::disabled("Disabled by config".to_string()));
+        return (
+            None,
+            None,
+            GpuStatusIndicator::disabled("Disabled by config".to_string()),
+        );
     }
     let info = context.adapter_info();
     match WgpuPreprocessor::new(context.clone()) {
@@ -119,9 +155,8 @@ pub fn perform_detection(
     detector: Arc<YuNetDetector>,
     path: PathBuf,
 ) -> Result<DetectionJobSuccess> {
-    let image = Arc::new(
-        load_image(&path).with_context(|| format!("failed to load {}", path.display()))?,
-    );
+    let image =
+        Arc::new(load_image(&path).with_context(|| format!("failed to load {}", path.display()))?);
     let detection_output = detector
         .detect_image(&image)
         .with_context(|| format!("detection failed for {}", path.display()))?;
@@ -195,9 +230,16 @@ pub fn spawn_detection_job(
                     nms_bits: 0,
                     top_k: 5000,
                 };
-                JobMessage::DetectionFinished { job_id, cache_key, data }
+                JobMessage::DetectionFinished {
+                    job_id,
+                    cache_key,
+                    data,
+                }
             }
-            Err(err) => JobMessage::DetectionFailed { job_id, error: format!("{err:#}") },
+            Err(err) => JobMessage::DetectionFailed {
+                job_id,
+                error: format!("{err:#}"),
+            },
         };
         if job_tx.send(payload).is_err() {
             error!("GUI dropped detection result for {}", path.display());

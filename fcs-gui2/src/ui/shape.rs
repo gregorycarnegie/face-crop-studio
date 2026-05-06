@@ -45,19 +45,35 @@ fn default_for_variant(variant: ShapeVariant) -> CropShape {
         ShapeVariant::ChamferRect => CropShape::ChamferedRectangle { size_pct: 0.12 },
         ShapeVariant::Ellipse => CropShape::Ellipse,
         ShapeVariant::PolygonSharp => CropShape::Polygon {
-            sides: 6, rotation_deg: 0.0, corner_style: PolygonCornerStyle::Sharp,
+            sides: 6,
+            rotation_deg: 0.0,
+            corner_style: PolygonCornerStyle::Sharp,
         },
         ShapeVariant::PolygonRounded => CropShape::Polygon {
-            sides: 6, rotation_deg: 0.0, corner_style: PolygonCornerStyle::Rounded { radius_pct: 0.1 },
+            sides: 6,
+            rotation_deg: 0.0,
+            corner_style: PolygonCornerStyle::Rounded { radius_pct: 0.1 },
         },
         ShapeVariant::PolygonChamfered => CropShape::Polygon {
-            sides: 6, rotation_deg: 0.0, corner_style: PolygonCornerStyle::Chamfered { size_pct: 0.1 },
+            sides: 6,
+            rotation_deg: 0.0,
+            corner_style: PolygonCornerStyle::Chamfered { size_pct: 0.1 },
         },
         ShapeVariant::PolygonBezier => CropShape::Polygon {
-            sides: 6, rotation_deg: 0.0, corner_style: PolygonCornerStyle::Bezier { tension: 0.5 },
+            sides: 6,
+            rotation_deg: 0.0,
+            corner_style: PolygonCornerStyle::Bezier { tension: 0.5 },
         },
-        ShapeVariant::Star => CropShape::Star { points: 5, inner_radius_pct: 0.5, rotation_deg: 0.0 },
-        ShapeVariant::KochPolygon => CropShape::KochPolygon { sides: 3, rotation_deg: 0.0, iterations: 3 },
+        ShapeVariant::Star => CropShape::Star {
+            points: 5,
+            inner_radius_pct: 0.5,
+            rotation_deg: 0.0,
+        },
+        ShapeVariant::KochPolygon => CropShape::KochPolygon {
+            sides: 3,
+            rotation_deg: 0.0,
+            iterations: 3,
+        },
         ShapeVariant::KochRectangle => CropShape::KochRectangle { iterations: 3 },
     }
 }
@@ -114,10 +130,17 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
                 changed = true;
             }
         }
-        CropShape::Polygon { sides, rotation_deg, corner_style } => {
+        CropShape::Polygon {
+            sides,
+            rotation_deg,
+            corner_style,
+        } => {
             let mut s = *sides as u32;
             field_label(ui, "Sides");
-            if ui.add(egui::DragValue::new(&mut s).range(3..=24).speed(0.1)).changed() {
+            if ui
+                .add(egui::DragValue::new(&mut s).range(3..=24).speed(0.1))
+                .changed()
+            {
                 *sides = s.clamp(3, 24) as u8;
                 changed = true;
             }
@@ -155,10 +178,17 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
                 }
             }
         }
-        CropShape::Star { points, inner_radius_pct, rotation_deg } => {
+        CropShape::Star {
+            points,
+            inner_radius_pct,
+            rotation_deg,
+        } => {
             let mut p = *points as u32;
             field_label(ui, "Points");
-            if ui.add(egui::DragValue::new(&mut p).range(3..=24).speed(0.1)).changed() {
+            if ui
+                .add(egui::DragValue::new(&mut p).range(3..=24).speed(0.1))
+                .changed()
+            {
                 *points = p.clamp(3, 24) as u8;
                 changed = true;
             }
@@ -175,10 +205,17 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
                 changed = true;
             }
         }
-        CropShape::KochPolygon { sides, rotation_deg, iterations } => {
+        CropShape::KochPolygon {
+            sides,
+            rotation_deg,
+            iterations,
+        } => {
             let mut s = *sides as u32;
             field_label(ui, "Sides");
-            if ui.add(egui::DragValue::new(&mut s).range(3..=24).speed(0.1)).changed() {
+            if ui
+                .add(egui::DragValue::new(&mut s).range(3..=24).speed(0.1))
+                .changed()
+            {
                 *sides = s.clamp(3, 24) as u8;
                 changed = true;
             }
@@ -190,7 +227,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
 
             let mut iter = *iterations as u32;
             field_label(ui, "Iterations");
-            if ui.add(egui::DragValue::new(&mut iter).range(0..=5).speed(0.1)).changed() {
+            if ui
+                .add(egui::DragValue::new(&mut iter).range(0..=5).speed(0.1))
+                .changed()
+            {
                 *iterations = iter.clamp(0, 5) as u8;
                 changed = true;
             }
@@ -198,7 +238,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
         CropShape::KochRectangle { iterations } => {
             let mut iter = *iterations as u32;
             field_label(ui, "Iterations");
-            if ui.add(egui::DragValue::new(&mut iter).range(0..=5).speed(0.1)).changed() {
+            if ui
+                .add(egui::DragValue::new(&mut iter).range(0..=5).speed(0.1))
+                .changed()
+            {
                 *iterations = iter.clamp(0, 5) as u8;
                 changed = true;
             }
@@ -230,10 +273,13 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
     field_label(ui, "Vignette color");
     let vc = &mut app.settings.crop.vignette_color;
     let mut color = [vc.red, vc.green, vc.blue, vc.alpha];
-    if ui.color_edit_button_srgba_unmultiplied(&mut color).changed() {
-        vc.red   = color[0];
+    if ui
+        .color_edit_button_srgba_unmultiplied(&mut color)
+        .changed()
+    {
+        vc.red = color[0];
         vc.green = color[1];
-        vc.blue  = color[2];
+        vc.blue = color[2];
         vc.alpha = color[3];
         changed = true;
     }
@@ -243,30 +289,30 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
 
 fn variant_label(v: ShapeVariant) -> &'static str {
     match v {
-        ShapeVariant::Rectangle       => "Rectangle",
-        ShapeVariant::RoundedRect     => "Rounded rectangle",
-        ShapeVariant::ChamferRect     => "Chamfered rectangle",
-        ShapeVariant::Ellipse         => "Ellipse",
-        ShapeVariant::PolygonSharp    => "Polygon",
-        ShapeVariant::PolygonRounded  => "Polygon (rounded)",
+        ShapeVariant::Rectangle => "Rectangle",
+        ShapeVariant::RoundedRect => "Rounded rectangle",
+        ShapeVariant::ChamferRect => "Chamfered rectangle",
+        ShapeVariant::Ellipse => "Ellipse",
+        ShapeVariant::PolygonSharp => "Polygon",
+        ShapeVariant::PolygonRounded => "Polygon (rounded)",
         ShapeVariant::PolygonChamfered => "Polygon (chamfered)",
-        ShapeVariant::PolygonBezier   => "Polygon (bezier)",
-        ShapeVariant::Star            => "Star",
-        ShapeVariant::KochPolygon     => "Koch polygon",
-        ShapeVariant::KochRectangle   => "Koch rectangle",
+        ShapeVariant::PolygonBezier => "Polygon (bezier)",
+        ShapeVariant::Star => "Star",
+        ShapeVariant::KochPolygon => "Koch polygon",
+        ShapeVariant::KochRectangle => "Koch rectangle",
     }
 }
 
 const ALL_VARIANTS: &[(&str, ShapeVariant)] = &[
-    ("Rectangle",           ShapeVariant::Rectangle),
-    ("Rounded rectangle",   ShapeVariant::RoundedRect),
+    ("Rectangle", ShapeVariant::Rectangle),
+    ("Rounded rectangle", ShapeVariant::RoundedRect),
     ("Chamfered rectangle", ShapeVariant::ChamferRect),
-    ("Ellipse",             ShapeVariant::Ellipse),
-    ("Polygon",             ShapeVariant::PolygonSharp),
-    ("Polygon (rounded)",   ShapeVariant::PolygonRounded),
+    ("Ellipse", ShapeVariant::Ellipse),
+    ("Polygon", ShapeVariant::PolygonSharp),
+    ("Polygon (rounded)", ShapeVariant::PolygonRounded),
     ("Polygon (chamfered)", ShapeVariant::PolygonChamfered),
-    ("Polygon (bezier)",    ShapeVariant::PolygonBezier),
-    ("Star",                ShapeVariant::Star),
-    ("Koch polygon",        ShapeVariant::KochPolygon),
-    ("Koch rectangle",      ShapeVariant::KochRectangle),
+    ("Polygon (bezier)", ShapeVariant::PolygonBezier),
+    ("Star", ShapeVariant::Star),
+    ("Koch polygon", ShapeVariant::KochPolygon),
+    ("Koch rectangle", ShapeVariant::KochRectangle),
 ];

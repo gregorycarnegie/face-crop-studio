@@ -9,27 +9,38 @@ const LABEL_W: f32 = 50.0;
 
 /// Draw a slider with the peach-thumb dark-track style and return changed flag.
 pub fn themed_slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32) -> bool {
-    ui.add(egui::Slider::new(value, min..=max).show_value(false)).changed()
+    ui.add(egui::Slider::new(value, min..=max).show_value(false))
+        .changed()
 }
 
 /// Slider with inline value label on the right.
-pub fn slider_with_label(ui: &mut Ui, _label: &str, value: &mut f32, min: f32, max: f32, fmt: &str) -> bool {
+pub fn slider_with_label(
+    ui: &mut Ui,
+    _label: &str,
+    value: &mut f32,
+    min: f32,
+    max: f32,
+    fmt: &str,
+) -> bool {
     ui.horizontal(|ui| {
         let slider_w = (ui.available_width() - LABEL_W).max(60.0);
-        let changed = ui.add_sized(
-            [slider_w, 20.0],
-            egui::Slider::new(value, min..=max).show_value(false),
-        ).changed();
+        let changed = ui
+            .add_sized(
+                [slider_w, 20.0],
+                egui::Slider::new(value, min..=max).show_value(false),
+            )
+            .changed();
         let display = match fmt {
-            "pct"  => format!("{:.0}%", value),
+            "pct" => format!("{:.0}%", value),
             "conf" => format!("{:.2}", value),
-            "deg"  => format!("{:.0}°", value),
-            "px"   => format!("{:.0}px", value),
-            _      => format!("{value:.1}"),
+            "deg" => format!("{:.0}°", value),
+            "px" => format!("{:.0}px", value),
+            _ => format!("{value:.1}"),
         };
         ui.monospace(egui::RichText::new(display).color(P::PEACH).size(11.5));
         changed
-    }).inner
+    })
+    .inner
 }
 
 // ── Segmented control ─────────────────────────────────────────────────────────
@@ -47,7 +58,12 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: &mut usize) ->
     );
     let painter = ui.painter();
     painter.rect_filled(outer.rect, 7.0, bg);
-    painter.rect_stroke(outer.rect, 7.0, Stroke::new(1.0, P::RULE), StrokeKind::Outside);
+    painter.rect_stroke(
+        outer.rect,
+        7.0,
+        Stroke::new(1.0, P::RULE),
+        StrokeKind::Outside,
+    );
 
     ui.horizontal(|ui| {
         for (i, &label) in options.iter().enumerate() {
@@ -57,8 +73,20 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: &mut usize) ->
             );
             let resp = ui.allocate_rect(btn_rect, Sense::click());
             let is_on = i == *selected;
-            let bg_fill = if is_on { P::PEACH } else if resp.hovered() { P::white_alpha(10) } else { Color32::TRANSPARENT };
-            let text_color = if is_on { P::BG } else if resp.hovered() { P::INK } else { P::INK2 };
+            let bg_fill = if is_on {
+                P::PEACH
+            } else if resp.hovered() {
+                P::white_alpha(10)
+            } else {
+                Color32::TRANSPARENT
+            };
+            let text_color = if is_on {
+                P::BG
+            } else if resp.hovered() {
+                P::INK
+            } else {
+                P::INK2
+            };
             let painter = ui.painter();
             if bg_fill != Color32::TRANSPARENT {
                 painter.rect_filled(btn_rect, 5.0, bg_fill);
@@ -70,7 +98,10 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: &mut usize) ->
                 egui::FontId::monospace(11.0),
                 text_color,
             );
-            if resp.clicked() { *selected = i; changed = true; }
+            if resp.clicked() {
+                *selected = i;
+                changed = true;
+            }
         }
     });
     changed
@@ -84,15 +115,30 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool) -> (Response, bool) {
     let rect = resp.rect;
     let bg = if *on { P::cyan_alpha(64) } else { P::RULE };
     painter.rect_filled(rect, 9.0, bg);
-    painter.rect_stroke(rect, 9.0, Stroke::new(1.0, if *on { P::cyan_alpha(120) } else { P::RULE2 }), StrokeKind::Outside);
-    let cx = if *on { rect.max.x - 9.0 } else { rect.min.x + 9.0 };
+    painter.rect_stroke(
+        rect,
+        9.0,
+        Stroke::new(1.0, if *on { P::cyan_alpha(120) } else { P::RULE2 }),
+        StrokeKind::Outside,
+    );
+    let cx = if *on {
+        rect.max.x - 9.0
+    } else {
+        rect.min.x + 9.0
+    };
     let thumb_color = if *on { P::CYAN } else { P::INK3 };
     painter.circle_filled(egui::pos2(cx, rect.center().y), 5.5, thumb_color);
     if *on {
-        painter.circle_stroke(egui::pos2(cx, rect.center().y), 5.5, Stroke::new(0.5, P::CYAN));
+        painter.circle_stroke(
+            egui::pos2(cx, rect.center().y),
+            5.5,
+            Stroke::new(0.5, P::CYAN),
+        );
     }
     let changed = resp.clicked();
-    if changed { *on = !*on; }
+    if changed {
+        *on = !*on;
+    }
     (resp, changed)
 }
 
@@ -104,8 +150,10 @@ pub fn toggle_row(ui: &mut Ui, label: &str, on: &mut bool) -> bool {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (_, changed) = toggle_switch(ui, on);
             changed
-        }).inner
-    }).inner
+        })
+        .inner
+    })
+    .inner
 }
 
 // ── Color swatch + hex input ──────────────────────────────────────────────────
@@ -116,7 +164,12 @@ pub fn color_swatch_input(ui: &mut Ui, hex: &mut String, color: &mut [u8; 3]) ->
         let (resp, painter) = ui.allocate_painter(Vec2::splat(28.0), Sense::click());
         let fill = Color32::from_rgb(color[0], color[1], color[2]);
         painter.rect_filled(resp.rect, 6.0, fill);
-        painter.rect_stroke(resp.rect, 6.0, Stroke::new(1.0, P::RULE), egui::StrokeKind::Outside);
+        painter.rect_stroke(
+            resp.rect,
+            6.0,
+            Stroke::new(1.0, P::RULE),
+            egui::StrokeKind::Outside,
+        );
 
         let text_resp = ui.add(
             egui::TextEdit::singleline(hex)
@@ -140,7 +193,9 @@ fn parse_hex_color(hex: &str) -> Option<[u8; 3]> {
         let g = u8::from_str_radix(&s[2..4], 16).ok()?;
         let b = u8::from_str_radix(&s[4..6], 16).ok()?;
         Some([r, g, b])
-    } else { None }
+    } else {
+        None
+    }
 }
 
 // ── Panel header ──────────────────────────────────────────────────────────────
@@ -154,8 +209,14 @@ pub fn panel_header(ui: &mut Ui, num: &str, title: &str, open: bool) -> bool {
         painter.rect_filled(rect, 0.0, P::white_alpha(4));
     }
     // Number badge
-    let num_rect = egui::Rect::from_min_size(rect.min + Vec2::new(14.0, 10.0), Vec2::new(28.0, 16.0));
-    painter.rect_stroke(num_rect, 4.0, Stroke::new(1.0, P::RULE2), egui::StrokeKind::Outside);
+    let num_rect =
+        egui::Rect::from_min_size(rect.min + Vec2::new(14.0, 10.0), Vec2::new(28.0, 16.0));
+    painter.rect_stroke(
+        num_rect,
+        4.0,
+        Stroke::new(1.0, P::RULE2),
+        egui::StrokeKind::Outside,
+    );
     painter.text(
         num_rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -183,7 +244,10 @@ pub fn panel_header(ui: &mut Ui, num: &str, title: &str, open: bool) -> bool {
     );
     // Separator
     painter.line_segment(
-        [egui::pos2(rect.min.x, rect.max.y), egui::pos2(rect.max.x, rect.max.y)],
+        [
+            egui::pos2(rect.min.x, rect.max.y),
+            egui::pos2(rect.max.x, rect.max.y),
+        ],
         Stroke::new(1.0, P::RULE),
     );
     resp.clicked()
@@ -199,7 +263,9 @@ pub fn badge(ui: &mut Ui, label: &str) {
         label.to_string()
     };
     let font = egui::FontId::monospace(9.5);
-    let galley = ui.painter().layout_no_wrap(display.clone(), font.clone(), fg);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(display.clone(), font.clone(), fg);
     let pad = Vec2::new(5.0, 1.5);
     let (resp, painter) = ui.allocate_painter(galley.size() + pad * 2.0, Sense::hover());
     painter.rect_filled(resp.rect, 3.0, bg);
@@ -229,14 +295,30 @@ pub fn face_chip(ui: &mut Ui, label: &str, selected: bool, alt: bool) -> Respons
     painter.rect_stroke(r, 12.0, Stroke::new(1.0, border), egui::StrokeKind::Outside);
 
     // Check square
-    let check_rect = egui::Rect::from_min_size(r.min + Vec2::new(8.0, (total_h - 12.0) / 2.0), check_size);
+    let check_rect =
+        egui::Rect::from_min_size(r.min + Vec2::new(8.0, (total_h - 12.0) / 2.0), check_size);
     painter.rect_filled(check_rect, 3.0, check_bg);
-    painter.rect_stroke(check_rect, 3.0, Stroke::new(0.5, if selected { text } else { P::INK3 }), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        check_rect,
+        3.0,
+        Stroke::new(0.5, if selected { text } else { P::INK3 }),
+        egui::StrokeKind::Outside,
+    );
     if selected {
-        painter.text(check_rect.center(), egui::Align2::CENTER_CENTER, "✓", egui::FontId::proportional(9.0), P::BG);
+        painter.text(
+            check_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "✓",
+            egui::FontId::proportional(9.0),
+            P::BG,
+        );
     }
     // Label
-    painter.galley(r.min + Vec2::new(22.0, (total_h - galley.size().y) / 2.0), galley, text);
+    painter.galley(
+        r.min + Vec2::new(22.0, (total_h - galley.size().y) / 2.0),
+        galley,
+        text,
+    );
     resp
 }
 
@@ -244,23 +326,39 @@ pub fn face_chip(ui: &mut Ui, label: &str, selected: bool, alt: bool) -> Respons
 
 pub fn gpu_pill(ui: &mut Ui, label: &str) {
     let font = egui::FontId::monospace(10.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, P::LIME);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, P::LIME);
     let total_w = 6.0 + 8.0 + galley.size().x + 22.0;
     let total_h = 24.0_f32.max(galley.size().y + 12.0);
     let (resp, painter) = ui.allocate_painter(Vec2::new(total_w, total_h), Sense::hover());
     let r = resp.rect;
     painter.rect_filled(r, 12.0, P::lime_alpha(20));
-    painter.rect_stroke(r, 12.0, Stroke::new(1.0, P::lime_alpha(76)), egui::StrokeKind::Outside);
+    painter.rect_stroke(
+        r,
+        12.0,
+        Stroke::new(1.0, P::lime_alpha(76)),
+        egui::StrokeKind::Outside,
+    );
     let cx = r.min + Vec2::new(14.0, total_h / 2.0);
     painter.circle_filled(egui::pos2(cx.x, cx.y), 3.0, P::LIME);
-    painter.galley(r.min + Vec2::new(22.0, (total_h - galley.size().y) / 2.0), galley, P::LIME);
+    painter.galley(
+        r.min + Vec2::new(22.0, (total_h - galley.size().y) / 2.0),
+        galley,
+        P::LIME,
+    );
 }
 
 // ── Field label ───────────────────────────────────────────────────────────────
 
 pub fn field_label(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
-    ui.label(egui::RichText::new(text).size(10.0).color(P::INK3).family(egui::FontFamily::Monospace));
+    ui.label(
+        egui::RichText::new(text)
+            .size(10.0)
+            .color(P::INK3)
+            .family(egui::FontFamily::Monospace),
+    );
     ui.add_space(2.0);
 }
 
@@ -279,13 +377,19 @@ pub fn tb_sep(ui: &mut Ui) {
 pub fn ctl_pill(ui: &mut Ui, key: &str, val: &str, accent: Option<Color32>) {
     let key_color = P::INK3;
     let val_color = accent.unwrap_or(P::INK);
-    let border    = accent.map(|c| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 100)).unwrap_or(P::RULE);
-    let bg        = P::white_alpha(10);
+    let border = accent
+        .map(|c| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 100))
+        .unwrap_or(P::RULE);
+    let bg = P::white_alpha(10);
 
     let key_font = egui::FontId::monospace(10.5);
     let val_font = egui::FontId::monospace(10.5);
-    let key_g = ui.painter().layout_no_wrap(key.to_string(), key_font, key_color);
-    let val_g = ui.painter().layout_no_wrap(val.to_string(), val_font, val_color);
+    let key_g = ui
+        .painter()
+        .layout_no_wrap(key.to_string(), key_font, key_color);
+    let val_g = ui
+        .painter()
+        .layout_no_wrap(val.to_string(), val_font, val_color);
     let key_w = key_g.size().x;
     let w = key_w + val_g.size().x + 20.0;
     let h = 22.0_f32.max(key_g.size().y + 8.0);

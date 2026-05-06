@@ -11,7 +11,9 @@ pub fn apply_quality_rules_to_preview(
     auto_skip_no_high_quality: bool,
     auto_select_best: bool,
 ) {
-    if detections.is_empty() { return; }
+    if detections.is_empty() {
+        return;
+    }
 
     if auto_select_best {
         let best = detections
@@ -26,7 +28,9 @@ pub fn apply_quality_rules_to_preview(
     }
 
     if auto_skip_no_high_quality {
-        let has_high = detections.iter().any(|d| matches!(d.quality, Quality::High));
+        let has_high = detections
+            .iter()
+            .any(|d| matches!(d.quality, Quality::High));
         if !has_high {
             selected.clear();
         }

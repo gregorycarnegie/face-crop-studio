@@ -17,9 +17,13 @@ pub fn hit_test_handle(rect: Rect, pos: Pos2) -> Option<DragHandle> {
     ];
     for (handle, corner) in corners {
         let h_rect = Rect::from_center_size(corner, egui::Vec2::splat(HANDLE_SIZE + 4.0));
-        if h_rect.contains(pos) { return Some(handle); }
+        if h_rect.contains(pos) {
+            return Some(handle);
+        }
     }
-    if rect.shrink(4.0).contains(pos) { return Some(DragHandle::Move); }
+    if rect.shrink(4.0).contains(pos) {
+        return Some(DragHandle::Move);
+    }
     None
 }
 
@@ -39,7 +43,7 @@ pub fn apply_drag(
         DragHandle::NorthWest => {
             let new_x = (bbox.x + delta_px.x).clamp(0.0, bbox.x + bbox.width - 10.0);
             let new_y = (bbox.y + delta_px.y).clamp(0.0, bbox.y + bbox.height - 10.0);
-            bbox.width  += bbox.x - new_x;
+            bbox.width += bbox.x - new_x;
             bbox.height += bbox.y - new_y;
             bbox.x = new_x;
             bbox.y = new_y;
@@ -52,12 +56,12 @@ pub fn apply_drag(
         }
         DragHandle::SouthWest => {
             let new_x = (bbox.x + delta_px.x).clamp(0.0, bbox.x + bbox.width - 10.0);
-            bbox.width  += bbox.x - new_x;
+            bbox.width += bbox.x - new_x;
             bbox.x = new_x;
             bbox.height = (bbox.height + delta_px.y).clamp(10.0, img_h - bbox.y);
         }
         DragHandle::SouthEast => {
-            bbox.width  = (bbox.width  + delta_px.x).clamp(10.0, img_w - bbox.x);
+            bbox.width = (bbox.width + delta_px.x).clamp(10.0, img_w - bbox.x);
             bbox.height = (bbox.height + delta_px.y).clamp(10.0, img_h - bbox.y);
         }
     }

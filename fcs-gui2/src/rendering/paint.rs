@@ -16,11 +16,19 @@ pub fn draw_face_box(painter: &Painter, rect: Rect, color: Color32, selected: bo
 
 fn draw_dashed_rect(painter: &Painter, rect: Rect, stroke: Stroke) {
     let dash = 6.0;
-    let gap  = 4.0;
-    draw_dashed_h(painter, rect.min.x, rect.max.x, rect.min.y, stroke, dash, gap);
-    draw_dashed_h(painter, rect.min.x, rect.max.x, rect.max.y, stroke, dash, gap);
-    draw_dashed_v(painter, rect.min.y, rect.max.y, rect.min.x, stroke, dash, gap);
-    draw_dashed_v(painter, rect.min.y, rect.max.y, rect.max.x, stroke, dash, gap);
+    let gap = 4.0;
+    draw_dashed_h(
+        painter, rect.min.x, rect.max.x, rect.min.y, stroke, dash, gap,
+    );
+    draw_dashed_h(
+        painter, rect.min.x, rect.max.x, rect.max.y, stroke, dash, gap,
+    );
+    draw_dashed_v(
+        painter, rect.min.y, rect.max.y, rect.min.x, stroke, dash, gap,
+    );
+    draw_dashed_v(
+        painter, rect.min.y, rect.max.y, rect.max.x, stroke, dash, gap,
+    );
 }
 
 fn draw_dashed_h(painter: &Painter, x0: f32, x1: f32, y: f32, stroke: Stroke, dash: f32, gap: f32) {
@@ -58,7 +66,10 @@ pub fn draw_confidence_badge(painter: &Painter, text: &str, above_rect: Rect, co
     let galley = painter.layout_no_wrap(text.to_owned(), font_id.clone(), color);
     let pad = egui::Vec2::new(5.0, 2.0);
     let text_rect = Rect::from_min_size(
-        Pos2::new(above_rect.min.x - 1.0, above_rect.min.y - galley.size().y - pad.y * 2.0 - 2.0),
+        Pos2::new(
+            above_rect.min.x - 1.0,
+            above_rect.min.y - galley.size().y - pad.y * 2.0 - 2.0,
+        ),
         galley.size() + pad * 2.0,
     );
     painter.rect_filled(text_rect, 2.0, color);

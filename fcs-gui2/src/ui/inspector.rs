@@ -20,24 +20,24 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
     // Scrollable content
     egui::ScrollArea::vertical()
         .id_salt("inspector_scroll")
-        .show(ui, |ui| {
-            match app.inspector_tab {
-                InspectorTab::Crop    => crop_tab(ui, app),
-                InspectorTab::Output  => output_tab(ui, app),
-                InspectorTab::Enhance => enhance_tab(ui, app),
-            }
+        .show(ui, |ui| match app.inspector_tab {
+            InspectorTab::Crop => crop_tab(ui, app),
+            InspectorTab::Output => output_tab(ui, app),
+            InspectorTab::Enhance => enhance_tab(ui, app),
         });
 }
 
 fn inspector_tab_bar(ui: &mut Ui, app: &mut App2) {
     let tabs = [
-        ("Crop",    InspectorTab::Crop),
-        ("Output",  InspectorTab::Output),
+        ("Crop", InspectorTab::Crop),
+        ("Output", InspectorTab::Output),
         ("Enhance", InspectorTab::Enhance),
     ];
     ui.painter().line_segment(
-        [egui::pos2(ui.min_rect().min.x, ui.min_rect().min.y + 32.0),
-         egui::pos2(ui.min_rect().max.x, ui.min_rect().min.y + 32.0)],
+        [
+            egui::pos2(ui.min_rect().min.x, ui.min_rect().min.y + 32.0),
+            egui::pos2(ui.min_rect().max.x, ui.min_rect().min.y + 32.0),
+        ],
         Stroke::new(1.0, P::RULE),
     );
     ui.horizontal(|ui| {
@@ -47,18 +47,29 @@ fn inspector_tab_bar(ui: &mut Ui, app: &mut App2) {
             let is_active = app.inspector_tab == *variant;
             let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
             let text_color = if is_active { P::CYAN } else { P::INK3 };
-            if resp.hovered() && !is_active { painter.rect_filled(resp.rect, 0.0, P::white_alpha(5)); }
+            if resp.hovered() && !is_active {
+                painter.rect_filled(resp.rect, 0.0, P::white_alpha(5));
+            }
             if is_active {
                 painter.rect_filled(resp.rect, 0.0, P::cyan_alpha(10));
                 painter.line_segment(
-                    [egui::pos2(resp.rect.min.x, resp.rect.max.y - 2.0),
-                     egui::pos2(resp.rect.max.x, resp.rect.max.y - 2.0)],
+                    [
+                        egui::pos2(resp.rect.min.x, resp.rect.max.y - 2.0),
+                        egui::pos2(resp.rect.max.x, resp.rect.max.y - 2.0),
+                    ],
                     Stroke::new(2.0, P::CYAN),
                 );
             }
-            painter.text(resp.rect.center(), egui::Align2::CENTER_CENTER, *label,
-                egui::FontId::monospace(10.5), text_color);
-            if resp.clicked() { app.inspector_tab = *variant; }
+            painter.text(
+                resp.rect.center(),
+                egui::Align2::CENTER_CENTER,
+                *label,
+                egui::FontId::monospace(10.5),
+                text_color,
+            );
+            if resp.clicked() {
+                app.inspector_tab = *variant;
+            }
         }
     });
 }
@@ -71,18 +82,20 @@ fn mini_stats(ui: &mut Ui, app: &App2) {
     let (src_w, src_h) = app.preview.image_size.unwrap_or((0, 0));
 
     ui.painter().line_segment(
-        [egui::pos2(ui.min_rect().min.x, ui.cursor().min.y + 58.0),
-         egui::pos2(ui.min_rect().max.x, ui.cursor().min.y + 58.0)],
+        [
+            egui::pos2(ui.min_rect().min.x, ui.cursor().min.y + 58.0),
+            egui::pos2(ui.min_rect().max.x, ui.cursor().min.y + 58.0),
+        ],
         Stroke::new(1.0, P::RULE),
     );
 
     ui.horizontal(|ui| {
         ui.set_height(60.0);
         let w = ui.available_width() / 4.0;
-        stat_cell(ui, "Faces",    &total.to_string(),                P::PEACH, w);
-        stat_cell(ui, "Selected", &selected.to_string(),             P::CYAN,  w);
-        stat_cell(ui, "Detect",   &format!("{detect_ms}ms"),         P::LIME,  w);
-        stat_cell(ui, "Source",   &format!("{src_w}×{src_h}"),       P::ROSE,  w);
+        stat_cell(ui, "Faces", &total.to_string(), P::PEACH, w);
+        stat_cell(ui, "Selected", &selected.to_string(), P::CYAN, w);
+        stat_cell(ui, "Detect", &format!("{detect_ms}ms"), P::LIME, w);
+        stat_cell(ui, "Source", &format!("{src_w}×{src_h}"), P::ROSE, w);
     });
 }
 
@@ -95,7 +108,12 @@ fn stat_cell(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32, 
         ui.set_width(w);
         ui.set_height(56.0);
         ui.add_space(6.0);
-        ui.label(egui::RichText::new(label).size(9.5).color(P::INK3).family(egui::FontFamily::Monospace));
+        ui.label(
+            egui::RichText::new(label)
+                .size(9.5)
+                .color(P::INK3)
+                .family(egui::FontFamily::Monospace),
+        );
         ui.label(egui::RichText::new(value).size(18.0).strong().color(color));
     });
 }
@@ -113,8 +131,12 @@ fn crop_tab(ui: &mut Ui, app: &mut App2) {
 fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
     let open = &mut app.panel_state.crop_framing;
     let toggled = panel_header(ui, "01", "Crop framing", *open);
-    if toggled { *open = !*open; }
-    if !*open { return; }
+    if toggled {
+        *open = !*open;
+    }
+    if !*open {
+        return;
+    }
 
     ui.add_space(4.0);
     let _pad = egui::Margin::symmetric(14, 0);
@@ -124,7 +146,15 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         // Preset dropdown
         field_label(ui, "Preset");
         let preset = &mut app.settings.crop.preset;
-        let presets = ["LinkedIn (1:1)", "Passport (35×45)", "Instagram (4:5)", "Headshot (3:4)", "ID Card (3:4)", "Avatar (1:1)", "Custom…"];
+        let presets = [
+            "LinkedIn (1:1)",
+            "Passport (35×45)",
+            "Instagram (4:5)",
+            "Headshot (3:4)",
+            "ID Card (3:4)",
+            "Avatar (1:1)",
+            "Custom…",
+        ];
         egui::ComboBox::from_id_salt("preset_combo")
             .selected_text(preset.as_str())
             .width(ui.available_width() - 28.0)
@@ -138,7 +168,10 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         field_label(ui, "Aspect ratio");
         let aspect_options = ["Free", "1:1", "4:5", "3:4"];
         // map current width/height to index
-        let mut asp_idx = match (app.settings.crop.output_width, app.settings.crop.output_height) {
+        let mut asp_idx = match (
+            app.settings.crop.output_width,
+            app.settings.crop.output_height,
+        ) {
             (w, h) if w == h => 1,
             (4, 5) | (800, 1000) => 2,
             (3, 4) | (900, 1200) => 3,
@@ -148,9 +181,18 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         segmented_control(ui, &aspect_options, &mut asp_idx);
         if asp_idx != asp_idx_bak {
             match asp_idx {
-                1 => { app.settings.crop.output_width = 1024; app.settings.crop.output_height = 1024; }
-                2 => { app.settings.crop.output_width = 1024; app.settings.crop.output_height = 1280; }
-                3 => { app.settings.crop.output_width = 768;  app.settings.crop.output_height = 1024; }
+                1 => {
+                    app.settings.crop.output_width = 1024;
+                    app.settings.crop.output_height = 1024;
+                }
+                2 => {
+                    app.settings.crop.output_width = 1024;
+                    app.settings.crop.output_height = 1280;
+                }
+                3 => {
+                    app.settings.crop.output_width = 768;
+                    app.settings.crop.output_height = 1024;
+                }
                 _ => {}
             }
         }
@@ -158,7 +200,14 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         // Face height (stored as 0-100)
         let pct_label = format!("Face height · {:.0}%", app.settings.crop.face_height_pct);
         field_label(ui, &pct_label);
-        slider_with_label(ui, "", &mut app.settings.crop.face_height_pct, 10.0, 100.0, "pct");
+        slider_with_label(
+            ui,
+            "",
+            &mut app.settings.crop.face_height_pct,
+            10.0,
+            100.0,
+            "pct",
+        );
 
         // Width / Height
         ui.horizontal(|ui| {
@@ -166,23 +215,46 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
                 ui.set_width((ui.available_width() - 6.0) / 2.0);
                 field_label(ui, "Width");
                 let mut w_str = app.settings.crop.output_width.to_string();
-                if ui.add(egui::TextEdit::singleline(&mut w_str).desired_width(ui.available_width())).changed() {
-                    if let Ok(v) = w_str.parse::<u32>() { app.settings.crop.output_width = v; }
+                if ui
+                    .add(egui::TextEdit::singleline(&mut w_str).desired_width(ui.available_width()))
+                    .changed()
+                {
+                    if let Ok(v) = w_str.parse::<u32>() {
+                        app.settings.crop.output_width = v;
+                    }
                 }
             });
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 field_label(ui, "Height");
                 let mut h_str = app.settings.crop.output_height.to_string();
-                if ui.add(egui::TextEdit::singleline(&mut h_str).desired_width(ui.available_width())).changed() {
-                    if let Ok(v) = h_str.parse::<u32>() { app.settings.crop.output_height = v; }
+                if ui
+                    .add(egui::TextEdit::singleline(&mut h_str).desired_width(ui.available_width()))
+                    .changed()
+                {
+                    if let Ok(v) = h_str.parse::<u32>() {
+                        app.settings.crop.output_height = v;
+                    }
                 }
             });
         });
 
         // Confidence floor
-        field_label(ui, &format!("Confidence floor · {:.2}", app.settings.detection.score_threshold));
-        slider_with_label(ui, "", &mut app.settings.detection.score_threshold, 0.0, 1.0, "conf");
+        field_label(
+            ui,
+            &format!(
+                "Confidence floor · {:.2}",
+                app.settings.detection.score_threshold
+            ),
+        );
+        slider_with_label(
+            ui,
+            "",
+            &mut app.settings.detection.score_threshold,
+            0.0,
+            1.0,
+            "conf",
+        );
 
         // Fill color
         field_label(ui, "Padding fill color");
@@ -190,9 +262,9 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         let mut color_arr = [fill.red, fill.green, fill.blue];
         let hex = &mut app.crop_fill_hex_input;
         if color_swatch_input(ui, hex, &mut color_arr) {
-            app.settings.crop.fill_color.red   = color_arr[0];
+            app.settings.crop.fill_color.red = color_arr[0];
             app.settings.crop.fill_color.green = color_arr[1];
-            app.settings.crop.fill_color.blue  = color_arr[2];
+            app.settings.crop.fill_color.blue = color_arr[2];
         }
 
         ui.add_space(6.0);
@@ -203,8 +275,12 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
 fn panel_02_crop_shape(ui: &mut Ui, app: &mut App2) {
     let open = &mut app.panel_state.crop_shape;
     let toggled = panel_header(ui, "02", "Crop shape", *open);
-    if toggled { *open = !*open; }
-    if !*open { return; }
+    if toggled {
+        *open = !*open;
+    }
+    if !*open {
+        return;
+    }
 
     ui.add_space(4.0);
     ui.scope(|ui| {
@@ -218,8 +294,12 @@ fn panel_02_crop_shape(ui: &mut Ui, app: &mut App2) {
 fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
     let open = &mut app.panel_state.positioning;
     let toggled = panel_header(ui, "03", "Positioning", *open);
-    if toggled { *open = !*open; }
-    if !*open { return; }
+    if toggled {
+        *open = !*open;
+    }
+    if !*open {
+        return;
+    }
 
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 10.0;
@@ -227,16 +307,19 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
         field_label(ui, "Mode");
         let modes = ["Center", "Thirds", "Custom"];
         let mut mode_idx: usize = match app.settings.crop.positioning_mode.as_str() {
-            "center"  => 0,
-            "thirds"  => 1,
-            _         => 2,
+            "center" => 0,
+            "thirds" => 1,
+            _ => 2,
         };
         let prev = mode_idx;
         segmented_control(ui, &modes, &mut mode_idx);
         if mode_idx != prev {
             app.settings.crop.positioning_mode = match mode_idx {
-                0 => "center", 1 => "thirds", _ => "custom"
-            }.to_string();
+                0 => "center",
+                1 => "thirds",
+                _ => "custom",
+            }
+            .to_string();
         }
 
         // Offsets
@@ -245,16 +328,26 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
                 ui.set_width((ui.available_width() - 6.0) / 2.0);
                 field_label(ui, "Offset X");
                 let mut x_str = format!("{:.0}", app.settings.crop.horizontal_offset);
-                if ui.add(egui::TextEdit::singleline(&mut x_str).desired_width(ui.available_width())).changed() {
-                    if let Ok(v) = x_str.parse::<f32>() { app.settings.crop.horizontal_offset = v; }
+                if ui
+                    .add(egui::TextEdit::singleline(&mut x_str).desired_width(ui.available_width()))
+                    .changed()
+                {
+                    if let Ok(v) = x_str.parse::<f32>() {
+                        app.settings.crop.horizontal_offset = v;
+                    }
                 }
             });
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 field_label(ui, "Offset Y");
                 let mut y_str = format!("{:.0}", app.settings.crop.vertical_offset);
-                if ui.add(egui::TextEdit::singleline(&mut y_str).desired_width(ui.available_width())).changed() {
-                    if let Ok(v) = y_str.parse::<f32>() { app.settings.crop.vertical_offset = v; }
+                if ui
+                    .add(egui::TextEdit::singleline(&mut y_str).desired_width(ui.available_width()))
+                    .changed()
+                {
+                    if let Ok(v) = y_str.parse::<f32>() {
+                        app.settings.crop.vertical_offset = v;
+                    }
                 }
             });
         });
@@ -274,10 +367,15 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
     let label = format!("Crops  {} ready", n_ready);
     let open = &mut app.panel_state.crops_ready;
     let toggled = panel_header(ui, "04", &label, *open);
-    if toggled { *open = !*open; }
-    if !*open { return; }
+    if toggled {
+        *open = !*open;
+    }
+    if !*open {
+        return;
+    }
 
     let selected: Vec<usize> = app.selected_faces.iter().cloned().collect();
+    let mut save_face = None;
     for &i in &selected {
         if let Some(det) = app.preview.detections.get(i) {
             ui.add_space(8.0);
@@ -289,39 +387,92 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
                 let (thumb_resp, painter) = ui.allocate_painter(Vec2::splat(60.0), Sense::hover());
                 let tr = thumb_resp.rect;
                 painter.rect_filled(tr, 7.0, P::BG2);
-                painter.rect_stroke(tr, 7.0, Stroke::new(1.0, P::RULE), egui::StrokeKind::Outside);
+                painter.rect_stroke(
+                    tr,
+                    7.0,
+                    Stroke::new(1.0, P::RULE),
+                    egui::StrokeKind::Outside,
+                );
                 if let Some(tex) = &det.thumbnail {
-                    painter.image(tex.id(), tr, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                    painter.image(
+                        tex.id(),
+                        tr,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
                 } else {
-                    painter.text(tr.center(), egui::Align2::CENTER_CENTER, "◉", egui::FontId::proportional(20.0), P::INK3);
+                    painter.text(
+                        tr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "◉",
+                        egui::FontId::proportional(20.0),
+                        P::INK3,
+                    );
                 }
 
                 ui.add_space(8.0);
                 ui.vertical(|ui| {
-                    let name = app.preview.image_path.as_deref()
+                    let name = app
+                        .preview
+                        .image_path
+                        .as_deref()
                         .and_then(|p| p.file_stem())
                         .and_then(|s| s.to_str())
                         .unwrap_or("crop");
-                    ui.label(egui::RichText::new(format!("{name}_face{}.jpg", i + 1)).size(11.0).color(P::INK).family(egui::FontFamily::Monospace));
+                    ui.label(
+                        egui::RichText::new(format!("{name}_face{}.jpg", i + 1))
+                            .size(11.0)
+                            .color(P::INK)
+                            .family(egui::FontFamily::Monospace),
+                    );
                     let w = app.settings.crop.output_width;
                     let h = app.settings.crop.output_height;
-                    ui.label(egui::RichText::new(format!("{w}×{h} · q92")).size(10.0).color(P::INK3).family(egui::FontFamily::Monospace));
-                    ui.label(egui::RichText::new("● ready").size(10.0).color(P::LIME).family(egui::FontFamily::Monospace));
+                    ui.label(
+                        egui::RichText::new(format!("{w}×{h} · q92"))
+                            .size(10.0)
+                            .color(P::INK3)
+                            .family(egui::FontFamily::Monospace),
+                    );
+                    ui.label(
+                        egui::RichText::new("● ready")
+                            .size(10.0)
+                            .color(P::LIME)
+                            .family(egui::FontFamily::Monospace),
+                    );
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
-                    let (resp, painter) = ui.allocate_painter(Vec2::new(46.0, 26.0), Sense::click());
-                    let bg = if resp.hovered() { P::lime_alpha(50) } else { P::lime_alpha(30) };
+                    let (resp, painter) =
+                        ui.allocate_painter(Vec2::new(46.0, 26.0), Sense::click());
+                    let bg = if resp.hovered() {
+                        P::lime_alpha(50)
+                    } else {
+                        P::lime_alpha(30)
+                    };
                     painter.rect_filled(resp.rect, 6.0, bg);
-                    painter.rect_stroke(resp.rect, 6.0, Stroke::new(1.0, P::lime_alpha(76)), egui::StrokeKind::Outside);
-                    painter.text(resp.rect.center(), egui::Align2::CENTER_CENTER, "Save", egui::FontId::monospace(10.0), P::LIME);
+                    painter.rect_stroke(
+                        resp.rect,
+                        6.0,
+                        Stroke::new(1.0, P::lime_alpha(76)),
+                        egui::StrokeKind::Outside,
+                    );
+                    painter.text(
+                        resp.rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Save",
+                        egui::FontId::monospace(10.0),
+                        P::LIME,
+                    );
                     if resp.clicked() {
-                        // TODO: trigger single-face export via rfd
+                        save_face = Some(i);
                     }
                 });
             });
         }
+    }
+    if let Some(face_index) = save_face {
+        crate::core::export::export_one_face(app, face_index);
     }
     ui.add_space(8.0);
     separator_line(ui);
@@ -330,12 +481,16 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
 fn panel_05_enhancement(ui: &mut Ui, app: &mut App2) {
     let open = &mut app.panel_state.enhancement;
     let toggled = panel_header(ui, "05", "Enhancement", *open);
-    if toggled { *open = !*open; }
-    if !*open { return; }
+    if toggled {
+        *open = !*open;
+    }
+    if !*open {
+        return;
+    }
 
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        toggle_row(ui, "Auto color",      &mut app.settings.enhance.auto_color);
+        toggle_row(ui, "Auto color", &mut app.settings.enhance.auto_color);
         let mut skin_on = app.settings.enhance.skin_smooth > 0.0;
         if toggle_row(ui, "Skin smoothing", &mut skin_on) {
             app.settings.enhance.skin_smooth = if skin_on { 0.5 } else { 0.0 };
@@ -344,7 +499,11 @@ fn panel_05_enhancement(ui: &mut Ui, app: &mut App2) {
         if toggle_row(ui, "Sharpen", &mut sharpen_on) {
             app.settings.enhance.sharpness = if sharpen_on { 1.0 } else { 0.0 };
         }
-        toggle_row(ui, "Red-eye removal", &mut app.settings.enhance.red_eye_removal);
+        toggle_row(
+            ui,
+            "Red-eye removal",
+            &mut app.settings.enhance.red_eye_removal,
+        );
         ui.add_space(6.0);
     });
     separator_line(ui);
@@ -368,7 +527,10 @@ fn output_tab(ui: &mut Ui, app: &mut App2) {
     ui.add_space(8.0);
     field_label(ui, "Output directory");
     let mut dir_str = String::new(); // output_dir not in AppSettings; use rfd directly
-    if ui.add(egui::TextEdit::singleline(&mut dir_str).desired_width(ui.available_width() - 14.0)).changed() {}
+    if ui
+        .add(egui::TextEdit::singleline(&mut dir_str).desired_width(ui.available_width() - 14.0))
+        .changed()
+    {}
 
     ui.add_space(4.0);
     if ui.button("Browse…").clicked() {
@@ -383,29 +545,55 @@ fn output_tab(ui: &mut Ui, app: &mut App2) {
 fn enhance_tab(ui: &mut Ui, app: &mut App2) {
     ui.add_space(12.0);
 
-    field_label(ui, &format!("Exposure · {:.2}", app.settings.enhance.exposure_stops));
-    slider_with_label(ui, "", &mut app.settings.enhance.exposure_stops, -3.0, 3.0, "");
+    field_label(
+        ui,
+        &format!("Exposure · {:.2}", app.settings.enhance.exposure_stops),
+    );
+    slider_with_label(
+        ui,
+        "",
+        &mut app.settings.enhance.exposure_stops,
+        -3.0,
+        3.0,
+        "",
+    );
     ui.add_space(4.0);
 
-    field_label(ui, &format!("Brightness · {}", app.settings.enhance.brightness));
+    field_label(
+        ui,
+        &format!("Brightness · {}", app.settings.enhance.brightness),
+    );
     let mut bright = app.settings.enhance.brightness as f32;
     slider_with_label(ui, "", &mut bright, -100.0, 100.0, "px");
     app.settings.enhance.brightness = bright as i32;
     ui.add_space(4.0);
 
-    field_label(ui, &format!("Contrast · {:.2}", app.settings.enhance.contrast));
+    field_label(
+        ui,
+        &format!("Contrast · {:.2}", app.settings.enhance.contrast),
+    );
     slider_with_label(ui, "", &mut app.settings.enhance.contrast, -2.0, 2.0, "");
     ui.add_space(4.0);
 
-    field_label(ui, &format!("Saturation · {:.2}", app.settings.enhance.saturation));
+    field_label(
+        ui,
+        &format!("Saturation · {:.2}", app.settings.enhance.saturation),
+    );
     slider_with_label(ui, "", &mut app.settings.enhance.saturation, 0.0, 3.0, "");
     ui.add_space(4.0);
 
-    field_label(ui, &format!("Sharpness · {:.2}", app.settings.enhance.sharpness));
+    field_label(
+        ui,
+        &format!("Sharpness · {:.2}", app.settings.enhance.sharpness),
+    );
     slider_with_label(ui, "", &mut app.settings.enhance.sharpness, 0.0, 4.0, "");
     ui.add_space(8.0);
 
-    toggle_row(ui, "Background blur", &mut app.settings.enhance.background_blur);
+    toggle_row(
+        ui,
+        "Background blur",
+        &mut app.settings.enhance.background_blur,
+    );
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -416,9 +604,10 @@ fn separator_line(ui: &mut Ui) {
     let _rect = ui.min_rect();
     // Draw via ui scope
     ui.painter().line_segment(
-        [egui::pos2(ui.min_rect().min.x, ui.cursor().min.y),
-         egui::pos2(ui.min_rect().max.x, ui.cursor().min.y)],
+        [
+            egui::pos2(ui.min_rect().min.x, ui.cursor().min.y),
+            egui::pos2(ui.min_rect().max.x, ui.cursor().min.y),
+        ],
         Stroke::new(1.0, P::RULE),
     );
 }
-

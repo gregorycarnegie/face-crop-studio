@@ -9,7 +9,10 @@ pub fn load_settings(path: &Path) -> AppSettings {
     match AppSettings::load_from_path(path) {
         Ok(s) => s,
         Err(err) => {
-            warn!("Failed to load settings from {}: {err}. Using defaults.", path.display());
+            warn!(
+                "Failed to load settings from {}: {err}. Using defaults.",
+                path.display()
+            );
             AppSettings::default()
         }
     }
