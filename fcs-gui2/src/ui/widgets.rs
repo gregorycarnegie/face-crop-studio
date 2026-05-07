@@ -23,7 +23,7 @@ pub fn slider_with_label(
     fmt: &str,
 ) -> bool {
     ui.horizontal(|ui| {
-        let slider_w = (ui.available_width() - LABEL_W).max(60.0);
+        let slider_w = (ui.available_width() - LABEL_W - ui.spacing().item_spacing.x).max(60.0);
         let changed = ui
             .add_sized(
                 [slider_w, 20.0],

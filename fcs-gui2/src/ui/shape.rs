@@ -97,7 +97,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
     let mut variant_changed = false;
     egui::ComboBox::from_id_salt("shape_combo")
         .selected_text(variant_label(variant))
-        .width(ui.available_width() - 28.0)
+        .width(ui.available_width())
         .show_ui(ui, |ui| {
             for (label, target) in ALL_VARIANTS {
                 if ui.selectable_label(variant == *target, *label).clicked() && variant != *target {

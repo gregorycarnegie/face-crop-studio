@@ -8,6 +8,8 @@ use crate::ui::widgets::{
 };
 use egui::{Sense, Stroke, Ui, Vec2};
 
+const BODY_MARGIN_X: i8 = 14;
+
 pub fn show(ui: &mut Ui, app: &mut App2) {
     ui.set_min_height(ui.available_height());
 
@@ -90,6 +92,7 @@ fn mini_stats(ui: &mut Ui, app: &App2) {
     );
 
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         ui.set_height(60.0);
         let w = ui.available_width() / 4.0;
         stat_cell(ui, "Faces", &total.to_string(), P::PEACH, w);
@@ -100,22 +103,22 @@ fn mini_stats(ui: &mut Ui, app: &App2) {
 }
 
 fn stat_cell(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32, w: f32) {
-    let (_, _painter) = ui.allocate_painter(Vec2::new(w, 56.0), Sense::hover());
-    let _r = ui.min_rect(); // wrong, use the allocated rect — we'll draw directly
-    let _allocated = ui.min_rect();
-    // We just add a label + value in a column
-    ui.vertical(|ui| {
-        ui.set_width(w);
-        ui.set_height(56.0);
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(label)
-                .size(9.5)
-                .color(P::INK3)
-                .family(egui::FontFamily::Monospace),
-        );
-        ui.label(egui::RichText::new(value).size(18.0).strong().color(color));
-    });
+    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 56.0), Sense::hover());
+    let rect = resp.rect;
+    painter.text(
+        egui::pos2(rect.center().x, rect.min.y + 16.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::monospace(9.5),
+        P::INK3,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.min.y + 36.0),
+        egui::Align2::CENTER_CENTER,
+        value,
+        egui::FontId::proportional(18.0),
+        color,
+    );
 }
 
 // ── Crop tab ──────────────────────────────────────────────────────────────────
@@ -138,9 +141,8 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         return;
     }
 
-    ui.add_space(4.0);
-    let _pad = egui::Margin::symmetric(14, 0);
-    ui.scope(|ui| {
+    inspector_body(ui, |ui| {
+        ui.add_space(4.0);
         ui.spacing_mut().item_spacing.y = 10.0;
 
         // Preset dropdown
@@ -157,7 +159,7 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         ];
         egui::ComboBox::from_id_salt("preset_combo")
             .selected_text(preset.as_str())
-            .width(ui.available_width() - 28.0)
+            .width(ui.available_width())
             .show_ui(ui, |ui| {
                 for p in &presets {
                     ui.selectable_value(preset, p.to_string(), *p);
@@ -282,8 +284,8 @@ fn panel_02_crop_shape(ui: &mut Ui, app: &mut App2) {
         return;
     }
 
-    ui.add_space(4.0);
-    ui.scope(|ui| {
+    inspector_body(ui, |ui| {
+        ui.add_space(4.0);
         ui.spacing_mut().item_spacing.y = 6.0;
         shape_controls(ui, app);
         ui.add_space(6.0);
@@ -301,7 +303,7 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
         return;
     }
 
-    ui.scope(|ui| {
+    inspector_body(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 10.0;
 
         field_label(ui, "Mode");
@@ -376,105 +378,106 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
 
     let selected: Vec<usize> = app.selected_faces.iter().cloned().collect();
     let mut save_face = None;
-    for &i in &selected {
-        if let Some(det) = app.preview.detections.get(i) {
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.set_height(64.0);
-                ui.add_space(10.0);
-
-                // Thumbnail
-                let (thumb_resp, painter) = ui.allocate_painter(Vec2::splat(60.0), Sense::hover());
-                let tr = thumb_resp.rect;
-                painter.rect_filled(tr, 7.0, P::BG2);
-                painter.rect_stroke(
-                    tr,
-                    7.0,
-                    Stroke::new(1.0, P::RULE),
-                    egui::StrokeKind::Outside,
-                );
-                if let Some(tex) = &det.thumbnail {
-                    painter.image(
-                        tex.id(),
-                        tr,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
-                    );
-                } else {
-                    painter.text(
-                        tr.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "◉",
-                        egui::FontId::proportional(20.0),
-                        P::INK3,
-                    );
-                }
-
+    inspector_body(ui, |ui| {
+        for &i in &selected {
+            if let Some(det) = app.preview.detections.get(i) {
                 ui.add_space(8.0);
-                ui.vertical(|ui| {
-                    let name = app
-                        .preview
-                        .image_path
-                        .as_deref()
-                        .and_then(|p| p.file_stem())
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("crop");
-                    ui.label(
-                        egui::RichText::new(format!("{name}_face{}.jpg", i + 1))
-                            .size(11.0)
-                            .color(P::INK)
-                            .family(egui::FontFamily::Monospace),
-                    );
-                    let w = app.settings.crop.output_width;
-                    let h = app.settings.crop.output_height;
-                    ui.label(
-                        egui::RichText::new(format!("{w}×{h} · q92"))
-                            .size(10.0)
-                            .color(P::INK3)
-                            .family(egui::FontFamily::Monospace),
-                    );
-                    ui.label(
-                        egui::RichText::new("● ready")
-                            .size(10.0)
-                            .color(P::LIME)
-                            .family(egui::FontFamily::Monospace),
-                    );
-                });
+                ui.horizontal(|ui| {
+                    ui.set_height(64.0);
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(10.0);
-                    let (resp, painter) =
-                        ui.allocate_painter(Vec2::new(46.0, 26.0), Sense::click());
-                    let bg = if resp.hovered() {
-                        P::lime_alpha(50)
-                    } else {
-                        P::lime_alpha(30)
-                    };
-                    painter.rect_filled(resp.rect, 6.0, bg);
+                    // Thumbnail
+                    let (thumb_resp, painter) =
+                        ui.allocate_painter(Vec2::splat(60.0), Sense::hover());
+                    let tr = thumb_resp.rect;
+                    painter.rect_filled(tr, 7.0, P::BG2);
                     painter.rect_stroke(
-                        resp.rect,
-                        6.0,
-                        Stroke::new(1.0, P::lime_alpha(76)),
+                        tr,
+                        7.0,
+                        Stroke::new(1.0, P::RULE),
                         egui::StrokeKind::Outside,
                     );
-                    painter.text(
-                        resp.rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "Save",
-                        egui::FontId::monospace(10.0),
-                        P::LIME,
-                    );
-                    if resp.clicked() {
-                        save_face = Some(i);
+                    if let Some(tex) = &det.thumbnail {
+                        painter.image(
+                            tex.id(),
+                            tr,
+                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            egui::Color32::WHITE,
+                        );
+                    } else {
+                        painter.text(
+                            tr.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "◉",
+                            egui::FontId::proportional(20.0),
+                            P::INK3,
+                        );
                     }
+
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        let name = app
+                            .preview
+                            .image_path
+                            .as_deref()
+                            .and_then(|p| p.file_stem())
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("crop");
+                        ui.label(
+                            egui::RichText::new(format!("{name}_face{}.jpg", i + 1))
+                                .size(11.0)
+                                .color(P::INK)
+                                .family(egui::FontFamily::Monospace),
+                        );
+                        let w = app.settings.crop.output_width;
+                        let h = app.settings.crop.output_height;
+                        ui.label(
+                            egui::RichText::new(format!("{w}×{h} · q92"))
+                                .size(10.0)
+                                .color(P::INK3)
+                                .family(egui::FontFamily::Monospace),
+                        );
+                        ui.label(
+                            egui::RichText::new("● ready")
+                                .size(10.0)
+                                .color(P::LIME)
+                                .family(egui::FontFamily::Monospace),
+                        );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (resp, painter) =
+                            ui.allocate_painter(Vec2::new(46.0, 26.0), Sense::click());
+                        let bg = if resp.hovered() {
+                            P::lime_alpha(50)
+                        } else {
+                            P::lime_alpha(30)
+                        };
+                        painter.rect_filled(resp.rect, 6.0, bg);
+                        painter.rect_stroke(
+                            resp.rect,
+                            6.0,
+                            Stroke::new(1.0, P::lime_alpha(76)),
+                            egui::StrokeKind::Outside,
+                        );
+                        painter.text(
+                            resp.rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Save",
+                            egui::FontId::monospace(10.0),
+                            P::LIME,
+                        );
+                        if resp.clicked() {
+                            save_face = Some(i);
+                        }
+                    });
                 });
-            });
+            }
         }
-    }
+        ui.add_space(8.0);
+    });
     if let Some(face_index) = save_face {
         crate::core::export::export_one_face(app, face_index);
     }
-    ui.add_space(8.0);
     separator_line(ui);
 }
 
@@ -488,7 +491,7 @@ fn panel_05_enhancement(ui: &mut Ui, app: &mut App2) {
         return;
     }
 
-    ui.scope(|ui| {
+    inspector_body(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         toggle_row(ui, "Auto color", &mut app.settings.enhance.auto_color);
         let mut skin_on = app.settings.enhance.skin_smooth > 0.0;
@@ -512,91 +515,107 @@ fn panel_05_enhancement(ui: &mut Ui, app: &mut App2) {
 // ── Output tab ────────────────────────────────────────────────────────────────
 
 fn output_tab(ui: &mut Ui, app: &mut App2) {
-    ui.add_space(12.0);
-    field_label(ui, "Format");
-    let formats = ["JPEG", "PNG", "WEBP", "AVIF"];
-    let mut fmt_idx = 0usize;
-    segmented_control(ui, &formats, &mut fmt_idx);
+    inspector_body(ui, |ui| {
+        ui.add_space(12.0);
+        field_label(ui, "Format");
+        let formats = ["JPEG", "PNG", "WEBP", "AVIF"];
+        let mut fmt_idx = 0usize;
+        segmented_control(ui, &formats, &mut fmt_idx);
 
-    ui.add_space(8.0);
-    field_label(ui, "JPEG quality");
-    let mut q = app.settings.crop.jpeg_quality as f32;
-    slider_with_label(ui, "", &mut q, 50.0, 100.0, "px");
-    app.settings.crop.jpeg_quality = q as u8;
+        ui.add_space(8.0);
+        field_label(ui, "JPEG quality");
+        let mut q = app.settings.crop.jpeg_quality as f32;
+        slider_with_label(ui, "", &mut q, 50.0, 100.0, "px");
+        app.settings.crop.jpeg_quality = q as u8;
 
-    ui.add_space(8.0);
-    field_label(ui, "Output directory");
-    let mut dir_str = String::new(); // output_dir not in AppSettings; use rfd directly
-    if ui
-        .add(egui::TextEdit::singleline(&mut dir_str).desired_width(ui.available_width() - 14.0))
-        .changed()
-    {}
+        ui.add_space(8.0);
+        field_label(ui, "Output directory");
+        let mut dir_str = String::new(); // output_dir not in AppSettings; use rfd directly
+        if ui
+            .add(egui::TextEdit::singleline(&mut dir_str).desired_width(ui.available_width()))
+            .changed()
+        {}
 
-    ui.add_space(4.0);
-    if ui.button("Browse…").clicked() {
-        if let Some(_dir) = rfd::FileDialog::new().pick_folder() {
-            // would persist to settings if field exists
+        ui.add_space(4.0);
+        if ui.button("Browse…").clicked() {
+            if let Some(_dir) = rfd::FileDialog::new().pick_folder() {
+                // would persist to settings if field exists
+            }
         }
-    }
+    });
 }
 
 // ── Enhance tab ───────────────────────────────────────────────────────────────
 
 fn enhance_tab(ui: &mut Ui, app: &mut App2) {
-    ui.add_space(12.0);
+    inspector_body(ui, |ui| {
+        ui.add_space(12.0);
 
-    field_label(
-        ui,
-        &format!("Exposure · {:.2}", app.settings.enhance.exposure_stops),
-    );
-    slider_with_label(
-        ui,
-        "",
-        &mut app.settings.enhance.exposure_stops,
-        -3.0,
-        3.0,
-        "",
-    );
-    ui.add_space(4.0);
+        field_label(
+            ui,
+            &format!("Exposure · {:.2}", app.settings.enhance.exposure_stops),
+        );
+        slider_with_label(
+            ui,
+            "",
+            &mut app.settings.enhance.exposure_stops,
+            -3.0,
+            3.0,
+            "",
+        );
+        ui.add_space(4.0);
 
-    field_label(
-        ui,
-        &format!("Brightness · {}", app.settings.enhance.brightness),
-    );
-    let mut bright = app.settings.enhance.brightness as f32;
-    slider_with_label(ui, "", &mut bright, -100.0, 100.0, "px");
-    app.settings.enhance.brightness = bright as i32;
-    ui.add_space(4.0);
+        field_label(
+            ui,
+            &format!("Brightness · {}", app.settings.enhance.brightness),
+        );
+        let mut bright = app.settings.enhance.brightness as f32;
+        slider_with_label(ui, "", &mut bright, -100.0, 100.0, "px");
+        app.settings.enhance.brightness = bright as i32;
+        ui.add_space(4.0);
 
-    field_label(
-        ui,
-        &format!("Contrast · {:.2}", app.settings.enhance.contrast),
-    );
-    slider_with_label(ui, "", &mut app.settings.enhance.contrast, -2.0, 2.0, "");
-    ui.add_space(4.0);
+        field_label(
+            ui,
+            &format!("Contrast · {:.2}", app.settings.enhance.contrast),
+        );
+        slider_with_label(ui, "", &mut app.settings.enhance.contrast, -2.0, 2.0, "");
+        ui.add_space(4.0);
 
-    field_label(
-        ui,
-        &format!("Saturation · {:.2}", app.settings.enhance.saturation),
-    );
-    slider_with_label(ui, "", &mut app.settings.enhance.saturation, 0.0, 3.0, "");
-    ui.add_space(4.0);
+        field_label(
+            ui,
+            &format!("Saturation · {:.2}", app.settings.enhance.saturation),
+        );
+        slider_with_label(ui, "", &mut app.settings.enhance.saturation, 0.0, 3.0, "");
+        ui.add_space(4.0);
 
-    field_label(
-        ui,
-        &format!("Sharpness · {:.2}", app.settings.enhance.sharpness),
-    );
-    slider_with_label(ui, "", &mut app.settings.enhance.sharpness, 0.0, 4.0, "");
-    ui.add_space(8.0);
+        field_label(
+            ui,
+            &format!("Sharpness · {:.2}", app.settings.enhance.sharpness),
+        );
+        slider_with_label(ui, "", &mut app.settings.enhance.sharpness, 0.0, 4.0, "");
+        ui.add_space(8.0);
 
-    toggle_row(
-        ui,
-        "Background blur",
-        &mut app.settings.enhance.background_blur,
-    );
+        toggle_row(
+            ui,
+            "Background blur",
+            &mut app.settings.enhance.background_blur,
+        );
+    });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn inspector_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    let outer_width = ui.available_width();
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(BODY_MARGIN_X, 0))
+        .show(ui, |ui| {
+            let margin = f32::from(BODY_MARGIN_X) * 2.0;
+            ui.set_width((outer_width - margin).max(0.0));
+            add_contents(ui)
+        })
+        .inner
+}
 
 fn separator_line(ui: &mut Ui) {
     let (_, painter) = ui.allocate_painter(Vec2::new(ui.available_width(), 1.0), Sense::hover());
