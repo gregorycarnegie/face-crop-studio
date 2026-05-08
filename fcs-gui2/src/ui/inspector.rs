@@ -4,7 +4,7 @@ use crate::theme::P;
 use crate::types::{App2, InspectorTab};
 use crate::ui::shape::shape_controls;
 use crate::ui::widgets::{
-    color_swatch_input, field_label, panel_header, segmented_control, slider_with_label, toggle_row,
+    field_label, panel_header, segmented_control, slider_with_label, toggle_row,
 };
 use egui::{Sense, Stroke, Ui, Vec2};
 
@@ -253,13 +253,16 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
 
         // Fill color
         field_label(ui, "Padding fill color");
-        let fill = app.settings.crop.fill_color;
-        let mut color_arr = [fill.red, fill.green, fill.blue];
-        let hex = &mut app.crop_fill_hex_input;
-        if color_swatch_input(ui, hex, &mut color_arr) {
-            app.settings.crop.fill_color.red = color_arr[0];
-            app.settings.crop.fill_color.green = color_arr[1];
-            app.settings.crop.fill_color.blue = color_arr[2];
+        let fc = &mut app.settings.crop.fill_color;
+        let mut color = [fc.red, fc.green, fc.blue, fc.alpha];
+        if ui
+            .color_edit_button_srgba_unmultiplied(&mut color)
+            .changed()
+        {
+            fc.red = color[0];
+            fc.green = color[1];
+            fc.blue = color[2];
+            fc.alpha = color[3];
         }
 
         ui.add_space(6.0);
