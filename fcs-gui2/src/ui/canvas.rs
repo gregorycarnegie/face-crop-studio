@@ -300,6 +300,13 @@ fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
         P::CYAN,
     );
 
+    let msg_x = log_rect.min.x + 62.0;
+    let msg_clip = egui::Rect::from_min_max(
+        egui::pos2(msg_x, log_rect.min.y),
+        egui::pos2(log_rect.max.x - pad, log_rect.max.y),
+    );
+    let msg_painter = painter.with_clip_rect(msg_clip);
+
     let start = app.log_lines.len().saturating_sub(log_max_lines);
     for (i, line) in app.log_lines[start..].iter().enumerate() {
         let y = log_rect.min.y + header_h + i as f32 * line_h;
@@ -315,8 +322,8 @@ fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
             egui::FontId::monospace(9.5),
             P::INK3,
         );
-        painter.text(
-            egui::pos2(log_rect.min.x + 62.0, y),
+        msg_painter.text(
+            egui::pos2(msg_x, y),
             egui::Align2::LEFT_TOP,
             &line.message,
             egui::FontId::monospace(9.5),

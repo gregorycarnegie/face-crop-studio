@@ -542,6 +542,10 @@ fn expand_input_path(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
     }
 }
 
+pub(crate) fn collect_folder_images(dir: &Path) -> Vec<PathBuf> {
+    collect_supported_images_in_dir(dir).unwrap_or_default()
+}
+
 fn collect_supported_images_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut images = Vec::new();
     let mut queue = VecDeque::new();
