@@ -105,8 +105,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
                 menu_item(ui, "Help", |ui| {
                     if ui.button("About Face Crop Studio").clicked() {
-                        app.status_line =
-                            "Face Crop Studio — YuNet face detection".to_string();
+                        app.show_about = true;
                     }
                 });
 

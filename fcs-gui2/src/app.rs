@@ -149,6 +149,7 @@ impl App2 {
             webcam_state: WebcamState::default(),
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            show_about: false,
         }
     }
 }
@@ -214,6 +215,10 @@ impl App for App2 {
             });
 
         install_resize_edges(root_ui);
+
+        if self.show_about {
+            show_about_window(root_ui.ctx(), &mut self.show_about);
+        }
     }
 }
 
@@ -617,4 +622,93 @@ fn collect_supported_images_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
     images.sort();
     Ok(images)
+}
+
+// ── About dialog ──────────────────────────────────────────────────────────────
+
+fn show_about_window(ctx: &egui::Context, open: &mut bool) {
+    use crate::theme::P;
+
+    let window_frame = egui::Frame::window(&ctx.global_style())
+        .fill(P::BG2)
+        .stroke(egui::Stroke::new(1.0, P::RULE2))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(24))
+        .shadow(egui::Shadow {
+            offset: [0, 8],
+            blur: 32,
+            spread: 0,
+            color: P::black_alpha(120),
+        });
+
+    let mut close = false;
+    egui::Window::new("About Face Crop Studio")
+        .open(open)
+        .collapsible(false)
+        .resizable(false)
+        .fixed_size(egui::vec2(340.0, 0.0))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .title_bar(false)
+        .frame(window_frame)
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                let (resp, painter) = ui.allocate_painter(egui::Vec2::splat(40.0), egui::Sense::hover());
+                let c = resp.rect.center();
+                painter.circle_filled(c, 20.0, P::PEACH);
+                painter.circle_filled(c, 16.0, P::ROSE);
+                painter.circle_filled(c, 11.0, P::BG2);
+                painter.circle_filled(c, 5.5, P::PEACH);
+
+                ui.add_space(10.0);
+                ui.label(
+                    egui::RichText::new("Face Crop Studio")
+                        .size(17.0)
+                        .color(P::INK)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("AI-powered face detection and cropping")
+                        .size(12.0)
+                        .color(P::INK3),
+                );
+            });
+
+            ui.add_space(16.0);
+            ui.separator();
+            ui.add_space(12.0);
+
+            ui.label(
+                egui::RichText::new(
+                    "Face Crop Studio uses the YuNet neural network to detect \
+                     faces and automatically crop portraits at scale.",
+                )
+                .size(12.5)
+                .color(P::INK2),
+            );
+
+            ui.add_space(14.0);
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Website").size(12.0).color(P::INK3));
+                ui.add_space(4.0);
+                ui.hyperlink_to(
+                    egui::RichText::new("facecropstudio.com")
+                        .size(12.0)
+                        .color(P::CYAN),
+                    "https://facecropstudio.com/",
+                );
+            });
+
+            ui.add_space(16.0);
+
+            ui.vertical_centered(|ui| {
+                if ui.button(egui::RichText::new("Close").size(13.0)).clicked() {
+                    close = true;
+                }
+            });
+        });
+    if close {
+        *open = false;
+    }
 }

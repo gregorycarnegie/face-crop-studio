@@ -641,4 +641,7 @@ pub struct App2 {
     // Canvas zoom
     pub zoom: f32,
     pub pan: egui::Vec2,
+
+    // Dialogs
+    pub show_about: bool,
 }
