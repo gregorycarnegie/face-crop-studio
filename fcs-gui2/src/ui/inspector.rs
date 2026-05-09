@@ -3,6 +3,7 @@
 use crate::theme::P;
 use crate::types::{App2, InspectorTab};
 use fcs_core::preset_by_name;
+use fcs_utils::CropShape;
 use crate::ui::shape::shape_controls;
 use crate::ui::widgets::{
     field_label, panel_header, segmented_control, slider_with_label, toggle_row,
@@ -179,6 +180,47 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
             if let Some(p) = preset_by_name(&selected_key) {
                 app.settings.crop.output_width = p.width;
                 app.settings.crop.output_height = p.height;
+            }
+            app.settings.crop.shape = CropShape::Rectangle;
+            let c = &mut app.settings.crop;
+            match selected_key.as_str() {
+                "LinkedIn" => {
+                    c.face_height_pct = 55.0;
+                    c.positioning_mode = "center".into();
+                    c.horizontal_offset = 0.0;
+                    c.vertical_offset = 0.0;
+                }
+                "Passport" => {
+                    c.face_height_pct = 75.0;
+                    c.positioning_mode = "center".into();
+                    c.horizontal_offset = 0.0;
+                    c.vertical_offset = 0.0;
+                }
+                "Instagram" => {
+                    c.face_height_pct = 55.0;
+                    c.positioning_mode = "center".into();
+                    c.horizontal_offset = 0.0;
+                    c.vertical_offset = 0.0;
+                }
+                "Headshot" => {
+                    c.face_height_pct = 55.0;
+                    c.positioning_mode = "rule-of-thirds".into();
+                    c.horizontal_offset = 0.0;
+                    c.vertical_offset = 0.0;
+                }
+                "ID Card" => {
+                    c.face_height_pct = 62.0;
+                    c.positioning_mode = "center".into();
+                    c.horizontal_offset = 0.0;
+                    c.vertical_offset = 0.0;
+                }
+                "Avatar" => {
+                    c.face_height_pct = 70.0;
+                    c.positioning_mode = "center".into();
+                    c.horizontal_offset = 0.0;
+                    c.vertical_offset = 0.0;
+                }
+                _ => {}
             }
             app.crop_preview_cache.clear();
         }
