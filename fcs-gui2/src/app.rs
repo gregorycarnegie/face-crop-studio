@@ -179,9 +179,16 @@ impl App for App2 {
         ui::toolbar::show(root_ui, self);
         ui::statusbar::show(root_ui, self);
 
+        let side_frame = egui::Frame::new()
+            .fill(crate::theme::P::BG2)
+            .inner_margin(egui::Margin::ZERO)
+            .outer_margin(egui::Margin::ZERO);
+
         egui::Panel::left("sidebar")
             .exact_size(SIDEBAR_W)
             .resizable(false)
+            .show_separator_line(false)
+            .frame(side_frame)
             .show_inside(root_ui, |ui| {
                 ui::sidebar::show(ui, self);
             });
@@ -189,12 +196,19 @@ impl App for App2 {
         egui::Panel::right("inspector")
             .exact_size(INSPECTOR_W)
             .resizable(false)
+            .show_separator_line(false)
+            .frame(side_frame)
             .show_inside(root_ui, |ui| {
                 ui::inspector::show(ui, self);
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(crate::theme::P::BG1))
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::P::BG1)
+                    .inner_margin(egui::Margin::ZERO)
+                    .outer_margin(egui::Margin::ZERO),
+            )
             .show_inside(root_ui, |ui| {
                 ui::canvas::show(ui, self);
             });

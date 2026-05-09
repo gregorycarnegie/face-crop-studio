@@ -34,6 +34,7 @@ fn tab_bar(ui: &mut Ui, app: &mut App2) {
         Stroke::new(1.0, P::RULE),
     );
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         ui.set_height(32.0);
         let w = ui.available_width() / tabs.len() as f32;
         for (label, variant) in &tabs {
