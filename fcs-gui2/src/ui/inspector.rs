@@ -86,18 +86,20 @@ fn mini_stats(ui: &mut Ui, app: &App2) {
 
     ui.painter().line_segment(
         [
-            egui::pos2(ui.min_rect().min.x, ui.cursor().min.y + 58.0),
-            egui::pos2(ui.min_rect().max.x, ui.cursor().min.y + 58.0),
+            egui::pos2(ui.min_rect().min.x, ui.cursor().min.y + 116.0),
+            egui::pos2(ui.min_rect().max.x, ui.cursor().min.y + 116.0),
         ],
         Stroke::new(1.0, P::RULE),
     );
 
+    let w = ui.available_width() / 2.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        ui.set_height(60.0);
-        let w = ui.available_width() / 4.0;
         stat_cell(ui, "Faces", &total.to_string(), P::PEACH, w);
         stat_cell(ui, "Selected", &selected.to_string(), P::CYAN, w);
+    });
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         stat_cell(ui, "Detect", &format!("{detect_ms}ms"), P::LIME, w);
         stat_cell(ui, "Source", &format!("{src_w}×{src_h}"), P::ROSE, w);
     });
