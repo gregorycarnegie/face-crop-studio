@@ -37,6 +37,7 @@ type GpuPipelineHandles = (
 impl App2 {
     pub fn new(cc: &CreationContext<'_>) -> Self {
         crate::theme::apply(&cc.egui_ctx);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
 
         let settings_path = default_settings_path();
         let settings = load_settings(&settings_path);
@@ -652,12 +653,10 @@ fn show_about_window(ctx: &egui::Context, open: &mut bool) {
         .frame(window_frame)
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                let (resp, painter) = ui.allocate_painter(egui::Vec2::splat(40.0), egui::Sense::hover());
-                let c = resp.rect.center();
-                painter.circle_filled(c, 20.0, P::PEACH);
-                painter.circle_filled(c, 16.0, P::ROSE);
-                painter.circle_filled(c, 11.0, P::BG2);
-                painter.circle_filled(c, 5.5, P::PEACH);
+                ui.add(
+                    egui::Image::new(egui::include_image!("../assets/app_logo.svg"))
+                        .fit_to_exact_size(egui::Vec2::splat(48.0)),
+                );
 
                 ui.add_space(10.0);
                 ui.label(

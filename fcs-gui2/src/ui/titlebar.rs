@@ -166,11 +166,8 @@ fn win_btn(ui: &mut egui::Ui, rect: egui::Rect, icon: WinIcon) {
 }
 
 fn draw_logo(ui: &mut egui::Ui) {
-    let (resp, painter) = ui.allocate_painter(Vec2::splat(18.0), Sense::hover());
-    let c = resp.rect.center();
-    let r = 9.0;
-    painter.circle_filled(c, r, P::PEACH);
-    painter.circle_filled(c, r * 0.8, P::ROSE);
-    painter.circle_filled(c, r * 0.55, P::BG);
-    painter.circle_filled(c, r * 0.28, P::PEACH);
+    ui.add(
+        egui::Image::new(egui::include_image!("../../assets/app_logo.svg"))
+            .fit_to_exact_size(Vec2::splat(18.0)),
+    );
 }
