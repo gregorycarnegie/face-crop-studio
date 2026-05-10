@@ -227,7 +227,15 @@ fn draw_rotation_handle(
 fn stage(ui: &mut Ui, app: &mut App2) {
     let avail = ui.available_rect_before_wrap();
     let pad = 18.0;
+    // Reserve space above the image for the rotation handle (line + circle + label clearance).
+    // This keeps the handle inside the CentralPanel so interaction and painting both work.
+    let handle_reserve = 48.0;
     let stage_outer = avail.shrink(pad);
+    // The image is fitted into a slot that leaves handle_reserve pixels at the top of stage_outer.
+    let image_slot = egui::Rect::from_min_max(
+        egui::pos2(stage_outer.min.x, stage_outer.min.y + handle_reserve),
+        stage_outer.max,
+    );
 
     // Scroll-to-zoom
     let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
@@ -236,26 +244,25 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         app.zoom = (app.zoom * factor).clamp(0.25, 8.0);
     }
 
-    // Compute fit_rect (zoom=1, pan=0) from the AABB of the rotated image.
-    // draw_rect uses the *original* image proportions at the same scale — vertices are
-    // then rotated around its center, so the visual result fills fit_rect exactly.
+    // fit_rect: canvas border frame, sized to the AABB of the rotated image, centred in image_slot.
+    // draw_rect: original-proportion rect at the same scale — vertices are rotated around its
+    //            centre, so the rotated mesh exactly fills fit_rect.
     let (fit_rect, draw_rect) = if let Some((iw, ih)) = app.preview.image_size {
         let theta = app.canvas_rotation.to_radians();
         let (sin, cos) = theta.sin_cos();
         let (asin, acos) = (sin.abs(), cos.abs());
         let iw = iw as f32;
         let ih = ih as f32;
-        // AABB of rotated image
         let aabb_w = iw * acos + ih * asin;
         let aabb_h = iw * asin + ih * acos;
-        let slot_ar = stage_outer.width() / stage_outer.height();
+        let slot_ar = image_slot.width() / image_slot.height();
         let scale = if aabb_w / aabb_h > slot_ar {
-            stage_outer.width() / aabb_w
+            image_slot.width() / aabb_w
         } else {
-            stage_outer.height() / aabb_h
+            image_slot.height() / aabb_h
         };
         let fr = egui::Rect::from_center_size(
-            stage_outer.center(),
+            image_slot.center(),
             Vec2::new(aabb_w * scale, aabb_h * scale),
         );
         let dr = egui::Rect::from_center_size(
@@ -264,43 +271,46 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         );
         (fr, dr)
     } else {
-        let fr = stage_outer;
+        let fr = image_slot;
         let dr = egui::Rect::from_center_size(fr.center() + app.pan, fr.size() * app.zoom);
         (fr, dr)
     };
 
-    // --- Rotation handle (drawn + interacted before stage area so it gets event priority) ---
-    let unclipped = ui.painter().clone();
-    if app.preview.texture.is_some() || app.preview.image_size.is_some() {
-        let handle_pos = rotation_handle_pos(draw_rect, app.canvas_rotation);
-        let handle_rect = egui::Rect::from_center_size(handle_pos, Vec2::splat(20.0));
-        let h_resp = ui.allocate_rect(handle_rect, Sense::drag());
+    // --- Rotation handle ---
+    // Allocate the hit-rect first (beats the stage pan allocation below).
+    // The handle lives in the handle_reserve zone above fit_rect — always inside stage_outer,
+    // so both ui.allocate_rect interaction and ui.painter drawing work normally.
+    let h_resp_opt =
+        if app.preview.texture.is_some() || app.preview.image_size.is_some() {
+            let handle_pos = rotation_handle_pos(draw_rect, app.canvas_rotation);
+            let handle_rect = egui::Rect::from_center_size(handle_pos, Vec2::splat(20.0));
+            let h_resp = ui.allocate_rect(handle_rect, Sense::drag());
 
-        let center = draw_rect.center();
-        if h_resp.drag_started() {
-            if let Some(pos) = h_resp.interact_pointer_pos() {
-                app.rotation_drag = Some(RotationDragState {
-                    start_mouse_angle: angle_from_center(center, pos),
-                    start_rotation: app.canvas_rotation,
-                });
+            let center = draw_rect.center();
+            if h_resp.drag_started() {
+                if let Some(pos) = h_resp.interact_pointer_pos() {
+                    app.rotation_drag = Some(RotationDragState {
+                        start_mouse_angle: angle_from_center(center, pos),
+                        start_rotation: app.canvas_rotation,
+                    });
+                }
             }
-        }
-        if h_resp.dragged() {
-            if let (Some(drag), Some(pos)) = (&app.rotation_drag.clone(), h_resp.interact_pointer_pos()) {
-                let delta = angle_from_center(center, pos) - drag.start_mouse_angle;
-                app.canvas_rotation = drag.start_rotation + delta;
+            if h_resp.dragged() {
+                if let (Some(drag), Some(pos)) = (&app.rotation_drag.clone(), h_resp.interact_pointer_pos()) {
+                    let delta = angle_from_center(center, pos) - drag.start_mouse_angle;
+                    app.canvas_rotation = drag.start_rotation + delta;
+                }
             }
-        }
-        if h_resp.drag_stopped() {
-            app.rotation_drag = None;
-        }
-
-        let dragging = app.rotation_drag.is_some();
-        draw_rotation_handle(&unclipped, draw_rect, app.canvas_rotation, h_resp.hovered(), dragging);
-        if h_resp.hovered() || dragging {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        }
-    }
+            if h_resp.drag_stopped() {
+                app.rotation_drag = None;
+            }
+            if h_resp.hovered() || app.rotation_drag.is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+            Some(h_resp)
+        } else {
+            None
+        };
 
     // Stage background + border
     let painter = ui.painter();
@@ -469,6 +479,14 @@ fn stage(ui: &mut Ui, app: &mut App2) {
 
     // Mini-log overlay
     mini_log_overlay(ui, app, fit_rect);
+
+    // Draw the rotation handle last (on top of image + overlays).
+    // The handle lives inside stage_outer, so the panel painter clips it correctly.
+    if let Some(h_resp) = h_resp_opt {
+        let handle_painter = ui.painter().with_clip_rect(stage_outer);
+        let dragging = app.rotation_drag.is_some();
+        draw_rotation_handle(&handle_painter, draw_rect, app.canvas_rotation, h_resp.hovered(), dragging);
+    }
 }
 
 fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
