@@ -1,3 +1,16 @@
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+[profile.dev]
+opt-level = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [workspace]
 members = ["fcs-core", "fcs-utils", "fcs-cli", "fcs-gui"]
 resolver = "2"

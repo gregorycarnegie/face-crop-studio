@@ -6,8 +6,8 @@ use crate::rendering::paint::{
 use crate::theme::P;
 use crate::types::{App2, LogKind, RotationDragState};
 use crate::ui::widgets::{ctl_pill, face_chip};
-use egui::{Color32, Frame, Sense, Stroke, Ui, Vec2};
 use egui::epaint::{Mesh, Vertex};
+use egui::{Color32, Frame, Sense, Stroke, Ui, Vec2};
 use fcs_core::calculate_crop_region;
 use fcs_utils::outline_points_for_rect;
 
@@ -47,7 +47,7 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
         Stroke::new(1.0, P::RULE),
     );
 
-    let conf   = app.settings.detection.score_threshold;
+    let conf = app.settings.detection.score_threshold;
     let preset = app.settings.crop.preset.clone();
     let face_h = app.settings.crop.face_height_pct;
     let aspect = format!(
@@ -59,18 +59,23 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
     // ctl_pill width formula: key_w + val_w + 20  (matches the widget implementation)
     let pill_font = egui::FontId::monospace(10.5);
     let measure_pill = |key: &str, val: &str| -> f32 {
-        let kw = painter.layout_no_wrap(key.to_string(), pill_font.clone(), P::INK3).size().x;
-        let vw = painter.layout_no_wrap(val.to_string(), pill_font.clone(), P::INK).size().x;
+        let kw = painter
+            .layout_no_wrap(key.to_string(), pill_font.clone(), P::INK3)
+            .size()
+            .x;
+        let vw = painter
+            .layout_no_wrap(val.to_string(), pill_font.clone(), P::INK)
+            .size()
+            .x;
         kw + vw + 20.0
     };
-    let pills_total_w =
-        measure_pill("preset ",  &preset)
+    let pills_total_w = measure_pill("preset ",  &preset)
         + measure_pill("conf ",   &format!("{conf:.2}"))
         + measure_pill("aspect ", &aspect)
         + measure_pill("face-h ", &format!("{:.0}%", face_h))
         + 3.0 * 4.0   // three add_space(4) between pills
         + 12.0         // trailing add_space(12) on the right
-        + 20.0;         // extra breathing room
+        + 20.0; // extra breathing room
 
     // chips_x = left edge of the pills container; text is clipped before it.
     let chips_x = (r.max.x - pills_total_w).max(r.min.x + 80.0);
@@ -142,28 +147,35 @@ fn norm_to_screen_rotated(nx: f32, ny: f32, rect: egui::Rect, rotation_deg: f32)
     let (sin, cos) = theta.sin_cos();
     let rx = dx * cos - dy * sin + 0.5;
     let ry = dx * sin + dy * cos + 0.5;
-    egui::pos2(rect.min.x + rx * rect.width(), rect.min.y + ry * rect.height())
+    egui::pos2(
+        rect.min.x + rx * rect.width(),
+        rect.min.y + ry * rect.height(),
+    )
 }
 
 /// Converts a BoundingBox in image pixel coords to an axis-aligned screen rect under rotation.
 fn rotated_bbox_screen_rect(
-    bx: f32, by: f32, bw: f32, bh: f32,
-    iw: f32, ih: f32,
+    bx: f32,
+    by: f32,
+    bw: f32,
+    bh: f32,
+    img_size: Vec2,
     rect: egui::Rect,
     rotation_deg: f32,
 ) -> egui::Rect {
+    let (iw, ih) = (img_size.x, img_size.y);
     let corners = [
-        (bx / iw,        by / ih),
+        (bx / iw, by / ih),
         ((bx + bw) / iw, by / ih),
         ((bx + bw) / iw, (by + bh) / ih),
-        (bx / iw,        (by + bh) / ih),
+        (bx / iw, (by + bh) / ih),
     ];
     let pts: Vec<egui::Pos2> = corners
         .iter()
         .map(|(nx, ny)| norm_to_screen_rotated(*nx, *ny, rect, rotation_deg))
         .collect();
-    let min_x = pts.iter().map(|p| p.x).fold(f32::INFINITY,     f32::min);
-    let min_y = pts.iter().map(|p| p.y).fold(f32::INFINITY,     f32::min);
+    let min_x = pts.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+    let min_y = pts.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
     let max_x = pts.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
     let max_y = pts.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
     egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y))
@@ -177,20 +189,26 @@ fn image_shape(texture_id: egui::TextureId, dest: egui::Rect, rotation_deg: f32)
     let hh = dest.height() / 2.0;
     let theta = rotation_deg.to_radians();
     let (sin, cos) = theta.sin_cos();
-    let rotate = |dx: f32, dy: f32| egui::pos2(
-        center.x + dx * cos - dy * sin,
-        center.y + dx * sin + dy * cos,
-    );
+    let rotate = |dx: f32, dy: f32| {
+        egui::pos2(
+            center.x + dx * cos - dy * sin,
+            center.y + dx * sin + dy * cos,
+        )
+    };
     let pos = [
         rotate(-hw, -hh), // TL
-        rotate( hw, -hh), // TR
-        rotate( hw,  hh), // BR
-        rotate(-hw,  hh), // BL
+        rotate(hw, -hh),  // TR
+        rotate(hw, hh),   // BR
+        rotate(-hw, hh),  // BL
     ];
     let uvs = [[0.0f32, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
     let mut mesh = Mesh::with_texture(texture_id);
     for (p, uv) in pos.iter().zip(uvs.iter()) {
-        mesh.vertices.push(Vertex { pos: *p, uv: egui::pos2(uv[0], uv[1]), color: Color32::WHITE });
+        mesh.vertices.push(Vertex {
+            pos: *p,
+            uv: egui::pos2(uv[0], uv[1]),
+            color: Color32::WHITE,
+        });
     }
     mesh.indices = vec![0, 1, 2, 0, 2, 3];
     egui::Shape::mesh(mesh)
@@ -224,10 +242,16 @@ fn draw_rotation_handle(
     let (sin, cos) = theta.sin_cos();
     let center = draw_rect.center();
     let top_edge = center + egui::vec2(sin * hh, -cos * hh);
-    let handle   = center + egui::vec2(sin * (hh + 32.0), -cos * (hh + 32.0));
+    let handle = center + egui::vec2(sin * (hh + 32.0), -cos * (hh + 32.0));
 
     let line_color = P::white_alpha(60);
-    let fill = if dragging { P::CYAN } else if hovered { P::INK } else { P::INK3 };
+    let fill = if dragging {
+        P::CYAN
+    } else if hovered {
+        P::INK
+    } else {
+        P::INK3
+    };
     painter.line_segment([top_edge, handle], Stroke::new(1.0, line_color));
     painter.circle(handle, 7.0, fill, Stroke::new(1.5, P::white_alpha(120)));
 
@@ -298,37 +322,37 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     // Allocate the hit-rect first (beats the stage pan allocation below).
     // The handle lives in the handle_reserve zone above fit_rect — always inside stage_outer,
     // so both ui.allocate_rect interaction and ui.painter drawing work normally.
-    let h_resp_opt =
-        if app.preview.texture.is_some() || app.preview.image_size.is_some() {
-            let handle_pos = rotation_handle_pos(draw_rect, app.canvas_rotation);
-            let handle_rect = egui::Rect::from_center_size(handle_pos, Vec2::splat(20.0));
-            let h_resp = ui.allocate_rect(handle_rect, Sense::drag());
+    let h_resp_opt = if app.preview.texture.is_some() || app.preview.image_size.is_some() {
+        let handle_pos = rotation_handle_pos(draw_rect, app.canvas_rotation);
+        let handle_rect = egui::Rect::from_center_size(handle_pos, Vec2::splat(20.0));
+        let h_resp = ui.allocate_rect(handle_rect, Sense::drag());
 
-            let center = draw_rect.center();
-            if h_resp.drag_started() {
-                if let Some(pos) = h_resp.interact_pointer_pos() {
-                    app.rotation_drag = Some(RotationDragState {
-                        start_mouse_angle: angle_from_center(center, pos),
-                        start_rotation: app.canvas_rotation,
-                    });
-                }
-            }
-            if h_resp.dragged() {
-                if let (Some(drag), Some(pos)) = (&app.rotation_drag.clone(), h_resp.interact_pointer_pos()) {
-                    let delta = angle_from_center(center, pos) - drag.start_mouse_angle;
-                    app.canvas_rotation = drag.start_rotation + delta;
-                }
-            }
-            if h_resp.drag_stopped() {
-                app.rotation_drag = None;
-            }
-            if h_resp.hovered() || app.rotation_drag.is_some() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-            }
-            Some(h_resp)
-        } else {
-            None
-        };
+        let center = draw_rect.center();
+        if h_resp.drag_started()
+            && let Some(pos) = h_resp.interact_pointer_pos()
+        {
+            app.rotation_drag = Some(RotationDragState {
+                start_mouse_angle: angle_from_center(center, pos),
+                start_rotation: app.canvas_rotation,
+            });
+        }
+        if h_resp.dragged()
+            && let (Some(drag), Some(pos)) =
+                (&app.rotation_drag.clone(), h_resp.interact_pointer_pos())
+        {
+            let delta = angle_from_center(center, pos) - drag.start_mouse_angle;
+            app.canvas_rotation = drag.start_rotation + delta;
+        }
+        if h_resp.drag_stopped() {
+            app.rotation_drag = None;
+        }
+        if h_resp.hovered() || app.rotation_drag.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        Some(h_resp)
+    } else {
+        None
+    };
 
     // Stage background + border
     let painter = ui.painter();
@@ -380,7 +404,13 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         for (i, det) in &dets {
             let bbox = det.active_bbox();
             let screen_rect = rotated_bbox_screen_rect(
-                bbox.x, bbox.y, bbox.width, bbox.height, iw, ih, draw_rect, rot,
+                bbox.x,
+                bbox.y,
+                bbox.width,
+                bbox.height,
+                Vec2::new(iw, ih),
+                draw_rect,
+                rot,
             );
 
             let selected = app.selected_faces.contains(i);
@@ -454,7 +484,8 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                     painter.rect_stroke(crop_rect, 4.0, crop_stroke, egui::StrokeKind::Inside);
                 }
             } else {
-                let screen_rect = rotated_bbox_screen_rect(rx, ry, rw, rh, iw, ih, draw_rect, rot);
+                let screen_rect =
+                    rotated_bbox_screen_rect(rx, ry, rw, rh, Vec2::new(iw, ih), draw_rect, rot);
                 painter.rect_stroke(screen_rect, 4.0, crop_stroke, egui::StrokeKind::Inside);
             }
         }
@@ -478,7 +509,13 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         for (i, det) in app.preview.detections.iter().enumerate() {
             let bbox = det.active_bbox();
             let sr = rotated_bbox_screen_rect(
-                bbox.x, bbox.y, bbox.width, bbox.height, iw, ih, draw_rect, rot,
+                bbox.x,
+                bbox.y,
+                bbox.width,
+                bbox.height,
+                Vec2::new(iw, ih),
+                draw_rect,
+                rot,
             );
             if sr.expand(4.0).contains(pos) {
                 if app.selected_faces.contains(&i) {
@@ -503,7 +540,13 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     if let Some(h_resp) = h_resp_opt {
         let handle_painter = ui.painter().with_clip_rect(stage_outer);
         let dragging = app.rotation_drag.is_some();
-        draw_rotation_handle(&handle_painter, draw_rect, app.canvas_rotation, h_resp.hovered(), dragging);
+        draw_rotation_handle(
+            &handle_painter,
+            draw_rect,
+            app.canvas_rotation,
+            h_resp.hovered(),
+            dragging,
+        );
     }
 }
 
