@@ -59,10 +59,10 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
                 // Rotation
                 if ghost_btn(ui, "↶ 90°") {
-                    app.canvas_rotation = (app.canvas_rotation + 270) % 360;
+                    app.canvas_rotation = (app.canvas_rotation + 270.0) % 360.0;
                 }
                 if ghost_btn(ui, "90° ↷") {
-                    app.canvas_rotation = (app.canvas_rotation + 90) % 360;
+                    app.canvas_rotation = (app.canvas_rotation + 90.0) % 360.0;
                 }
                 tb_sep(ui);
 

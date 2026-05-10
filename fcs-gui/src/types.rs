@@ -327,6 +327,12 @@ pub enum DragHandle {
     SouthEast,
 }
 
+#[derive(Clone, Copy)]
+pub struct RotationDragState {
+    pub start_mouse_angle: f32,
+    pub start_rotation: f32,
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct PointerSnapshot {
     pub pressed: bool,
@@ -642,7 +648,8 @@ pub struct App2 {
     // Canvas zoom / rotation
     pub zoom: f32,
     pub pan: egui::Vec2,
-    pub canvas_rotation: u32, // 0, 90, 180, or 270
+    pub canvas_rotation: f32,
+    pub rotation_drag: Option<RotationDragState>,
 
     // Dialogs
     pub show_about: bool,

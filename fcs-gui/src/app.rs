@@ -152,7 +152,8 @@ impl App2 {
             webcam_state: WebcamState::default(),
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
-            canvas_rotation: 0,
+            canvas_rotation: 0.0,
+            rotation_drag: None,
             show_about: false,
             needs_detector_rebuild: false,
         }
@@ -379,6 +380,7 @@ impl App2 {
                 self.preview.source_image = Some(data.original_image.clone());
                 self.active_bbox_drag = None;
                 self.manual_box_tool_enabled = false;
+                self.canvas_rotation = 0.0;
 
                 let n = self.preview.detections.len();
                 self.push_log(format!("Detected {n} face(s)"), LogKind::Ok);
@@ -514,11 +516,13 @@ impl App2 {
         self.job_counter += 1;
         self.current_job = Some(job_id);
         self.push_log(format!("Loading {}", path.display()), LogKind::Info);
+        let rotation = self.canvas_rotation;
         spawn_detection_job(
             job_id,
             path,
             self.detector.clone(),
             self.settings.clone(),
+            rotation,
             self.job_tx.clone(),
         );
     }

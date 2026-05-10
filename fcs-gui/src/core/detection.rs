@@ -2,6 +2,8 @@
 
 use crate::types::*;
 use fcs_utils::gpu::GpuStatusIndicator;
+use image::DynamicImage;
+use imageproc::geometric_transformations::{Interpolation, rotate_about_center};
 
 use anyhow::{Context as AnyhowContext, Result};
 use fcs_core::{
@@ -151,12 +153,28 @@ fn build_preprocessor_from_context(
     }
 }
 
+fn rotate_image(image: Arc<DynamicImage>, rotation_deg: f32) -> Arc<DynamicImage> {
+    if rotation_deg.abs() < 0.01 {
+        return image;
+    }
+    let rgba = image.to_rgba8();
+    let rotated = rotate_about_center(
+        &rgba,
+        rotation_deg.to_radians(),
+        Interpolation::Bilinear,
+        image::Rgba([0, 0, 0, 255]),
+    );
+    Arc::new(DynamicImage::ImageRgba8(rotated))
+}
+
 pub fn perform_detection(
     detector: Arc<YuNetDetector>,
     path: PathBuf,
+    rotation_deg: f32,
 ) -> Result<DetectionJobSuccess> {
-    let image =
+    let raw =
         Arc::new(load_image(&path).with_context(|| format!("failed to load {}", path.display()))?);
+    let image = rotate_image(raw, rotation_deg);
     let detection_output = detector
         .detect_image(&image)
         .with_context(|| format!("detection failed for {}", path.display()))?;
@@ -206,6 +224,7 @@ pub fn spawn_detection_job(
     path: PathBuf,
     detector: Option<Arc<YuNetDetector>>,
     settings: AppSettings,
+    rotation_deg: f32,
     job_tx: mpsc::Sender<JobMessage>,
 ) {
     let Some(detector) = detector else {
@@ -218,7 +237,7 @@ pub fn spawn_detection_job(
 
     rayon::spawn(move || {
         let _ = settings; // used for future cache-key construction
-        let payload = match perform_detection(detector, path.clone()) {
+        let payload = match perform_detection(detector, path.clone(), rotation_deg) {
             Ok(data) => {
                 let cache_key = CacheKey {
                     path: path.clone(),
