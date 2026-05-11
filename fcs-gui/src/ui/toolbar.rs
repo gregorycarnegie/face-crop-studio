@@ -82,10 +82,8 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                     app.manual_box_draft = None;
                 }
                 // Remove selected (only enabled when something is selected)
-                if !app.selected_faces.is_empty() {
-                    if ghost_btn(ui, "Remove selected") {
-                        app.delete_selected_faces();
-                    }
+                if !app.selected_faces.is_empty() && ghost_btn(ui, "Remove selected") {
+                    app.delete_selected_faces();
                 }
                 tb_sep(ui);
 
@@ -197,14 +195,13 @@ fn toggle_btn(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let r = resp.rect;
     if active {
         painter.rect_filled(r, 7.0, P::cyan_alpha(30));
-        painter.rect_stroke(
-            r,
-            7.0,
-            Stroke::new(1.5, P::CYAN),
-            egui::StrokeKind::Outside,
-        );
+        painter.rect_stroke(r, 7.0, Stroke::new(1.5, P::CYAN), egui::StrokeKind::Outside);
     } else {
-        let bg = if resp.hovered() { P::white_alpha(15) } else { P::white_alpha(5) };
+        let bg = if resp.hovered() {
+            P::white_alpha(15)
+        } else {
+            P::white_alpha(5)
+        };
         painter.rect_filled(r, 7.0, bg);
         painter.rect_stroke(
             r,

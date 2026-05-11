@@ -222,7 +222,13 @@ fn rotation_handle_pos(draw_rect: egui::Rect, rotation_deg: f32) -> egui::Pos2 {
 }
 
 /// Converts a screen-space delta to image-pixel-space delta, accounting for scale and rotation.
-fn screen_delta_to_image_delta(screen_delta: Vec2, draw_rect: egui::Rect, img_w: f32, img_h: f32, rotation_deg: f32) -> Vec2 {
+fn screen_delta_to_image_delta(
+    screen_delta: Vec2,
+    draw_rect: egui::Rect,
+    img_w: f32,
+    img_h: f32,
+    rotation_deg: f32,
+) -> Vec2 {
     let sx = screen_delta.x * img_w / draw_rect.width();
     let sy = screen_delta.y * img_h / draw_rect.height();
     let theta = rotation_deg.to_radians();
@@ -239,7 +245,13 @@ fn handle_cursor(handle: DragHandle) -> CursorIcon {
 }
 
 /// Converts a screen position back to image-pixel coordinates, inverting the rotation.
-fn screen_to_image_px(screen_pos: Pos2, draw_rect: egui::Rect, img_w: f32, img_h: f32, rotation_deg: f32) -> (f32, f32) {
+fn screen_to_image_px(
+    screen_pos: Pos2,
+    draw_rect: egui::Rect,
+    img_w: f32,
+    img_h: f32,
+    rotation_deg: f32,
+) -> (f32, f32) {
     let rx = (screen_pos.x - draw_rect.min.x) / draw_rect.width() - 0.5;
     let ry = (screen_pos.y - draw_rect.min.y) / draw_rect.height() - 0.5;
     let theta = rotation_deg.to_radians();
@@ -250,14 +262,25 @@ fn screen_to_image_px(screen_pos: Pos2, draw_rect: egui::Rect, img_w: f32, img_h
 }
 
 /// Converts a ManualBoxDraft (screen positions) to a BoundingBox in image pixel coords.
-fn draft_to_image_bbox(draft: ManualBoxDraft, draw_rect: egui::Rect, img_w: f32, img_h: f32, rotation_deg: f32) -> BoundingBox {
+fn draft_to_image_bbox(
+    draft: ManualBoxDraft,
+    draw_rect: egui::Rect,
+    img_w: f32,
+    img_h: f32,
+    rotation_deg: f32,
+) -> BoundingBox {
     let (ax, ay) = screen_to_image_px(draft.start, draw_rect, img_w, img_h, rotation_deg);
     let (bx, by) = screen_to_image_px(draft.current, draw_rect, img_w, img_h, rotation_deg);
     let x = ax.min(bx).max(0.0);
     let y = ay.min(by).max(0.0);
     let w = (ax - bx).abs().min(img_w - x);
     let h = (ay - by).abs().min(img_h - y);
-    BoundingBox { x, y, width: w, height: h }
+    BoundingBox {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 /// Angle (degrees) from image center to mouse position, measuring CW from "up".
@@ -349,9 +372,9 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     };
 
     // Scroll-to-zoom — only when the pointer is over the canvas
-    let pointer_over_canvas = ui.ctx().input(|i| {
-        i.pointer.hover_pos().map_or(false, |p| fit_rect.contains(p))
-    });
+    let pointer_over_canvas = ui
+        .ctx()
+        .input(|i| i.pointer.hover_pos().is_some_and(|p| fit_rect.contains(p)));
     if pointer_over_canvas {
         let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() > 0.1 {
@@ -545,7 +568,9 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     }
 
     // Delete key removes selected faces
-    let delete_pressed = ui.ctx().input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+    let delete_pressed = ui
+        .ctx()
+        .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
     if delete_pressed && !app.selected_faces.is_empty() {
         app.delete_selected_faces();
     }
@@ -560,37 +585,44 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         }
         if let Some(pos) = resp.interact_pointer_pos() {
             if resp.drag_started() {
-                app.manual_box_draft = Some(ManualBoxDraft { start: pos, current: pos });
+                app.manual_box_draft = Some(ManualBoxDraft {
+                    start: pos,
+                    current: pos,
+                });
             }
-            if resp.dragged() && app.manual_box_draft.is_some() {
-                if let Some(draft) = app.manual_box_draft.as_mut() {
-                    draft.current = pos;
-                }
+            if resp.dragged()
+                && app.manual_box_draft.is_some()
+                && let Some(draft) = app.manual_box_draft.as_mut()
+            {
+                draft.current = pos;
             }
         }
-        if resp.drag_stopped() {
-            if let Some(draft) = app.manual_box_draft.take() {
-                let w = (draft.start.x - draft.current.x).abs();
-                let h = (draft.start.y - draft.current.y).abs();
-                if w > 8.0 && h > 8.0 {
-                    if let Some((img_w, img_h)) = app.preview.image_size {
-                        let bbox = draft_to_image_bbox(
-                            draft,
-                            draw_rect,
-                            img_w as f32,
-                            img_h as f32,
-                            app.canvas_rotation,
-                        );
-                        if bbox.width > 1.0 && bbox.height > 1.0 {
-                            app.commit_manual_box(bbox);
-                        }
-                    }
+        if resp.drag_stopped()
+            && let Some(draft) = app.manual_box_draft.take()
+        {
+            let w = (draft.start.x - draft.current.x).abs();
+            let h = (draft.start.y - draft.current.y).abs();
+            if w > 8.0
+                && h > 8.0
+                && let Some((img_w, img_h)) = app.preview.image_size
+            {
+                let bbox = draft_to_image_bbox(
+                    draft,
+                    draw_rect,
+                    img_w as f32,
+                    img_h as f32,
+                    app.canvas_rotation,
+                );
+                if bbox.width > 1.0 && bbox.height > 1.0 {
+                    app.commit_manual_box(bbox);
                 }
             }
         }
     } else {
         // Normal mode: bbox resize on handle drag, pan otherwise, select on click.
-        let (iw, ih) = app.preview.image_size
+        let (iw, ih) = app
+            .preview
+            .image_size
             .map(|(w, h)| (w as f32, h as f32))
             .unwrap_or((1.0, 1.0));
         let rot = app.canvas_rotation;
@@ -603,8 +635,13 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                     if let Some(det) = app.preview.detections.get(sel_i) {
                         let bbox = det.active_bbox();
                         let sr = rotated_bbox_screen_rect(
-                            bbox.x, bbox.y, bbox.width, bbox.height,
-                            Vec2::new(iw, ih), draw_rect, rot,
+                            bbox.x,
+                            bbox.y,
+                            bbox.width,
+                            bbox.height,
+                            Vec2::new(iw, ih),
+                            draw_rect,
+                            rot,
                         );
                         if let Some(h) = hit_test_handle(sr, hover_pos) {
                             ui.ctx().set_cursor_icon(handle_cursor(h));
@@ -622,30 +659,36 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         }
 
         // Start a bbox drag when the user presses on a handle of a selected face
-        if resp.drag_started() && app.rotation_drag.is_none() {
-            if let Some(press_pos) = resp.interact_pointer_pos() {
-                let mut started = false;
-                for &sel_i in &app.selected_faces {
-                    if let Some(det) = app.preview.detections.get(sel_i) {
-                        let bbox = det.active_bbox();
-                        let sr = rotated_bbox_screen_rect(
-                            bbox.x, bbox.y, bbox.width, bbox.height,
-                            Vec2::new(iw, ih), draw_rect, rot,
-                        );
-                        if let Some(handle) = hit_test_handle(sr, press_pos) {
-                            app.active_bbox_drag = Some(ActiveBoxDrag {
-                                index: sel_i,
-                                handle,
-                                start_bbox: bbox,
-                                drag_start_screen: press_pos,
-                            });
-                            started = true;
-                            break;
-                        }
+        if resp.drag_started()
+            && app.rotation_drag.is_none()
+            && let Some(press_pos) = resp.interact_pointer_pos()
+        {
+            let mut started = false;
+            for &sel_i in &app.selected_faces {
+                if let Some(det) = app.preview.detections.get(sel_i) {
+                    let bbox = det.active_bbox();
+                    let sr = rotated_bbox_screen_rect(
+                        bbox.x,
+                        bbox.y,
+                        bbox.width,
+                        bbox.height,
+                        Vec2::new(iw, ih),
+                        draw_rect,
+                        rot,
+                    );
+                    if let Some(handle) = hit_test_handle(sr, press_pos) {
+                        app.active_bbox_drag = Some(ActiveBoxDrag {
+                            index: sel_i,
+                            handle,
+                            start_bbox: bbox,
+                            drag_start_screen: press_pos,
+                        });
+                        started = true;
+                        break;
                     }
                 }
-                let _ = started;
             }
+            let _ = started;
         }
 
         // Apply bbox drag or pan
@@ -653,9 +696,8 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             if let Some(drag) = app.active_bbox_drag {
                 if let Some(cur_pos) = resp.interact_pointer_pos() {
                     let screen_delta = cur_pos - drag.drag_start_screen;
-                    let image_delta = screen_delta_to_image_delta(
-                        screen_delta, draw_rect, iw, ih, rot,
-                    );
+                    let image_delta =
+                        screen_delta_to_image_delta(screen_delta, draw_rect, iw, ih, rot);
                     let new_bbox = apply_drag(&drag, image_delta, iw, ih);
                     if let Some(det) = app.preview.detections.get_mut(drag.index) {
                         det.set_bbox(new_bbox);
@@ -679,8 +721,13 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             for (i, det) in app.preview.detections.iter().enumerate() {
                 let bbox = det.active_bbox();
                 let sr = rotated_bbox_screen_rect(
-                    bbox.x, bbox.y, bbox.width, bbox.height,
-                    Vec2::new(iw, ih), draw_rect, rot,
+                    bbox.x,
+                    bbox.y,
+                    bbox.width,
+                    bbox.height,
+                    Vec2::new(iw, ih),
+                    draw_rect,
+                    rot,
                 );
                 if sr.expand(4.0).contains(pos) {
                     if app.selected_faces.contains(&i) {
@@ -706,8 +753,13 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             for (i, det) in app.preview.detections.iter().enumerate() {
                 let bbox = det.active_bbox();
                 let sr = rotated_bbox_screen_rect(
-                    bbox.x, bbox.y, bbox.width, bbox.height,
-                    Vec2::new(iw, ih), draw_rect, rot,
+                    bbox.x,
+                    bbox.y,
+                    bbox.width,
+                    bbox.height,
+                    Vec2::new(iw, ih),
+                    draw_rect,
+                    rot,
                 );
                 if sr.expand(4.0).contains(pos) {
                     hit_idx = Some(i);
