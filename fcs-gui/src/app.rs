@@ -736,6 +736,12 @@ fn show_about_window(ctx: &egui::Context, open: &mut bool) {
                         .color(P::INK)
                         .strong(),
                 );
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                        .size(11.0)
+                        .color(P::INK3),
+                );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new("AI-powered face detection and cropping")
