@@ -11,8 +11,8 @@ use fcs_core::{
     YuNetDetector,
 };
 use fcs_utils::{
-    GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image, load_image_raw,
-    quality::estimate_sharpness,
+    GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image,
+    load_image_raw, quality::estimate_sharpness,
 };
 use log::{error, info, warn};
 use std::{
@@ -383,29 +383,30 @@ pub fn spawn_detection_job(
     };
 
     rayon::spawn(move || {
-        let payload = match perform_detection(detector, path.clone(), rotation_deg, auto_orient_exif) {
-            Ok(data) => {
-                let cache_key = CacheKey {
-                    path: path.clone(),
-                    model_path: None,
-                    input_width: 640,
-                    input_height: 640,
-                    resize_quality: Default::default(),
-                    score_bits: 0,
-                    nms_bits: 0,
-                    top_k: 5000,
-                };
-                JobMessage::DetectionFinished {
-                    job_id,
-                    cache_key,
-                    data,
+        let payload =
+            match perform_detection(detector, path.clone(), rotation_deg, auto_orient_exif) {
+                Ok(data) => {
+                    let cache_key = CacheKey {
+                        path: path.clone(),
+                        model_path: None,
+                        input_width: 640,
+                        input_height: 640,
+                        resize_quality: Default::default(),
+                        score_bits: 0,
+                        nms_bits: 0,
+                        top_k: 5000,
+                    };
+                    JobMessage::DetectionFinished {
+                        job_id,
+                        cache_key,
+                        data,
+                    }
                 }
-            }
-            Err(err) => JobMessage::DetectionFailed {
-                job_id,
-                error: format!("{err:#}"),
-            },
-        };
+                Err(err) => JobMessage::DetectionFailed {
+                    job_id,
+                    error: format!("{err:#}"),
+                },
+            };
         if job_tx.send(payload).is_err() {
             error!("GUI dropped detection result for {}", path.display());
         }

@@ -255,7 +255,7 @@ fn gpu_vram_mb() -> Option<u64> {
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Graphics::Dxgi::{
-            CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL,
+            CreateDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, IDXGIAdapter3, IDXGIFactory1,
         };
         use windows::core::Interface as _;
         unsafe {

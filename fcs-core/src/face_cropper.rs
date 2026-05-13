@@ -72,8 +72,7 @@ pub fn crop_face_from_image(
                 settings.fill_color.alpha,
             ]);
             // rotate_about_center rotates counter-clockwise, so pass -angle to level the eyes.
-            let rotated = rotate_about_center(&canvas, -angle, Interpolation::Bilinear, fill);
-            rotated
+            rotate_about_center(&canvas, -angle, Interpolation::Bilinear, fill)
         } else {
             canvas
         }

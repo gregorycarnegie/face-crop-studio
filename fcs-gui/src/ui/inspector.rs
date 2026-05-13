@@ -405,7 +405,11 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
         });
 
         toggle_row(ui, "Eye-line align", &mut app.settings.crop.eye_line_align);
-        toggle_row(ui, "Auto-orient via EXIF", &mut app.settings.crop.auto_orient_exif);
+        toggle_row(
+            ui,
+            "Auto-orient via EXIF",
+            &mut app.settings.crop.auto_orient_exif,
+        );
         ui.add_space(6.0);
     });
     separator_line(ui);
