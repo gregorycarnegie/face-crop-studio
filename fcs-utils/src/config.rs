@@ -192,6 +192,10 @@ pub struct CropSettings {
     pub vignette_intensity: f32,
     /// Color of the vignette effect.
     pub vignette_color: RgbaColor,
+    /// Rotate the crop so the eye line is horizontal.
+    pub eye_line_align: bool,
+    /// Apply EXIF orientation tag when loading the source image.
+    pub auto_orient_exif: bool,
 }
 
 impl CropSettings {
@@ -262,6 +266,8 @@ impl Default for CropSettings {
             vignette_softness: 0.0,
             vignette_intensity: 1.0,
             vignette_color: RgbaColor::opaque(0, 0, 0),
+            eye_line_align: false,
+            auto_orient_exif: true,
         }
     }
 }

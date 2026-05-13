@@ -379,6 +379,7 @@ pub struct DetectionJobSuccess {
     pub detections: Vec<DetectionWithQuality>,
     pub original_size: (u32, u32),
     pub original_image: Arc<DynamicImage>,
+    pub detect_ms: u64,
 }
 
 pub enum JobMessage {
@@ -633,6 +634,7 @@ pub struct App2 {
     // Misc
     pub status_line: String,
     pub last_error: Option<String>,
+    pub last_detect_ms: Option<u64>,
     pub is_busy: bool,
     pub texture_seq: u64,
     pub job_counter: u64,

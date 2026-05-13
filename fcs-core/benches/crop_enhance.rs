@@ -51,6 +51,7 @@ fn crop_settings() -> CropSettings {
         horizontal_offset: 0.0,
         vertical_offset: 0.0,
         fill_color: FillColor::default(),
+        eye_line_align: false,
     }
 }
 

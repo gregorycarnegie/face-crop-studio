@@ -144,6 +144,7 @@ impl App2 {
             status_line,
             last_error: None,
             is_busy: false,
+            last_detect_ms: None,
             texture_seq: 0,
             job_counter: 0,
             current_job: None,
@@ -416,6 +417,7 @@ impl App2 {
                 self.manual_box_tool_enabled = false;
                 self.canvas_rotation = 0.0;
 
+                self.last_detect_ms = Some(data.detect_ms);
                 let n = self.preview.detections.len();
                 self.push_log(format!("Detected {n} face(s)"), LogKind::Ok);
                 self.status_line = format!("Detected {n} face(s)");
@@ -549,11 +551,13 @@ impl App2 {
         self.current_job = Some(job_id);
         self.push_log(format!("Loading {}", path.display()), LogKind::Info);
         let rotation = self.canvas_rotation;
+        let auto_orient_exif = self.settings.crop.auto_orient_exif;
         spawn_detection_job(
             job_id,
             path,
             self.detector.clone(),
             rotation,
+            auto_orient_exif,
             self.job_tx.clone(),
         );
     }
@@ -753,6 +757,7 @@ pub(crate) fn build_crop_settings_from_app_settings(
         horizontal_offset: settings.crop.horizontal_offset,
         vertical_offset: settings.crop.vertical_offset,
         fill_color: settings.crop.fill_color,
+        eye_line_align: settings.crop.eye_line_align,
     }
 }
 

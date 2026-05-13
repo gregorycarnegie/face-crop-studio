@@ -184,6 +184,7 @@ pub fn build_core_crop_settings(cfg: &ConfigCropSettings) -> CropSettings {
         horizontal_offset: cfg.horizontal_offset,
         vertical_offset: cfg.vertical_offset,
         fill_color: cfg.fill_color,
+        eye_line_align: cfg.eye_line_align,
     }
 }
 

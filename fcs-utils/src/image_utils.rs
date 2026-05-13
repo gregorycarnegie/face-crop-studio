@@ -39,6 +39,17 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     Ok(image)
 }
 
+/// Load an image from disk without applying EXIF orientation.
+pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
+    let path_ref = path.as_ref();
+    ImageReader::open(path_ref)
+        .with_context(|| format!("failed to open image {}", path_ref.display()))?
+        .with_guessed_format()
+        .with_context(|| format!("failed to guess image format for {}", path_ref.display()))?
+        .decode()
+        .with_context(|| format!("failed to decode image {}", path_ref.display()))
+}
+
 /// Resize an image to the requested resolution using the provided filter.
 ///
 /// # Arguments

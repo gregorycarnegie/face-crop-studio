@@ -312,6 +312,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
         assert!(runtime.crop_faces_gpu(&img, &[], &settings).is_none());
     }
@@ -329,6 +330,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
         assert!(runtime.crop_faces_gpu(&img, &[], &settings).is_none());
     }

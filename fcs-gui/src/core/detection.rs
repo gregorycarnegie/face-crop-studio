@@ -11,13 +11,14 @@ use fcs_core::{
     YuNetDetector,
 };
 use fcs_utils::{
-    GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image,
+    GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image, load_image_raw,
     quality::estimate_sharpness,
 };
 use log::{error, info, warn};
 use std::{
     path::PathBuf,
     sync::{Arc, mpsc},
+    time::Instant,
 };
 
 pub fn build_detector(
@@ -171,13 +172,20 @@ pub fn perform_detection(
     detector: Arc<YuNetDetector>,
     path: PathBuf,
     rotation_deg: f32,
+    auto_orient_exif: bool,
 ) -> Result<DetectionJobSuccess> {
-    let raw =
-        Arc::new(load_image(&path).with_context(|| format!("failed to load {}", path.display()))?);
-    let image = rotate_image(raw, rotation_deg);
+    let raw = if auto_orient_exif {
+        load_image(&path)
+    } else {
+        load_image_raw(&path)
+    }
+    .with_context(|| format!("failed to load {}", path.display()))?;
+    let image = rotate_image(Arc::new(raw), rotation_deg);
+    let t0 = Instant::now();
     let detection_output = detector
         .detect_image(&image)
         .with_context(|| format!("detection failed for {}", path.display()))?;
+    let detect_ms = t0.elapsed().as_millis() as u64;
 
     let detections: Vec<DetectionWithQuality> = detection_output
         .detections
@@ -216,6 +224,7 @@ pub fn perform_detection(
         detections,
         original_size: detection_output.original_size,
         original_image: image,
+        detect_ms,
     })
 }
 
@@ -224,9 +233,11 @@ pub fn perform_detection_from_image(
     image: Arc<DynamicImage>,
     synthetic_path: PathBuf,
 ) -> Result<DetectionJobSuccess> {
+    let t0 = Instant::now();
     let detection_output = detector
         .detect_image(&image)
         .context("webcam detection failed")?;
+    let detect_ms = t0.elapsed().as_millis() as u64;
 
     let detections: Vec<DetectionWithQuality> = detection_output
         .detections
@@ -265,6 +276,7 @@ pub fn perform_detection_from_image(
         detections,
         original_size: detection_output.original_size,
         original_image: image,
+        detect_ms,
     })
 }
 
@@ -359,6 +371,7 @@ pub fn spawn_detection_job(
     path: PathBuf,
     detector: Option<Arc<YuNetDetector>>,
     rotation_deg: f32,
+    auto_orient_exif: bool,
     job_tx: mpsc::Sender<JobMessage>,
 ) {
     let Some(detector) = detector else {
@@ -370,7 +383,7 @@ pub fn spawn_detection_job(
     };
 
     rayon::spawn(move || {
-        let payload = match perform_detection(detector, path.clone(), rotation_deg) {
+        let payload = match perform_detection(detector, path.clone(), rotation_deg, auto_orient_exif) {
             Ok(data) => {
                 let cache_key = CacheKey {
                     path: path.clone(),

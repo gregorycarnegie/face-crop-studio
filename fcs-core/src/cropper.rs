@@ -42,6 +42,8 @@ pub struct CropSettings {
     pub vertical_offset: f32,
     /// Background fill color for areas that fall outside the source image.
     pub fill_color: FillColor,
+    /// Rotate the crop so the eye line is horizontal.
+    pub eye_line_align: bool,
 }
 
 /// Integer crop region in source image coordinates.
@@ -109,6 +111,7 @@ impl Default for CropSettings {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         }
     }
 }
@@ -313,6 +316,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -345,6 +349,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -405,6 +410,7 @@ mod tests {
             horizontal_offset: 0.5,
             vertical_offset: -0.5,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -443,6 +449,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -472,6 +479,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -500,6 +508,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -529,6 +538,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);
@@ -559,6 +569,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::default(),
+            eye_line_align: false,
         };
 
         let crop = calculate_crop_region(img_w, img_h, face, &settings);

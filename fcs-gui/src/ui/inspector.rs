@@ -82,8 +82,7 @@ fn inspector_tab_bar(ui: &mut Ui, app: &mut App2) {
 fn mini_stats(ui: &mut Ui, app: &App2) {
     let total = app.preview.detections.len();
     let selected = app.selected_faces.len();
-    // Detect time not directly tracked; show 0 as placeholder
-    let detect_ms: u64 = 0;
+    let detect_ms = app.last_detect_ms.unwrap_or(0);
     let (src_w, src_h) = app.preview.image_size.unwrap_or((0, 0));
 
     ui.painter().line_segment(
@@ -405,11 +404,8 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
             });
         });
 
-        // Eye-line align and auto-orient are not in AppSettings; show placeholders
-        let mut eye_align = false;
-        let mut auto_orient = false;
-        toggle_row(ui, "Eye-line align", &mut eye_align);
-        toggle_row(ui, "Auto-orient via EXIF", &mut auto_orient);
+        toggle_row(ui, "Eye-line align", &mut app.settings.crop.eye_line_align);
+        toggle_row(ui, "Auto-orient via EXIF", &mut app.settings.crop.auto_orient_exif);
         ui.add_space(6.0);
     });
     separator_line(ui);

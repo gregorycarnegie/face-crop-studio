@@ -7,6 +7,7 @@ use crate::cropper::{CropRegion, CropSettings, calculate_crop_region};
 use crate::postprocess::Detection;
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
+use imageproc::geometric_transformations::{Interpolation, rotate_about_center};
 
 /// Crop a face from `img` according to `detection` and `settings`.
 ///
@@ -53,6 +54,32 @@ pub fn crop_face_from_image(
     if settings.output_width == 0 || settings.output_height == 0 {
         return DynamicImage::ImageRgba8(canvas);
     }
+
+    let canvas = if settings.eye_line_align {
+        let re = &detection.landmarks[0]; // right eye (viewer's right)
+        let le = &detection.landmarks[1]; // left eye  (viewer's left)
+        let both_zero = re.x == 0.0 && re.y == 0.0 && le.x == 0.0 && le.y == 0.0;
+        if !both_zero {
+            // Angle of the eye line relative to horizontal in source image coords.
+            // Positive angle = right eye is above left eye; we rotate by -angle to level.
+            let dx = le.x - re.x;
+            let dy = le.y - re.y;
+            let angle = dy.atan2(dx); // radians; counter-clockwise positive
+            let fill = Rgba([
+                settings.fill_color.red,
+                settings.fill_color.green,
+                settings.fill_color.blue,
+                settings.fill_color.alpha,
+            ]);
+            // rotate_about_center rotates counter-clockwise, so pass -angle to level the eyes.
+            let rotated = rotate_about_center(&canvas, -angle, Interpolation::Bilinear, fill);
+            rotated
+        } else {
+            canvas
+        }
+    } else {
+        canvas
+    };
 
     let resized = image::imageops::resize(
         &DynamicImage::ImageRgba8(canvas),
@@ -109,6 +136,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: crate::cropper::FillColor::default(),
+            eye_line_align: false,
         };
 
         let out = crop_face_from_image(&img_dyn, &detection, &settings);
@@ -144,6 +172,7 @@ mod tests {
             horizontal_offset: 0.0,
             vertical_offset: 0.0,
             fill_color: FillColor::opaque(200, 10, 50),
+            eye_line_align: false,
         };
 
         let out = crop_face_from_image(&img_dyn, &detection, &settings).to_rgba8();
