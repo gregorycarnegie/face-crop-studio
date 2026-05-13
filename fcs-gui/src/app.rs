@@ -410,6 +410,7 @@ impl App2 {
                         ctx,
                         det,
                         &data.original_image,
+                        &self.settings,
                         &mut self.texture_seq,
                     );
                 }

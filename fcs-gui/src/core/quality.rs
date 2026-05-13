@@ -1,7 +1,9 @@
 //! Quality helpers — thin wrappers around fcs-utils quality functions.
 
+use crate::app::build_crop_settings_from_app_settings;
 use crate::types::DetectionWithQuality;
-use fcs_utils::quality::Quality;
+use fcs_core::{Detection, crop_face_from_image};
+use fcs_utils::{apply_enhancements, config::AppSettings, quality::Quality};
 use image::DynamicImage;
 use std::collections::HashSet;
 
@@ -41,19 +43,19 @@ pub fn refresh_thumbnail(
     ctx: &egui::Context,
     det: &mut DetectionWithQuality,
     source: &DynamicImage,
+    settings: &AppSettings,
     texture_seq: &mut u64,
 ) {
-    let bbox = det.active_bbox();
-    let x = bbox.x.max(0.0) as u32;
-    let y = bbox.y.max(0.0) as u32;
-    let w = bbox.width.max(1.0) as u32;
-    let h = bbox.height.max(1.0) as u32;
-    let x = x.min(source.width().saturating_sub(1));
-    let y = y.min(source.height().saturating_sub(1));
-    let w = w.min(source.width().saturating_sub(x));
-    let h = h.min(source.height().saturating_sub(y));
-    let face = source.crop_imm(x, y, w, h);
-    let thumb = face.resize(96, 96, image::imageops::FilterType::Triangle);
+    let crop_settings = build_crop_settings_from_app_settings(settings);
+    let detection = Detection {
+        bbox: det.active_bbox(),
+        landmarks: det.detection.landmarks,
+        score: det.detection.score,
+    };
+    let raw = crop_face_from_image(source, &detection, &crop_settings);
+    let enhanced = apply_enhancements(&raw, &settings.enhance.to_enhancement_settings(), None);
+
+    let thumb = enhanced.resize(96, 96, image::imageops::FilterType::Triangle);
     let rgba = thumb.to_rgba8();
     let size = [rgba.width() as usize, rgba.height() as usize];
     let img = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());

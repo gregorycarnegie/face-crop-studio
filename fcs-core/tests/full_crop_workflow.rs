@@ -97,6 +97,7 @@ fn full_crop_workflow_selects_best_quality_face() {
         horizontal_offset: 0.0,
         vertical_offset: 0.0,
         fill_color: FillColor::default(),
+        eye_line_align: false,
     };
 
     let cfg_crop = build_app_crop_settings(&core_settings);

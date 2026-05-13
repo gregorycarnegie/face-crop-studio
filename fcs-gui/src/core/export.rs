@@ -5,12 +5,15 @@ use crate::{
     types::{App2, BatchFileStatus, JobMessage},
 };
 
-use fcs_core::{Detection, YuNetDetector, crop_face_from_image};
+use fcs_core::{
+    CropSettings as CoreCropSettings, Detection, YuNetDetector, calculate_crop_region,
+    crop_face_from_image,
+};
 use fcs_utils::{
-    MetadataContext, OutputOptions, append_suffix_to_filename, apply_enhancements,
+    MetadataContext, OutputOptions, RedEye, append_suffix_to_filename, apply_enhancements,
     apply_shape_mask, estimate_sharpness, load_image, quality::Quality, save_dynamic_image,
 };
-use image::{DynamicImage, Rgba};
+use image::{DynamicImage, GenericImageView, Rgba};
 use log::{info, warn};
 use rfd::FileDialog;
 use std::{
@@ -18,6 +21,35 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+/// Map the two eye landmarks into output-crop coordinates for targeted red-eye removal.
+fn eye_positions(
+    detection: &Detection,
+    img_w: u32,
+    img_h: u32,
+    crop: &CoreCropSettings,
+) -> Vec<RedEye> {
+    let re = &detection.landmarks[0];
+    let le = &detection.landmarks[1];
+    if re.x == 0.0 && re.y == 0.0 && le.x == 0.0 && le.y == 0.0 {
+        return vec![];
+    }
+    let region = calculate_crop_region(img_w, img_h, detection.bbox, crop);
+    let sx = crop.output_width as f32 / region.width.max(1) as f32;
+    let sy = crop.output_height as f32 / region.height.max(1) as f32;
+    let face_h_out =
+        detection.bbox.height / region.height.max(1) as f32 * crop.output_height as f32;
+    let radius = (face_h_out * 0.12).max(4.0);
+    [re, le]
+        .iter()
+        .map(|lm| RedEye {
+            x: (lm.x - region.x as f32) * sx,
+            y: (lm.y - region.y as f32) * sy,
+            radius,
+            _pad: 0.0,
+        })
+        .collect()
+}
 
 /// Apply shape mask then composite transparent pixels onto `fill`.
 /// When `fill.alpha == 0` the output keeps its alpha channel (transparent PNG/WEBP).
@@ -126,7 +158,17 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
         let raw_crop =
             crop_face_from_image(source_image.as_ref(), &detection_for_crop, &crop_settings);
         let shaped = apply_shape_and_fill(raw_crop, &settings.crop);
-        let crop = apply_enhancements(&shaped, &settings.enhance.to_enhancement_settings(), None);
+        let eyes = eye_positions(
+            &detection_for_crop,
+            source_image.width(),
+            source_image.height(),
+            &crop_settings,
+        );
+        let crop = apply_enhancements(
+            &shaped,
+            &settings.enhance.to_enhancement_settings(),
+            if eyes.is_empty() { None } else { Some(&eyes) },
+        );
 
         let mut filename = format!("{source_stem}_face_{:02}.{ext}", face_index + 1);
         if let Some(suffix) = quality_suffix(settings, det.quality) {
@@ -284,10 +326,16 @@ fn run_batch_job(
     let mut crops = Vec::with_capacity(detections.len());
     let mut candidates = Vec::with_capacity(detections.len());
 
+    let (src_w, src_h) = source_image.dimensions();
     for (face_index, detection) in detections.iter().enumerate() {
         let raw = crop_face_from_image(&source_image, detection, &crop_settings);
         let shaped = apply_shape_and_fill(raw, &settings.crop);
-        let crop = apply_enhancements(&shaped, &settings.enhance.to_enhancement_settings(), None);
+        let eyes = eye_positions(detection, src_w, src_h, &crop_settings);
+        let crop = apply_enhancements(
+            &shaped,
+            &settings.enhance.to_enhancement_settings(),
+            if eyes.is_empty() { None } else { Some(&eyes) },
+        );
         let (quality_score, quality) = estimate_sharpness(&crop);
         crops.push(crop);
         candidates.push(ExportCandidate {

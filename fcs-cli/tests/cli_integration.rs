@@ -48,6 +48,7 @@ fn cli_like_crop_and_enhance_saves_file() {
         horizontal_offset: 0.0,
         vertical_offset: 0.0,
         fill_color: FillColor::default(),
+        eye_line_align: false,
     };
 
     let cropped = crop_face_from_image(&dyn_img, &det, &settings);

@@ -32,7 +32,7 @@ pub use bilateral_filter::GpuBilateralFilter;
 pub mod background_blur;
 pub use background_blur::GpuBackgroundBlur;
 pub mod red_eye;
-pub use red_eye::GpuRedEyeRemoval;
+pub use red_eye::{GpuRedEyeRemoval, RedEye};
 pub mod shape_mask;
 pub use shape_mask::GpuShapeMask;
 pub mod hist_equalize;
