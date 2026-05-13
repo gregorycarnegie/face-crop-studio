@@ -147,14 +147,10 @@ impl GpuInferenceOps {
         config: &Conv2dConfig,
     ) -> Result<Vec<f32>> {
         let input_tensor =
-            self.upload_tensor(config.input_shape_dims(), input, Some("yunet_conv_input"))?;
-        let weight_tensor = self.upload_tensor(
-            config.weight_shape_dims(),
-            weights,
-            Some("yunet_conv_weights"),
-        )?;
-        let bias_tensor =
-            self.upload_tensor(config.bias_shape_dims(), bias, Some("yunet_conv_bias"))?;
+            self.upload_tensor(config.input_shape_dims(), input, Some("conv_input"))?;
+        let weight_tensor =
+            self.upload_tensor(config.weight_shape_dims(), weights, Some("conv_weights"))?;
+        let bias_tensor = self.upload_tensor(config.bias_shape_dims(), bias, Some("conv_bias"))?;
         let output = self.conv2d_tensor(&input_tensor, &weight_tensor, &bias_tensor, config)?;
         output.to_vec()
     }
@@ -201,12 +197,12 @@ impl GpuInferenceOps {
         config: &BatchNormConfig,
     ) -> Result<Vec<f32>> {
         let tensor_gpu =
-            self.upload_tensor(config.tensor_shape_dims(), tensor, Some("yunet_bn_tensor"))?;
+            self.upload_tensor(config.tensor_shape_dims(), tensor, Some("bn_tensor"))?;
         let channels = config.channels as usize;
-        let gamma_gpu = self.upload_tensor([channels], gamma, Some("yunet_bn_gamma"))?;
-        let beta_gpu = self.upload_tensor([channels], beta, Some("yunet_bn_beta"))?;
-        let mean_gpu = self.upload_tensor([channels], mean, Some("yunet_bn_mean"))?;
-        let variance_gpu = self.upload_tensor([channels], variance, Some("yunet_bn_variance"))?;
+        let gamma_gpu = self.upload_tensor([channels], gamma, Some("bn_gamma"))?;
+        let beta_gpu = self.upload_tensor([channels], beta, Some("bn_beta"))?;
+        let mean_gpu = self.upload_tensor([channels], mean, Some("bn_mean"))?;
+        let variance_gpu = self.upload_tensor([channels], variance, Some("bn_variance"))?;
         let output = self.batch_norm_tensor(
             &tensor_gpu,
             &gamma_gpu,
@@ -225,8 +221,7 @@ impl GpuInferenceOps {
     }
 
     pub fn activation(&self, tensor: &[f32], kind: ActivationKind) -> Result<Vec<f32>> {
-        let tensor_gpu =
-            self.upload_tensor([tensor.len()], tensor, Some("yunet_activation_tensor"))?;
+        let tensor_gpu = self.upload_tensor([tensor.len()], tensor, Some("activation_tensor"))?;
         let output = self.activation_tensor(&tensor_gpu, kind)?;
         output.to_vec()
     }

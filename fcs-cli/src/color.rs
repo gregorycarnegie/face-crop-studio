@@ -238,14 +238,16 @@ mod tests {
     #[test]
     fn parse_fill_color_spec_hsv_plain_hue_number() {
         // parse_hue_value: no deg/° suffix — plain f32
-        let result = parse_fill_color_spec("hsv(0, 100%, 100%)").expect("valid hsv() with plain hue number");
+        let result =
+            parse_fill_color_spec("hsv(0, 100%, 100%)").expect("valid hsv() with plain hue number");
         assert_eq!(result, RgbaColor::opaque(255, 0, 0));
     }
 
     #[test]
     fn parse_fill_color_spec_hsv_fractional_percentage() {
         // parse_percentage_value: value ≤ 1.0 — treated as a direct fraction
-        let result = parse_fill_color_spec("hsv(0, 1.0, 1.0)").expect("valid hsv() with fractional percentage");
+        let result = parse_fill_color_spec("hsv(0, 1.0, 1.0)")
+            .expect("valid hsv() with fractional percentage");
         assert_eq!(result, RgbaColor::opaque(255, 0, 0));
     }
 

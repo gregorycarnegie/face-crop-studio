@@ -124,7 +124,7 @@ impl MaxPoolPipeline {
             context.clone(),
             Some(pool.clone()),
             config.output_dims().to_vec(),
-            Some("yunet_max_pool_output"),
+            Some("max_pool_output"),
         )?;
         let uniforms = MaxPoolUniforms {
             input_width: config.input_width,
@@ -139,7 +139,7 @@ impl MaxPoolPipeline {
         let uniform_buffer = create_uniform_buffer(device, "yunet_max_pool_uniforms", &uniforms);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_max_pool_bg"),
+            label: Some("max_pool_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -159,7 +159,7 @@ impl MaxPoolPipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_max_pool_pass"),
+                label: Some("max_pool_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -185,7 +185,7 @@ impl MaxPoolPipeline {
             context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_max_pool_encoder"),
+                    label: Some("max_pool_encoder"),
                 });
         let output = self.encode(&mut encoder, context, pool, tensor, config)?;
         context.queue().submit(Some(encoder.finish()));

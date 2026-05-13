@@ -59,11 +59,11 @@ impl Conv2dPipeline {
             context.clone(),
             Some(pool.clone()),
             config.output_shape_dims(),
-            Some("yunet_conv2d_output"),
+            Some("conv2d_output"),
         )?;
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_conv2d_bg"),
+            label: Some("conv2d_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -91,7 +91,7 @@ impl Conv2dPipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_conv2d_pass"),
+                label: Some("conv2d_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -121,7 +121,7 @@ impl Conv2dPipeline {
             context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_conv2d_encoder"),
+                    label: Some("conv2d_encoder"),
                 });
         let output = self.encode(&mut encoder, context, pool, input, weights, bias, config)?;
         context.queue().submit(Some(encoder.finish()));

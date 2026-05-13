@@ -209,7 +209,9 @@ mod tests {
 
         // Save a small RGBA image
         let img = RgbaImage::from_pixel(100, 100, image::Rgba([128, 128, 128, 255]));
-        DynamicImage::ImageRgba8(img).save(&img_path).expect("save test image");
+        DynamicImage::ImageRgba8(img)
+            .save(&img_path)
+            .expect("save test image");
 
         let det = make_detection(20.0, 20.0, 40.0, 40.0);
         let result = annotate_image(&img_path, &[det], &out_dir);
@@ -225,7 +227,9 @@ mod tests {
         std::fs::create_dir_all(&out_dir).expect("create output dir");
 
         let img = RgbaImage::from_pixel(50, 50, image::Rgba([255, 0, 0, 255]));
-        DynamicImage::ImageRgba8(img).save(&img_path).expect("save test image");
+        DynamicImage::ImageRgba8(img)
+            .save(&img_path)
+            .expect("save test image");
 
         let result = annotate_image(&img_path, &[], &out_dir);
         assert!(result.is_ok());

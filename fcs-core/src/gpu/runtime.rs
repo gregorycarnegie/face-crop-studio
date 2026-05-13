@@ -87,13 +87,13 @@ impl GpuYuNet {
                 } else {
                     // Dims changed, allocate new. Old one is dropped (and its buffer goes to GpuBufferPool)
                     self.ops
-                        .upload_tensor(dims, data, Some("yunet_gpu_input"))
+                        .upload_tensor(dims, data, Some("gpu_input"))
                         .context("upload input tensor")?
                 }
             } else {
                 // Pool empty, allocate new
                 self.ops
-                    .upload_tensor(dims, data, Some("yunet_gpu_input"))
+                    .upload_tensor(dims, data, Some("gpu_input"))
                     .context("upload input tensor")?
             }
         };
@@ -129,7 +129,7 @@ impl GpuYuNet {
                 .context()
                 .device()
                 .create_command_encoder(&CommandEncoderDescriptor {
-                    label: Some("yunet_inference"),
+                    label: Some("inference"),
                 });
         let features = graph::encode_backbone_features(
             &mut encoder,
@@ -271,7 +271,7 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
         .iter()
         .map(|t| {
             device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("yunet_batch_readback"),
+                label: Some("batch_readback"),
                 size: t.size_bytes(),
                 usage: readback_usage,
                 mapped_at_creation: false,
@@ -281,7 +281,7 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
 
     // One encoder copies all tensors to their readback buffers.
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("yunet_batch_readback_encoder"),
+        label: Some("batch_readback_encoder"),
     });
     for (tensor, readback) in tensors.iter().zip(readback_bufs.iter()) {
         encoder.copy_buffer_to_buffer(tensor.buffer(), 0, readback, 0, tensor.size_bytes());

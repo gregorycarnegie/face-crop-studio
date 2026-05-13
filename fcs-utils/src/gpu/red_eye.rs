@@ -76,14 +76,14 @@ impl GpuRedEyeRemoval {
 
         let buffer_size = (data_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
         let storage = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_red_eye_storage"),
+            label: Some("red_eye_storage"),
             contents: cast_slice(&data_u32),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_red_eye_readback"),
+            label: Some("red_eye_readback"),
             size: buffer_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -106,7 +106,7 @@ impl GpuRedEyeRemoval {
         };
 
         let eyes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_red_eye_locs"),
+            label: Some("red_eye_locs"),
             contents: cast_slice(&eyes_data),
             usage: wgpu::BufferUsages::STORAGE,
         });
@@ -120,13 +120,13 @@ impl GpuRedEyeRemoval {
             __padding: [0; 3], // Adjusted padding for alignment (total size must by 16-byte aligned)
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_red_eye_uniforms"),
+            label: Some("red_eye_uniforms"),
             contents: bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_red_eye_bg"),
+            label: Some("red_eye_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -145,12 +145,12 @@ impl GpuRedEyeRemoval {
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_red_eye_encoder"),
+            label: Some("red_eye_encoder"),
         });
         {
             let dispatch = div_ceil(pixel_count as u32, 256);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_red_eye_pass"),
+                label: Some("red_eye_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);

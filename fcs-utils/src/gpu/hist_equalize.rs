@@ -42,7 +42,7 @@ impl GpuHistogramEqualizer {
         });
 
         let histogram_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("yunet_histogram_bgl"),
+            label: Some("histogram_bgl"),
             entries: &[
                 storage_buffer_entry!(0, read_only),
                 storage_buffer_entry!(1, read_write),
@@ -50,7 +50,7 @@ impl GpuHistogramEqualizer {
             ],
         });
         let cdf_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("yunet_hist_cdf_bgl"),
+            label: Some("hist_cdf_bgl"),
             entries: &[
                 storage_buffer_entry!(0, read_only),
                 storage_buffer_entry!(1, read_write),
@@ -58,7 +58,7 @@ impl GpuHistogramEqualizer {
             ],
         });
         let apply_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("yunet_hist_apply_bgl"),
+            label: Some("hist_apply_bgl"),
             entries: &[
                 storage_buffer_entry!(0, read_write),
                 storage_buffer_entry!(1, read_only),
@@ -67,17 +67,17 @@ impl GpuHistogramEqualizer {
         });
 
         let histogram_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("yunet_histogram_layout"),
+            label: Some("histogram_layout"),
             bind_group_layouts: &[Some(&histogram_bgl)],
             immediate_size: 0,
         });
         let cdf_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("yunet_hist_cdf_layout"),
+            label: Some("hist_cdf_layout"),
             bind_group_layouts: &[Some(&cdf_bgl)],
             immediate_size: 0,
         });
         let apply_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("yunet_hist_apply_layout"),
+            label: Some("hist_apply_layout"),
             bind_group_layouts: &[Some(&apply_bgl)],
             immediate_size: 0,
         });
@@ -143,7 +143,7 @@ impl GpuHistogramEqualizer {
         let queue = self.context.queue();
 
         let pixel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_hist_pixels"),
+            label: Some("hist_pixels"),
             contents: cast_slice(pixels),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
@@ -151,7 +151,7 @@ impl GpuHistogramEqualizer {
         });
         let histogram_size = (256 * 3 * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
         let histogram_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_histogram_buffer"),
+            label: Some("histogram_buffer"),
             size: histogram_size,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
@@ -169,13 +169,13 @@ impl GpuHistogramEqualizer {
             __padding: [0; 3],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_hist_uniform"),
+            label: Some("hist_uniform"),
             contents: bytes_of(&uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_histogram_bg"),
+            label: Some("histogram_bg"),
             layout: &self.histogram_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -194,7 +194,7 @@ impl GpuHistogramEqualizer {
         });
 
         let lut_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_hist_lut_buffer"),
+            label: Some("hist_lut_buffer"),
             size: (256 * 3 * std::mem::size_of::<u32>()) as wgpu::BufferAddress,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
@@ -207,13 +207,13 @@ impl GpuHistogramEqualizer {
             __padding: [0; 3],
         };
         let cdf_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_hist_cdf_uniform"),
+            label: Some("hist_cdf_uniform"),
             contents: bytes_of(&cdf_uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let cdf_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_hist_cdf_bg"),
+            label: Some("hist_cdf_bg"),
             layout: &self.cdf_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -232,12 +232,12 @@ impl GpuHistogramEqualizer {
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_hist_encoder"),
+            label: Some("hist_encoder"),
         });
         {
             let dispatch = pixel_count.div_ceil(256);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_hist_pass"),
+                label: Some("hist_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.histogram_pipeline);
@@ -246,7 +246,7 @@ impl GpuHistogramEqualizer {
         }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_hist_cdf_pass"),
+                label: Some("hist_cdf_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.cdf_pipeline);
@@ -277,13 +277,13 @@ impl GpuHistogramEqualizer {
             __padding: [0; 3],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_hist_apply_uniform"),
+            label: Some("hist_apply_uniform"),
             contents: bytes_of(&uniform),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_hist_apply_bg"),
+            label: Some("hist_apply_bg"),
             layout: &self.apply_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -302,12 +302,12 @@ impl GpuHistogramEqualizer {
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_hist_apply_encoder"),
+            label: Some("hist_apply_encoder"),
         });
         {
             let dispatch = pixel_count.div_ceil(256);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_hist_apply_pass"),
+                label: Some("hist_apply_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.apply_pipeline);
@@ -316,7 +316,7 @@ impl GpuHistogramEqualizer {
         }
 
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_hist_apply_readback"),
+            label: Some("hist_apply_readback"),
             size: buffer_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,

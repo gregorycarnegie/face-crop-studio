@@ -509,7 +509,8 @@ mod tests {
             ";",
         ]);
 
-        let items = collect_mapping_targets(&mapping_path, &args).expect("collect mapping targets with text format");
+        let items = collect_mapping_targets(&mapping_path, &args)
+            .expect("collect mapping targets with text format");
         assert_eq!(items.len(), 1);
         assert_same_existing_path(&items[0].source, &image);
         assert_eq!(items[0].output_override, Some(PathBuf::from("out-name")));

@@ -58,13 +58,13 @@ impl BatchNormPipeline {
         let device = context.device();
         let output = tensors
             .tensor
-            .uninitialized_like(Some("yunet_batch_norm_output"))?;
+            .uninitialized_like(Some("batch_norm_output"))?;
         tensors.tensor.encode_copy_to(encoder, &output);
         let uniforms = BatchNormUniforms::from(config);
         let uniform_buffer = create_uniform_buffer(device, "yunet_batch_norm_uniforms", &uniforms);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_batch_norm_bg"),
+            label: Some("batch_norm_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -96,7 +96,7 @@ impl BatchNormPipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_batch_norm_pass"),
+                label: Some("batch_norm_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -121,7 +121,7 @@ impl BatchNormPipeline {
             context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_batch_norm_encoder"),
+                    label: Some("batch_norm_encoder"),
                 });
         let output = self.encode(&mut encoder, context, tensors, config)?;
         context.queue().submit(Some(encoder.finish()));

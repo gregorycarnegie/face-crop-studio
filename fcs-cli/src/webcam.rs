@@ -137,7 +137,7 @@ pub fn run_webcam_mode(
         // Save annotated frame if requested
         if let Some(dir) = annotate_dir.as_ref() {
             match tempfile::Builder::new()
-                .prefix("yunet_frame_")
+                .prefix("frame_")
                 .suffix(".png")
                 .tempfile()
             {

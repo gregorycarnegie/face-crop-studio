@@ -47,7 +47,7 @@ impl AddPipeline {
             context.clone(),
             Some(pool.clone()),
             lhs.shape().dims().to_vec(),
-            Some("yunet_add_output"),
+            Some("add_output"),
         )?;
         let uniforms = AddUniforms {
             len: lhs.shape().elements() as u32,
@@ -58,7 +58,7 @@ impl AddPipeline {
         let bind_group = context
             .device()
             .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("yunet_add_bg"),
+                label: Some("add_bg"),
                 layout: &self.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -82,7 +82,7 @@ impl AddPipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_add_pass"),
+                label: Some("add_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -104,7 +104,7 @@ impl AddPipeline {
             context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_add_encoder"),
+                    label: Some("add_encoder"),
                 });
         let output = self.encode(&mut encoder, context, pool, lhs, rhs)?;
         context.queue().submit(Some(encoder.finish()));

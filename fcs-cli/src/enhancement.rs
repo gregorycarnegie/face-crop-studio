@@ -172,7 +172,8 @@ mod tests {
             "--enhance-background-blur=true",
         ]);
 
-        let settings = build_enhancement_settings(&args).expect("build enhancement settings with overrides");
+        let settings =
+            build_enhancement_settings(&args).expect("build enhancement settings with overrides");
         assert!((settings.unsharp_amount - 1.1).abs() < f32::EPSILON);
         assert!((settings.unsharp_radius - 2.5).abs() < f32::EPSILON);
         assert!((settings.skin_smooth_amount - 0.75).abs() < f32::EPSILON);

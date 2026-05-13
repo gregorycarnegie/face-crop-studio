@@ -277,6 +277,7 @@ mod tests {
             mapping_row: None,
         }];
 
-        run_preprocess_benchmark(&items, &benchmark_config(), None).expect("preprocess benchmark should succeed");
+        run_preprocess_benchmark(&items, &benchmark_config(), None)
+            .expect("preprocess benchmark should succeed");
     }
 }

@@ -293,7 +293,7 @@ impl WgpuPreprocessPipeline {
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("yunet_preprocess_bgl"),
+            label: Some("preprocess_bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -335,7 +335,7 @@ impl WgpuPreprocessPipeline {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("yunet_preprocess_pipeline_layout"),
+            label: Some("preprocess_pipeline_layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
@@ -350,7 +350,7 @@ impl WgpuPreprocessPipeline {
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("yunet_preprocess_sampler"),
+            label: Some("preprocess_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -424,7 +424,7 @@ impl GpuResourcePool {
 impl GpuWorkBuffers {
     fn new(device: &wgpu::Device, extent: wgpu::Extent3d, output_bytes: u64) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("yunet_preprocess_input_texture"),
+            label: Some("preprocess_input_texture"),
             size: extent,
             mip_level_count: 1,
             sample_count: 1,
@@ -434,19 +434,19 @@ impl GpuWorkBuffers {
             view_formats: &[],
         });
         let storage = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_preprocess_output_storage"),
+            label: Some("preprocess_output_storage"),
             size: output_bytes,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_preprocess_readback"),
+            label: Some("preprocess_readback"),
             size: output_bytes,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_preprocess_uniforms"),
+            label: Some("preprocess_uniforms"),
             size: UNIFORM_BUFFER_SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -469,7 +469,7 @@ impl GpuWorkBuffers {
             return;
         }
         self.texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("yunet_preprocess_input_texture"),
+            label: Some("preprocess_input_texture"),
             size: extent,
             mip_level_count: 1,
             sample_count: 1,
@@ -484,7 +484,7 @@ impl GpuWorkBuffers {
     fn ensure_output_buffers(&mut self, device: &wgpu::Device, size: u64) {
         if self.storage_size < size {
             self.storage = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("yunet_preprocess_output_storage"),
+                label: Some("preprocess_output_storage"),
                 size,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
@@ -493,7 +493,7 @@ impl GpuWorkBuffers {
         }
         if self.readback_size < size {
             self.readback = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("yunet_preprocess_readback"),
+                label: Some("preprocess_readback"),
                 size,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
@@ -598,7 +598,7 @@ fn gpu_preprocess(
     queue.write_buffer(&uniform_buffer, 0, bytes_of(&uniforms));
 
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("yunet_preprocess_bind_group"),
+        label: Some("preprocess_bind_group"),
         layout: &pipeline.bind_group_layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -621,11 +621,11 @@ fn gpu_preprocess(
     });
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("yunet_preprocess_encoder"),
+        label: Some("preprocess_encoder"),
     });
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("yunet_preprocess_pass"),
+            label: Some("preprocess_pass"),
             timestamp_writes: None,
         });
         pass.set_pipeline(&pipeline.pipeline);

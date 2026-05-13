@@ -78,7 +78,7 @@ impl GpuPixelAdjust {
         let queue = self.context.queue();
 
         let storage_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_pixel_adjust_storage"),
+            label: Some("pixel_adjust_storage"),
             contents: cast_slice(&data_u32),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
@@ -100,13 +100,13 @@ impl GpuPixelAdjust {
         };
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_pixel_adjust_uniforms"),
+            label: Some("pixel_adjust_uniforms"),
             contents: bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_pixel_adjust_bg"),
+            label: Some("pixel_adjust_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -123,18 +123,18 @@ impl GpuPixelAdjust {
         let buffer_size_bytes =
             (data_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_pixel_adjust_readback"),
+            label: Some("pixel_adjust_readback"),
             size: buffer_size_bytes,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_pixel_adjust_encoder"),
+            label: Some("pixel_adjust_encoder"),
         });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_pixel_adjust_pass"),
+                label: Some("pixel_adjust_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);

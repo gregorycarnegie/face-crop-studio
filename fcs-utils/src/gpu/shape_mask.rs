@@ -90,21 +90,21 @@ impl GpuShapeMask {
         let buffer_size = (pixels_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
 
         let storage = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_shape_mask_pixels"),
+            label: Some("shape_mask_pixels"),
             contents: cast_slice(&pixels_u32),
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
         });
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_shape_mask_readback"),
+            label: Some("shape_mask_readback"),
             size: buffer_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let points_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_shape_mask_points"),
+            label: Some("shape_mask_points"),
             contents: cast_slice(&clamped),
             usage: wgpu::BufferUsages::STORAGE,
         });
@@ -123,13 +123,13 @@ impl GpuShapeMask {
             ..Default::default()
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_shape_mask_uniforms"),
+            label: Some("shape_mask_uniforms"),
             contents: bytemuck::bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_shape_mask_bg"),
+            label: Some("shape_mask_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -148,13 +148,13 @@ impl GpuShapeMask {
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_shape_mask_encoder"),
+            label: Some("shape_mask_encoder"),
         });
         {
             let workgroups_x = width.div_ceil(16);
             let workgroups_y = height.div_ceil(16);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_shape_mask_pass"),
+                label: Some("shape_mask_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);

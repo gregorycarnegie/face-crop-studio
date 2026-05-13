@@ -52,7 +52,7 @@ impl Upsample2xPipeline {
             context.clone(),
             Some(pool.clone()),
             [dims[0], dims[1], dims[2] * 2, dims[3] * 2],
-            Some("yunet_resize2x_output"),
+            Some("resize2x_output"),
         )?;
         let uniforms = UpsampleUniforms {
             input_width: dims[3] as u32,
@@ -66,7 +66,7 @@ impl Upsample2xPipeline {
         let bind_group = context
             .device()
             .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("yunet_resize2x_bg"),
+                label: Some("resize2x_bg"),
                 layout: &self.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -86,7 +86,7 @@ impl Upsample2xPipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_resize2x_pass"),
+                label: Some("resize2x_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -111,7 +111,7 @@ impl Upsample2xPipeline {
             context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_resize2x_encoder"),
+                    label: Some("resize2x_encoder"),
                 });
         let output = self.encode(&mut encoder, context, pool, tensor)?;
         context.queue().submit(Some(encoder.finish()));

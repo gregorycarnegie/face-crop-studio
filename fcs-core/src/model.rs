@@ -530,9 +530,8 @@ mod tests {
         };
         let layout = build_stride_layout(size).expect("build stride layout");
         let mut outputs = mock_outputs(size);
-        outputs[0] =
-            Tensor::from_shape(&[layout.metas[0].cell_count - 1], &vec![0.0f32; 63])
-                .expect("build malformed cls tensor");
+        outputs[0] = Tensor::from_shape(&[layout.metas[0].cell_count - 1], &vec![0.0f32; 63])
+            .expect("build malformed cls tensor");
 
         let err = validate_stride_outputs(&outputs, &layout.metas[0])
             .unwrap_err()

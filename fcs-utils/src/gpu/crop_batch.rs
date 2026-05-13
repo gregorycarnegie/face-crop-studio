@@ -126,7 +126,7 @@ impl GpuBatchCropper {
         let queue = self.context.queue();
 
         let source_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_batch_crop_source"),
+            label: Some("batch_crop_source"),
             contents: cast_slice(&source_data),
             usage: wgpu::BufferUsages::STORAGE,
         });
@@ -169,14 +169,14 @@ impl GpuBatchCropper {
 
         let total_bytes = (total_elements * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("yunet_batch_crop_readback"),
+            label: Some("batch_crop_readback"),
             size: total_bytes,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_batch_crop_encoder"),
+            label: Some("batch_crop_encoder"),
         });
         let mut _transient_buffers = Vec::with_capacity(requests.len());
 
@@ -185,7 +185,7 @@ impl GpuBatchCropper {
                 (job.element_count * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
 
             let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("yunet_batch_crop_output"),
+                label: Some("batch_crop_output"),
                 size: buffer_len_bytes,
                 usage: wgpu::BufferUsages::STORAGE
                     | wgpu::BufferUsages::COPY_SRC
@@ -194,13 +194,13 @@ impl GpuBatchCropper {
             });
 
             let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("yunet_batch_crop_uniforms"),
+                label: Some("batch_crop_uniforms"),
                 contents: bytes_of(&job.uniform),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
 
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("yunet_batch_crop_bg"),
+                label: Some("batch_crop_bg"),
                 layout: &self.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -222,7 +222,7 @@ impl GpuBatchCropper {
                 let workgroups_x = req.output_width.div_ceil(16);
                 let workgroups_y = req.output_height.div_ceil(16);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("yunet_batch_crop_pass"),
+                    label: Some("batch_crop_pass"),
                     timestamp_writes: None,
                 });
                 pass.set_pipeline(&self.pipeline);

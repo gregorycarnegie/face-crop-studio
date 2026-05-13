@@ -53,7 +53,7 @@ impl ActivationPipeline {
     ) -> Result<GpuTensor> {
         let device = context.device();
         let len = tensor.shape().elements();
-        let output = tensor.uninitialized_like(Some("yunet_activation_output"))?;
+        let output = tensor.uninitialized_like(Some("activation_output"))?;
         tensor.encode_copy_to(encoder, &output);
         let uniforms = ActivationUniforms {
             len: len as u32,
@@ -61,7 +61,7 @@ impl ActivationPipeline {
         };
         let uniform_buffer = create_uniform_buffer(device, "yunet_activation_uniforms", &uniforms);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_activation_bg"),
+            label: Some("activation_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -77,7 +77,7 @@ impl ActivationPipeline {
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_activation_pass"),
+                label: Some("activation_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
@@ -102,7 +102,7 @@ impl ActivationPipeline {
             context
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_activation_encoder"),
+                    label: Some("activation_encoder"),
                 });
         let output = self.encode(&mut encoder, context, tensor, kind)?;
         context.queue().submit(Some(encoder.finish()));

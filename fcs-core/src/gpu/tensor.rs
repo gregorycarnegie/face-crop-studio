@@ -151,10 +151,10 @@ impl GpuTensor {
         let usage = wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ;
 
         let readback = if let Some(pool) = &self.inner.pool {
-            pool.acquire(size_bytes, usage, Some("yunet_tensor_readback"))?
+            pool.acquire(size_bytes, usage, Some("tensor_readback"))?
         } else {
             device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("yunet_tensor_readback"),
+                label: Some("tensor_readback"),
                 size: size_bytes,
                 usage,
                 mapped_at_creation: false,
@@ -162,7 +162,7 @@ impl GpuTensor {
         };
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_tensor_readback_encoder"),
+            label: Some("tensor_readback_encoder"),
         });
         encoder.copy_buffer_to_buffer(self.buffer(), 0, &readback, 0, size_bytes);
         self.context().queue().submit(Some(encoder.finish()));
@@ -231,7 +231,7 @@ impl GpuTensor {
             self.context()
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("yunet_tensor_clone_encoder"),
+                    label: Some("tensor_clone_encoder"),
                 });
         encoder.copy_buffer_to_buffer(self.buffer(), 0, clone.buffer(), 0, size_bytes);
         self.context().queue().submit(Some(encoder.finish()));

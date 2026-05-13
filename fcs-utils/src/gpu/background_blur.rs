@@ -78,22 +78,22 @@ impl GpuBackgroundBlur {
         let sharp_buffer = self.buffer_pool.acquire(
             buffer_size,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            Some("yunet_background_blur_sharp"),
+            Some("background_blur_sharp"),
         )?;
         let blur_buffer = self.buffer_pool.acquire(
             buffer_size,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            Some("yunet_background_blur_blur"),
+            Some("background_blur_blur"),
         )?;
         let output_buffer = self.buffer_pool.acquire(
             buffer_size,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            Some("yunet_background_blur_output"),
+            Some("background_blur_output"),
         )?;
         let readback = self.buffer_pool.acquire(
             buffer_size,
             wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            Some("yunet_background_blur_readback"),
+            Some("background_blur_readback"),
         )?;
 
         // Upload input data
@@ -107,13 +107,13 @@ impl GpuBackgroundBlur {
             __padding: [0; 1],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_background_blur_uniforms"),
+            label: Some("background_blur_uniforms"),
             contents: bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_background_blur_bg"),
+            label: Some("background_blur_bg"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -136,13 +136,13 @@ impl GpuBackgroundBlur {
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_background_blur_encoder"),
+            label: Some("background_blur_encoder"),
         });
         {
             let workgroups_x = width.div_ceil(16);
             let workgroups_y = height.div_ceil(16);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("yunet_background_blur_pass"),
+                label: Some("background_blur_pass"),
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);

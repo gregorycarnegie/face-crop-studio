@@ -77,31 +77,31 @@ impl GpuGaussianBlur {
             wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
-            Some("yunet_gaussian_blur_input"),
+            Some("gaussian_blur_input"),
         )?;
         queue.write_buffer(&input_buffer, 0, cast_slice(&data_u32));
 
         let weights_buffer = self.pool.acquire(
             (weights.len() * std::mem::size_of::<f32>()) as u64,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            Some("yunet_gaussian_blur_weights"),
+            Some("gaussian_blur_weights"),
         )?;
         queue.write_buffer(&weights_buffer, 0, cast_slice(&weights));
 
         let temp_buffer = self.pool.acquire(
             buffer_size,
             wgpu::BufferUsages::STORAGE,
-            Some("yunet_gaussian_blur_temp"),
+            Some("gaussian_blur_temp"),
         )?;
 
         let readback = self.pool.acquire(
             buffer_size,
             wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            Some("yunet_gaussian_blur_readback"),
+            Some("gaussian_blur_readback"),
         )?;
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("yunet_gaussian_blur_encoder"),
+            label: Some("gaussian_blur_encoder"),
         });
 
         // Horizontal pass
@@ -113,12 +113,12 @@ impl GpuGaussianBlur {
             __padding: [],
         };
         let horizontal_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_gaussian_blur_uniform_horizontal"),
+            label: Some("gaussian_blur_uniform_horizontal"),
             contents: bytes_of(&horizontal_uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let horizontal_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_gaussian_blur_bg_horizontal"),
+            label: Some("gaussian_blur_bg_horizontal"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -147,12 +147,12 @@ impl GpuGaussianBlur {
             ..horizontal_uniforms
         };
         let vertical_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("yunet_gaussian_blur_uniform_vertical"),
+            label: Some("gaussian_blur_uniform_vertical"),
             contents: bytes_of(&vertical_uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let vertical_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("yunet_gaussian_blur_bg_vertical"),
+            label: Some("gaussian_blur_bg_vertical"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -228,7 +228,7 @@ fn dispatch_blur(
     let workgroups_x = width.div_ceil(16);
     let workgroups_y = height.div_ceil(16);
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-        label: Some("yunet_gaussian_blur_pass"),
+        label: Some("gaussian_blur_pass"),
         timestamp_writes: None,
     });
     pass.set_pipeline(pipeline);

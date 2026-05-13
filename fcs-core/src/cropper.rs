@@ -336,16 +336,8 @@ mod tests {
                     let bbox_h = 1 + (bbox_h_seed - 1) % img_h;
                     let max_x = img_w - bbox_w;
                     let max_y = img_h - bbox_h;
-                    let x = if max_x == 0 {
-                        0
-                    } else {
-                        x_seed % (max_x + 1)
-                    };
-                    let y = if max_y == 0 {
-                        0
-                    } else {
-                        y_seed % (max_y + 1)
-                    };
+                    let x = if max_x == 0 { 0 } else { x_seed % (max_x + 1) };
+                    let y = if max_y == 0 { 0 } else { y_seed % (max_y + 1) };
 
                     let face_bbox = BoundingBox {
                         x: x as f32,
