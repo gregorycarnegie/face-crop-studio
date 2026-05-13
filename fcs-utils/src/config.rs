@@ -334,6 +334,30 @@ pub struct QualityAutomationSettings {
     pub quality_suffix: bool,
 }
 
+impl EnhanceSettings {
+    /// Map to the processing struct used by `apply_enhancements`.
+    pub fn to_enhancement_settings(&self) -> crate::enhance::EnhancementSettings {
+        crate::enhance::EnhancementSettings {
+            auto_color: self.auto_color,
+            exposure_stops: self.exposure_stops,
+            brightness: self.brightness,
+            contrast: self.contrast,
+            saturation: self.saturation,
+            unsharp_amount: 0.0,
+            unsharp_radius: 1.0,
+            sharpness: self.sharpness,
+            skin_smooth_amount: self.skin_smooth,
+            skin_smooth_sigma_space: 3.0,
+            skin_smooth_sigma_color: 25.0,
+            red_eye_removal: self.red_eye_removal,
+            red_eye_threshold: 1.5,
+            background_blur: self.background_blur,
+            background_blur_radius: 15.0,
+            background_blur_mask_size: 0.6,
+        }
+    }
+}
+
 impl Default for EnhanceSettings {
     fn default() -> Self {
         Self {

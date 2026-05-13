@@ -7,8 +7,8 @@ use crate::{
 
 use fcs_core::{Detection, YuNetDetector, crop_face_from_image};
 use fcs_utils::{
-    MetadataContext, OutputOptions, append_suffix_to_filename, apply_shape_mask,
-    estimate_sharpness, load_image, quality::Quality, save_dynamic_image,
+    MetadataContext, OutputOptions, append_suffix_to_filename, apply_enhancements,
+    apply_shape_mask, estimate_sharpness, load_image, quality::Quality, save_dynamic_image,
 };
 use image::{DynamicImage, Rgba};
 use log::{info, warn};
@@ -125,7 +125,8 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
         };
         let raw_crop =
             crop_face_from_image(source_image.as_ref(), &detection_for_crop, &crop_settings);
-        let crop = apply_shape_and_fill(raw_crop, &settings.crop);
+        let shaped = apply_shape_and_fill(raw_crop, &settings.crop);
+        let crop = apply_enhancements(&shaped, &settings.enhance.to_enhancement_settings(), None);
 
         let mut filename = format!("{source_stem}_face_{:02}.{ext}", face_index + 1);
         if let Some(suffix) = quality_suffix(settings, det.quality) {
@@ -285,7 +286,8 @@ fn run_batch_job(
 
     for (face_index, detection) in detections.iter().enumerate() {
         let raw = crop_face_from_image(&source_image, detection, &crop_settings);
-        let crop = apply_shape_and_fill(raw, &settings.crop);
+        let shaped = apply_shape_and_fill(raw, &settings.crop);
+        let crop = apply_enhancements(&shaped, &settings.enhance.to_enhancement_settings(), None);
         let (quality_score, quality) = estimate_sharpness(&crop);
         crops.push(crop);
         candidates.push(ExportCandidate {
