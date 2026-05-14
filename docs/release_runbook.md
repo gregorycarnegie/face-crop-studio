@@ -19,7 +19,7 @@ git push origin v1.0.0-rc2
 
 This triggers the tag-based release workflow and publishes Windows assets for validation.
 
-## 3) Validate release artifacts
+## 3) Validate release artefacts
 
 From GitHub Release assets:
 
@@ -43,7 +43,7 @@ Confirm executables launch:
 
 ## 4) Publish final v1.0.0
 
-If RC artifacts are good:
+If RC artefacts are good:
 
 ```bash
 git tag v1.0.0

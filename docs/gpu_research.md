@@ -40,7 +40,7 @@ We implement a **custom WebGPU execution engine** for a subset of ONNX ops suffi
 
 - Parse model into a compact IR. Options:
   - Use a light ONNX proto reader (prost‑generated) or a crate like `onnx-ir`; or
-  - Implement a focused reader that extracts only: **initializers**, **inputs/outputs**, **nodes** (type + attrs), **topo order**.
+  - Implement a focused reader that extracts only: **initialisers**, **inputs/outputs**, **nodes** (type + attrs), **topo order**.
 - Extract **constant tensors** (weights/bias/BN params) and upload once to `GpuTensor`.
 - Compute **shapes**:
   - Prefer **static** input (YuNet is typically fixed resolution). Precompute all intermediate shapes.
@@ -116,8 +116,8 @@ struct TensorInit {
 
 ## 5) Execution Pipeline (Rust `ops.rs` / `mod.rs`)
 
-1. **Initialize**: create `GpuContext` (adapter/device/queue); compile pipelines once; upload **initializers** to `GpuTensor`.
-2. **Preprocess**: convert image → tensor (normalize, mean/std, channel order, resize to model resolution, e.g., 640 on YuNet).
+1. **Initialise**: create `GpuContext` (adapter/device/queue); compile pipelines once; upload **initialisers** to `GpuTensor`.
+2. **Preprocess**: convert image → tensor (normalise, mean/std, channel order, resize to model resolution, e.g., 640 on YuNet).
 3. **Execute graph** (topo order):
    - Look up input tensors from value table.
    - Call registry wrapper (e.g., `conv2d_tensor(&x, &w, &b, &cfg)`), producing a new `GpuTensor`.
@@ -192,7 +192,7 @@ Internals: `GpuEngine` owns pipelines, a value table, and an op registry. `run()
 
 ## 12) Next Actions (implementation‑ready)
 
-1. **Finalize IR** and ONNX loader for required ops; precompute static shapes for 640‑input.
+1. **Finalise IR** and ONNX loader for required ops; precompute static shapes for 640‑input.
 2. **Harden kernels**: bounds checks, bias add, eps in BN, activation modes.
 3. **End‑to‑end path**: encode one command buffer for full graph; confirm GPU‑only chaining.
 4. **Parity tests**: compare against CPU ORT/NumPy for 2–3 images; assert max|Δ| < 1e‑4.

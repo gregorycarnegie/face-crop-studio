@@ -12,11 +12,11 @@ The desktop app bundles a full crop workflow on top of YuNet detection so you ca
 ## Crop Controls
 
 - **Presets** – Pick from LinkedIn, Passport, Instagram, ID Card, Avatar, or Headshot. Selecting “Custom” enables the width/height inputs for arbitrary sizes.
-- **Face height %** – Target proportion of the output height that should be filled by the detected face. Use the slider or press `+`/`–` for one percent adjustments (hold *Shift* for ±5).
+- **Face height %** – Target proportion of the output height that should be filled by the detected face. Use the slider or press `+`/`–` for one per cent adjustments (hold *Shift* for ±5).
 - **Positioning mode** – Choose between Center, Rule of Thirds, or Custom. When Custom is active the horizontal/vertical sliders appear; arrow keys nudge by 0.05 (hold *Shift* for 0.1). Values are clamped to ±1.0 and updates are undoable.
 - **Undo / Redo** – `Ctrl+Z` to step back through crop changes, `Ctrl+Y` or `Ctrl+Shift+Z` to redo. The application keeps a bounded history of the last 100 adjustments.
-- **Overlay toggle** – Enable the overlay checkbox in the preview to visualize the calculated crop region. The overlay auto-updates as you tweak settings.
-- **Fill color padding** – If the crop extends past the source image, the empty pixels are filled with the configured color. Use the color picker, hex input, or RGB/HSV spinners to override the default black padding.
+- **Overlay toggle** – Enable the overlay checkbox in the preview to visualise the calculated crop region. The overlay auto-updates as you tweak settings.
+- **Fill colour padding** – If the crop extends past the source image, the empty pixels are filled with the configured colour. Use the colour picker, hex input, or RGB/HSV spinners to override the default black padding.
 
 ## Face Selection & Quality
 
@@ -42,8 +42,8 @@ When **Enable enhancements** is ticked, the crop output is routed through the pu
 ## Batch Mode
 
 - Use **Load multiple…** to enqueue a directory of images. The batch table tracks progress (Pending/Processing/Completed/Failed) and displays per-image stats.
-- Drag-and-drop a folder from your file explorer (or paste a folder path from the clipboard) to append its supported images to the batch queue without opening the dialog.
-- Drop a CSV/XLSX/Parquet/SQLite mapping file (or paste its path) to auto-populate the Mapping Import panel so you can combine spreadsheet data with batch exports immediately.
+- Drag-and-drop a folder from your file explorer (or paste a folder path from the clipboard) to append its supported images to the batch queue without opening the dialogue.
+- Drop a CSV/XLSX/Parquet/SQLite mapping file (or paste its path) to autopopulate the Mapping Import panel so you can combine spreadsheet data with batch exports immediately.
 - Start the batch export from the footer once rules are configured. Progress updates stream live in the status bar.
 
 By combining these surfaces you can rapidly iterate on crop framing, dial in enhancement presets, and export the most flattering results without leaving the app. For deeper technical details see `ARCHITECTURE.md` and the inline documentation in `fcs-core/src/cropper.rs`.
