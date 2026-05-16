@@ -34,12 +34,15 @@ use std::{
 };
 
 /// Canonical image formats supported by the exporter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ImageFormatHint {
     #[default]
     Png,
+    #[serde(alias = "jpg")]
     Jpeg,
     Webp,
+    #[serde(alias = "tif")]
     Tiff,
     Bmp,
     Avif,
@@ -69,9 +72,11 @@ impl std::str::FromStr for ImageFormatHint {
 }
 
 /// Simplified PNG compression strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PngCompression {
     Fast,
+    #[default]
     Default,
     Best,
 }
@@ -111,6 +116,18 @@ impl PngCompression {
     }
 }
 
+// Accept either a keyword ("fast"/"default"/"best") or a numeric string ("0".."9"),
+// preserving back-compat with hand-written config files.
+impl<'de> serde::Deserialize<'de> for PngCompression {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::parse(&raw))
+    }
+}
+
 /// Immutable configuration derived from the user's crop settings.
 #[derive(Debug, Clone)]
 pub struct OutputOptions {
@@ -126,10 +143,10 @@ impl OutputOptions {
     /// Build `OutputOptions` from persistent crop settings.
     pub fn from_crop_settings(settings: &CropSettings) -> Self {
         Self {
-            format: settings.output_format.parse().ok(),
+            format: Some(settings.output_format),
             auto_detect: settings.auto_detect_format,
             jpeg_quality: settings.jpeg_quality.clamp(1, 100),
-            png_compression: PngCompression::parse(&settings.png_compression),
+            png_compression: settings.png_compression,
             webp_quality: settings.webp_quality.min(100),
             metadata: settings.metadata.clone(),
         }
@@ -629,7 +646,8 @@ fn build_custom_metadata_payload(
                 );
                 crop_map.insert(
                     "positioning_mode".into(),
-                    JsonValue::String(crop.positioning_mode.clone()),
+                    serde_json::to_value(crop.positioning_mode)
+                        .unwrap_or(JsonValue::String("center".into())),
                 );
                 crop_map.insert(
                     "horizontal_offset".into(),
@@ -708,7 +726,10 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{color::RgbaColor, config::CropSettings};
+    use crate::{
+        color::RgbaColor,
+        config::{CropSettings, PositioningMode},
+    };
     use image::{DynamicImage, Rgba, RgbaImage};
     use serde_json::Value;
     use std::{collections::BTreeMap, path::PathBuf};
@@ -782,9 +803,9 @@ mod tests {
     #[test]
     fn output_options_from_crop_settings_clamps_values() {
         let mut settings = CropSettings {
-            output_format: "jpeg".to_string(),
+            output_format: ImageFormatHint::Jpeg,
             jpeg_quality: 0,
-            png_compression: "9".to_string(),
+            png_compression: PngCompression::Best,
             webp_quality: 200,
             auto_detect_format: false,
             ..CropSettings::default()
@@ -1026,7 +1047,7 @@ mod tests {
             output_width: 400,
             output_height: 500,
             face_height_pct: 72.5,
-            positioning_mode: "custom".to_string(),
+            positioning_mode: PositioningMode::Custom,
             horizontal_offset: 0.25,
             vertical_offset: -0.1,
             fill_color: RgbaColor::opaque(1, 2, 3),

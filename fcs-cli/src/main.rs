@@ -436,7 +436,7 @@ fn process_crops(
             continue;
         }
 
-        let ext = normalized_output_extension(&settings.crop.output_format);
+        let ext = normalized_output_extension(settings.crop.output_format);
         let timestamp = if args.naming_template.is_some() {
             SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -736,7 +736,7 @@ mod tests {
         settings.gpu.enabled = false;
         settings.crop.output_width = 16;
         settings.crop.output_height = 16;
-        settings.crop.output_format = "png".to_string();
+        settings.crop.output_format = fcs_utils::ImageFormatHint::Png;
         settings.crop.fill_color = FillColor::default();
         Arc::new(settings)
     }

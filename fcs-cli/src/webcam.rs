@@ -178,10 +178,9 @@ pub fn run_webcam_mode(
                     settings.crop.vignette_color,
                 );
 
-                let mut ext = settings.crop.output_format.clone();
-                if ext.is_empty() {
-                    ext = "png".to_string();
-                }
+                let ext = crate::output_path::normalized_output_extension(
+                    settings.crop.output_format,
+                );
 
                 let mut out_name =
                     format!("webcam_frame{:06}_face{}.{}", frame_count, idx + 1, ext);

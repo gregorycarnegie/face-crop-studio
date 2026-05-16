@@ -1,17 +1,21 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use fcs_utils::{MetadataContext, OutputOptions, append_suffix_to_filename, save_dynamic_image};
+use fcs_utils::{
+    ImageFormatHint, MetadataContext, OutputOptions, append_suffix_to_filename, save_dynamic_image,
+};
 
 use crate::ProcessedCrop;
 
-pub(crate) fn normalized_output_extension(output_format: &str) -> String {
-    let ext = if output_format.is_empty() {
-        "png".to_string()
-    } else {
-        output_format.to_string()
-    };
-    ext.to_ascii_lowercase()
+pub(crate) fn normalized_output_extension(format: ImageFormatHint) -> &'static str {
+    match format {
+        ImageFormatHint::Png => "png",
+        ImageFormatHint::Jpeg => "jpg",
+        ImageFormatHint::Webp => "webp",
+        ImageFormatHint::Tiff => "tif",
+        ImageFormatHint::Bmp => "bmp",
+        ImageFormatHint::Avif => "avif",
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -149,9 +153,10 @@ mod tests {
     }
 
     #[test]
-    fn normalized_output_extension_defaults_to_png() {
-        assert_eq!(normalized_output_extension(""), "png");
-        assert_eq!(normalized_output_extension("JPG"), "jpg");
+    fn normalized_output_extension_maps_known_formats() {
+        assert_eq!(normalized_output_extension(ImageFormatHint::Png), "png");
+        assert_eq!(normalized_output_extension(ImageFormatHint::Jpeg), "jpg");
+        assert_eq!(normalized_output_extension(ImageFormatHint::Webp), "webp");
     }
 
     #[test]
@@ -201,7 +206,7 @@ mod tests {
         img.save(&image_path).unwrap();
 
         let mut settings = AppSettings::default();
-        settings.crop.output_format = "png".to_string();
+        settings.crop.output_format = ImageFormatHint::Png;
         let options = OutputOptions::from_crop_settings(&settings.crop);
 
         let crop = crate::ProcessedCrop {

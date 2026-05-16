@@ -6,7 +6,7 @@ use crate::ui;
 
 use eframe::{App, CreationContext, Frame};
 use egui::{CursorIcon, ResizeDirection, ViewportCommand};
-use fcs_core::{CropSettings as CoreCropSettings, PositioningMode, preset_by_name};
+use fcs_core::{CropSettings as CoreCropSettings, preset_by_name};
 use fcs_utils::{
     WgpuEnhancer,
     config::default_settings_path,
@@ -732,17 +732,11 @@ pub(crate) fn build_crop_settings_from_app_settings(
         (settings.crop.output_width, settings.crop.output_height)
     };
 
-    let positioning_mode = match settings.crop.positioning_mode.as_str() {
-        "rule-of-thirds" | "rule_of_thirds" | "thirds" => PositioningMode::RuleOfThirds,
-        "custom" => PositioningMode::Custom,
-        _ => PositioningMode::Center,
-    };
-
     CoreCropSettings {
         output_width,
         output_height,
         face_height_pct: settings.crop.face_height_pct,
-        positioning_mode,
+        positioning_mode: settings.crop.positioning_mode,
         horizontal_offset: settings.crop.horizontal_offset,
         vertical_offset: settings.crop.vertical_offset,
         fill_color: settings.crop.fill_color,

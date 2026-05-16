@@ -50,13 +50,8 @@ fn build_app_crop_settings(core: &CropSettings) -> ConfigCropSettings {
         output_width: core.output_width,
         output_height: core.output_height,
         face_height_pct: core.face_height_pct,
-        positioning_mode: match core.positioning_mode {
-            PositioningMode::Center => "center",
-            PositioningMode::RuleOfThirds => "rule_of_thirds",
-            PositioningMode::Custom => "custom",
-        }
-        .to_string(),
-        output_format: "png".to_string(),
+        positioning_mode: core.positioning_mode,
+        output_format: fcs_utils::ImageFormatHint::Png,
         auto_detect_format: false,
         ..ConfigCropSettings::default()
     }

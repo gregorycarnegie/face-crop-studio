@@ -3,7 +3,13 @@
 //! These structures provide a common representation for inference, detection, cropping, and
 //! enhancement settings that can be serialized to disk and reused by CLI and GUI front-ends.
 
-use crate::{color::RgbaColor, gpu::GpuContextOptions, quality::Quality, shape::CropShape};
+use crate::{
+    color::RgbaColor,
+    gpu::GpuContextOptions,
+    output::{ImageFormatHint, PngCompression},
+    quality::Quality,
+    shape::CropShape,
+};
 
 use anyhow::{Context, Result};
 use log::LevelFilter;
@@ -150,6 +156,20 @@ impl InputDimensions {
     }
 }
 
+/// How to position the face within the crop region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PositioningMode {
+    /// Center the face in the crop region.
+    #[default]
+    Center,
+    /// Place the face roughly at the upper third (rule of thirds).
+    #[serde(alias = "rule_of_thirds", alias = "ruleofthirds", alias = "thirds")]
+    RuleOfThirds,
+    /// Use custom offsets (fractions) to nudge the face relative to crop center.
+    Custom,
+}
+
 /// Settings for face cropping operations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -162,20 +182,20 @@ pub struct CropSettings {
     pub output_height: u32,
     /// Face height as percentage of output height (0-100)
     pub face_height_pct: f32,
-    /// Positioning mode: "center", "rule-of-thirds", or "custom"
-    pub positioning_mode: String,
+    /// Where to place the face within the crop region.
+    pub positioning_mode: PositioningMode,
     /// Vertical offset for custom positioning (-1.0 to 1.0)
     pub vertical_offset: f32,
     /// Horizontal offset for custom positioning (-1.0 to 1.0)
     pub horizontal_offset: f32,
     /// Background color applied when the crop extends outside the source image bounds.
     pub fill_color: RgbaColor,
-    /// Output format: "png", "jpeg", or "webp"
-    pub output_format: String,
+    /// Output image format.
+    pub output_format: ImageFormatHint,
     /// JPEG quality (1-100, only used when format is jpeg)
     pub jpeg_quality: u8,
-    /// PNG compression strategy ("fast", "default", "best") or numeric level (0-9)
-    pub png_compression: String,
+    /// PNG compression strategy.
+    pub png_compression: PngCompression,
     /// WebP quality (0-100, lossy encoding)
     pub webp_quality: u8,
     /// Automatically detect output format from the file extension.
@@ -222,8 +242,6 @@ impl CropSettings {
 pub struct EnhanceSettings {
     /// Enable enhancements
     pub enabled: bool,
-    /// Enhancement preset: "none", "natural", "vivid", or "professional"
-    pub preset: String,
     /// Apply histogram-equalization based auto color correction
     pub auto_color: bool,
     /// Exposure adjustment in stops (-2.0 to 2.0)
@@ -251,13 +269,13 @@ impl Default for CropSettings {
             output_width: 400,
             output_height: 400,
             face_height_pct: 70.0,
-            positioning_mode: "center".to_string(),
+            positioning_mode: PositioningMode::default(),
             vertical_offset: 0.0,
             horizontal_offset: 0.0,
             fill_color: RgbaColor::default(),
-            output_format: "png".to_string(),
+            output_format: ImageFormatHint::default(),
             jpeg_quality: 90,
-            png_compression: "default".to_string(),
+            png_compression: PngCompression::default(),
             webp_quality: 90,
             auto_detect_format: true,
             metadata: MetadataSettings::default(),
@@ -362,7 +380,6 @@ impl Default for EnhanceSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            preset: "none".to_string(),
             auto_color: false,
             exposure_stops: 0.0,
             brightness: 0,

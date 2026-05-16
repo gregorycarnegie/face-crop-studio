@@ -8,7 +8,7 @@ use crate::ui::widgets::{
 };
 use egui::{Sense, Stroke, Ui, Vec2};
 use fcs_core::preset_by_name;
-use fcs_utils::CropShape;
+use fcs_utils::{CropShape, ImageFormatHint, PositioningMode};
 
 const BODY_MARGIN_X: i8 = 14;
 
@@ -185,37 +185,37 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
             match selected_key.as_str() {
                 "LinkedIn" => {
                     c.face_height_pct = 55.0;
-                    c.positioning_mode = "center".into();
+                    c.positioning_mode = PositioningMode::Center;
                     c.horizontal_offset = 0.0;
                     c.vertical_offset = 0.0;
                 }
                 "Passport" => {
                     c.face_height_pct = 75.0;
-                    c.positioning_mode = "center".into();
+                    c.positioning_mode = PositioningMode::Center;
                     c.horizontal_offset = 0.0;
                     c.vertical_offset = 0.0;
                 }
                 "Instagram" => {
                     c.face_height_pct = 55.0;
-                    c.positioning_mode = "center".into();
+                    c.positioning_mode = PositioningMode::Center;
                     c.horizontal_offset = 0.0;
                     c.vertical_offset = 0.0;
                 }
                 "Headshot" => {
                     c.face_height_pct = 55.0;
-                    c.positioning_mode = "rule-of-thirds".into();
+                    c.positioning_mode = PositioningMode::RuleOfThirds;
                     c.horizontal_offset = 0.0;
                     c.vertical_offset = 0.0;
                 }
                 "ID Card" => {
                     c.face_height_pct = 62.0;
-                    c.positioning_mode = "center".into();
+                    c.positioning_mode = PositioningMode::Center;
                     c.horizontal_offset = 0.0;
                     c.vertical_offset = 0.0;
                 }
                 "Avatar" => {
                     c.face_height_pct = 70.0;
-                    c.positioning_mode = "center".into();
+                    c.positioning_mode = PositioningMode::Center;
                     c.horizontal_offset = 0.0;
                     c.vertical_offset = 0.0;
                 }
@@ -360,20 +360,19 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
 
         field_label(ui, "Mode");
         let modes = ["Center", "Thirds", "Custom"];
-        let mut mode_idx: usize = match app.settings.crop.positioning_mode.as_str() {
-            "center" => 0,
-            "thirds" => 1,
-            _ => 2,
+        let mut mode_idx: usize = match app.settings.crop.positioning_mode {
+            PositioningMode::Center => 0,
+            PositioningMode::RuleOfThirds => 1,
+            PositioningMode::Custom => 2,
         };
         let prev = mode_idx;
         segmented_control(ui, &modes, &mut mode_idx);
         if mode_idx != prev {
             app.settings.crop.positioning_mode = match mode_idx {
-                0 => "center",
-                1 => "thirds",
-                _ => "custom",
-            }
-            .to_string();
+                0 => PositioningMode::Center,
+                1 => PositioningMode::RuleOfThirds,
+                _ => PositioningMode::Custom,
+            };
         }
 
         // Offsets
@@ -570,28 +569,21 @@ fn output_tab(ui: &mut Ui, app: &mut App2) {
         ui.add_space(12.0);
         field_label(ui, "Format");
         let formats = ["JPEG", "PNG", "WEBP", "AVIF"];
-        let mut fmt_idx = match app
-            .settings
-            .crop
-            .output_format
-            .to_ascii_uppercase()
-            .as_str()
-        {
-            "PNG" => 1,
-            "WEBP" => 2,
-            "AVIF" => 3,
+        let mut fmt_idx = match app.settings.crop.output_format {
+            ImageFormatHint::Png => 1,
+            ImageFormatHint::Webp => 2,
+            ImageFormatHint::Avif => 3,
             _ => 0,
         };
         let fmt_idx_bak = fmt_idx;
         segmented_control(ui, &formats, &mut fmt_idx);
         if fmt_idx != fmt_idx_bak {
             app.settings.crop.output_format = match fmt_idx {
-                1 => "png",
-                2 => "webp",
-                3 => "avif",
-                _ => "jpeg",
-            }
-            .to_string();
+                1 => ImageFormatHint::Png,
+                2 => ImageFormatHint::Webp,
+                3 => ImageFormatHint::Avif,
+                _ => ImageFormatHint::Jpeg,
+            };
         }
 
         ui.add_space(8.0);

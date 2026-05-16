@@ -59,8 +59,10 @@ pub use mapping::{
     MappingReadOptions, detect_format as detect_mapping_format, inspect_mapping_sources,
     list_sqlite_tables, load_mapping_entries, load_mapping_preview,
 };
+pub use config::PositioningMode;
 pub use output::{
-    ImageFormatHint, MetadataContext, OutputOptions, append_suffix_to_filename, save_dynamic_image,
+    ImageFormatHint, MetadataContext, OutputOptions, PngCompression, append_suffix_to_filename,
+    save_dynamic_image,
 };
 pub use quality::{Quality, QualityFilter, estimate_sharpness, laplacian_variance};
 pub use shape::{

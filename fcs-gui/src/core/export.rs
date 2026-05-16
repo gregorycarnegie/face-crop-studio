@@ -10,8 +10,9 @@ use fcs_core::{
     crop_face_from_image,
 };
 use fcs_utils::{
-    MetadataContext, OutputOptions, RedEye, append_suffix_to_filename, apply_enhancements,
-    apply_shape_mask, estimate_sharpness, load_image, quality::Quality, save_dynamic_image,
+    ImageFormatHint, MetadataContext, OutputOptions, RedEye, append_suffix_to_filename,
+    apply_enhancements, apply_shape_mask, estimate_sharpness, load_image, quality::Quality,
+    save_dynamic_image,
 };
 use image::{DynamicImage, GenericImageView, Rgba};
 use log::{info, warn};
@@ -135,7 +136,7 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
     let settings = &app.settings;
     let crop_settings = app.build_crop_settings();
     let output_options = OutputOptions::from_crop_settings(&settings.crop);
-    let ext = output_extension(&settings.crop.output_format);
+    let ext = output_extension(settings.crop.output_format);
     let source_stem = source_path
         .and_then(Path::file_stem)
         .and_then(|s| s.to_str())
@@ -450,10 +451,10 @@ fn build_output_path(
     output_override: Option<&PathBuf>,
     multi_face: bool,
 ) -> PathBuf {
-    let ext = output_extension(&settings.crop.output_format);
+    let ext = output_extension(settings.crop.output_format);
 
     if let Some(custom) = output_override {
-        return resolve_override_path(output_dir, custom, &ext, candidate.face_index, multi_face);
+        return resolve_override_path(output_dir, custom, ext, candidate.face_index, multi_face);
     }
 
     let source_stem = source_path
@@ -510,10 +511,13 @@ fn quality_suffix(
     }
 }
 
-fn output_extension(output_format: &str) -> String {
-    match output_format.trim().to_ascii_lowercase().as_str() {
-        "" => "png".to_string(),
-        "jpeg" => "jpg".to_string(),
-        other => other.to_string(),
+fn output_extension(format: ImageFormatHint) -> &'static str {
+    match format {
+        ImageFormatHint::Png => "png",
+        ImageFormatHint::Jpeg => "jpg",
+        ImageFormatHint::Webp => "webp",
+        ImageFormatHint::Tiff => "tif",
+        ImageFormatHint::Bmp => "bmp",
+        ImageFormatHint::Avif => "avif",
     }
 }

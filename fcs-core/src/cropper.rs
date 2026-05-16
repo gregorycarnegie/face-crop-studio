@@ -11,16 +11,9 @@ use fcs_utils::color::RgbaColor;
 /// Alias exported alongside [`CropSettings`] so downstream crates don't need to depend on `fcs_utils::color`.
 pub type FillColor = RgbaColor;
 
-/// How to position the face within the crop region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PositioningMode {
-    /// Center the face in the crop region.
-    Center,
-    /// Place the face roughly at the upper third (rule of thirds).
-    RuleOfThirds,
-    /// Use custom offsets (fractions) to nudge the face relative to crop center.
-    Custom,
-}
+// Re-export so existing `fcs_core::PositioningMode` usage keeps working; the canonical
+// definition lives in `fcs-utils` so the config struct can store it directly.
+pub use fcs_utils::PositioningMode;
 
 /// Settings controlling how crops are computed and the output size.
 #[derive(Debug, Clone)]

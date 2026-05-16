@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use fcs_core::preset_by_name;
 use fcs_core::{CropSettings, PositioningMode};
 use fcs_utils::{
-    Quality,
+    ImageFormatHint, PngCompression, Quality,
     config::{
         AppSettings, CropSettings as ConfigCropSettings, MetadataMode, default_settings_path,
     },
@@ -113,17 +113,23 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
     settings.crop.face_height_pct = args.face_height_pct;
     settings.crop.horizontal_offset = args.horizontal_offset;
     settings.crop.vertical_offset = args.vertical_offset;
-    settings.crop.positioning_mode = args.positioning_mode.replace('_', "-");
+    settings.crop.positioning_mode = parse_positioning_mode(&args.positioning_mode);
     if let Some(ref fill) = args.crop_fill_color {
         match parse_fill_color_spec(fill) {
             Ok(color) => settings.crop.fill_color = color,
             Err(err) => warn!("failed to parse --crop-fill-color '{}': {}", fill, err),
         }
     }
-    settings.crop.output_format = args.output_format.to_ascii_lowercase();
+    match args.output_format.parse::<ImageFormatHint>() {
+        Ok(fmt) => settings.crop.output_format = fmt,
+        Err(_) => warn!(
+            "unknown --output-format '{}', keeping {:?}",
+            args.output_format, settings.crop.output_format
+        ),
+    }
     settings.crop.jpeg_quality = args.jpeg_quality;
     if let Some(ref compression) = args.png_compression {
-        settings.crop.png_compression = compression.clone();
+        settings.crop.png_compression = PngCompression::parse(compression);
     }
     if let Some(webp) = args.webp_quality {
         settings.crop.webp_quality = webp;
@@ -180,7 +186,7 @@ pub fn build_core_crop_settings(cfg: &ConfigCropSettings) -> CropSettings {
         output_width: cfg.output_width,
         output_height: cfg.output_height,
         face_height_pct: cfg.face_height_pct,
-        positioning_mode: parse_positioning_mode(&cfg.positioning_mode),
+        positioning_mode: cfg.positioning_mode,
         horizontal_offset: cfg.horizontal_offset,
         vertical_offset: cfg.vertical_offset,
         fill_color: cfg.fill_color,
@@ -188,14 +194,14 @@ pub fn build_core_crop_settings(cfg: &ConfigCropSettings) -> CropSettings {
     }
 }
 
+/// Parse the `--positioning-mode` CLI argument value. Reuses the serde aliases
+/// configured on [`PositioningMode`] so the CLI accepts the same spellings the
+/// config file does.
 fn parse_positioning_mode(value: &str) -> PositioningMode {
-    match value.to_ascii_lowercase().as_str() {
-        "rule_of_thirds" | "rule-of-thirds" | "ruleofthirds" | "thirds" => {
-            PositioningMode::RuleOfThirds
-        }
-        "custom" => PositioningMode::Custom,
-        _ => PositioningMode::Center,
-    }
+    let token = value.to_ascii_lowercase();
+    // serde_json's enum string deserializer honors the `#[serde(alias = …)]` attrs,
+    // so we can route every accepted spelling through one canonical path.
+    serde_json::from_value(serde_json::Value::String(token)).unwrap_or(PositioningMode::Center)
 }
 
 fn parse_metadata_tags_args(entries: &[String]) -> BTreeMap<String, String> {
@@ -550,8 +556,8 @@ mod tests {
         assert_eq!(settings.crop.output_width, 400);
         assert_eq!(settings.crop.output_height, 400);
         assert_eq!(settings.crop.fill_color.red, 0x11);
-        assert_eq!(settings.crop.output_format, "jpg");
-        assert_eq!(settings.crop.png_compression, "best");
+        assert_eq!(settings.crop.output_format, ImageFormatHint::Jpeg);
+        assert_eq!(settings.crop.png_compression, PngCompression::Best);
         assert_eq!(settings.crop.webp_quality, 77);
         assert!(settings.crop.auto_detect_format);
         assert!(settings.crop.quality_rules.auto_select_best_face);
@@ -622,7 +628,7 @@ mod tests {
         let cfg = fcs_utils::config::CropSettings {
             output_width: 200,
             output_height: 300,
-            positioning_mode: "center".to_string(),
+            positioning_mode: PositioningMode::Center,
             ..Default::default()
         };
         let core = build_core_crop_settings(&cfg);
@@ -634,7 +640,7 @@ mod tests {
     #[test]
     fn build_core_crop_settings_rule_of_thirds() {
         let cfg = fcs_utils::config::CropSettings {
-            positioning_mode: "rule-of-thirds".to_string(),
+            positioning_mode: PositioningMode::RuleOfThirds,
             ..Default::default()
         };
         let core = build_core_crop_settings(&cfg);
