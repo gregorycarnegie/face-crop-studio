@@ -590,7 +590,7 @@ mod benches {
                 "input height not divisible by stride {}",
                 stride
             );
-            total_cells += (pad_w / stride) * (pad_h / stride);
+            total_cells += (pad_w * pad_h) / (stride * stride);
         }
         let total_capacity = total_cells * DETECTION_OUTPUT_COLS;
 

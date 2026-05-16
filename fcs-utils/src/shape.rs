@@ -676,8 +676,7 @@ fn analytical_signed_distance(
             let dx = (px - params.cx).abs();
             let dy = (py - params.cy).abs();
             let val = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry);
-            val.sqrt() * (params.width.min(params.height) * 0.5)
-                - (params.width.min(params.height) * 0.5)
+            (val.sqrt() - 1.0) * params.width.min(params.height) * 0.5
         }
         CropShape::Rectangle => {
             let bx = params.width * 0.5;

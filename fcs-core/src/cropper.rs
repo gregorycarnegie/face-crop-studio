@@ -221,7 +221,7 @@ pub fn calculate_crop_region(
     // Source region height (in source pixels) so that after resizing the face
     // will occupy `face_height_pct` percent of the output height.
     // Derived from: (face_h / src_region_h) = face_height_pct/100
-    let src_h = face_h * (100.0 / face_height_pct);
+    let src_h = face_h * 100.0 / face_height_pct;
 
     // Maintain output aspect ratio for width.
     let out_w = settings.output_width as f32;
