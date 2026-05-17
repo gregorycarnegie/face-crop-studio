@@ -40,6 +40,11 @@
 
 - [x] Decompose oversized CLI, GUI, core, and utils functions into smaller private helpers and add unit coverage for the extracted decision logic.
 
+### Refactor Follow-up #2 (deferred from /simplify rounds)
+
+- [ ] **Unify CropSettings translation between CLI and GUI.** CLI's `build_core_crop_settings` (`fcs-cli/src/config.rs`) and GUI's `build_crop_settings_from_app_settings` (`fcs-gui/src/app.rs`) do the same field-by-field copy except the GUI runs a runtime `preset_by_name()` resolution for `output_width`/`output_height`, while the CLI pre-resolves them in `apply_cli_overrides`. Unifying behind a single `From<&ConfigCropSettings> for CropSettings` (in `fcs-core`) is straightforward, but it would silently change behaviour for saved configs where `preset` and `output_width`/`output_height` are inconsistent (e.g. preset=linkedin with stored 999×999). Decide the desired semantics first — preset wins, or stored dims win — then unify.
+- [ ] **Extend `GpuBufferPool` to all GPU ops.** `fcs-utils/src/gpu/background_blur.rs` already routes its storage/readback buffers through `GpuBufferPool::acquire`/`recycle`; `shape_mask.rs`, `bilateral_filter.rs`, `gaussian_blur.rs`, `hist_equalize.rs`, `pixel_adjust.rs`, `red_eye.rs`, and `crop_batch.rs` still allocate raw buffers per call. Biggest wins are on `shape_mask` / `bilateral_filter` / `red_eye` since they run on every export. The pool already supports the required `acquire(size, usage)`/`recycle(buffer, size, usage)` shape, so this is mechanical refactoring per op.
+
 ### Coverage Follow-up
 
 - [x] Add direct unit tests for CSV/SQLite mapping ingestion, selector handling, and SQL query validation in `fcs-utils/src/mapping.rs`.

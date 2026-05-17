@@ -84,6 +84,29 @@ graph TD
 
 *Note: GPU preprocessing includes PCIe transfer overhead which dominates for single images. Batch throughput sees higher gains.*
 
+### GPU Inference Determinism
+
+The custom WGSL YuNet inference path (`gpu.inference: true`) is **not bit-deterministic across runs**. GPU compute shaders perform parallel float reductions during convolution and the accumulation order is scheduler-dependent. Most of the time this manifests as sub-ULP wobble in detection scores and bbox coordinates, but occasionally — especially on borderline detections or images with multiple face-like patterns — it produces visibly different outputs.
+
+Empirically on a 1239-image batch, with `gpu.inference: true`:
+
+- **~99%** of images produce identical detection sets across batch runs.
+- **~1%** show variance in their detection list. The breakdown of that 1%:
+  - About half are *secondary* detections around a single face (near-duplicate boxes from YuNet's stride-8/16/32 anchors). NMS and the post-NMS centroid dedup pass catch most of these.
+  - About a third are *threshold-boundary flicker* — a borderline detection's score wobbles across `score_threshold`, so it's included in some runs and not others.
+  - The remainder is genuine model-level wobble where a clear face produces meaningfully different scores between runs.
+
+With `quality_rules.auto_select_best_face: true` (the GUI default), only the top detection per image affects output, so the user-visible drift is closer to **~0.3% of images**. CPU inference (`gpu.inference: false`) routes through `tract` and removes the GPU-side source of wobble — recommended when reproducibility matters more than batch throughput.
+
+#### Mitigations in code
+
+- `nms_threshold: 0.2` (down from the YuNet upstream 0.3) — more aggressive overlap suppression absorbs IoU jitter for clearly-overlapping boxes.
+- `fcs-core::nms::dedup_close_centers` — post-NMS pass that drops detections whose centers are within 50% of the larger bbox's longest edge. Catches the multi-scale duplicates that low-IoU NMS lets through. Wired into `apply_postprocess`.
+
+#### Diagnostic logging
+
+There's a `log_detection_diag` helper in `fcs-gui/src/core/export.rs` (currently commented out) that logs per-image detection counts and sorted score lists at `debug` level. Uncomment its definition and call site in `run_batch_job`, then run two batches with `RUST_LOG="fcs_gui::core::export=debug"`, capture the `[batch-diag]` lines from each into a file, and diff with `compare_batch_diag.py` to see which images are flipping. Re-comment when done.
+
 ## Testing Matrix
 
 | Area                 | Location                               | Purpose                                         |

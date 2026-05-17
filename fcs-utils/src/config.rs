@@ -461,8 +461,27 @@ pub struct AppSettings {
     pub telemetry: TelemetrySettings,
     /// Batch processing logging settings.
     pub batch_logging: BatchLoggingSettings,
+    /// Maximum number of worker threads used by the GUI batch export pipeline.
+    /// `None` falls back to a conservative `min(4, max(1, num_cpus / 2))` default
+    /// chosen to limit peak memory pressure from concurrent full-resolution images.
+    /// Set to `Some(1)` to disable parallelism.
+    pub batch_parallelism: Option<usize>,
     /// GPU runtime preferences shared across CLI and GUI.
     pub gpu: GpuSettings,
+}
+
+impl AppSettings {
+    /// Resolve [`Self::batch_parallelism`] to an effective worker count (>= 1).
+    /// Honors an explicit override; otherwise picks `min(4, max(1, num_cpus / 2))`.
+    pub fn resolved_batch_parallelism(&self) -> usize {
+        if let Some(n) = self.batch_parallelism {
+            return n.max(1);
+        }
+        let total = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        (total / 2).clamp(1, 4)
+    }
 }
 
 impl Default for AppSettings {
@@ -475,6 +494,7 @@ impl Default for AppSettings {
             enhance: EnhanceSettings::default(),
             telemetry: TelemetrySettings::default(),
             batch_logging: BatchLoggingSettings::default(),
+            batch_parallelism: None,
             gpu: GpuSettings::default(),
         };
         settings.crop.sanitize();

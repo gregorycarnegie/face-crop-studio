@@ -15,12 +15,17 @@ use fcs_utils::{
     save_dynamic_image,
 };
 use image::{DynamicImage, GenericImageView, Rgba};
-use log::{info, warn};
+use log::{error, info, warn};
+use rayon::prelude::*;
 use rfd::FileDialog;
 use std::{
     cmp::Ordering,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+    },
 };
 
 /// Map the two eye landmarks into output-crop coordinates for targeted red-eye removal.
@@ -254,39 +259,205 @@ pub fn start_batch_export(app: &mut App2) {
     }
 
     let settings = Arc::new(app.settings.clone());
+    let parallelism = settings.resolved_batch_parallelism();
     let tx = app.job_tx.clone();
     app.is_busy = true;
-    app.show_success(format!("Starting batch export of {} image(s)", tasks.len()));
+    app.show_success(format!(
+        "Starting batch export of {} image(s) using {} worker(s)",
+        tasks.len(),
+        parallelism
+    ));
 
     std::thread::spawn(move || {
-        let mut completed = 0usize;
-        let mut failed = 0usize;
+        let completed = Arc::new(AtomicUsize::new(0));
+        let failed = Arc::new(AtomicUsize::new(0));
 
-        for (index, path, output_override) in tasks {
-            let _ = tx.send(JobMessage::BatchProgress {
-                index,
-                status: BatchFileStatus::Processing,
-            });
-
-            let status = run_batch_job(
-                detector.as_ref(),
-                path,
-                output_dir.as_path(),
-                settings.as_ref(),
-                output_override,
-            );
-
-            if matches!(status, BatchFileStatus::Failed { .. }) {
-                failed += 1;
-            } else {
-                completed += 1;
+        // Dedicated pool so this batch can't starve other rayon work and so the
+        // worker count stays bounded regardless of the global pool size.
+        let pool = match rayon::ThreadPoolBuilder::new()
+            .num_threads(parallelism)
+            .thread_name(|i| format!("fcs-batch-{i}"))
+            .build()
+        {
+            Ok(p) => p,
+            Err(err) => {
+                error!("Failed to build batch thread pool: {err}; running sequentially");
+                run_batch_sequential(
+                    tasks,
+                    detector.as_ref(),
+                    output_dir.as_path(),
+                    settings.as_ref(),
+                    &tx,
+                    &completed,
+                    &failed,
+                );
+                let _ = tx.send(JobMessage::BatchComplete {
+                    completed: completed.load(AtomicOrdering::Relaxed),
+                    failed: failed.load(AtomicOrdering::Relaxed),
+                });
+                return;
             }
+        };
 
-            let _ = tx.send(JobMessage::BatchProgress { index, status });
-        }
+        // Clone everything the install closure needs. `mpsc::Sender` is `!Sync`,
+        // so it must be moved (not borrowed) into the closure; we clone here so
+        // the outer `tx` survives for the final `BatchComplete` send.
+        let inner_tx = tx.clone();
+        let inner_detector = detector.clone();
+        let inner_output_dir = output_dir.clone();
+        let inner_settings = settings.clone();
+        let inner_completed = completed.clone();
+        let inner_failed = failed.clone();
 
-        let _ = tx.send(JobMessage::BatchComplete { completed, failed });
+        pool.install(move || {
+            // `for_each_with` clones the init once per worker thread, so the
+            // sender refcount bumps once per worker rather than once per task.
+            tasks.into_par_iter().for_each_with(
+                inner_tx,
+                |tx, (index, path, output_override)| {
+                    let _ = tx.send(JobMessage::BatchProgress {
+                        index,
+                        status: BatchFileStatus::Processing,
+                    });
+
+                    let status = run_batch_job_panic_safe(
+                        inner_detector.as_ref(),
+                        path,
+                        inner_output_dir.as_path(),
+                        inner_settings.as_ref(),
+                        output_override,
+                    );
+
+                    if matches!(status, BatchFileStatus::Failed { .. }) {
+                        inner_failed.fetch_add(1, AtomicOrdering::Relaxed);
+                    } else {
+                        inner_completed.fetch_add(1, AtomicOrdering::Relaxed);
+                    }
+
+                    let _ = tx.send(JobMessage::BatchProgress { index, status });
+                },
+            );
+        });
+
+        let _ = tx.send(JobMessage::BatchComplete {
+            completed: completed.load(AtomicOrdering::Relaxed),
+            failed: failed.load(AtomicOrdering::Relaxed),
+        });
     });
+}
+
+// Per-image detection diagnostic — commented out for normal use. Uncomment
+// this function and the call site in `run_batch_job` to capture per-image
+// detection counts and sorted score lists at `debug` level for diffing two
+// batch runs. See ARCHITECTURE.md "GPU Inference Determinism" for usage.
+//
+// Output lines are prefixed `[batch-diag]` for easy grepping; format:
+//   `[batch-diag] det=<n> border=<n> min=<f.4> max=<f.4> path=<...> scores=[<f.4>,...]`
+//
+// `compare_batch_diag.py` in the repo root parses two such files and reports
+// per-image mismatches.
+//
+// fn log_detection_diag(path: &Path, detections: &[Detection], score_threshold: f32) {
+//     if !log::log_enabled!(log::Level::Debug) {
+//         return;
+//     }
+//
+//     const BORDERLINE_MARGIN: f32 = 0.02;
+//     let borderline = detections
+//         .iter()
+//         .filter(|d| d.score < score_threshold + BORDERLINE_MARGIN)
+//         .count();
+//
+//     let (min_score, max_score) = detections.iter().fold((f32::MAX, f32::MIN), |(lo, hi), d| {
+//         (lo.min(d.score), hi.max(d.score))
+//     });
+//
+//     // Sort scores descending so cross-run diffs line up by rank rather than by
+//     // detection order (which can shuffle even without count change).
+//     let mut sorted_scores: Vec<f32> = detections.iter().map(|d| d.score).collect();
+//     sorted_scores.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+//     let scores_str = sorted_scores
+//         .iter()
+//         .map(|s| format!("{:.4}", s))
+//         .collect::<Vec<_>>()
+//         .join(",");
+//
+//     let (min_display, max_display) = if detections.is_empty() {
+//         ("-".to_string(), "-".to_string())
+//     } else {
+//         (format!("{:.4}", min_score), format!("{:.4}", max_score))
+//     };
+//
+//     debug!(
+//         "[batch-diag] det={} border={} min={} max={} path={} scores=[{}]",
+//         detections.len(),
+//         borderline,
+//         min_display,
+//         max_display,
+//         path.display(),
+//         scores_str
+//     );
+// }
+
+/// Run one batch job and convert any panic into a [`BatchFileStatus::Failed`].
+/// One corrupt/edge-case image must not abort the rest of the batch.
+fn run_batch_job_panic_safe(
+    detector: &YuNetDetector,
+    path: PathBuf,
+    output_dir: &Path,
+    settings: &fcs_utils::config::AppSettings,
+    output_override: Option<PathBuf>,
+) -> BatchFileStatus {
+    let path_display = path.display().to_string();
+    let result = catch_unwind(AssertUnwindSafe(move || {
+        run_batch_job(detector, path, output_dir, settings, output_override)
+    }));
+    match result {
+        Ok(status) => status,
+        Err(payload) => {
+            let msg = panic_payload_message(payload);
+            error!("Panic processing batch image {path_display}: {msg}");
+            BatchFileStatus::Failed {
+                error: format!("panic: {msg}"),
+            }
+        }
+    }
+}
+
+/// Best-effort extraction of the message from a panic payload (`&str` or `String`).
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "panic with non-string payload".to_string()
+}
+
+/// Sequential fallback used only if building the rayon pool fails.
+fn run_batch_sequential(
+    tasks: Vec<(usize, PathBuf, Option<PathBuf>)>,
+    detector: &YuNetDetector,
+    output_dir: &Path,
+    settings: &fcs_utils::config::AppSettings,
+    tx: &std::sync::mpsc::Sender<JobMessage>,
+    completed: &AtomicUsize,
+    failed: &AtomicUsize,
+) {
+    for (index, path, output_override) in tasks {
+        let _ = tx.send(JobMessage::BatchProgress {
+            index,
+            status: BatchFileStatus::Processing,
+        });
+        let status = run_batch_job_panic_safe(detector, path, output_dir, settings, output_override);
+        if matches!(status, BatchFileStatus::Failed { .. }) {
+            failed.fetch_add(1, AtomicOrdering::Relaxed);
+        } else {
+            completed.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+        let _ = tx.send(JobMessage::BatchProgress { index, status });
+    }
 }
 
 fn run_batch_job(
@@ -313,6 +484,11 @@ fn run_batch_job(
             };
         }
     };
+
+    // Per-batch detection diagnostic — disabled. Re-enable by uncommenting this
+    // line and the `log_detection_diag` function below to investigate GPU inference
+    // run-to-run variance. See ARCHITECTURE.md "GPU Inference Determinism".
+    // log_detection_diag(&path, &detections, settings.detection.score_threshold);
 
     let faces_detected = detections.len();
     if detections.is_empty() {

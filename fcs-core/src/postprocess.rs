@@ -5,8 +5,21 @@ use tract_onnx::prelude::{Tensor, tract_ndarray::ArrayView2};
 
 use crate::{
     model_config::{DETECTION_OUTPUT_COLS, DETECTION_SCORE_INDEX},
-    nms::apply_nms_in_place,
+    nms::{apply_nms_in_place, dedup_close_centers},
 };
+
+/// Centroid-distance threshold for the post-NMS dedup pass, expressed as a
+/// fraction of the *larger* bbox's longest edge (see `dedup_close_centers`).
+/// `0.5` means "if two box centers are within half the bigger face's longest
+/// edge, treat them as the same face." Sized to span YuNet's multi-stride
+/// anchors while leaving genuinely-separate faces alone (their centers
+/// typically sit a full face-width or more apart).
+const POST_NMS_RELATIVE_DEDUP_DISTANCE: f32 = 0.5;
+
+/// Hard floor for the post-NMS dedup pass in pixels, applied alongside the
+/// relative-distance check. Prevents pathologically small bboxes from
+/// degrading the relative metric to nothing.
+const POST_NMS_MIN_ABSOLUTE_DEDUP_DISTANCE_PX: f32 = 8.0;
 
 pub use crate::model_config::{DEFAULT_NMS_THRESHOLD, DEFAULT_SCORE_THRESHOLD, DEFAULT_TOP_K};
 
@@ -168,6 +181,12 @@ pub fn apply_postprocess(
     if config.nms_threshold > 0.0 && detections.len() > 1 {
         apply_nms_in_place(&mut detections, config.nms_threshold);
     }
+
+    dedup_close_centers(
+        &mut detections,
+        POST_NMS_RELATIVE_DEDUP_DISTANCE,
+        POST_NMS_MIN_ABSOLUTE_DEDUP_DISTANCE_PX,
+    );
 
     Ok(detections)
 }
