@@ -511,8 +511,12 @@ jobs:
 
       - name: Install build dependencies (apt)
         run: |
+          DAV1D_VERSION=1.5.1
           sudo apt-get update
           sudo apt-get install -y \
+            meson \
+            ninja-build \
+            nasm \
             pkg-config \
             libdav1d-dev \
             librsvg2-bin \
@@ -522,6 +526,22 @@ jobs:
             libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-render0-dev \
             libegl-dev \
             libgl-dev
+          curl -fsSL -o /tmp/dav1d.tar.xz \
+            "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz"
+          tar -xf /tmp/dav1d.tar.xz -C /tmp
+          meson setup "/tmp/dav1d-${DAV1D_VERSION}/build" "/tmp/dav1d-${DAV1D_VERSION}" \
+            --prefix=/usr/local \
+            --libdir=lib \
+            --buildtype=release \
+            --default-library=static \
+            -Denable_tools=false \
+            -Denable_tests=false
+          ninja -C "/tmp/dav1d-${DAV1D_VERSION}/build"
+          sudo ninja -C "/tmp/dav1d-${DAV1D_VERSION}/build" install
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
+          pkg-config --modversion dav1d
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
