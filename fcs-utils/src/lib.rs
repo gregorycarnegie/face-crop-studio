@@ -131,6 +131,9 @@ const LINUX_SHARE_DIR: &str = "face-crop-studio";
 pub fn resolve_data_path<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
     if path.exists() {
+        if path.is_relative() {
+            return path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        }
         return path.to_path_buf();
     }
     if path.is_relative()
