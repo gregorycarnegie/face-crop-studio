@@ -22,10 +22,10 @@ Face Crop Studio is a Rust workspace that wraps the YuNet face detector with det
 
 - **Preset sizing** – LinkedIn, Passport, Instagram, ID Card, Avatar, Headshot, plus an explicit “Custom” mode.
 - **Face height targeting** – Configure how large the face should appear in the final crop (10–100%). The cropper preserves the requested aspect ratio and records any padding needed so crops can extend beyond the source image without distortion.
-- **Padding color control** – Empty pixels introduced by out-of-bounds crops are filled with a configurable color (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
+- **Padding colour control** – Empty pixels introduced by out-of-bounds crops are filled with a configurable colour (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
-- **Enhancement pipeline** – Optional post-crop adjustments (auto color, exposure, brightness, contrast, saturation, sharpening, skin smoothing, red-eye removal, and portrait background blur) with both CPU (pure Rust) and GPU (WGSL compute shaders) implementations.
+- **Enhancement pipeline** – Optional post-crop adjustments (auto colour, exposure, brightness, contrast, saturation, sharpening, skin smoothing, red-eye removal, and portrait background blur) with both CPU (pure Rust) and GPU (WGSL compute shaders) implementations.
 - **Metadata & export** – Preserve, strip, or customise metadata. Exports support PNG, JPEG (with quality controls), and WebP.
 - **Batch processing** – Both CLI and GUI support multi-image workflows with status tracking, filenames derived from templates, and quality-aware selection.
 - **Clipboard & drag-and-drop import** – Drop/paste a single image to preview instantly, drop a folder/clipboard path list to enqueue its supported images for batch export, or drop CSV/XLSX/Parquet/SQLite tables to seed the mapping workflow.
@@ -98,7 +98,7 @@ The release package includes `models/face_detection_yunet_2023mar_640.onnx` by d
     </td>
     <td width="58%" align="center" valign="top">
       <a href="screenshots/gui-enhancement.png"><img src="screenshots/gui-enhancement.png" alt="Enhancement controls for exposure, brightness, contrast, saturation, sharpening, smoothing, and background blur" width="320"/></a><br/>
-      <sub><strong>Enhancement controls</strong><br/>Post-crop color, sharpness, smoothing, and blur tuning.</sub>
+      <sub><strong>Enhancement controls</strong><br/>Post-crop colour, sharpness, smoothing, and blur tuning.</sub>
     </td>
   </tr>
   <tr>
