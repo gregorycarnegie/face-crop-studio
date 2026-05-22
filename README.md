@@ -8,6 +8,8 @@ GPU accelerated face detection and cropping software built in Rust.
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
 ![WGSL](https://img.shields.io/badge/WGSL-GPU%20Compute-blue?logo=webgpu)
 ![License](https://img.shields.io/badge/license-MIT-green)
+[![CI](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml)
+[![Release](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml/badge.svg)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml)
 
 Face Crop Studio is a Rust workspace that wraps the YuNet face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Both CPU and GPU acceleration paths are supported via wgpu/WGSL compute shaders for preprocessing, enhancement, and custom YuNet inference.
 
