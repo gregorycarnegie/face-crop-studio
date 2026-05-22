@@ -58,6 +58,7 @@ webcam = ["dep:nokhwa"]
 [dev-dependencies]
 tempfile.workspace = true
 criterion.workspace = true
+naga.workspace = true
 
 [[bench]]
 name = "bitwise_optimizations"

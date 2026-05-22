@@ -34,6 +34,8 @@ pub mod telemetry;
 /// Webcam capture utilities for real-time face detection.
 #[cfg(feature = "webcam")]
 pub mod webcam;
+#[cfg(test)]
+mod wgsl_validation_tests;
 
 use anyhow::Result;
 pub use color::{

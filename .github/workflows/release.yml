@@ -13,8 +13,32 @@ env:
   YUNET_640_SHA256: d2c5a887db77802389261b13d2b9f5e1171b9d5787cb315d0add225812ff4d96
 
 jobs:
+  shader-validation:
+    name: Validate WGSL shaders
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdav1d-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Validate WGSL shaders
+        run: cargo test -p fcs-utils validate_all_wgsl_files
+
   windows-release:
     name: Windows Release Artifacts
+    needs: shader-validation
     runs-on: windows-latest
     permissions:
       contents: write
@@ -293,6 +317,7 @@ jobs:
 
   macos-release:
     name: macOS Release Artifacts (Apple Silicon)
+    needs: shader-validation
     runs-on: macos-latest
     permissions:
       contents: write
@@ -441,6 +466,7 @@ jobs:
 
   linux-release:
     name: Linux Release Artifacts (x86_64)
+    needs: shader-validation
     # Build on 22.04 for broad glibc compatibility (binaries link against
     # glibc 2.35 and run on Ubuntu 22.04+ and other modern distros).
     runs-on: ubuntu-22.04
