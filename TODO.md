@@ -6,6 +6,10 @@
 
 - [x] Centralize remaining package-local Cargo dependency versions under workspace dependencies; keep native AVIF decode enabled so AVIF inputs load.
 
+### Utility Optimization
+
+- [x] Reduce avoidable allocations in image extension checks, RGB-to-BGR tensor conversion, and CPU enhancement hot paths.
+
 ### fcs-gui2 Follow-up
 
 - [x] Restore redesigned GUI basics: resizable frameless window, folder drag-and-drop queueing, working queue row controls, and crop export actions.
@@ -634,6 +638,7 @@ Leverage GPU compute for massive performance gains in image processing operation
   - [x] Add screenshots/GIFs demonstrating crop features
 
 ### Phase 14: Code sigining (deferred)
+
 - [ ] **Windows**
   - [ ] Requires CODE_SIGN_PFX (base64-encoded PFX) and CODE_SIGN_PASSWORD. To be set as repository secrets. Skipped silently if absent.
 - [ ] **macOS**

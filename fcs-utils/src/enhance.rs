@@ -293,14 +293,10 @@ fn apply_histogram_equalization(img: &DynamicImage) -> DynamicImage {
     let lut_g = build_equalization_lut(&hist_g, total);
     let lut_b = build_equalization_lut(&hist_b, total);
 
-    for y in 0..h {
-        for x in 0..w {
-            let mut px = buf.get_pixel(x, y).0;
-            px[0] = lut_r[px[0] as usize];
-            px[1] = lut_g[px[1] as usize];
-            px[2] = lut_b[px[2] as usize];
-            buf.put_pixel(x, y, image::Rgba(px));
-        }
+    for px in buf.as_mut().chunks_exact_mut(4) {
+        px[0] = lut_r[px[0] as usize];
+        px[1] = lut_g[px[1] as usize];
+        px[2] = lut_b[px[2] as usize];
     }
 
     DynamicImage::ImageRgba8(buf)
@@ -427,7 +423,7 @@ fn apply_skin_smoothing(
         return DynamicImage::ImageRgba8(src);
     }
 
-    let mut out_buffer = src.clone();
+    let mut out_buffer = ImageBuffer::new(w, h);
 
     let radius = (sigma_space * 2.0).ceil() as i32;
     let kernel = skin_kernel(radius, sigma_space, sigma_color);
@@ -504,6 +500,9 @@ fn apply_skin_smoothing(
                     row[out_idx + 1] = final_g;
                     row[out_idx + 2] = final_b;
                     row[out_idx + 3] = center[3];
+                } else {
+                    let out_idx = x << 2; // Optimized: x * 4
+                    row[out_idx..out_idx + 4].copy_from_slice(center);
                 }
             }
         });
@@ -520,9 +519,8 @@ fn apply_red_eye_removal(
     threshold: f32,
     eyes: Option<&[RedEye]>,
 ) -> DynamicImage {
-    let src = img.to_rgba8();
-    let (w, h) = src.dimensions();
-    let mut out = src.clone();
+    let mut out = img.to_rgba8();
+    let (w, h) = out.dimensions();
     let active_eyes = eyes.filter(|list| !list.is_empty());
 
     for y in 0..h {
@@ -542,7 +540,7 @@ fn apply_red_eye_removal(
                 }
             }
 
-            let px = src.get_pixel(x, y).0;
+            let px = out.get_pixel(x, y).0;
             let r = px[0] as f32;
             let g = px[1] as f32;
             let b = px[2] as f32;
@@ -681,25 +679,26 @@ fn unsharp_with_preblur_rgba(
 ) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
     let amount = amount.clamp(0.0, 2.0);
     let (w, h) = src.dimensions();
+    assert_eq!(
+        blurred.dimensions(),
+        (w, h),
+        "unsharp inputs must have matching dimensions"
+    );
     let mut out: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(w, h);
 
-    for y in 0..h {
-        for x in 0..w {
-            let s = src.get_pixel(x, y).0;
-            let b = blurred.get_pixel(x, y).0;
-            let mut new_px = [0u8; 4];
-            for c in 0..4usize {
-                if c == 3 {
-                    new_px[c] = s[c];
-                    continue;
-                }
-                let src_val = s[c] as f32;
-                let diff = src_val - b[c] as f32;
-                let val = amount.mul_add(diff, src_val);
-                new_px[c] = val.round().clamp(0.0, 255.0) as u8;
-            }
-            out.put_pixel(x, y, Rgba(new_px));
+    for ((dst, s), b) in out
+        .as_mut()
+        .chunks_exact_mut(4)
+        .zip(src.as_raw().chunks_exact(4))
+        .zip(blurred.as_raw().chunks_exact(4))
+    {
+        for c in 0..3usize {
+            let src_val = s[c] as f32;
+            let diff = src_val - b[c] as f32;
+            let val = amount.mul_add(diff, src_val);
+            dst[c] = val.round().clamp(0.0, 255.0) as u8;
         }
+        dst[3] = s[3];
     }
 
     out

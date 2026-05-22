@@ -9,7 +9,7 @@ use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageReader, RgbImage, imageops::FilterType};
 use ndarray::Array3;
 use rayon::prelude::*;
-use std::{borrow::Cow, cell::RefCell, path::Path};
+use std::{borrow::Cow, path::Path};
 
 /// Filename extensions recognized as decodable raster images across CLI and GUI.
 /// Kept in lower-case; callers should normalize input before comparison.
@@ -21,15 +21,11 @@ pub fn is_supported_image_path(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|ext| {
-            let lower = ext.to_ascii_lowercase();
-            SUPPORTED_IMAGE_EXTENSIONS.contains(&lower.as_str())
+            SUPPORTED_IMAGE_EXTENSIONS
+                .iter()
+                .any(|supported| ext.eq_ignore_ascii_case(supported))
         })
         .unwrap_or(false)
-}
-
-// Thread-local buffer pool for RGB→BGR→CHW conversion to reduce allocations.
-thread_local! {
-    static CONVERSION_BUFFER: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Load an image from disk into memory.
@@ -111,7 +107,7 @@ fn resize_image_fast(image: &DynamicImage, width: u32, height: u32) -> Option<Rg
 /// CHW (channels, height, width) and swaps the red and blue channels.
 ///
 /// Uses rayon to process channels in parallel for improved performance.
-/// Uses thread-local buffer pooling to reduce allocations.
+/// Allocates one contiguous output buffer and fills it directly.
 ///
 /// # Arguments
 ///
@@ -124,22 +120,7 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Array3<f32> {
     let row_stride = w * 3; // Keep as multiplication since 3 is not a power of 2
     let pixels = image.as_raw();
 
-    // Use thread-local buffer pool to avoid allocation
-    let mut data = CONVERSION_BUFFER.with(|buf| {
-        let mut buffer = buf.borrow_mut();
-        let required_len = 3 * channel_len;
-
-        // Reuse existing buffer if large enough, otherwise allocate
-        if buffer.len() < required_len {
-            buffer.resize(required_len, 0.0);
-        }
-
-        // Take ownership of the buffer contents
-        std::mem::take(&mut *buffer)
-    });
-
-    // Ensure we have the exact size needed
-    data.truncate(3 * channel_len);
+    let mut data = vec![0.0f32; 3 * channel_len];
 
     let (b_slice, rest) = data.split_at_mut(channel_len);
     let (g_slice, r_slice) = rest.split_at_mut(channel_len);
@@ -160,15 +141,7 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Array3<f32> {
             }
         });
 
-    let result =
-        Array3::from_shape_vec((3, h, w), data.clone()).expect("shape matches data length");
-
-    // Return the buffer to the thread-local pool for reuse
-    CONVERSION_BUFFER.with(|buf| {
-        *buf.borrow_mut() = data;
-    });
-
-    result
+    Array3::from_shape_vec((3, h, w), data).expect("shape matches data length")
 }
 
 /// Convert any dynamic image into a BGR CHW array by first converting to RGB.
@@ -177,7 +150,10 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Array3<f32> {
 ///
 /// * `image` - The dynamic image to convert.
 pub fn dynamic_to_bgr_chw(image: &DynamicImage) -> Array3<f32> {
-    rgb_to_bgr_chw(&image.to_rgb8())
+    match image.as_rgb8() {
+        Some(rgb) => rgb_to_bgr_chw(rgb),
+        None => rgb_to_bgr_chw(&image.to_rgb8()),
+    }
 }
 
 /// Compute scale factors used to reproject detections from model space to original space.
