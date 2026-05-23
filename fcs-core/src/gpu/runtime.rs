@@ -429,7 +429,7 @@ fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize
         if hardware_limit < required {
             log::warn!(
                 "Estimated requirement ({} MB) exceeds safe hardware limit ({} MB). Capping at hardware limit.",
-                required >> 20, // bytes to MiB
+                required >> 20,       // bytes to MiB
                 hardware_limit >> 20, // bytes to MiB
             );
         } else {
@@ -438,8 +438,8 @@ fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize
             log::info!(
                 "Hardware VRAM ({} MB) allows increasing limit from estimated {} MB to {} MB.",
                 hardware_available >> 20, // bytes to MiB
-                required >> 20, // bytes to MiB
-                hardware_limit >> 20 // bytes to MiB
+                required >> 20,           // bytes to MiB
+                hardware_limit >> 20      // bytes to MiB
             );
         }
         return hardware_limit;

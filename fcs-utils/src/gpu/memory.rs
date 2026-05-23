@@ -62,7 +62,7 @@ fn get_vram_windows() -> Option<u64> {
         let available = info.Budget.saturating_sub(info.CurrentUsage);
         debug!(
             "DXGI VRAM Budget: {} MB, Usage: {} MB, Available: {} MB",
-            info.Budget  >> 20, // bytes to MiB
+            info.Budget >> 20, // bytes to MiB
             info.CurrentUsage >> 20,
             available >> 20
         );
