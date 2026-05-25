@@ -271,17 +271,36 @@ fn init_gpu_pipelines(context: Option<Arc<GpuContext>>) -> GpuPipelineHandles {
 // ── eframe::App ───────────────────────────────────────────────────────────────
 
 impl App for App2 {
-    /// Detects Ctrl+V via `GetAsyncKeyState` because egui_winit swallows the
-    /// Key::V event when the clipboard holds an image instead of text, making
-    /// `key_pressed(Key::V)` permanently false in that scenario.
-    #[cfg(target_os = "windows")]
+    /// Detects the paste shortcut (Ctrl/Cmd+V) via OS key-state polling because
+    /// egui_winit swallows the Key::V event when the clipboard holds an image
+    /// instead of text, making `key_pressed(Key::V)` permanently false.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     fn raw_input_hook(&mut self, _ctx: &egui::Context, _raw_input: &mut egui::RawInput) {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
-        let pressed = unsafe {
-            let ctrl = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
-            let v = GetAsyncKeyState(0x56_i32) as u16 & 0x8000 != 0; // VK_V = 'V' = 0x56
-            ctrl && v
+        #[cfg(target_os = "windows")]
+        let pressed = {
+            use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
+            unsafe {
+                let ctrl = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
+                let v = GetAsyncKeyState(0x56_i32) as u16 & 0x8000 != 0; // VK_V = 0x56
+                ctrl && v
+            }
         };
+
+        #[cfg(target_os = "macos")]
+        let pressed = {
+            // kCGEventSourceStateHIDSystemState = 1
+            // kVK_ANSI_V = 0x09, kVK_Command = 0x37, kVK_RightCommand = 0x36
+            #[link(name = "CoreGraphics", kind = "framework")]
+            extern "C" {
+                fn CGEventSourceKeyState(state_id: i32, keycode: u16) -> bool;
+            }
+            unsafe {
+                let cmd = CGEventSourceKeyState(1, 0x37) || CGEventSourceKeyState(1, 0x36);
+                let v = CGEventSourceKeyState(1, 0x09);
+                cmd && v
+            }
+        };
+
         if pressed && !self.prev_ctrl_v_pressed {
             self.clipboard_paste_pending = true;
         }
