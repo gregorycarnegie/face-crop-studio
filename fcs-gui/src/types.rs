@@ -642,6 +642,9 @@ pub struct App2 {
     pub model_path_input: String,
     pub model_path_dirty: bool,
     pub clipboard_temp_images: Vec<TempPath>,
+    pub clipboard_paste_pending: bool,
+    /// Tracks Ctrl+V held state for rising-edge detection in raw_input_hook.
+    pub prev_ctrl_v_pressed: bool,
     pub webcam_state: WebcamState,
 
     // Canvas zoom / rotation

@@ -398,31 +398,63 @@ fn drop_zone(ui: &mut Ui, app: &mut App2) {
         egui::FontId::proportional(11.5),
         P::INK3,
     );
+    // Hit-test the paste label area (right half of bottom strip) for hover highlight
+    let action_y = dz_rect.min.y + 86.0;
+    let paste_area = egui::Rect::from_center_size(
+        egui::pos2(dz_rect.center().x + 38.0, action_y),
+        egui::Vec2::new(56.0, 14.0),
+    );
+    let pointer_in_paste = ui.input(|i| {
+        i.pointer
+            .latest_pos()
+            .is_some_and(|p| paste_area.contains(p))
+    });
+    let browse_color = if resp.hovered() && !pointer_in_paste {
+        P::CYAN
+    } else {
+        P::INK2
+    };
+    let paste_color = if pointer_in_paste { P::CYAN } else { P::INK2 };
+
     painter.text(
-        egui::pos2(dz_rect.center().x, dz_rect.min.y + 86.0),
+        egui::pos2(dz_rect.center().x - 34.0, action_y),
         egui::Align2::CENTER_CENTER,
-        "[ Browse ]  [ Paste ]",
+        "[ Browse ]",
         egui::FontId::monospace(10.0),
-        P::INK2,
+        browse_color,
+    );
+    painter.text(
+        egui::pos2(dz_rect.center().x + 38.0, action_y),
+        egui::Align2::CENTER_CENTER,
+        "[ Paste ]",
+        egui::FontId::monospace(10.0),
+        paste_color,
     );
     ui.add_space(108.0);
 
     if resp.clicked() {
-        // Open file dialog
-        if let Some(paths) = rfd::FileDialog::new()
-            .add_filter("Images", fcs_utils::SUPPORTED_IMAGE_EXTENSIONS)
-            .pick_files()
+        if resp
+            .interact_pointer_pos()
+            .is_some_and(|p| paste_area.contains(p))
         {
-            let first = paths.first().cloned();
-            let added = app.enqueue_batch_paths(paths);
-            if let Some(path) = first {
-                app.load_image_path(path);
-            }
-            if added > 0 {
-                app.show_success(format!(
-                    "Added {added} image(s) to the queue ({} total)",
-                    app.batch_files.len()
-                ));
+            app.paste_clipboard_image();
+        } else {
+            // Open file dialog
+            if let Some(paths) = rfd::FileDialog::new()
+                .add_filter("Images", fcs_utils::SUPPORTED_IMAGE_EXTENSIONS)
+                .pick_files()
+            {
+                let first = paths.first().cloned();
+                let added = app.enqueue_batch_paths(paths);
+                if let Some(path) = first {
+                    app.load_image_path(path);
+                }
+                if added > 0 {
+                    app.show_success(format!(
+                        "Added {added} image(s) to the queue ({} total)",
+                        app.batch_files.len()
+                    ));
+                }
             }
         }
     }
