@@ -60,6 +60,33 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
+    /// Right edge of the bounding box.
+    #[inline]
+    pub fn right(&self) -> f32 {
+        self.x + self.width
+    }
+
+    /// Bottom edge of the bounding box.
+    #[inline]
+    pub fn bottom(&self) -> f32 {
+        self.y + self.height
+    }
+
+    /// Center point of the bounding box.
+    #[inline]
+    pub fn center(&self) -> Point {
+        Point::new(
+            self.width.mul_add(0.5, self.x),
+            self.height.mul_add(0.5, self.y),
+        )
+    }
+
+    /// Longest side of the bounding box.
+    #[inline]
+    pub fn longest_edge(&self) -> f32 {
+        self.width.max(self.height)
+    }
+
     /// Calculates the area of the bounding box.
     #[inline]
     pub fn area(&self) -> f32 {
@@ -71,8 +98,8 @@ impl BoundingBox {
     pub fn iou(&self, other: &Self) -> f32 {
         let x1 = self.x.max(other.x);
         let y1 = self.y.max(other.y);
-        let x2 = (self.x + self.width).min(other.x + other.width);
-        let y2 = (self.y + self.height).min(other.y + other.height);
+        let x2 = self.right().min(other.right());
+        let y2 = self.bottom().min(other.bottom());
 
         if x2 <= x1 || y2 <= y1 {
             return 0.0;
@@ -390,6 +417,10 @@ mod tests {
             height: 2.0,
         };
 
+        assert_eq!(a.right(), 10.0);
+        assert_eq!(a.bottom(), 10.0);
+        assert_eq!(a.center(), Landmark::new(5.0, 5.0));
+        assert_eq!(a.longest_edge(), 10.0);
         assert_eq!(a.area(), 100.0);
         assert_eq!(degenerate.area(), 0.0);
         assert!((a.iou(&b) - (25.0 / 175.0)).abs() < 1e-6);

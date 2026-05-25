@@ -497,34 +497,10 @@ fn match_detections(
 }
 
 fn bbox_iou(bbox: &BoundingBox, x: f32, y: f32, w: f32, h: f32) -> f32 {
-    let ax1 = bbox.x;
-    let ay1 = bbox.y;
-    let ax2 = bbox.x + bbox.width;
-    let ay2 = bbox.y + bbox.height;
-
-    let bx1 = x;
-    let by1 = y;
-    let bx2 = x + w;
-    let by2 = y + h;
-
-    let inter_x1 = ax1.max(bx1);
-    let inter_y1 = ay1.max(by1);
-    let inter_x2 = ax2.min(bx2);
-    let inter_y2 = ay2.min(by2);
-
-    let inter_w = (inter_x2 - inter_x1).max(0.0);
-    let inter_h = (inter_y2 - inter_y1).max(0.0);
-    let intersection = inter_w * inter_h;
-
-    if intersection <= 0.0 {
-        return 0.0;
-    }
-
-    let area_a = bbox.width.max(0.0) * bbox.height.max(0.0);
-    let area_b = w.max(0.0) * h.max(0.0);
-    let union = area_a + area_b - intersection;
-    if union <= 0.0 {
-        return 0.0;
-    }
-    intersection / union
+    bbox.iou(&BoundingBox {
+        x,
+        y,
+        width: w,
+        height: h,
+    })
 }

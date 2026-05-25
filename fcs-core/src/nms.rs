@@ -25,9 +25,9 @@ impl SceneBounds {
         let cell_h = self.height() / grid_size as f32;
         CellRange {
             min_col: grid_cell_index(bbox.x - self.min_x, cell_w, grid_size),
-            max_col: grid_cell_index(bbox.x + bbox.width - self.min_x, cell_w, grid_size),
+            max_col: grid_cell_index(bbox.right() - self.min_x, cell_w, grid_size),
             min_row: grid_cell_index(bbox.y - self.min_y, cell_h, grid_size),
-            max_row: grid_cell_index(bbox.y + bbox.height - self.min_y, cell_h, grid_size),
+            max_row: grid_cell_index(bbox.bottom() - self.min_y, cell_h, grid_size),
         }
     }
 }
@@ -51,28 +51,17 @@ fn compute_scene_bounds(detections: &[Detection]) -> Option<SceneBounds> {
         return None;
     }
 
-    let mut min_x = f32::MAX;
-    let mut min_y = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut max_y = f32::MIN;
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
 
     for detection in detections {
         let bbox = detection.bbox;
-        if bbox.x < min_x {
-            min_x = bbox.x;
-        }
-        if bbox.y < min_y {
-            min_y = bbox.y;
-        }
-
-        let right = bbox.x + bbox.width;
-        let bottom = bbox.y + bbox.height;
-        if right > max_x {
-            max_x = right;
-        }
-        if bottom > max_y {
-            max_y = bottom;
-        }
+        min_x = min_x.min(bbox.x);
+        min_y = min_y.min(bbox.y);
+        max_x = max_x.max(bbox.right());
+        max_y = max_y.max(bbox.bottom());
     }
 
     let bounds = SceneBounds {
@@ -192,7 +181,7 @@ pub(crate) fn apply_nms_in_place(detections: &mut Vec<Detection>, threshold: f32
 }
 
 /// Drop detections whose center is within `min_relative_distance` of a higher-
-/// scoring detection, expressed as a fraction of the smaller bbox's longest
+/// scoring detection, expressed as a fraction of the larger bbox's longest
 /// edge. Also drops detections whose absolute center distance is under
 /// `min_absolute_distance_px`, which keeps degenerate tiny boxes from slipping
 /// through when the relative-distance metric collapses.
@@ -222,21 +211,19 @@ pub(crate) fn dedup_close_centers(
     let mut keep_idx = 0;
     while keep_idx < detections.len() {
         let kept = detections[keep_idx].bbox;
-        let kept_cx = kept.width.mul_add(0.5, kept.x);
-        let kept_cy = kept.height.mul_add(0.5, kept.y);
-        let kept_longest = kept.width.max(kept.height);
+        let kept_center = kept.center();
+        let kept_longest = kept.longest_edge();
         let mut probe = keep_idx + 1;
         while probe < detections.len() {
             let other = detections[probe].bbox;
-            let dx = other.width.mul_add(0.5, other.x) - kept_cx;
-            let dy = other.height.mul_add(0.5, other.y) - kept_cy;
-            let dist_sq = dx.mul_add(dx, dy * dy);
+            let delta = other.center() - kept_center;
+            let dist_sq = delta * delta;
 
             // Use the larger of the two bboxes' longest edge as the scale.
             // YuNet's stride-8/16/32 outputs for the same face can produce
             // boxes whose centers drift up to ~half the bigger box's extent —
             // taking the min collapses the threshold and misses those.
-            let other_longest = other.width.max(other.height);
+            let other_longest = other.longest_edge();
             let scale = kept_longest.max(other_longest).max(1.0);
             let rel_threshold = scale * min_relative_distance;
             let rel_threshold_sq = rel_threshold * rel_threshold;

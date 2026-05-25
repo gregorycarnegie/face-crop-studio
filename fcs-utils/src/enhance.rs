@@ -545,12 +545,11 @@ fn apply_red_eye_removal(
             let g = px[1] as f32;
             let b = px[2] as f32;
 
-            // Calculate red dominance: red / average(green, blue)
+            // Check red dominance without dividing by the green/blue average.
             let avg_gb = (g + b).mul_add(0.5, EPSILON);
-            let red_ratio = r / avg_gb;
 
             // If red is significantly dominant (typical red-eye has ratio > 1.5)
-            if red_ratio > threshold && r > 80.0 {
+            if r > avg_gb * threshold && r > 80.0 {
                 // Desaturate by replacing red with the average of green and blue
                 let corrected_r = avg_gb.round().clamp(0.0, 255.0) as u8;
                 out.put_pixel(x, y, image::Rgba([corrected_r, px[1], px[2], px[3]]));

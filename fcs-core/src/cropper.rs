@@ -232,25 +232,26 @@ pub fn calculate_crop_region(
 ) -> CropRegion {
     // Safety clamps and early guards
     let face_h = face_bbox.height.max(1.0);
-    let face_cx = face_bbox.width.mul_add(0.5, face_bbox.x);
-    let face_cy = face_bbox.height.mul_add(0.5, face_bbox.y);
+    let face_center = face_bbox.center();
 
     let face_height_pct = settings.face_height_pct.clamp(1.0, 100.0);
 
     // Source region height (in source pixels) so that after resizing the face
     // will occupy `face_height_pct` percent of the output height.
     // Derived from: (face_h / src_region_h) = face_height_pct/100
-    let src_h = face_h * 100.0 / face_height_pct;
+    let src_h = face_h / (face_height_pct / 100.0);
 
     // Maintain output aspect ratio for width.
     let out_w = settings.output_width as f32;
     let out_h = settings.output_height as f32;
     let aspect = if out_h > 0.0 { out_w / out_h } else { 1.0 };
     let src_w = src_h * aspect;
+    let half_src_w = src_w * 0.5;
+    let half_src_h = src_h * 0.5;
 
     // Determine crop center based on positioning mode
-    let mut cx = face_cx;
-    let mut cy = face_cy;
+    let mut cx = face_center.x;
+    let mut cy = face_center.y;
 
     match settings.positioning_mode {
         PositioningMode::Center => {
@@ -259,20 +260,20 @@ pub fn calculate_crop_region(
         PositioningMode::RuleOfThirds => {
             // Place face center at 1/3 down from the top of the crop region.
             // So crop_top = face_cy - src_h * (1.0/3.0)
-            cy = face_cy - src_h / 6.0;
+            cy = face_center.y - src_h / 6.0;
         }
         PositioningMode::Custom => {
             // Offsets are fractions in [-1,1] relative to half the crop dimension.
             let ho = settings.horizontal_offset.clamp(-1.0, 1.0);
             let vo = settings.vertical_offset.clamp(-1.0, 1.0);
-            cx = src_w.mul_add(ho * 0.5, face_cx);
-            cy = src_h.mul_add(vo * 0.5, face_cy);
+            cx = face_center.x + half_src_w * ho;
+            cy = face_center.y + half_src_h * vo;
         }
     }
 
     // Compute top-left corner from center
-    let left = (-src_w).mul_add(0.5, cx);
-    let top = (-src_h).mul_add(0.5, cy);
+    let left = cx - half_src_w;
+    let top = cy - half_src_h;
 
     // Clamp coordinates to i32 range to prevent undefined behaviour from
     // out-of-range float-to-int casts (NaN, infinity, extreme values).

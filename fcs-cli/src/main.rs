@@ -484,8 +484,8 @@ fn detection_crop_rect(
 ) -> Option<(u32, u32, u32, u32)> {
     let x1 = bbox.x.clamp(0.0, image_width as f32);
     let y1 = bbox.y.clamp(0.0, image_height as f32);
-    let x2 = (bbox.x + bbox.width).clamp(0.0, image_width as f32);
-    let y2 = (bbox.y + bbox.height).clamp(0.0, image_height as f32);
+    let x2 = bbox.right().clamp(0.0, image_width as f32);
+    let y2 = bbox.bottom().clamp(0.0, image_height as f32);
     let w = (x2 - x1).max(1.0).round() as u32;
     let h = (y2 - y1).max(1.0).round() as u32;
     let left = x1.round() as u32;

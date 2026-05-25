@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-cli"
-version = "1.2.2-beta"
+version = "1.2.3-beta"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-core"
-version = "1.2.2-beta"
+version = "1.2.3-beta"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2160,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-gui"
-version = "1.2.2-beta"
+version = "1.2.3-beta"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-utils"
-version = "1.2.2-beta"
+version = "1.2.3-beta"
 dependencies = [
  "anyhow",
  "async-channel",

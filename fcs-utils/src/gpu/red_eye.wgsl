@@ -65,10 +65,9 @@ fn main(@builtin(global_invocation_id) gid : vec3<u32>) {
     let a = (pixel >> 24u) & 0xFFu;
 
     let avg_gb = fma((g + b), 0.5, 1e-6);
-    let ratio = r / avg_gb;
 
     // We already checked r > min_red above (r > 80.0 usually)
-    let out_r = select(r, avg_gb, ratio > params.threshold);
+    let out_r = select(r, avg_gb, r > avg_gb * params.threshold);
     
     // Only write back if changed
     if (out_r != r) {

@@ -65,8 +65,8 @@ fn rect_from_bbox(bbox: &BoundingBox, img_w: u32, img_h: u32) -> Rect {
 
     let x1 = bbox.x.clamp(0.0, max_x);
     let y1 = bbox.y.clamp(0.0, max_y);
-    let x2 = (bbox.x + bbox.width).clamp(0.0, max_x);
-    let y2 = (bbox.y + bbox.height).clamp(0.0, max_y);
+    let x2 = bbox.right().clamp(0.0, max_x);
+    let y2 = bbox.bottom().clamp(0.0, max_y);
 
     let width = (x2 - x1).max(1.0) as u32;
     let height = (y2 - y1).max(1.0) as u32;

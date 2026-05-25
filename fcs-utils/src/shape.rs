@@ -8,7 +8,7 @@ use crate::point::Point;
 use image::{DynamicImage, RgbaImage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::f32::consts::PI;
+use std::f32::consts::{FRAC_1_SQRT_2, PI};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 /// Number of segments used for ellipse outlines.
@@ -25,6 +25,8 @@ const MAX_KOCH_ITERATIONS: u8 = 5;
 const MIN_POLYGON_SIDES: u8 = 3;
 /// Maximum mask resolution for raster-based shape masking.
 const MAX_MASK_RESOLUTION: f32 = 2048.0;
+const KOCH_SIN_60: f32 = 0.866_025_4; // sin(60 degrees)
+const KOCH_COS_60: f32 = 0.5; // cos(60 degrees)
 
 /// Polygon corner styles.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -278,11 +280,8 @@ fn koch_fractal(vertices: &[Point], iterations: u8) -> Vec<Point> {
             // Rotate -60 degrees (outward for CCW polygon)
             let v = p_c - p_a;
 
-            let sin60 = (PI / 3.0).sin();
-            let cos60 = 0.5;
-
-            let p_b_x = p_a.x + v.y.mul_add(sin60, v.x * cos60);
-            let p_b_y = p_a.y + v.y.mul_add(cos60, -v.x * sin60);
+            let p_b_x = p_a.x + v.y.mul_add(KOCH_SIN_60, v.x * KOCH_COS_60);
+            let p_b_y = p_a.y + v.y.mul_add(KOCH_COS_60, -v.x * KOCH_SIN_60);
 
             let p_b = Point { x: p_b_x, y: p_b_y };
 
@@ -547,12 +546,10 @@ fn cubic_bezier(p0: Point, p1: Point, p2: Point, p3: Point, t: f32) -> Point {
 
 #[inline]
 fn distance(a: Point, b: Point) -> f32 {
-    // ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
     (a - b).hypot()
 }
 
 fn normalize(v: Point) -> Point {
-    // let len = (v.x * v.x + v.y * v.y).sqrt();
     let len = v.hypot();
     if len <= f32::EPSILON {
         Point { x: 0.0, y: 0.0 }
@@ -663,53 +660,47 @@ fn analytical_shape_param(shape: &CropShape, width: f32, height: f32) -> f32 {
     }
 }
 
+#[inline]
+fn axis_aligned_rect_signed_distance(p_abs_x: f32, p_abs_y: f32, half_w: f32, half_h: f32) -> f32 {
+    let dx = p_abs_x - half_w;
+    let dy = p_abs_y - half_h;
+    dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0)
+}
+
 fn analytical_signed_distance(
     shape: &CropShape,
     px: f32,
     py: f32,
     params: &AnalyticalMaskParams,
 ) -> f32 {
+    let p_abs_x = (px - params.cx).abs();
+    let p_abs_y = (py - params.cy).abs();
+
     match shape {
         CropShape::Ellipse => {
             let rx = params.width * 0.5;
             let ry = params.height * 0.5;
-            let dx = (px - params.cx).abs();
-            let dy = (py - params.cy).abs();
-            let val = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry);
+            let val = (p_abs_x * p_abs_x) / (rx * rx) + (p_abs_y * p_abs_y) / (ry * ry);
             (val.sqrt() - 1.0) * params.width.min(params.height) * 0.5
         }
         CropShape::Rectangle => {
             let bx = params.width * 0.5;
             let by = params.height * 0.5;
-            let dx = (px - params.cx).abs() - bx;
-            let dy = (py - params.cy).abs() - by;
-            let out_dist = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
-            let in_dist = dx.max(dy).min(0.0);
-            out_dist + in_dist
+            axis_aligned_rect_signed_distance(p_abs_x, p_abs_y, bx, by)
         }
         CropShape::RoundedRectangle { .. } => {
             let radius = params.shape_param;
             let bx = params.width * 0.5 - radius;
             let by = params.height * 0.5 - radius;
-            let dx = (px - params.cx).abs() - bx;
-            let dy = (py - params.cy).abs() - by;
-            let out_dist = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
-            let in_dist = dx.max(dy).min(0.0);
-            (out_dist + in_dist) - radius
+            axis_aligned_rect_signed_distance(p_abs_x, p_abs_y, bx, by) - radius
         }
         CropShape::ChamferedRectangle { .. } => {
             let chamfer = params.shape_param;
             let bx = params.width * 0.5;
             let by = params.height * 0.5;
-            let dx = (px - params.cx).abs() - bx;
-            let dy = (py - params.cy).abs() - by;
-            let rect_dist =
-                (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() + dx.max(dy).min(0.0);
+            let rect_dist = axis_aligned_rect_signed_distance(p_abs_x, p_abs_y, bx, by);
 
-            let p_abs_x = (px - params.cx).abs();
-            let p_abs_y = (py - params.cy).abs();
-            let diag_dist =
-                (p_abs_x + p_abs_y - (bx + by - chamfer)) * std::f32::consts::FRAC_1_SQRT_2;
+            let diag_dist = (p_abs_x + p_abs_y - (bx + by - chamfer)) * FRAC_1_SQRT_2;
 
             rect_dist.max(diag_dist)
         }
