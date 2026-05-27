@@ -33,9 +33,9 @@ clap = { version = "4.6.1", features = ["derive"] }
 crc32fast = "1.5.0"
 criterion = "0.8.2"
 csv = "1.4.0"
-eframe = { version = "0.34.2", features = ["wgpu"] }
-egui = "0.34.2"
-egui_extras = "0.34.2"
+eframe = { version = "0.34.3", features = ["wgpu"] }
+egui = "0.34.3"
+egui_extras = "0.34.3"
 env_logger = "0.11.10"
 fast_image_resize = "6.0.0"
 fcs-core = { path = "fcs-core" }
@@ -53,7 +53,7 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 imageproc = "0.26.2"
 imgref = "1.12.1"
-log = "0.4.29"
+log = "0.4.30"
 lru = "0.18.0"
 metal = "0.33.0"
 ndarray = { version = "0.17.2", features = ["rayon"] }
@@ -76,7 +76,7 @@ ravif = { version = "0.13.0", default-features = false, features = [
 rayon = "1.12.0"
 rfd = "0.17.2"
 rgb = "0.8.53"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.40.0", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
