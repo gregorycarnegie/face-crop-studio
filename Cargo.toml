@@ -22,24 +22,26 @@ version = "1.2.3-beta"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 [workspace.dependencies]
+# Workspace crates
+fcs-core = { path = "fcs-core" }
+fcs-utils = { path = "fcs-utils" }
+
+# Error handling and logging
 anyhow = "1.0.102"
+env_logger = "0.11.10"
+log = "0.4.30"
+thiserror = "2.0.18"
+
+# CLI and desktop UI
 arboard = "3.6.1"
-assert_cmd = "2.2.2"
-async-channel = "2.5.0"
-base64 = "0.22.1"
-bytemuck = { version = "1.25.0", features = ["derive"] }
-calamine = "0.35.0"
 clap = { version = "4.6.1", features = ["derive"] }
-crc32fast = "1.5.0"
-criterion = "0.8.2"
-csv = "1.4.0"
 eframe = { version = "0.34.3", features = ["wgpu"] }
 egui = "0.34.3"
 egui_extras = "0.34.3"
-env_logger = "0.11.10"
+rfd = "0.17.2"
+
+# Image processing and graphics
 fast_image_resize = "6.0.0"
-fcs-core = { path = "fcs-core" }
-fcs-utils = { path = "fcs-utils" }
 ico = "0.5.0"
 image = { version = "0.25.10", default-features = false, features = [
     "png",
@@ -53,40 +55,27 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 imageproc = "0.26.2"
 imgref = "1.12.1"
-log = "0.4.30"
-lru = "0.18.0"
-metal = "0.33.0"
-ndarray = { version = "0.17.2", features = ["rayon"] }
-nokhwa = { version = "=0.10.10", features = ["input-native"] } # keep at 0.10.10 for now
-naga = { version = "29.0.3", features = ["wgsl-in"] }
-parquet = { version = "58.3.0", default-features = false, features = [
-    "arrow",
-    "flate2",
-    "flate2-zlib-rs",
-    "lz4",
-    "snap",
-    "zstd",
-] }
-pollster = "0.4.0"
-predicates = "3.1.4"
-prost = "=0.11.9" # Set to 0.11.9 for tract-onnx v0.22.1 compatibility
 ravif = { version = "0.13.0", default-features = false, features = [
     "threading",
 ] }
-rayon = "1.12.0"
-rfd = "0.17.2"
 rgb = "0.8.53"
-rusqlite = { version = "0.40.0", features = ["bundled"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-sha2 = "0.11.0"
-tempfile = "3.27.0"
-thiserror = "2.0.18"
 tiny-skia = "0.12.0"
+
+# Machine learning and numeric processing
+bytemuck = { version = "1.25.0", features = ["derive"] }
+ndarray = { version = "0.17.2", features = ["rayon"] }
+prost = "=0.11.9" # Set to 0.11.9 for tract-onnx v0.22.1 compatibility
 tract-onnx = "0.22.1"
-walkdir = "2.5.0"
-wgpu = "29.0.3"
 wide = "1.4.0"
+
+# GPU and shader support
+metal = "0.33.0"
+naga = { version = "29.0.3", features = ["wgsl-in"] }
+pollster = "0.4.0"
+wgpu = "29.0.3"
+
+# Camera and platform integration
+nokhwa = { version = "=0.10.10", features = ["input-native"] } # keep at 0.10.10 for now
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
@@ -98,3 +87,33 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Time",
 ] }
 winresource = "0.1.31"
+
+# Data formats and storage
+base64 = "0.22.1"
+calamine = "0.35.0"
+crc32fast = "1.5.0"
+csv = "1.4.0"
+parquet = { version = "58.3.0", default-features = false, features = [
+    "arrow",
+    "flate2",
+    "flate2-zlib-rs",
+    "lz4",
+    "snap",
+    "zstd",
+] }
+rusqlite = { version = "0.40.0", features = ["bundled"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+
+# Concurrency and utilities
+async-channel = "2.5.0"
+lru = "0.18.0"
+rayon = "1.12.0"
+walkdir = "2.5.0"
+
+# Testing and benchmarking
+assert_cmd = "2.2.2"
+criterion = "0.8.2"
+predicates = "3.1.4"
+tempfile = "3.27.0"
