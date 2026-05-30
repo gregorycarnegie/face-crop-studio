@@ -91,6 +91,8 @@ The release package includes `models/face_detection_yunet_2023mar_640.onnx` by d
   <sub><strong>Desktop workspace</strong> - loaded image, detection overlays, crop preview, queue, and export controls.</sub>
 </p>
 
+<div align="center">
+
 <table>
   <tr>
     <td width="42%" rowspan="2" align="center" valign="top">
@@ -109,6 +111,8 @@ The release package includes `models/face_detection_yunet_2023mar_640.onnx` by d
     </td>
   </tr>
 </table>
+
+</div>
 
 <details>
   <summary><strong>CLI automation example</strong></summary>
