@@ -102,7 +102,7 @@ fn reference_tensor(model_path: &Path, node: &str, input: &[f32]) -> (Vec<f32>, 
         .model_for_path(model_path)
         .expect("load reference ONNX");
     model
-        .set_output_names([node])
+        .select_outputs_by_name([node])
         .expect("set reference output");
     let plan = model
         .into_optimized()
@@ -116,7 +116,7 @@ fn reference_tensor(model_path: &Path, node: &str, input: &[f32]) -> (Vec<f32>, 
         .expect("run reference graph")
         .remove(0)
         .into_tensor()
-        .into_array::<f32>()
+        .into_plain_array::<f32>()
         .expect("convert reference output");
     let shape = tensor.shape().to_vec();
     (tensor.into_raw_vec_and_offset().0, shape)

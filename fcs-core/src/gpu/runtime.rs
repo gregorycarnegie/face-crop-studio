@@ -65,7 +65,8 @@ impl GpuYuNet {
     pub fn run(&self, tensor: Tensor) -> Result<Tensor> {
         let dims = tensor.shape().to_vec();
         let data = tensor
-            .as_slice::<f32>()
+            .try_as_plain()
+            .and_then(|view| view.as_slice::<f32>())
             .context("gpu input must be contiguous f32")?;
 
         // 1. Acquire a tensor from the pool or create a new one

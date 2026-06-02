@@ -721,7 +721,11 @@ mod tests {
         assert_eq!(output.scale_y, 2.0);
         assert_eq!(output.tensor.shape(), &[1, 3, 2, 2]);
 
-        let data = output.tensor.as_slice::<f32>().unwrap();
+        let data = output
+            .tensor
+            .try_as_plain()
+            .and_then(|view| view.as_slice::<f32>())
+            .unwrap();
         assert!(data.iter().all(|v| *v >= 0.0 && *v <= 255.0));
     }
 
@@ -921,8 +925,16 @@ mod tests {
         assert_eq!(trait_output.scale_y, helper_output.scale_y);
         assert_eq!(trait_output.tensor.shape(), helper_output.tensor.shape());
 
-        let trait_data = trait_output.tensor.as_slice::<f32>().unwrap();
-        let helper_data = helper_output.tensor.as_slice::<f32>().unwrap();
+        let trait_data = trait_output
+            .tensor
+            .try_as_plain()
+            .and_then(|view| view.as_slice::<f32>())
+            .unwrap();
+        let helper_data = helper_output
+            .tensor
+            .try_as_plain()
+            .and_then(|view| view.as_slice::<f32>())
+            .unwrap();
         assert_eq!(trait_data, helper_data);
     }
 }

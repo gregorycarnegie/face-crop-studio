@@ -7,12 +7,12 @@ use crate::{
 
 use anyhow::{Context, Result};
 use log::{debug, warn};
-use std::{fmt::Write, path::Path};
+use std::{fmt::Write, path::Path, sync::Arc};
 use tract_onnx::prelude::{
-    Framework, Graph, InferenceModelExt, IntoTensor, SimplePlan, Tensor, TypedFact, TypedOp, tvec,
+    Framework, InferenceModelExt, IntoRunnable, IntoTensor, Tensor, TypedRunnableModel, tvec,
 };
 
-type RunnableModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+type RunnableModel = Arc<TypedRunnableModel>;
 
 #[derive(Clone, Copy)]
 struct StrideMeta {
@@ -251,16 +251,20 @@ fn validate_stride_outputs<'a>(
     meta: &StrideMeta,
 ) -> Result<StrideOutputs<'a>> {
     let cls_slice = outputs[meta.stride_index]
-        .as_slice::<f32>()
+        .try_as_plain()
+        .and_then(|view| view.as_slice::<f32>())
         .map_err(|e| anyhow::anyhow!("cls output not f32: {e}"))?;
     let obj_slice = outputs[meta.stride_index + STRIDES.len()]
-        .as_slice::<f32>()
+        .try_as_plain()
+        .and_then(|view| view.as_slice::<f32>())
         .map_err(|e| anyhow::anyhow!("obj output not f32: {e}"))?;
     let bbox_slice = outputs[meta.stride_index + STRIDES.len() * 2]
-        .as_slice::<f32>()
+        .try_as_plain()
+        .and_then(|view| view.as_slice::<f32>())
         .map_err(|e| anyhow::anyhow!("bbox output not f32: {e}"))?;
     let kps_slice = outputs[meta.stride_index + STRIDES.len() * 3]
-        .as_slice::<f32>()
+        .try_as_plain()
+        .and_then(|view| view.as_slice::<f32>())
         .map_err(|e| anyhow::anyhow!("kps output not f32: {e}"))?;
 
     anyhow::ensure!(
@@ -485,7 +489,10 @@ mod tests {
         assert_eq!(result.shape().len(), 2);
         assert_eq!(result.shape()[1], DETECTION_OUTPUT_COLS);
         // Verify scores are in [0, 1]
-        let data = result.as_slice::<f32>().expect("output tensor is f32");
+        let data = result
+            .try_as_plain()
+            .and_then(|view| view.as_slice::<f32>())
+            .expect("output tensor is f32");
         for score in data
             .iter()
             .skip(DETECTION_SCORE_INDEX)
@@ -689,16 +696,20 @@ mod benches {
                 let stride_f = stride as f32;
 
                 let cls_slice = outputs[stride_index]
-                    .as_slice::<f32>()
+                    .try_as_plain()
+                    .and_then(|view| view.as_slice::<f32>())
                     .map_err(|e| anyhow::anyhow!("cls output not f32: {e}"))?;
                 let obj_slice = outputs[stride_index + STRIDES.len()]
-                    .as_slice::<f32>()
+                    .try_as_plain()
+                    .and_then(|view| view.as_slice::<f32>())
                     .map_err(|e| anyhow::anyhow!("obj output not f32: {e}"))?;
                 let bbox_slice = outputs[stride_index + STRIDES.len() * 2]
-                    .as_slice::<f32>()
+                    .try_as_plain()
+                    .and_then(|view| view.as_slice::<f32>())
                     .map_err(|e| anyhow::anyhow!("bbox output not f32: {e}"))?;
                 let kps_slice = outputs[stride_index + STRIDES.len() * 3]
-                    .as_slice::<f32>()
+                    .try_as_plain()
+                    .and_then(|view| view.as_slice::<f32>())
                     .map_err(|e| anyhow::anyhow!("kps output not f32: {e}"))?;
 
                 anyhow::ensure!(

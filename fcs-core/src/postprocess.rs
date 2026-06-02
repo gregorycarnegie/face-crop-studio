@@ -233,7 +233,8 @@ fn detection_rows<'a>(output: &'a Tensor) -> Result<ArrayView2<'a, f32>> {
     };
 
     let slice = output
-        .as_slice::<f32>()
+        .try_as_plain()
+        .and_then(|view| view.as_slice::<f32>())
         .map_err(|e| anyhow::anyhow!("YuNet output is not f32: {e}"))?;
 
     ArrayView2::from_shape((rows, DETECTION_OUTPUT_COLS), slice)

@@ -29,7 +29,7 @@ fcs-utils = { path = "fcs-utils" }
 # Error handling and logging
 anyhow = "1.0.102"
 env_logger = "0.11.10"
-log = "0.4.30"
+log = "0.4.31"
 thiserror = "2.0.18"
 
 # CLI and desktop UI
@@ -64,8 +64,8 @@ tiny-skia = "0.12.0"
 # Machine learning and numeric processing
 bytemuck = { version = "1.25.0", features = ["derive"] }
 ndarray = { version = "0.17.2", features = ["rayon"] }
-prost = "=0.11.9" # Set to 0.11.9 for tract-onnx v0.22.1 compatibility
-tract-onnx = "0.22.1"
+prost = "0.14.3"
+tract-onnx = "0.23.0"
 wide = "1.4.0"
 
 # GPU and shader support
