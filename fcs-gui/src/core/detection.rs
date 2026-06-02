@@ -3,7 +3,7 @@
 use crate::types::*;
 use fcs_utils::gpu::GpuStatusIndicator;
 use image::DynamicImage;
-use imageproc::geometric_transformations::{Interpolation, rotate_about_center};
+use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
 
 use anyhow::{Context as AnyhowContext, Result};
 use fcs_core::{
@@ -167,7 +167,7 @@ fn rotate_image(image: Arc<DynamicImage>, rotation_deg: f32) -> Arc<DynamicImage
         &rgba,
         rotation_deg.to_radians(),
         Interpolation::Bilinear,
-        image::Rgba([0, 0, 0, 255]),
+        Border::Constant(image::Rgba([0, 0, 0, 255])),
     );
     Arc::new(DynamicImage::ImageRgba8(rotated))
 }

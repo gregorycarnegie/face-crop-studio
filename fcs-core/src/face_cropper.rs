@@ -7,7 +7,7 @@ use crate::cropper::{CropRegion, CropSettings, calculate_crop_region};
 use crate::postprocess::Detection;
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
-use imageproc::geometric_transformations::{Interpolation, rotate_about_center};
+use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
 
 /// Crop a face from `img` according to `detection` and `settings`.
 ///
@@ -72,7 +72,7 @@ pub fn crop_face_from_image(
                 settings.fill_color.alpha,
             ]);
             // rotate_about_center rotates counter-clockwise, so pass -angle to level the eyes.
-            rotate_about_center(&canvas, -angle, Interpolation::Bilinear, fill)
+            rotate_about_center(&canvas, -angle, Interpolation::Bilinear, Border::Constant(fill))
         } else {
             canvas
         }

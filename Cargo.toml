@@ -53,7 +53,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "avif-native",
     "rayon",
 ] }
-imageproc = "0.26.2"
+imageproc = "0.27.0"
 imgref = "1.12.1"
 ravif = { version = "0.13.0", default-features = false, features = [
     "threading",
