@@ -29,7 +29,7 @@ fcs-utils = { path = "fcs-utils" }
 # Error handling and logging
 anyhow = "1.0.102"
 env_logger = "0.11.10"
-log = "0.4.31"
+log = "0.4.32"
 thiserror = "2.0.18"
 
 # CLI and desktop UI
@@ -54,7 +54,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "rayon",
 ] }
 imageproc = "0.27.0"
-imgref = "1.12.1"
+imgref = "1.12.2"
 ravif = { version = "0.13.0", default-features = false, features = [
     "threading",
 ] }
@@ -64,9 +64,9 @@ tiny-skia = "0.12.0"
 # Machine learning and numeric processing
 bytemuck = { version = "1.25.0", features = ["derive"] }
 ndarray = { version = "0.17.2", features = ["rayon"] }
-prost = "0.14.3"
-tract-onnx = "0.23.0"
-wide = "1.4.0"
+prost = "0.14.4"
+tract-onnx = "0.23.1"
+wide = "1.5.0"
 
 # GPU and shader support
 metal = "0.33.0"
@@ -93,7 +93,7 @@ base64 = "0.22.1"
 calamine = "0.35.0"
 crc32fast = "1.5.0"
 csv = "1.4.0"
-parquet = { version = "58.3.0", default-features = false, features = [
+parquet = { version = "59.0.0", default-features = false, features = [
     "arrow",
     "flate2",
     "flate2-zlib-rs",
@@ -101,7 +101,7 @@ parquet = { version = "58.3.0", default-features = false, features = [
     "snap",
     "zstd",
 ] }
-rusqlite = { version = "0.40.0", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
