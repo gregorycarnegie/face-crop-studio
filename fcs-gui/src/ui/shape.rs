@@ -4,6 +4,7 @@ use crate::types::App2;
 use crate::ui::widgets::{field_label, slider_with_label};
 use egui::Ui;
 use fcs_utils::{CropShape, PolygonCornerStyle};
+use std::f32::consts::PI;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShapeVariant {
@@ -79,11 +80,11 @@ fn default_for_variant(variant: ShapeVariant) -> CropShape {
 }
 
 fn polygon_corner_radius_max(sides: u32) -> f32 {
-    0.5 * (std::f32::consts::PI / sides as f32).cos()
+    0.5 * (PI / sides as f32).cos()
 }
 
 fn polygon_chamfer_size_max(sides: u32) -> f32 {
-    0.5 * (std::f32::consts::PI / sides as f32).sin()
+    0.5 * (PI / sides as f32).sin()
 }
 
 /// Returns whether any shape or vignette setting changed.
