@@ -13,7 +13,7 @@ use crate::{
 };
 
 use anyhow::{Context, Result};
-use image::{DynamicImage, ImageBuffer, Rgba};
+use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 use rayon::prelude::*;
 use std::{
     collections::HashMap,
@@ -211,14 +211,74 @@ fn build_lut(mut mapper: impl FnMut(u8) -> u8) -> [u8; 256] {
     lut
 }
 
-fn apply_lut_rgb(img: &DynamicImage, lut: &[u8; 256]) -> DynamicImage {
-    let mut buf = img.to_rgba8();
+fn apply_lut_in_place(buf: &mut RgbaImage, lut: &[u8; 256]) {
     for pixel in buf.as_mut().chunks_exact_mut(4) {
         pixel[0] = lut[pixel[0] as usize];
         pixel[1] = lut[pixel[1] as usize];
         pixel[2] = lut[pixel[2] as usize];
     }
+}
+
+fn apply_lut_rgb(img: &DynamicImage, lut: &[u8; 256]) -> DynamicImage {
+    let mut buf = img.to_rgba8();
+    apply_lut_in_place(&mut buf, lut);
     DynamicImage::ImageRgba8(buf)
+}
+
+/// Compose two LUTs into one: `out[i] = second[first[i]]`.
+fn compose_luts(first: &[u8; 256], second: &[u8; 256]) -> [u8; 256] {
+    let mut out = [0u8; 256];
+    for (slot, &mapped) in out.iter_mut().zip(first.iter()) {
+        *slot = second[mapped as usize];
+    }
+    out
+}
+
+fn exposure_lut(stops: f32) -> [u8; 256] {
+    let factor = 2f32.powf(stops.clamp(-2.0, 2.0));
+    build_lut(|value| {
+        let boosted = (value as f32 * factor).round().clamp(0.0, 255.0);
+        boosted as u8
+    })
+}
+
+fn brightness_lut(offset: i32) -> [u8; 256] {
+    build_lut(|value| {
+        let value = value as i32 + offset;
+        value.clamp(0, 255) as u8
+    })
+}
+
+fn contrast_lut(multiplier: f32) -> [u8; 256] {
+    let multiplier = multiplier.clamp(0.5, 2.0);
+    build_lut(|value| {
+        let normalized = value as f32 / 255.0;
+        let contrasted = multiplier.mul_add(normalized - 0.5, 0.5).clamp(0.0, 1.0) * 255.0;
+        contrasted.round() as u8
+    })
+}
+
+/// Fold the active tone stages (exposure → brightness → contrast) into a
+/// single LUT so the pipeline applies them in one pass over the image.
+/// Returns `None` when every stage is a no-op.
+fn tone_lut(settings: &EnhancementSettings) -> Option<[u8; 256]> {
+    let mut lut: Option<[u8; 256]> = None;
+    let fold = |stage: [u8; 256], lut: &mut Option<[u8; 256]>| {
+        *lut = Some(match lut {
+            Some(prev) => compose_luts(prev, &stage),
+            None => stage,
+        });
+    };
+    if settings.exposure_stops.abs() >= EPSILON {
+        fold(exposure_lut(settings.exposure_stops), &mut lut);
+    }
+    if settings.brightness != 0 {
+        fold(brightness_lut(settings.brightness), &mut lut);
+    }
+    if (settings.contrast - 1.0).abs() >= EPSILON {
+        fold(contrast_lut(settings.contrast), &mut lut);
+    }
+    lut
 }
 
 #[inline]
@@ -272,11 +332,10 @@ fn build_equalization_lut(hist: &[u32; 256], total: u32) -> [u8; 256] {
     lut
 }
 
-fn apply_histogram_equalization(img: &DynamicImage) -> DynamicImage {
-    let mut buf = img.to_rgba8();
+fn equalize_histogram_in_place(buf: &mut RgbaImage) {
     let (w, h) = buf.dimensions();
     if w == 0 || h == 0 {
-        return DynamicImage::ImageRgba8(buf);
+        return;
     }
 
     let mut hist_r = [0u32; 256];
@@ -298,7 +357,11 @@ fn apply_histogram_equalization(img: &DynamicImage) -> DynamicImage {
         px[1] = lut_g[px[1] as usize];
         px[2] = lut_b[px[2] as usize];
     }
+}
 
+fn apply_histogram_equalization(img: &DynamicImage) -> DynamicImage {
+    let mut buf = img.to_rgba8();
+    equalize_histogram_in_place(&mut buf);
     DynamicImage::ImageRgba8(buf)
 }
 
@@ -306,36 +369,21 @@ fn apply_exposure(img: &DynamicImage, stops: f32) -> DynamicImage {
     if stops.abs() < EPSILON {
         return img.clone();
     }
-    let factor = 2f32.powf(stops.clamp(-2.0, 2.0));
-    let lut = build_lut(|value| {
-        let boosted = (value as f32 * factor).round().clamp(0.0, 255.0);
-        boosted as u8
-    });
-    apply_lut_rgb(img, &lut)
+    apply_lut_rgb(img, &exposure_lut(stops))
 }
 
 fn apply_brightness(img: &DynamicImage, offset: i32) -> DynamicImage {
     if offset == 0 {
         return img.clone();
     }
-    let lut = build_lut(|value| {
-        let value = value as i32 + offset;
-        value.clamp(0, 255) as u8
-    });
-    apply_lut_rgb(img, &lut)
+    apply_lut_rgb(img, &brightness_lut(offset))
 }
 
 fn apply_contrast(img: &DynamicImage, multiplier: f32) -> DynamicImage {
     if (multiplier - 1.0).abs() < EPSILON {
         return img.clone();
     }
-    let multiplier = multiplier.clamp(0.5, 2.0);
-    let lut = build_lut(|value| {
-        let normalized = value as f32 / 255.0;
-        let contrasted = multiplier.mul_add(normalized - 0.5, 0.5).clamp(0.0, 1.0) * 255.0;
-        contrasted.round() as u8
-    });
-    apply_lut_rgb(img, &lut)
+    apply_lut_rgb(img, &contrast_lut(multiplier))
 }
 
 /// Adjust saturation by mixing with per-pixel luminance: new = gray*(1-s) + orig*s.
@@ -343,8 +391,13 @@ fn apply_saturation(img: &DynamicImage, saturation: f32) -> DynamicImage {
     if (saturation - 1.0).abs() < EPSILON {
         return img.clone();
     }
-    let multiplier = saturation.clamp(0.0, 2.5);
     let mut buf = img.to_rgba8();
+    saturation_in_place(&mut buf, saturation);
+    DynamicImage::ImageRgba8(buf)
+}
+
+fn saturation_in_place(buf: &mut RgbaImage, saturation: f32) {
+    let multiplier = saturation.clamp(0.0, 2.5);
     let data = buf.as_mut();
     let vec_inv = f32x4::splat(1.0 - multiplier);
     let vec_mul = f32x4::splat(multiplier);
@@ -398,8 +451,6 @@ fn apply_saturation(img: &DynamicImage, saturation: f32) -> DynamicImage {
         pixel[1] = g_adj.round().clamp(0.0, 255.0) as u8;
         pixel[2] = b_adj.round().clamp(0.0, 255.0) as u8;
     }
-
-    DynamicImage::ImageRgba8(buf)
 }
 
 /// Apply bilateral filter for skin smoothing (edge-preserving blur).
@@ -415,12 +466,15 @@ fn apply_skin_smoothing(
     if amount <= 0.0 {
         return img.clone();
     }
-
-    let amount = amount.clamp(0.0, 1.0);
     let src = img.to_rgba8();
+    DynamicImage::ImageRgba8(skin_smooth_rgba(&src, amount, sigma_space, sigma_color))
+}
+
+fn skin_smooth_rgba(src: &RgbaImage, amount: f32, sigma_space: f32, sigma_color: f32) -> RgbaImage {
+    let amount = amount.clamp(0.0, 1.0);
     let (w, h) = src.dimensions();
     if w == 0 || h == 0 {
-        return DynamicImage::ImageRgba8(src);
+        return src.clone();
     }
 
     let mut out_buffer = ImageBuffer::new(w, h);
@@ -507,7 +561,7 @@ fn apply_skin_smoothing(
             }
         });
 
-    DynamicImage::ImageRgba8(out_buffer)
+    out_buffer
 }
 
 /// Apply automated red-eye reduction.
@@ -520,44 +574,79 @@ fn apply_red_eye_removal(
     eyes: Option<&[RedEye]>,
 ) -> DynamicImage {
     let mut out = img.to_rgba8();
+    red_eye_in_place(&mut out, threshold, eyes);
+    DynamicImage::ImageRgba8(out)
+}
+
+fn red_eye_in_place(out: &mut RgbaImage, threshold: f32, eyes: Option<&[RedEye]>) {
     let (w, h) = out.dimensions();
-    let active_eyes = eyes.filter(|list| !list.is_empty());
+    if w == 0 || h == 0 {
+        return;
+    }
 
-    for y in 0..h {
-        for x in 0..w {
-            if let Some(eyes_list) = active_eyes {
-                let mut in_eye = false;
-                for eye in eyes_list {
-                    let dx = x as f32 - eye.x;
-                    let dy = y as f32 - eye.y;
-                    if dx * dx + dy * dy <= eye.radius * eye.radius {
-                        in_eye = true;
-                        break;
-                    }
-                }
-                if !in_eye {
-                    continue;
-                }
+    match eyes.filter(|list| !list.is_empty()) {
+        // With known eye locations only the pixels inside each eye's bounding
+        // box need testing, instead of scanning the whole image.
+        Some(eyes_list) => {
+            for eye in eyes_list {
+                correct_red_eye_region(out, threshold, eye);
             }
-
-            let px = out.get_pixel(x, y).0;
-            let r = px[0] as f32;
-            let g = px[1] as f32;
-            let b = px[2] as f32;
-
-            // Check red dominance without dividing by the green/blue average.
-            let avg_gb = (g + b).mul_add(0.5, EPSILON);
-
-            // If red is significantly dominant (typical red-eye has ratio > 1.5)
-            if r > avg_gb * threshold && r > 80.0 {
-                // Desaturate by replacing red with the average of green and blue
-                let corrected_r = avg_gb.round().clamp(0.0, 255.0) as u8;
-                out.put_pixel(x, y, image::Rgba([corrected_r, px[1], px[2], px[3]]));
+        }
+        None => {
+            for px in out.as_mut().chunks_exact_mut(4) {
+                correct_red_pixel(px, threshold);
             }
         }
     }
+}
 
-    DynamicImage::ImageRgba8(out)
+/// Desaturate a single RGBA pixel if red is dominant (typical red-eye has a
+/// red/(avg green+blue) ratio > 1.5) by replacing red with that average.
+/// Idempotent, so overlapping eye regions may safely re-apply it.
+#[inline]
+fn correct_red_pixel(px: &mut [u8], threshold: f32) {
+    let r = px[0] as f32;
+    let g = px[1] as f32;
+    let b = px[2] as f32;
+
+    // Check red dominance without dividing by the green/blue average.
+    let avg_gb = (g + b).mul_add(0.5, EPSILON);
+
+    if r > avg_gb * threshold && r > 80.0 {
+        px[0] = avg_gb.round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+fn correct_red_eye_region(out: &mut RgbaImage, threshold: f32, eye: &RedEye) {
+    let (w, h) = out.dimensions();
+    // `as u32` saturates negative/NaN coordinates to 0; an eye entirely
+    // outside the image yields an empty range.
+    let min_x = (eye.x - eye.radius).floor().max(0.0) as u32;
+    let max_x = ((eye.x + eye.radius).ceil() as u32).min(w - 1);
+    let min_y = (eye.y - eye.radius).floor().max(0.0) as u32;
+    let max_y = ((eye.y + eye.radius).ceil() as u32).min(h - 1);
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+
+    let radius_sq = eye.radius * eye.radius;
+    let row_stride = w as usize * 4;
+    let data = out.as_mut();
+
+    for y in min_y..=max_y {
+        let dy = y as f32 - eye.y;
+        let dy_sq = dy * dy;
+        let row = &mut data[y as usize * row_stride..(y as usize + 1) * row_stride];
+        for x in min_x..=max_x {
+            let dx = x as f32 - eye.x;
+            // Plain multiply-add (not fused) to match the original membership
+            // test bit-for-bit on boundary pixels.
+            if dx * dx + dy_sq <= radius_sq {
+                let idx = x as usize * 4;
+                correct_red_pixel(&mut row[idx..idx + 4], threshold);
+            }
+        }
+    }
 }
 
 /// Apply background blur with centered elliptical mask (portrait mode effect).
@@ -569,8 +658,10 @@ fn apply_background_blur(img: &DynamicImage, radius: f32, mask_size: f32) -> Dyn
         return img.clone();
     }
     let sharp = img.to_rgba8();
-    let blurred = image::imageops::blur(&sharp, radius);
-    background_blur_from_rgba(&sharp, &blurred, mask_size)
+    // fast_blur is a linear-time box-blur approximation of the Gaussian; at
+    // portrait-blur radii it is visually indistinguishable and far cheaper.
+    let blurred = image::imageops::fast_blur(&sharp, radius);
+    DynamicImage::ImageRgba8(background_blur_from_rgba(&sharp, &blurred, mask_size))
 }
 
 fn apply_background_blur_with_preblur(
@@ -580,20 +671,16 @@ fn apply_background_blur_with_preblur(
 ) -> DynamicImage {
     let sharp = img.to_rgba8();
     let blurred = blurred.to_rgba8();
-    background_blur_from_rgba(&sharp, &blurred, mask_size)
+    DynamicImage::ImageRgba8(background_blur_from_rgba(&sharp, &blurred, mask_size))
 }
 
-fn background_blur_from_rgba(
-    sharp: &image::RgbaImage,
-    blurred: &image::RgbaImage,
-    mask_size: f32,
-) -> DynamicImage {
+fn background_blur_from_rgba(sharp: &RgbaImage, blurred: &RgbaImage, mask_size: f32) -> RgbaImage {
     let (w, h) = sharp.dimensions();
     if blurred.dimensions() != (w, h) {
-        return DynamicImage::ImageRgba8(sharp.clone());
+        return sharp.clone();
     }
     if w == 0 || h == 0 {
-        return DynamicImage::ImageRgba8(sharp.clone());
+        return sharp.clone();
     }
 
     let cx = w as f32 * 0.5;
@@ -657,7 +744,7 @@ fn background_blur_from_rgba(
             }
         });
 
-    DynamicImage::ImageRgba8(out)
+    out
 }
 
 /// Apply a simple unsharp mask to an RGBA image.
@@ -667,7 +754,7 @@ fn apply_unsharp_mask(img: &DynamicImage, amount: f32, radius: f32) -> DynamicIm
     }
 
     let src = img.to_rgba8();
-    let blurred = image::imageops::blur(&src, radius);
+    let blurred = image::imageops::fast_blur(&src, radius);
     DynamicImage::ImageRgba8(unsharp_with_preblur_rgba(&src, &blurred, amount))
 }
 
@@ -714,40 +801,36 @@ fn apply_unsharp_with_preblur(
 }
 
 /// Apply the configured enhancements to the input image and return the result.
+///
+/// Converts to RGBA8 once up front; every stage then mutates that buffer in
+/// place (or swaps it for filters that can't run in place), avoiding the
+/// full-image copy per stage that chaining the `DynamicImage` helpers incurs.
 pub fn apply_enhancements(
     img: &DynamicImage,
     settings: &EnhancementSettings,
     eyes: Option<&[RedEye]>,
 ) -> DynamicImage {
-    let mut out = img.clone();
+    let mut buf = img.to_rgba8();
 
     if settings.auto_color {
-        out = apply_histogram_equalization(&out);
+        equalize_histogram_in_place(&mut buf);
     }
 
     if settings.red_eye_removal {
-        out = apply_red_eye_removal(&out, settings.red_eye_threshold, eyes);
+        red_eye_in_place(&mut buf, settings.red_eye_threshold, eyes);
     }
 
-    if settings.exposure_stops.abs() >= EPSILON {
-        out = apply_exposure(&out, settings.exposure_stops);
-    }
-
-    if settings.brightness != 0 {
-        out = apply_brightness(&out, settings.brightness);
-    }
-
-    if (settings.contrast - 1.0).abs() >= EPSILON {
-        out = apply_contrast(&out, settings.contrast);
+    if let Some(lut) = tone_lut(settings) {
+        apply_lut_in_place(&mut buf, &lut);
     }
 
     if (settings.saturation - 1.0).abs() >= EPSILON {
-        out = apply_saturation(&out, settings.saturation);
+        saturation_in_place(&mut buf, settings.saturation);
     }
 
     if settings.skin_smooth_amount > 0.0 {
-        out = apply_skin_smoothing(
-            &out,
+        buf = skin_smooth_rgba(
+            &buf,
             settings.skin_smooth_amount,
             settings.skin_smooth_sigma_space,
             settings.skin_smooth_sigma_color,
@@ -756,18 +839,16 @@ pub fn apply_enhancements(
 
     let combined_sharp = (settings.unsharp_amount + settings.sharpness).clamp(0.0, 2.0);
     if combined_sharp > 0.0 && settings.unsharp_radius > 0.0 {
-        out = apply_unsharp_mask(&out, combined_sharp, settings.unsharp_radius);
+        let blurred = image::imageops::fast_blur(&buf, settings.unsharp_radius);
+        buf = unsharp_with_preblur_rgba(&buf, &blurred, combined_sharp);
     }
 
-    if settings.background_blur {
-        out = apply_background_blur(
-            &out,
-            settings.background_blur_radius,
-            settings.background_blur_mask_size,
-        );
+    if settings.background_blur && settings.background_blur_radius > 0.0 {
+        let blurred = image::imageops::fast_blur(&buf, settings.background_blur_radius);
+        buf = background_blur_from_rgba(&buf, &blurred, settings.background_blur_mask_size);
     }
 
-    out
+    DynamicImage::ImageRgba8(buf)
 }
 
 /// GPU-accelerated enhancement pipeline that currently offloads pixel adjustments.
@@ -1495,7 +1576,7 @@ mod tests {
 
         // Produce the pre-blurred image the same way apply_background_blur does
         let pre_blurred =
-            DynamicImage::ImageRgba8(image::imageops::blur(&source.to_rgba8(), radius));
+            DynamicImage::ImageRgba8(image::imageops::fast_blur(&source.to_rgba8(), radius));
         let via_preblur =
             apply_background_blur_with_preblur(&source, &pre_blurred, mask_size).to_rgba8();
         let via_direct = apply_background_blur(&source, radius, mask_size).to_rgba8();
@@ -1523,7 +1604,7 @@ mod tests {
         let radius = 1.0f32;
 
         let pre_blurred =
-            DynamicImage::ImageRgba8(image::imageops::blur(&source.to_rgba8(), radius));
+            DynamicImage::ImageRgba8(image::imageops::fast_blur(&source.to_rgba8(), radius));
         let via_preblur = apply_unsharp_with_preblur(&source, &pre_blurred, amount).to_rgba8();
         let via_direct = apply_unsharp_mask(&source, amount, radius).to_rgba8();
 

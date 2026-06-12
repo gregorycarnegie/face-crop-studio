@@ -158,6 +158,23 @@ fn build_preprocessor_from_context(
     }
 }
 
+/// Convert a decoded image into an egui texture image without the
+/// intermediate full-image RGBA copy that `to_rgba8()` incurs: RGB8 and RGBA8
+/// buffers (the common decode/webcam formats) are read in place.
+pub(crate) fn color_image_from_dynamic(image: &DynamicImage) -> egui::ColorImage {
+    let size = [image.width() as usize, image.height() as usize];
+    match image {
+        DynamicImage::ImageRgb8(rgb) => egui::ColorImage::from_rgb(size, rgb.as_raw()),
+        DynamicImage::ImageRgba8(rgba) => {
+            egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+        }
+        other => {
+            let rgba = other.to_rgba8();
+            egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+        }
+    }
+}
+
 fn rotate_image(image: Arc<DynamicImage>, rotation_deg: f32) -> Arc<DynamicImage> {
     if rotation_deg.abs() < 0.01 {
         return image;
@@ -218,9 +235,7 @@ pub fn perform_detection(
         })
         .collect();
 
-    let rgba = image.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let color_image = color_image_from_dynamic(&image);
 
     Ok(DetectionJobSuccess {
         path,
@@ -270,9 +285,7 @@ pub fn perform_detection_from_image(
         })
         .collect();
 
-    let rgba = image.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let color_image = color_image_from_dynamic(&image);
 
     Ok(DetectionJobSuccess {
         path: synthetic_path,
@@ -306,9 +319,7 @@ pub fn spawn_webcam_stream(
         while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
             match cam.capture_frame() {
                 Ok(frame) => {
-                    let rgba = frame.to_rgba8();
-                    let size = [rgba.width() as usize, rgba.height() as usize];
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                    let color_image = color_image_from_dynamic(&frame);
                     let arc_frame = Arc::new(frame);
                     if frame_tx.send((color_image, arc_frame)).is_err() {
                         break;

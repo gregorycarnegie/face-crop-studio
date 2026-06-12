@@ -18,7 +18,7 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, mpsc},
 };
-use tract_onnx::prelude::Tensor;
+use tract_onnx::prelude::{IntoTensor, Tensor, tract_ndarray};
 
 /// Desired input resolution for YuNet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,11 +217,9 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
     };
     let chw = rgb_to_bgr_chw(&resized_rgb);
 
-    let shape = [1usize, 3, input_h as usize, input_w as usize];
     let (data, offset) = chw.into_raw_vec_and_offset();
     debug_assert_eq!(offset, Some(0), "expected contiguous array");
-    let tensor = Tensor::from_shape(&shape, &data)
-        .map_err(|e| anyhow::anyhow!("failed to build tensor: {e}"))?;
+    let tensor = chw_tensor_from_vec(data, input_w, input_h)?;
 
     let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
 
@@ -669,9 +667,7 @@ fn gpu_preprocess(
         floats.len()
     );
 
-    let shape = [1usize, 3, input_h as usize, input_w as usize];
-    let tensor = Tensor::from_shape(&shape, &floats)
-        .map_err(|e| anyhow::anyhow!("failed to build tensor: {e}"))?;
+    let tensor = chw_tensor_from_vec(floats, input_w, input_h)?;
 
     let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
 
@@ -681,6 +677,16 @@ fn gpu_preprocess(
         scale_y,
         original_size: (orig_w, orig_h),
     })
+}
+
+/// Build a `[1, 3, H, W]` tensor by taking ownership of an existing CHW
+/// buffer. `Array4::from_shape_vec` + `into_tensor` reuse the allocation,
+/// unlike `Tensor::from_shape`, which copies the slice.
+fn chw_tensor_from_vec(data: Vec<f32>, input_w: u32, input_h: u32) -> Result<Tensor> {
+    let array =
+        tract_ndarray::Array4::from_shape_vec((1, 3, input_h as usize, input_w as usize), data)
+            .map_err(|e| anyhow::anyhow!("failed to build tensor: {e}"))?;
+    Ok(array.into_tensor())
 }
 
 fn align_to(value: usize, alignment: usize) -> usize {

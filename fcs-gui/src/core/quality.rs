@@ -55,9 +55,7 @@ pub fn refresh_thumbnail(
     // 96×96 thumbnails skip enhancement (bilateral filter / red-eye / sharpening) —
     // the effects are imperceptible at this size and dominate the per-detection cost.
     let thumb = raw.resize(96, 96, image::imageops::FilterType::Triangle);
-    let rgba = thumb.to_rgba8();
-    let size = [rgba.width() as usize, rgba.height() as usize];
-    let img = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    let img = super::detection::color_image_from_dynamic(&thumb);
     let name = format!("thumb_{}", texture_seq);
     *texture_seq = texture_seq.wrapping_add(1);
     det.thumbnail = Some(ctx.load_texture(name, img, egui::TextureOptions::LINEAR));

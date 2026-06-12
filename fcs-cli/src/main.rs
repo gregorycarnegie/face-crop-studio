@@ -15,7 +15,7 @@ use fcs_core::{
 };
 use fcs_utils::{
     OutputOptions, Quality, config::AppSettings, configure_telemetry, estimate_sharpness,
-    init_logging, normalize_path, resolve_data_path,
+    init_logging, load_image, normalize_path, resolve_data_path,
 };
 use image::{DynamicImage, GenericImageView};
 use log::{debug, info, warn};
@@ -269,7 +269,10 @@ fn process_single_image(
         debug!("Mapping row {} -> {}", row, image_path.display());
     }
 
-    let output = detect_image(detector, image_path)?;
+    // Decode once and reuse for detection, annotation, and cropping. Detection
+    // must see the same EXIF-oriented pixels the crops are taken from.
+    let img_opt = load_source_image(image_path);
+    let output = detect_image(detector, img_opt.as_ref()?, image_path)?;
     counters
         .faces_detected
         .fetch_add(output.detections.len(), Ordering::Relaxed);
@@ -279,8 +282,6 @@ fn process_single_image(
         image_path.display(),
         output.detections.len()
     );
-
-    let img_opt = load_source_image(image_path);
     let annotated_path = annotate_image_if_requested(
         img_opt.as_ref(),
         image_path,
@@ -435,9 +436,10 @@ fn process_crops(
 
 fn detect_image(
     detector: &Arc<fcs_core::YuNetDetector>,
+    image: &DynamicImage,
     image_path: &Path,
 ) -> Option<DetectionOutput> {
-    match detector.detect_path(image_path) {
+    match detector.detect_image(image) {
         Ok(out) => Some(out),
         Err(err) => {
             warn!("Failed to process {}: {err}", image_path.display());
@@ -447,7 +449,8 @@ fn detect_image(
 }
 
 fn load_source_image(image_path: &Path) -> Option<DynamicImage> {
-    match image::open(image_path) {
+    // load_image applies EXIF orientation, matching what the detector sees.
+    match load_image(image_path) {
         Ok(img) => Some(img),
         Err(e) => {
             warn!("Failed to open image {}: {}", image_path.display(), e);
@@ -853,16 +856,6 @@ mod tests {
     }
 
     #[test]
-    fn detect_image_returns_none_for_missing_input() {
-        let Some(detector) = build_test_detector() else {
-            return;
-        };
-
-        let missing = Path::new("missing-file.png");
-        assert!(detect_image(&detector, missing).is_none());
-    }
-
-    #[test]
     fn detect_image_returns_output_for_valid_image() {
         let Some(detector) = build_test_detector() else {
             return;
@@ -871,7 +864,8 @@ mod tests {
         let image_path = dir.path().join("sample.png");
         write_sample_png(&image_path);
 
-        assert!(detect_image(&detector, &image_path).is_some());
+        let image = load_source_image(&image_path).expect("sample image should load");
+        assert!(detect_image(&detector, &image, &image_path).is_some());
     }
 
     #[test]
