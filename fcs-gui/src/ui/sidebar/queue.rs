@@ -1,0 +1,631 @@
+//! Queue tab and batch file tree UI.
+
+use crate::theme::P;
+use crate::types::{App2, BatchFileStatus};
+use egui::{RichText, Sense, Stroke, Ui, Vec2};
+
+pub(super) fn show_queue(ui: &mut Ui, app: &mut App2) {
+    // Drop zone
+    drop_zone(ui, app);
+
+    // Webcam capture
+    webcam_bar(ui, app);
+
+    // Folder browse shortcut
+    folder_browse_bar(ui, app);
+
+    // File tree
+    file_tree(ui, app);
+}
+
+fn webcam_bar(ui: &mut Ui, app: &mut App2) {
+    use crate::types::WebcamStatus;
+    let is_live = app.webcam_state.status == WebcamStatus::Active;
+
+    ui.add_space(4.0);
+    let row_h = 36.0;
+    let margin = 8.0_f32;
+    let avail_w = ui.available_width() - margin * 2.0;
+    let row_rect = egui::Rect::from_min_size(
+        egui::pos2(ui.min_rect().min.x + margin, ui.cursor().min.y),
+        Vec2::new(avail_w, row_h),
+    );
+    let resp = ui.allocate_rect(row_rect, Sense::hover());
+    let painter = ui.painter();
+
+    let bg = if is_live {
+        P::lime_alpha(12)
+    } else {
+        P::white_alpha(6)
+    };
+    painter.rect_filled(row_rect, 8.0, bg);
+    painter.rect_stroke(
+        row_rect,
+        8.0,
+        egui::Stroke::new(
+            1.0,
+            if is_live {
+                P::lime_alpha(80)
+            } else {
+                P::white_alpha(18)
+            },
+        ),
+        egui::StrokeKind::Outside,
+    );
+
+    // Dot — green when live
+    let dot_color = if is_live { P::LIME } else { P::INK3 };
+    let dot_center = egui::pos2(row_rect.min.x + 14.0, row_rect.center().y);
+    painter.circle_filled(dot_center, 5.0, dot_color);
+
+    // Labels
+    painter.text(
+        egui::pos2(row_rect.min.x + 26.0, row_rect.center().y - 5.0),
+        egui::Align2::LEFT_CENTER,
+        "Webcam capture",
+        egui::FontId::monospace(10.5),
+        P::INK,
+    );
+    let subtitle = if is_live {
+        format!("Live · {} frames", app.webcam_state.frames_captured)
+    } else {
+        "Default camera".to_string()
+    };
+    painter.text(
+        egui::pos2(row_rect.min.x + 26.0, row_rect.center().y + 8.0),
+        egui::Align2::LEFT_CENTER,
+        subtitle,
+        egui::FontId::monospace(9.0),
+        if is_live { P::LIME } else { P::INK3 },
+    );
+
+    // Right-side buttons
+    if is_live {
+        // "Detect faces" — cyan, left of close
+        let detect_w = 90.0_f32;
+        let detect_h = 24.0_f32;
+        let close_w = 24.0_f32;
+        let close_rect = egui::Rect::from_center_size(
+            egui::pos2(row_rect.max.x - close_w / 2.0 - 4.0, row_rect.center().y),
+            Vec2::new(close_w, detect_h),
+        );
+        let detect_rect = egui::Rect::from_center_size(
+            egui::pos2(close_rect.min.x - detect_w / 2.0 - 4.0, row_rect.center().y),
+            Vec2::new(detect_w, detect_h),
+        );
+
+        // Detect button
+        let detect_resp = ui.interact(detect_rect, resp.id.with("detect_btn"), Sense::click());
+        let detect_bg = if app.is_busy {
+            P::white_alpha(8)
+        } else if detect_resp.hovered() {
+            P::cyan_alpha(60)
+        } else {
+            P::cyan_alpha(35)
+        };
+        painter.rect_filled(detect_rect, 6.0, detect_bg);
+        painter.text(
+            detect_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Detect faces",
+            egui::FontId::monospace(9.5),
+            if app.is_busy { P::INK3 } else { P::CYAN },
+        );
+        if detect_resp.clicked() && !app.is_busy {
+            app.detect_webcam_faces();
+        }
+        detect_resp.on_hover_text("Freeze frame and run face detection");
+
+        // Close button
+        let close_resp = ui.interact(close_rect, resp.id.with("close_btn"), Sense::click());
+        let close_bg = if close_resp.hovered() {
+            P::rose_alpha(60)
+        } else {
+            P::white_alpha(12)
+        };
+        painter.rect_filled(close_rect, 6.0, close_bg);
+        painter.text(
+            close_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::proportional(13.0),
+            P::ROSE,
+        );
+        if close_resp.clicked() {
+            app.close_webcam();
+        }
+        close_resp.on_hover_text("Close camera");
+    } else {
+        // "Open camera" button
+        let btn_w = 86.0_f32;
+        let btn_h = 24.0_f32;
+        let btn_rect = egui::Rect::from_center_size(
+            egui::pos2(row_rect.max.x - btn_w / 2.0 - 4.0, row_rect.center().y),
+            Vec2::new(btn_w, btn_h),
+        );
+        let btn_resp = ui.interact(btn_rect, resp.id.with("open_btn"), Sense::click());
+        let btn_bg = if btn_resp.hovered() {
+            P::lime_alpha(55)
+        } else {
+            P::lime_alpha(30)
+        };
+        painter.rect_filled(btn_rect, 6.0, btn_bg);
+        painter.text(
+            btn_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Open camera",
+            egui::FontId::monospace(9.5),
+            P::LIME,
+        );
+        if btn_resp.clicked() {
+            app.open_webcam();
+        }
+    }
+
+    ui.add_space(4.0);
+}
+
+fn folder_browse_bar(ui: &mut Ui, app: &mut App2) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        let avail = ui.available_width() - 8.0;
+        if ui
+            .add_sized(
+                Vec2::new(avail, 24.0),
+                egui::Button::new(
+                    RichText::new("Add folder…")
+                        .size(10.5)
+                        .family(egui::FontFamily::Monospace)
+                        .color(P::INK2),
+                ),
+            )
+            .clicked()
+            && let Some(folder) = rfd::FileDialog::new().pick_folder()
+        {
+            let paths = crate::app::collect_folder_images(&folder);
+            let first = paths.first().cloned();
+            let added = app.enqueue_batch_paths(paths);
+            if let Some(path) = first {
+                app.load_image_path(path);
+            }
+            if added > 0 {
+                app.show_success(format!(
+                    "Added {added} image(s) to the queue ({} total)",
+                    app.batch_files.len()
+                ));
+            } else {
+                app.show_success("No new images found in folder.");
+            }
+        }
+    });
+    ui.add_space(4.0);
+}
+
+pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
+    let margin = 8.0_f32;
+    ui.add_space(8.0);
+
+    // ── Run batch ────────────────────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.add_space(margin);
+        let avail = ui.available_width() - margin;
+        let n = app.batch_files.len();
+        let enabled = !app.is_busy && app.detector.is_some();
+        ui.add_enabled_ui(enabled, |ui| {
+            if ui
+                .add_sized(
+                    Vec2::new(avail, 30.0),
+                    egui::Button::new(
+                        RichText::new(format!("Run batch  ({n} images) →"))
+                            .size(11.0)
+                            .family(egui::FontFamily::Monospace)
+                            .color(P::PEACH),
+                    ),
+                )
+                .clicked()
+            {
+                crate::core::export::start_batch_export(app);
+            }
+        });
+    });
+
+    // ── Export queue list ────────────────────────────────────────────────────
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(margin);
+        let avail = ui.available_width() - margin;
+        if ui
+            .add_sized(
+                Vec2::new(avail, 24.0),
+                egui::Button::new(
+                    RichText::new("Export queue list…")
+                        .size(10.0)
+                        .family(egui::FontFamily::Monospace)
+                        .color(P::INK2),
+                ),
+            )
+            .clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .set_file_name("queue.txt")
+                .add_filter("Text", &["txt"])
+                .save_file()
+        {
+            let lines: Vec<String> = app
+                .batch_files
+                .iter()
+                .map(|f| f.path.display().to_string())
+                .collect();
+            match std::fs::write(&path, lines.join("\n")) {
+                Ok(_) => app.show_success(format!(
+                    "Queue exported to {}",
+                    path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
+                )),
+                Err(e) => app.show_error("Export failed", e.to_string()),
+            }
+        }
+    });
+    ui.add_space(6.0);
+}
+
+fn drop_zone(ui: &mut Ui, app: &mut App2) {
+    ui.add_space(8.0);
+    let dz_rect = egui::Rect::from_min_size(
+        egui::pos2(ui.min_rect().min.x + 8.0, ui.cursor().min.y),
+        Vec2::new(ui.available_width() - 16.0, 100.0),
+    );
+    let resp = ui.allocate_rect(dz_rect, Sense::click());
+    let painter = ui.painter();
+
+    let border_color = if resp.hovered() {
+        P::CYAN
+    } else {
+        P::cyan_alpha(89)
+    };
+    let bg_color = if resp.hovered() {
+        P::cyan_alpha(30)
+    } else {
+        P::cyan_alpha(20)
+    };
+
+    // Draw dashed border
+    painter.rect_filled(dz_rect, 10.0, bg_color);
+    draw_dashed_border(painter, dz_rect, border_color);
+
+    // Icon
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(dz_rect.center().x, dz_rect.min.y + 28.0),
+        Vec2::splat(34.0),
+    );
+    painter.rect_filled(icon_rect, 9.0, P::cyan_alpha(40));
+    painter.text(
+        icon_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "↑",
+        egui::FontId::proportional(16.0),
+        P::CYAN,
+    );
+
+    painter.text(
+        egui::pos2(dz_rect.center().x, dz_rect.min.y + 52.0),
+        egui::Align2::CENTER_CENTER,
+        "Drop images or folder",
+        egui::FontId::proportional(13.0),
+        P::INK,
+    );
+    painter.text(
+        egui::pos2(dz_rect.center().x, dz_rect.min.y + 68.0),
+        egui::Align2::CENTER_CENTER,
+        "JPG · PNG · WEBP",
+        egui::FontId::proportional(11.5),
+        P::INK3,
+    );
+    // Hit-test the paste label area (right half of bottom strip) for hover highlight
+    let action_y = dz_rect.min.y + 86.0;
+    let paste_area = egui::Rect::from_center_size(
+        egui::pos2(dz_rect.center().x + 38.0, action_y),
+        egui::Vec2::new(56.0, 14.0),
+    );
+    let pointer_in_paste = ui.input(|i| {
+        i.pointer
+            .latest_pos()
+            .is_some_and(|p| paste_area.contains(p))
+    });
+    let browse_color = if resp.hovered() && !pointer_in_paste {
+        P::CYAN
+    } else {
+        P::INK2
+    };
+    let paste_color = if pointer_in_paste { P::CYAN } else { P::INK2 };
+
+    painter.text(
+        egui::pos2(dz_rect.center().x - 34.0, action_y),
+        egui::Align2::CENTER_CENTER,
+        "[ Browse ]",
+        egui::FontId::monospace(10.0),
+        browse_color,
+    );
+    painter.text(
+        egui::pos2(dz_rect.center().x + 38.0, action_y),
+        egui::Align2::CENTER_CENTER,
+        "[ Paste ]",
+        egui::FontId::monospace(10.0),
+        paste_color,
+    );
+    ui.add_space(108.0);
+
+    if resp.clicked() {
+        if resp
+            .interact_pointer_pos()
+            .is_some_and(|p| paste_area.contains(p))
+        {
+            app.paste_clipboard_image();
+        } else {
+            // Open file dialog
+            if let Some(paths) = rfd::FileDialog::new()
+                .add_filter("Images", fcs_utils::SUPPORTED_IMAGE_EXTENSIONS)
+                .pick_files()
+            {
+                let first = paths.first().cloned();
+                let added = app.enqueue_batch_paths(paths);
+                if let Some(path) = first {
+                    app.load_image_path(path);
+                }
+                if added > 0 {
+                    app.show_success(format!(
+                        "Added {added} image(s) to the queue ({} total)",
+                        app.batch_files.len()
+                    ));
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn draw_dashed_border(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let dash = 6.0;
+    let gap = 4.0;
+    let r = rect;
+    let mut x = r.min.x;
+    while x < r.max.x {
+        let ex = (x + dash).min(r.max.x);
+        painter.line_segment([egui::pos2(x, r.min.y), egui::pos2(ex, r.min.y)], stroke);
+        painter.line_segment([egui::pos2(x, r.max.y), egui::pos2(ex, r.max.y)], stroke);
+        x += dash + gap;
+    }
+    let mut y = r.min.y;
+    while y < r.max.y {
+        let ey = (y + dash).min(r.max.y);
+        painter.line_segment([egui::pos2(r.min.x, y), egui::pos2(r.min.x, ey)], stroke);
+        painter.line_segment([egui::pos2(r.max.x, y), egui::pos2(r.max.x, ey)], stroke);
+        y += dash + gap;
+    }
+}
+
+fn file_tree(ui: &mut Ui, app: &mut App2) {
+    if app.batch_files.is_empty() {
+        return;
+    }
+
+    let total = app.batch_files.len();
+    let mut action = None;
+    let is_in_progress = |status: &BatchFileStatus| {
+        matches!(
+            status,
+            BatchFileStatus::Processing
+                | BatchFileStatus::Completed { .. }
+                | BatchFileStatus::Failed { .. }
+        )
+    };
+    let in_progress_count = app
+        .batch_files
+        .iter()
+        .filter(|file| is_in_progress(&file.status))
+        .count();
+    let queued_count = total - in_progress_count;
+
+    if in_progress_count > 0 {
+        tree_group_header(ui, "In progress", in_progress_count, total);
+        for idx in 0..total {
+            if !is_in_progress(&app.batch_files[idx].status) {
+                continue;
+            }
+            let row_action = tree_row(ui, app, idx);
+            if action.is_none() {
+                action = row_action;
+            }
+        }
+    }
+    if queued_count > 0 {
+        tree_group_header(ui, "Queued", queued_count, 0);
+        for idx in 0..total {
+            if is_in_progress(&app.batch_files[idx].status) {
+                continue;
+            }
+            let row_action = tree_row(ui, app, idx);
+            if action.is_none() {
+                action = row_action;
+            }
+        }
+    }
+
+    match action {
+        Some(TreeAction::Load(path)) => app.load_image_path(path),
+        Some(TreeAction::Remove(idx)) if idx < app.batch_files.len() => {
+            app.batch_files.remove(idx);
+            app.show_success("Removed image from queue.");
+        }
+        _ => {}
+    }
+}
+
+enum TreeAction {
+    Load(std::path::PathBuf),
+    Remove(usize),
+}
+
+fn tree_group_header(ui: &mut Ui, label: &str, count: usize, total: usize) {
+    ui.horizontal(|ui| {
+        ui.set_height(28.0);
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(label)
+                .size(10.0)
+                .color(P::INK3)
+                .family(egui::FontFamily::Monospace),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0);
+            let count_str = if total > 0 {
+                format!("{count} / {total}")
+            } else {
+                count.to_string()
+            };
+            ui.label(
+                egui::RichText::new(count_str)
+                    .size(10.0)
+                    .color(P::PEACH)
+                    .family(egui::FontFamily::Monospace),
+            );
+        });
+    });
+}
+
+fn tree_row(ui: &mut Ui, app: &App2, idx: usize) -> Option<TreeAction> {
+    let path = &app.batch_files[idx].path;
+    let status = &app.batch_files[idx].status;
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+    let status_label = status.badge_label();
+    let face_count = status.face_count();
+
+    let is_active = app.preview.image_path.as_deref() == Some(path.as_path());
+
+    let row_h = 32.0;
+    let (resp, painter) =
+        ui.allocate_painter(Vec2::new(ui.available_width(), row_h), Sense::click());
+    let r = resp.rect;
+
+    let bg = if is_active {
+        P::peach_alpha(25)
+    } else if resp.hovered() {
+        P::white_alpha(10)
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if bg != egui::Color32::TRANSPARENT {
+        painter.rect_filled(r, 5.0, bg);
+    }
+
+    let text_color = if is_active { P::PEACH } else { P::INK2 };
+
+    // Index
+    painter.text(
+        egui::pos2(r.min.x + 20.0, r.center().y),
+        egui::Align2::RIGHT_CENTER,
+        format!("{:02}", idx + 1),
+        egui::FontId::monospace(10.0),
+        P::INK3,
+    );
+    // Person icon
+    painter.text(
+        egui::pos2(r.min.x + 34.0, r.center().y),
+        egui::Align2::CENTER_CENTER,
+        "◉",
+        egui::FontId::proportional(11.0),
+        P::INK3,
+    );
+    // Filename
+    let avail_w = r.width() - 132.0;
+    painter.text(
+        egui::pos2(r.min.x + 46.0, r.center().y),
+        egui::Align2::LEFT_CENTER,
+        truncate(name, avail_w, &egui::FontId::monospace(11.5), &painter),
+        egui::FontId::monospace(11.5),
+        text_color,
+    );
+
+    // Badge on the right
+    let badge_label = face_count.map_or_else(|| status_label.to_owned(), |count| count.to_string());
+    let (badge_bg, badge_fg) = crate::theme::badge_color(status_label);
+    let badge_font = egui::FontId::monospace(9.5);
+    let badge_g = painter.layout_no_wrap(badge_label, badge_font, badge_fg);
+    let bw = badge_g.size().x + 10.0;
+    let bh = badge_g.size().y + 4.0;
+    let remove_rect = egui::Rect::from_center_size(
+        egui::pos2(r.max.x - 18.0, r.center().y),
+        Vec2::new(24.0, 24.0),
+    );
+    let load_rect = egui::Rect::from_center_size(
+        egui::pos2(r.max.x - 46.0, r.center().y),
+        Vec2::new(24.0, 24.0),
+    );
+    let badge_rect = egui::Rect::from_min_size(
+        egui::pos2(load_rect.min.x - bw - 8.0, r.center().y - bh / 2.0),
+        Vec2::new(bw, bh),
+    );
+    painter.rect_filled(badge_rect, 3.0, badge_bg);
+    painter.galley(badge_rect.min + Vec2::new(5.0, 2.0), badge_g, badge_fg);
+
+    let load_clicked = row_icon_button(ui, load_rect, idx, "load", "▶", P::CYAN, "Load image");
+    let remove_clicked = row_icon_button(
+        ui,
+        remove_rect,
+        idx,
+        "remove",
+        "×",
+        P::ROSE,
+        "Remove from queue",
+    );
+
+    if remove_clicked {
+        Some(TreeAction::Remove(idx))
+    } else if load_clicked || resp.clicked() {
+        Some(TreeAction::Load(path.clone()))
+    } else {
+        None
+    }
+}
+
+fn row_icon_button(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    idx: usize,
+    salt: &str,
+    label: &str,
+    color: egui::Color32,
+    tooltip: &str,
+) -> bool {
+    let resp = ui.interact(rect, ui.id().with((salt, idx)), Sense::click());
+    let bg = if resp.hovered() {
+        P::white_alpha(20)
+    } else {
+        P::white_alpha(8)
+    };
+    ui.painter().rect_filled(rect, 5.0, bg);
+    ui.painter().rect_stroke(
+        rect,
+        5.0,
+        Stroke::new(1.0, P::white_alpha(24)),
+        egui::StrokeKind::Outside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        color,
+    );
+    let clicked = resp.clicked();
+    resp.on_hover_text(tooltip);
+    clicked
+}
+
+fn truncate(s: &str, max_w: f32, _font: &egui::FontId, _painter: &egui::Painter) -> String {
+    // Simple approximation — assume ~7px per char for monospace
+    let chars_fit = (max_w / 7.0) as usize;
+    if s.len() <= chars_fit {
+        return s.to_string();
+    }
+    format!("{}…", &s[..chars_fit.saturating_sub(1)])
+}

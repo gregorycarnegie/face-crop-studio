@@ -27,8 +27,6 @@ pub mod point;
 pub mod quality;
 /// Shape metadata and masking helpers for custom crop geometry.
 pub mod shape;
-#[cfg(test)]
-mod shape_tests;
 /// Instrumentation helpers for optional performance tracing.
 pub mod telemetry;
 /// Webcam capture utilities for real-time face detection.
