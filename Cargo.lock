@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-cli"
-version = "1.2.6-beta"
+version = "1.2.7-beta"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-core"
-version = "1.2.6-beta"
+version = "1.2.7-beta"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-gui"
-version = "1.2.6-beta"
+version = "1.2.7-beta"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2165,7 +2165,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-utils"
-version = "1.2.6-beta"
+version = "1.2.7-beta"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3612,9 +3612,9 @@ dependencies = [
 
 [[package]]
 name = "nokhwa-bindings-macos"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de78eb4a2d47a68f490899aa0516070d7a972f853ec2bb374ab53be0bd39b60f"
+checksum = "f70d3908ea68324e44a6b3a0f885aa59e433fb1f6678839d09e0df7d226fb42d"
 dependencies = [
  "block",
  "cocoa-foundation",
