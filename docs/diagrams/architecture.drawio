@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="Architecture">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1300" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Face Crop Studio &#8212; Workspace Architecture (v1.2.7-beta)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontStyle=1;fontSize=18;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="10" width="1180" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Entry points layer ===== -->
+        <mxCell id="cli" value="fcs-cli &#8212; Command-line app" style="swimlane;startSize=30;html=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontColor=#1f3b5c;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="560" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="cli_args" value="args (clap)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="cli">
+          <mxGeometry x="20" y="45" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="cli_detect" value="detector / batch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="cli">
+          <mxGeometry x="160" y="45" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="cli_quality" value="quality / color" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="cli">
+          <mxGeometry x="310" y="45" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="cli_bench" value="benchmark" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="cli">
+          <mxGeometry x="450" y="45" width="90" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="gui" value="fcs-gui &#8212; Desktop app (eframe / egui + wgpu)" style="swimlane;startSize=30;html=1;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontColor=#1f3b5c;" vertex="1" parent="1">
+          <mxGeometry x="660" y="60" width="560" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="gui_app" value="app / types" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="gui">
+          <mxGeometry x="20" y="45" width="100" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="gui_core" value="core (settings / cache)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="gui">
+          <mxGeometry x="135" y="45" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="gui_render" value="rendering / paint" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="gui">
+          <mxGeometry x="280" y="45" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="gui_ui" value="ui / interaction / theme" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="gui">
+          <mxGeometry x="415" y="45" width="125" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Core layer ===== -->
+        <mxCell id="core" value="fcs-core &#8212; YuNet detection &amp; cropping pipeline" style="swimlane;startSize=30;html=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontColor=#274e13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="1180" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="core_pre" value="preprocess&#xa;(resize &#8594; tensor)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="core">
+          <mxGeometry x="20" y="50" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="core_model" value="model&#xa;(ONNX / tract)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="core">
+          <mxGeometry x="190" y="50" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="core_post" value="postprocess&#xa;(NMS / scoring)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="core">
+          <mxGeometry x="360" y="50" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="core_detector" value="detector&#xa;(YuNetDetector)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="core">
+          <mxGeometry x="530" y="50" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="core_crop" value="cropper /&#xa;face_cropper" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="core">
+          <mxGeometry x="700" y="50" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="core_presets" value="presets /&#xa;model_config" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="core">
+          <mxGeometry x="870" y="50" width="140" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="core_gpu" value="gpu &#8212; WGPU inference ops (conv2d, batch_norm, max_pool, activation, add, upsample2x, graph)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f2e0;strokeColor=#82b366;fontStyle=2;" vertex="1" parent="core">
+          <mxGeometry x="20" y="125" width="990" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Utils layer ===== -->
+        <mxCell id="utils" value="fcs-utils &#8212; Shared foundation (image I/O, color, quality, telemetry, GPU blur, webcam)" style="swimlane;startSize=30;html=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontColor=#5c4a10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="1180" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="u_color" value="color" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="utils">
+          <mxGeometry x="20" y="45" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="u_quality" value="quality" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="utils">
+          <mxGeometry x="150" y="45" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="u_tel" value="telemetry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="utils">
+          <mxGeometry x="280" y="45" width="110" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="u_point" value="point / fixtures" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="utils">
+          <mxGeometry x="410" y="45" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="u_webcam" value="webcam&#xa;(nokhwa)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;" vertex="1" parent="utils">
+          <mxGeometry x="550" y="45" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="u_gpu" value="gpu &#8212; gaussian_blur, background_blur, buffer_pool" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fbf0c4;strokeColor=#d6b656;fontStyle=2;" vertex="1" parent="utils">
+          <mxGeometry x="690" y="45" width="470" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ===== External deps layer ===== -->
+        <mxCell id="ext_onnx" value="YuNet ONNX model&#xa;(face_detection_yunet_2023mar)" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="60" y="730" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_gpu" value="wgpu / Metal&#xa;GPU backend" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="350" y="740" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_cam" value="nokhwa&#xa;camera capture" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="620" y="740" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ext_img" value="image / ravif / fast_image_resize&#xa;(PNG, JPEG, WebP, AVIF, TIFF)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="890" y="740" width="280" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Edges: entry points -> core ===== -->
+        <mxCell id="e_cli_core" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.15;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_gui_core" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#6c8ebf;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.85;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Edges: entry points -> utils (bypass) ===== -->
+        <mxCell id="e_cli_utils" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#b09a30;exitX=0.05;exitY=1;exitDx=0;exitDy=0;entryX=0.03;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="utils">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="50" y="510" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_gui_utils" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;strokeColor=#b09a30;exitX=0.95;exitY=1;exitDx=0;exitDy=0;entryX=0.97;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="utils">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1210" y="510" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===== Edge: core -> utils ===== -->
+        <mxCell id="e_core_utils" value="depends on" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontColor=#274e13;" edge="1" parent="1" source="core" target="utils">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Edges: core -> external ===== -->
+        <mxCell id="e_core_onnx" value="loads / runs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;exitX=0.1;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontColor=#444444;" edge="1" parent="1" source="core" target="ext_onnx">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="170" y="510" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===== Edges: utils -> external ===== -->
+        <mxCell id="e_utils_gpu" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;exitX=0.4;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="ext_gpu">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_utils_cam" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;exitX=0.6;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="ext_cam">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_utils_img" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;exitX=0.85;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="ext_img">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend" value="Solid = direct crate dependency&#xa;Dashed = entry crate uses fcs-utils directly (features: mapping, webcam)" style="text;html=1;strokeColor=#cccccc;fillColor=#fbfbfb;align=left;verticalAlign=middle;fontSize=11;fontColor=#555555;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="660" y="840" width="560" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

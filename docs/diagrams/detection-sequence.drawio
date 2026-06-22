@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="Detection-Sequence">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1420" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Face Crop Studio &#8212; Detection Pipeline (runtime sequence: YuNetDetector::detect_path)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontStyle=1;fontSize=16;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="40" y="10" width="1340" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Lifelines ===== -->
+        <mxCell id="L1" value="Caller&#xa;(fcs-cli / fcs-gui)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="170" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="L2" value="YuNetDetector&#xa;(fcs-core)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="290" y="60" width="170" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="L3" value="Preprocessor&#xa;(CPU / WGPU)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="540" y="60" width="170" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="L4" value="DetectorBackend&#xa;(tract CPU / wgpu GPU)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="790" y="60" width="170" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="L5" value="postprocess&#xa;(NMS / dedup)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="60" width="170" height="740" as="geometry" />
+        </mxCell>
+        <mxCell id="L6" value="face_cropper&#xa;(fcs-core)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=1;collapsible=0;recursiveResize=0;outlineConnect=0;portConstraint=eastwest;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="60" width="120" height="740" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Messages ===== -->
+        <!-- 1. detect_path -->
+        <mxCell id="m1" value="detect_path(path)" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;exitX=1;exitY=0.10;exitDx=0;exitDy=0;entryX=0;entryY=0.10;entryDx=0;entryDy=0;" edge="1" parent="1" source="L1" target="L2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 2. self: load_image -->
+        <mxCell id="m2" value="load_image(path) &#8594; DynamicImage" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;exitX=1;exitY=0.15;exitDx=0;exitDy=0;entryX=1;entryY=0.19;entryDx=0;entryDy=0;" edge="1" parent="1" source="L2" target="L2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="500" y="190" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- 3. preprocess -->
+        <mxCell id="m3" value="preprocess(image, cfg)&#xa;resize&#8594;640&#178;, RGB&#8594;BGR CHW" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;exitX=1;exitY=0.24;exitDx=0;exitDy=0;entryX=0;entryY=0.24;entryDx=0;entryDy=0;" edge="1" parent="1" source="L2" target="L3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 4. return PreprocessOutput -->
+        <mxCell id="m4" value="PreprocessOutput { tensor[1,3,640,640], scale_x, scale_y }" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;strokeColor=#999999;exitX=0;exitY=0.32;exitDx=0;exitDy=0;entryX=1;entryY=0.32;entryDx=0;entryDy=0;" edge="1" parent="1" source="L3" target="L2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 5. backend.run -->
+        <mxCell id="m5" value="backend.run(tensor)&#xa;&#171;onnx_inference&#187;" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;exitX=1;exitY=0.41;exitDx=0;exitDy=0;entryX=0;entryY=0.41;entryDx=0;entryDy=0;" edge="1" parent="1" source="L2" target="L4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 6. return raw tensor -->
+        <mxCell id="m6" value="raw Tensor (N&#215;16 rows)" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;strokeColor=#999999;exitX=0;exitY=0.49;exitDx=0;exitDy=0;entryX=1;entryY=0.49;entryDx=0;entryDy=0;" edge="1" parent="1" source="L4" target="L2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 7. apply_postprocess -->
+        <mxCell id="m7" value="apply_postprocess(raw, scale, cfg)&#xa;decode &#8594; score filter &#8594; rescale &#8594; NMS &#8594; dedup &#8594; top_k" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;exitX=1;exitY=0.58;exitDx=0;exitDy=0;entryX=0;entryY=0.58;entryDx=0;entryDy=0;" edge="1" parent="1" source="L2" target="L5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 8. return detections -->
+        <mxCell id="m8" value="Vec&lt;Detection&gt; (bbox + 5 landmarks)" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;strokeColor=#999999;exitX=0;exitY=0.66;exitDx=0;exitDy=0;entryX=1;entryY=0.66;entryDx=0;entryDy=0;" edge="1" parent="1" source="L5" target="L2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 9. return DetectionOutput to caller -->
+        <mxCell id="m9" value="DetectionOutput { detections, scale_x, scale_y, original_size }" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;strokeColor=#999999;exitX=0;exitY=0.74;exitDx=0;exitDy=0;entryX=1;entryY=0.74;entryDx=0;entryDy=0;" edge="1" parent="1" source="L2" target="L1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 10. crop_face_from_image -->
+        <mxCell id="m10" value="crop_face_from_image(img, crop_region)   [per face]" style="html=1;verticalAlign=bottom;endArrow=block;rounded=0;exitX=1;exitY=0.83;exitDx=0;exitDy=0;entryX=0;entryY=0.83;entryDx=0;entryDy=0;" edge="1" parent="1" source="L1" target="L6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 11. return crop -->
+        <mxCell id="m11" value="cropped image &#8594; quality filter &#8594; save" style="html=1;verticalAlign=bottom;endArrow=open;dashed=1;strokeColor=#999999;exitX=0;exitY=0.91;exitDx=0;exitDy=0;entryX=1;entryY=0.91;entryDx=0;entryDy=0;" edge="1" parent="1" source="L6" target="L1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend" value="Solid filled arrow = synchronous call&#xa;Grey dashed arrow = return value&#xa;Steps 10&#8211;11 (crop &amp; save) run only on the CLI / batch path, once per detected face." style="text;html=1;strokeColor=#cccccc;fillColor=#fbfbfb;align=left;verticalAlign=middle;fontSize=11;fontColor=#555555;spacingLeft=8;" vertex="1" parent="1">
+          <mxGeometry x="40" y="820" width="640" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
