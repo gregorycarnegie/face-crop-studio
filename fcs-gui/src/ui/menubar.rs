@@ -19,7 +19,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 .fill(P::white_alpha(3))
                 .inner_margin(egui::Margin::ZERO),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.add_space(6.0);
 

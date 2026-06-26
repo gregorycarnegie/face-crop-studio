@@ -13,7 +13,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
         .exact_size(28.0)
         .show_separator_line(false)
         .frame(Frame::new().fill(P::BG).inner_margin(egui::Margin::ZERO))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 // Status dot + label
                 let (ready_dot, ready_text) = if app.is_busy {

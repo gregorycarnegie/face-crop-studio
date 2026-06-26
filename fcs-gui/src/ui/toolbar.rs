@@ -14,7 +14,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 .fill(P::SURFACE.linear_multiply(0.6))
                 .inner_margin(egui::Margin::symmetric(12, 8)),
         )
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 // Primary action: Detect
                 if primary_btn(ui, "Detect faces →", P::CYAN, bg_from_cyan())

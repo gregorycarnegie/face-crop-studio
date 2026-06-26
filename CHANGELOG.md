@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Camera RAW input behind the `raw` Cargo feature (enabled in CLI and GUI):
+  DNG, CR2, CR3, NEF, ARW, RW2, ORF, RAF, SRW, and PEF decode via the pure-Rust
+  `imagepipe`/`rawloader` stack, routed through the existing image-load path so
+  batch and single-image flows both accept RAW. Note: `rawloader` does not
+  support every DNG variant; unsupported files are skipped rather than crashing.
 - Batch export failure log now records skipped-but-detected images, not just
   hard failures. Items with `BatchFileStatus::Failed`, and items marked
   `Completed` with `faces_exported == 0`, are both logged.
@@ -43,6 +48,24 @@ index,path,error,faces_detected
 3,"C:\images\vacation\img_003.jpg","No faces detected",0
 5,"C:\images\vacation\img_005.jpg","Faces detected but skipped (quality checks)",2
 ```
+
+### Changed
+
+- Updated `egui`/`eframe`/`egui_extras` to 0.35 (panel `show_inside` → `show`)
+  and bumped `anyhow`, `env_logger`, `log`, and `tract-onnx` to their latest
+  patch releases.
+- Release builds now use `panic = "unwind"` instead of `"abort"`, so the
+  per-file `catch_unwind` panic-safety in batch processing actually takes
+  effect in shipped binaries (one undecodable file is skipped, not fatal).
+
+### Fixed
+
+- GPU preprocessing no longer crashes on images whose width or height exceeds
+  the device's maximum 2D texture dimension (e.g. full-resolution RAWs); it
+  falls back to CPU preprocessing above the limit.
+- GUI preview/thumbnail textures are downscaled to the texture-side limit, so
+  loading a very large image no longer panics on upload. Detection overlays and
+  crops still use the full-resolution source.
 
 ## [1.0.0]
 

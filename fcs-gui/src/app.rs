@@ -329,7 +329,7 @@ impl App for App2 {
             .resizable(false)
             .show_separator_line(false)
             .frame(side_frame)
-            .show_inside(root_ui, |ui| {
+            .show(root_ui, |ui| {
                 ui::sidebar::show(ui, self);
             });
 
@@ -338,7 +338,7 @@ impl App for App2 {
             .resizable(false)
             .show_separator_line(false)
             .frame(side_frame)
-            .show_inside(root_ui, |ui| {
+            .show(root_ui, |ui| {
                 ui::inspector::show(ui, self);
             });
 
@@ -349,7 +349,7 @@ impl App for App2 {
                     .inner_margin(egui::Margin::ZERO)
                     .outer_margin(egui::Margin::ZERO),
             )
-            .show_inside(root_ui, |ui| {
+            .show(root_ui, |ui| {
                 ui::canvas::show(ui, self);
             });
 

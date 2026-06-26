@@ -27,13 +27,13 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
         .exact_size(bottom_bar_h)
         .show_separator_line(false)
         .frame(Frame::new().fill(P::black_alpha(50)))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             canvas_bottom_bar(ui, app);
         });
 
     egui::CentralPanel::default()
         .frame(Frame::new().fill(P::BG1))
-        .show_inside(ui, |ui| {
+        .show(ui, |ui| {
             stage(ui, app);
         });
 }
