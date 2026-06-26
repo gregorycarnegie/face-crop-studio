@@ -59,7 +59,9 @@ fn is_raw_extension(ext: &str) -> bool {
     const RAW_EXTENSIONS: &[&str] = &[
         "dng", "cr2", "cr3", "nef", "arw", "rw2", "orf", "raf", "srw", "pef",
     ];
-    RAW_EXTENSIONS.iter().any(|raw| ext.eq_ignore_ascii_case(raw))
+    RAW_EXTENSIONS
+        .iter()
+        .any(|raw| ext.eq_ignore_ascii_case(raw))
 }
 
 /// Decode a camera RAW file into an 8-bit sRGB image via `imagepipe` (demosaic, white
@@ -91,7 +93,12 @@ fn load_raw_image(path: &Path) -> Result<DynamicImage> {
     .map_err(|e| anyhow::anyhow!("failed to decode RAW image {}: {e}", path.display()))?;
 
     let buffer = RgbImage::from_raw(decoded.width as u32, decoded.height as u32, decoded.data)
-        .with_context(|| format!("RAW decode returned mismatched buffer for {}", path.display()))?;
+        .with_context(|| {
+            format!(
+                "RAW decode returned mismatched buffer for {}",
+                path.display()
+            )
+        })?;
     Ok(DynamicImage::ImageRgb8(buffer))
 }
 
