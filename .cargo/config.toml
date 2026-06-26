@@ -4,3 +4,12 @@ target-dir = "target"
 [env]
 RUST_LOG = { value = "info,fcs_core=debug,fcs_gui=debug", force = false }
 RUST_BACKTRACE = { value = "1", force = false }
+# libheif-sys (HEIC) locates the library via the `vcpkg` crate, which needs VCPKG_ROOT.
+# force = false so a contributor with vcpkg elsewhere can override it from their own env.
+# Unused on macOS/Linux (libheif is found via pkg-config there).
+VCPKG_ROOT = { value = "C:\\vcpkg", force = false }
+
+# The vcpkg crate only selects the x64-windows-static triplet under crt-static, so the
+# static dav1d/libheif libs link cleanly. Scoped to MSVC so macOS/Linux are unaffected.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

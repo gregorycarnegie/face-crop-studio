@@ -55,10 +55,15 @@ optional = true
 workspace = true
 optional = true
 
+[dependencies.libheif-rs]
+workspace = true
+optional = true
+
 [features]
 mapping = ["dep:csv", "dep:calamine", "dep:parquet", "dep:rusqlite"]
 webcam = ["dep:nokhwa"]
 raw = ["dep:imagepipe"]
+heic = ["dep:libheif-rs"]
 
 [dev-dependencies]
 tempfile.workspace = true

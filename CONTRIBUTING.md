@@ -41,6 +41,7 @@ Install the usual Rust and Windows build tools first:
 - Git.
 - NASM on `PATH`; for example `C:\Program Files\NASM`.
 - `pkg-config` and `dav1d` for AVIF support.
+- `libheif` (>= 1.17) for HEIC/HEIF support, located via `pkg-config`.
 
 On Windows, the project CI uses `pkgconfiglite` and vcpkg:
 
@@ -52,7 +53,7 @@ if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
   & C:\vcpkg\bootstrap-vcpkg.bat
 }
 
-& C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static
+& C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static libheif:x64-windows-static
 ```
 
 Set the environment variables for your current terminal:

@@ -19,7 +19,7 @@ eframe.workspace = true
 egui.workspace = true
 egui_extras = { workspace = true, features = ["svg"] }
 fcs-core.workspace = true
-fcs-utils = { workspace = true, features = ["mapping", "webcam", "raw"] }
+fcs-utils = { workspace = true, features = ["mapping", "webcam", "raw", "heic"] }
 image.workspace = true
 imageproc.workspace = true
 ico.workspace = true

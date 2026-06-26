@@ -60,6 +60,9 @@ imageproc = "0.27.0"
 imgref = "1.12.2"
 # Pure-Rust camera RAW decode (demosaic + sRGB); pulls its own image 0.24 internally.
 imagepipe = "0.5.0"
+# HEIC/HEIF decode via system libheif (no pure-Rust HEVC decoder exists under a
+# permissive license). Located through pkg-config, same as dav1d for AVIF.
+libheif-rs = "2.7.0"
 ravif = { version = "0.13.0", default-features = false, features = [
     "threading",
 ] }

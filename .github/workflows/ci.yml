@@ -110,24 +110,29 @@ jobs:
       uses: actions/cache@v4
       with:
         path: C:\vcpkg\installed
-        key: vcpkg-dav1d-x64-windows-static-${{ runner.os }}
+        key: vcpkg-dav1d-libheif-x64-windows-static-${{ runner.os }}
 
-    - name: Install dav1d (vcpkg)
+    - name: Install dav1d + libheif (vcpkg)
       shell: pwsh
       run: |
         if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
           git clone https://github.com/microsoft/vcpkg C:\vcpkg
           & C:\vcpkg\bootstrap-vcpkg.bat
         }
-        & C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static
+        & C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static libheif:x64-windows-static
 
-    - name: Set PKG_CONFIG_PATH for dav1d
+    - name: Set PKG_CONFIG_PATH for dav1d + vcpkg for libheif
       shell: pwsh
       run: |
         # Write to GITHUB_ENV so this persists for all subsequent steps,
         # overriding any PATH entries added by Python toolcache setup.
-        "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static\lib\pkgconfig" |
-          Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        # dav1d is found via pkg-config; libheif-sys uses the `vcpkg` crate, which
+        # needs VCPKG_ROOT and only picks the x64-windows-static triplet under crt-static.
+        @(
+          "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static\lib\pkgconfig"
+          "VCPKG_ROOT=C:\vcpkg"
+          "RUSTFLAGS=-C target-feature=+crt-static"
+        ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Check
       run: cargo check --workspace

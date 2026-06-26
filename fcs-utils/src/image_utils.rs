@@ -44,6 +44,12 @@ pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "srw",
     #[cfg(feature = "raw")]
     "pef",
+    #[cfg(feature = "heic")]
+    "heic",
+    #[cfg(feature = "heic")]
+    "heif",
+    #[cfg(feature = "heic")]
+    "hif",
 ];
 
 /// Returns `true` if `ext` (case-insensitive) is one of the camera RAW formats routed
@@ -89,6 +95,51 @@ fn load_raw_image(path: &Path) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgb8(buffer))
 }
 
+/// Returns `true` if `ext` (case-insensitive) is a HEIC/HEIF container routed through
+/// the native `libheif` decoder rather than the `image` crate.
+#[cfg(feature = "heic")]
+fn is_heic_extension(ext: &str) -> bool {
+    const HEIC_EXTENSIONS: &[&str] = &["heic", "heif", "hif"];
+    HEIC_EXTENSIONS.iter().any(|h| ext.eq_ignore_ascii_case(h))
+}
+
+/// Decode a HEIC/HEIF file into an 8-bit sRGB image via native `libheif`. libheif applies
+/// the container's `irot`/`imir` orientation transforms during decode, so the result is
+/// already upright (this is why HEIC routes the same way in `load_image_raw`).
+#[cfg(feature = "heic")]
+fn load_heic_image(path: &Path) -> Result<DynamicImage> {
+    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+
+    let ctx = HeifContext::read_from_file(&path.to_string_lossy())
+        .with_context(|| format!("failed to open HEIC image {}", path.display()))?;
+    let handle = ctx
+        .primary_image_handle()
+        .with_context(|| format!("no primary image in {}", path.display()))?;
+    let image = LibHeif::new()
+        .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)
+        .with_context(|| format!("failed to decode HEIC image {}", path.display()))?;
+
+    let planes = image.planes();
+    let plane = planes
+        .interleaved
+        .context("HEIC decode returned no interleaved RGB plane")?;
+    let width = plane.width as usize;
+    let height = plane.height as usize;
+    let stride = plane.stride;
+
+    // libheif's row stride is padded and generally exceeds width*3, so copy row by row
+    // into a tightly packed RGB buffer.
+    let mut buf = Vec::with_capacity(width * height * 3);
+    for row in 0..height {
+        let start = row * stride;
+        buf.extend_from_slice(&plane.data[start..start + width * 3]);
+    }
+
+    let rgb = RgbImage::from_raw(width as u32, height as u32, buf)
+        .context("HEIC decode produced a mismatched buffer")?;
+    Ok(DynamicImage::ImageRgb8(rgb))
+}
+
 /// Returns `true` if the given path's extension is in [`SUPPORTED_IMAGE_EXTENSIONS`].
 pub fn is_supported_image_path(path: &Path) -> bool {
     path.extension()
@@ -118,6 +169,15 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
         return load_raw_image(path_ref);
     }
 
+    #[cfg(feature = "heic")]
+    if path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(is_heic_extension)
+    {
+        return load_heic_image(path_ref);
+    }
+
     let reader = ImageReader::open(path_ref)
         .with_context(|| format!("failed to open image {}", path_ref.display()))?
         .with_guessed_format()
@@ -145,6 +205,15 @@ pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
         .is_some_and(is_raw_extension)
     {
         return load_raw_image(path_ref);
+    }
+
+    #[cfg(feature = "heic")]
+    if path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(is_heic_extension)
+    {
+        return load_heic_image(path_ref);
     }
 
     ImageReader::open(path_ref)
@@ -356,6 +425,38 @@ mod tests {
         std::fs::write(&bogus, b"this is not a raw file").unwrap();
         // Must route to the RAW decoder and return an Err, not panic.
         assert!(super::load_image(&bogus).is_err());
+    }
+
+    #[cfg(feature = "heic")]
+    #[test]
+    fn heic_extensions_are_supported_and_classified() {
+        assert!(is_supported_image_path(Path::new("photo.HEIC")));
+        assert!(is_supported_image_path(Path::new("shot.heif")));
+        assert!(is_heic_extension("Hif"));
+        assert!(!is_heic_extension("png"));
+    }
+
+    #[cfg(feature = "heic")]
+    #[test]
+    fn load_image_rejects_malformed_heic_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let bogus = dir.path().join("not_really.heic");
+        std::fs::write(&bogus, b"this is not a heic file").unwrap();
+        // Must route to the HEIC decoder and return an Err, not panic.
+        assert!(super::load_image(&bogus).is_err());
+    }
+
+    /// Opt-in real-decode check: set `FCS_HEIC_SAMPLE` to a real HEIC file path.
+    /// Skips when unset so CI without a sample asset stays green (matches the RAW pattern).
+    #[cfg(feature = "heic")]
+    #[test]
+    fn load_image_decodes_real_heic_when_sample_provided() {
+        let Ok(sample) = std::env::var("FCS_HEIC_SAMPLE") else {
+            eprintln!("skipping: FCS_HEIC_SAMPLE not set");
+            return;
+        };
+        let img = super::load_image(&sample).expect("real HEIC sample should decode");
+        assert!(img.width() > 0 && img.height() > 0);
     }
 
     /// Opt-in real-decode check: set `FCS_RAW_SAMPLE` to a real camera RAW file path.

@@ -9,7 +9,7 @@ description = "Face Crop Studio CLI — batch face detection and cropping."
 anyhow.workspace = true
 clap.workspace = true
 fcs-core.workspace = true
-fcs-utils = { workspace = true, features = ["mapping", "webcam", "raw"] }
+fcs-utils = { workspace = true, features = ["mapping", "webcam", "raw", "heic"] }
 image.workspace = true
 imageproc.workspace = true
 log.workspace = true
