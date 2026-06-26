@@ -13,8 +13,81 @@ use std::{borrow::Cow, path::Path};
 
 /// Filename extensions recognized as decodable raster images across CLI and GUI.
 /// Kept in lower-case; callers should normalize input before comparison.
-pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] =
-    &["jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff"];
+///
+/// Camera RAW extensions are only present when the `raw` feature is enabled, so file
+/// dialogs and batch enqueue logic stay in sync with what [`load_image`] can decode.
+pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "bmp",
+    "tif",
+    "tiff",
+    #[cfg(feature = "raw")]
+    "dng",
+    #[cfg(feature = "raw")]
+    "cr2",
+    #[cfg(feature = "raw")]
+    "cr3",
+    #[cfg(feature = "raw")]
+    "nef",
+    #[cfg(feature = "raw")]
+    "arw",
+    #[cfg(feature = "raw")]
+    "rw2",
+    #[cfg(feature = "raw")]
+    "orf",
+    #[cfg(feature = "raw")]
+    "raf",
+    #[cfg(feature = "raw")]
+    "srw",
+    #[cfg(feature = "raw")]
+    "pef",
+];
+
+/// Returns `true` if `ext` (case-insensitive) is one of the camera RAW formats routed
+/// through the [`imagepipe`] decoder rather than the `image` crate.
+#[cfg(feature = "raw")]
+fn is_raw_extension(ext: &str) -> bool {
+    const RAW_EXTENSIONS: &[&str] = &[
+        "dng", "cr2", "cr3", "nef", "arw", "rw2", "orf", "raf", "srw", "pef",
+    ];
+    RAW_EXTENSIONS.iter().any(|raw| ext.eq_ignore_ascii_case(raw))
+}
+
+/// Decode a camera RAW file into an 8-bit sRGB image via `imagepipe` (demosaic, white
+/// balance, gamma). Orientation from the RAW metadata is already applied by the pipeline.
+///
+/// `rawloader` calls `.unwrap()` on DNG variants it does not support (e.g. unusual
+/// lossless-JPEG precisions). That panic fires inside its internal `rayon` parallel decode,
+/// on many workers at once — simultaneous panics on the shared global pool trip rayon's
+/// abort path, which a plain `catch_unwind`/thread join cannot stop. Running the decode in
+/// a dedicated single-thread pool means at most one panic occurs, so it propagates cleanly
+/// to the `catch_unwind` here and becomes a recoverable `Err` instead of crashing the app.
+#[cfg(feature = "raw")]
+fn load_raw_image(path: &Path) -> Result<DynamicImage> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .thread_name(|_| "fcs-raw-decode".into())
+        .build()
+        .context("failed to build RAW decode thread pool")?;
+
+    let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pool.install(|| imagepipe::simple_decode_8bit(path, 0, 0))
+    }))
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "RAW decoder panicked on {} (unsupported camera/format variant)",
+            path.display()
+        )
+    })?
+    .map_err(|e| anyhow::anyhow!("failed to decode RAW image {}: {e}", path.display()))?;
+
+    let buffer = RgbImage::from_raw(decoded.width as u32, decoded.height as u32, decoded.data)
+        .with_context(|| format!("RAW decode returned mismatched buffer for {}", path.display()))?;
+    Ok(DynamicImage::ImageRgb8(buffer))
+}
 
 /// Returns `true` if the given path's extension is in [`SUPPORTED_IMAGE_EXTENSIONS`].
 pub fn is_supported_image_path(path: &Path) -> bool {
@@ -35,6 +108,16 @@ pub fn is_supported_image_path(path: &Path) -> bool {
 /// * `path` - The path to the image file.
 pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
+
+    #[cfg(feature = "raw")]
+    if path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(is_raw_extension)
+    {
+        return load_raw_image(path_ref);
+    }
+
     let reader = ImageReader::open(path_ref)
         .with_context(|| format!("failed to open image {}", path_ref.display()))?
         .with_guessed_format()
@@ -54,6 +137,16 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
 /// Load an image from disk without applying EXIF orientation.
 pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
+
+    #[cfg(feature = "raw")]
+    if path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(is_raw_extension)
+    {
+        return load_raw_image(path_ref);
+    }
+
     ImageReader::open(path_ref)
         .with_context(|| format!("failed to open image {}", path_ref.display()))?
         .with_guessed_format()
@@ -244,6 +337,38 @@ mod tests {
         let dynamic = DynamicImage::ImageRgb8(image);
         let result = super::resize_image(&dynamic, 2, 2, FilterType::Triangle);
         assert_eq!(result.dimensions(), (2, 2));
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn raw_extensions_are_supported_and_classified() {
+        assert!(is_supported_image_path(Path::new("photo.DNG")));
+        assert!(is_supported_image_path(Path::new("shot.cr2")));
+        assert!(is_raw_extension("NeF"));
+        assert!(!is_raw_extension("png"));
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn load_image_rejects_malformed_raw_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let bogus = dir.path().join("not_really.dng");
+        std::fs::write(&bogus, b"this is not a raw file").unwrap();
+        // Must route to the RAW decoder and return an Err, not panic.
+        assert!(super::load_image(&bogus).is_err());
+    }
+
+    /// Opt-in real-decode check: set `FCS_RAW_SAMPLE` to a real camera RAW file path.
+    /// Skips when unset so CI without a sample asset stays green (matches the fixture pattern).
+    #[cfg(feature = "raw")]
+    #[test]
+    fn load_image_decodes_real_raw_when_sample_provided() {
+        let Ok(sample) = std::env::var("FCS_RAW_SAMPLE") else {
+            eprintln!("skipping: FCS_RAW_SAMPLE not set");
+            return;
+        };
+        let img = super::load_image(&sample).expect("real RAW sample should decode");
+        assert!(img.width() > 0 && img.height() > 0);
     }
 
     #[test]

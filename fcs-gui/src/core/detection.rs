@@ -158,10 +158,37 @@ fn build_preprocessor_from_context(
     }
 }
 
+/// Upper bound for a preview texture side. egui rejects (panics on) any texture
+/// whose width or height exceeds the GPU's max 2D texture dimension; full-resolution
+/// camera RAWs routinely exceed it. The app requires a Vulkan/DX12/Metal adapter, all
+/// of which guarantee at least 8192, and a preview never needs more on screen.
+// ponytail: fixed 8192 floor; thread the real `max_texture_side` through if a target
+// device ever reports a lower limit.
+const MAX_PREVIEW_TEXTURE_SIDE: u32 = 8192;
+
+/// Downscale `image` so neither side exceeds [`MAX_PREVIEW_TEXTURE_SIDE`], preserving
+/// aspect ratio. Returns the original untouched when it already fits.
+fn clamp_to_texture_limit(image: &DynamicImage) -> std::borrow::Cow<'_, DynamicImage> {
+    let (w, h) = (image.width(), image.height());
+    if w <= MAX_PREVIEW_TEXTURE_SIDE && h <= MAX_PREVIEW_TEXTURE_SIDE {
+        return std::borrow::Cow::Borrowed(image);
+    }
+    let scale = MAX_PREVIEW_TEXTURE_SIDE as f32 / w.max(h) as f32;
+    let nw = ((w as f32 * scale).floor() as u32).max(1);
+    let nh = ((h as f32 * scale).floor() as u32).max(1);
+    std::borrow::Cow::Owned(image.resize_exact(nw, nh, image::imageops::FilterType::Triangle))
+}
+
 /// Convert a decoded image into an egui texture image without the
 /// intermediate full-image RGBA copy that `to_rgba8()` incurs: RGB8 and RGBA8
 /// buffers (the common decode/webcam formats) are read in place.
+///
+/// Oversized images are downscaled to the texture-side limit first; detection overlays
+/// stay correct because they are positioned against the original image size, not the
+/// preview texture's pixel dimensions.
 pub(crate) fn color_image_from_dynamic(image: &DynamicImage) -> egui::ColorImage {
+    let clamped = clamp_to_texture_limit(image);
+    let image = clamped.as_ref();
     let size = [image.width() as usize, image.height() as usize];
     match image {
         DynamicImage::ImageRgb8(rgb) => egui::ColorImage::from_rgb(size, rgb.as_raw()),
@@ -426,4 +453,34 @@ pub fn spawn_detection_job(
             error!("GUI dropped detection result for {}", path.display());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, RgbImage};
+
+    #[test]
+    fn clamp_leaves_small_images_untouched() {
+        let img = DynamicImage::ImageRgb8(RgbImage::new(1024, 768));
+        // Borrowed (no copy) means it fit and was returned as-is.
+        assert!(matches!(
+            clamp_to_texture_limit(&img),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn clamp_downscales_oversized_within_limit_keeping_aspect() {
+        // 6192x8256 RAW (the crashing case) — taller side drives the scale.
+        let img = DynamicImage::ImageRgb8(RgbImage::new(6192, 8256));
+        let clamped = clamp_to_texture_limit(&img);
+        let (w, h) = (clamped.width(), clamped.height());
+        assert!(w <= MAX_PREVIEW_TEXTURE_SIDE && h <= MAX_PREVIEW_TEXTURE_SIDE);
+        assert_eq!(h, MAX_PREVIEW_TEXTURE_SIDE); // longest side pinned to the limit
+        // Aspect ratio preserved within rounding.
+        let orig = 6192.0_f32 / 8256.0;
+        let got = w as f32 / h as f32;
+        assert!((orig - got).abs() < 0.01);
+    }
 }

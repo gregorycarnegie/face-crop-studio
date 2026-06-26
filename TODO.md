@@ -643,3 +643,13 @@ Leverage GPU compute for massive performance gains in image processing operation
   - [ ] Requires CODE_SIGN_PFX (base64-encoded PFX) and CODE_SIGN_PASSWORD. To be set as repository secrets. Skipped silently if absent.
 - [ ] **macOS**
   - [ ] To activate signing/notarization later, add five repo secrets: APPLE_DEVELOPER_ID_CERT (base64 of the .p12), APPLE_DEVELOPER_ID_PASS (.p12 password), APPLE_DEVELOPER_ID_NAME (the keychain identity string), APPLE_NOTARIZE_USER/APPLE_NOTARIZE_PASS (Apple ID + app-specific password), APPLE_TEAM_ID. No code changes needed.
+
+---
+
+## COMPETITIVE FEATURE PARITY (from Face Crop Jet review)
+
+Two features Face Crop Jet ships that we don't, identified from inspecting `FCJ-1.9.3`. The rest of FCJ's stack (dlib CPU detection, DevExpress UI) is not worth borrowing — our GPU/enhancement/mapping story is already stronger.
+
+- [ ] **Watch-folder mode** — add `--watch <dir>` to `fcs-cli` that monitors a directory and runs the existing batch crop/export path on new/changed image files. Use the `notify` crate as a thin event loop around the current batch workflow (no new processing logic). FCJ calls this "Robot/Directory Monitor" mode. Highest value, lowest cost.
+- [x] **RAW input** — pure-Rust `imagepipe`/`rawloader` behind the `raw` feature (on in CLI+GUI), routed through `load_image` in `fcs-utils/src/image_utils.rs`; extensions dng/cr2/cr3/nef/arw/rw2/orf/raf/srw/pef. Hardened against three real crashes: GPU preprocess falls back to CPU above the device max texture dimension (`fcs-core/src/preprocess.rs`); RAW decode runs in a dedicated single-thread rayon pool + `catch_unwind` so `rawloader` panics on unsupported DNGs become skippable `Err`s instead of aborting; release profile switched to `panic = "unwind"` so batch panic-safety works; GUI preview/thumbnail textures downscaled to ≤8192/side (`fcs-gui/src/core/detection.rs`). Note: `rawloader` doesn't support every DNG variant — `libraw` (native dep) is the upgrade path if broader coverage is needed.
+- [ ] **HEIC/HEIF input** — needs native `libheif` (HEIC = HEVC-in-HEIF, no pure-Rust decoder), i.e. a vcpkg system dependency behind its own feature flag. Closes the remaining "any image format" gap vs FCJ's ImageMagick I/O.

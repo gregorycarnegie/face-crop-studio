@@ -1,7 +1,10 @@
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+# "unwind" (not "abort") so the catch_unwind panic-safety in batch processing
+# (fcs-gui run_batch_job_panic_safe) actually works in shipped builds: a single
+# undecodable file is skipped instead of aborting the whole app.
+panic = "unwind"
 strip = "debuginfo"
 
 [profile.dev]
@@ -55,6 +58,8 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 imageproc = "0.27.0"
 imgref = "1.12.2"
+# Pure-Rust camera RAW decode (demosaic + sRGB); pulls its own image 0.24 internally.
+imagepipe = "0.5.0"
 ravif = { version = "0.13.0", default-features = false, features = [
     "threading",
 ] }

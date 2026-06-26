@@ -547,9 +547,22 @@ fn gpu_preprocess(
     );
 
     let (orig_w, orig_h) = image.dimensions();
-    let rgba = image.to_rgba8();
     let device = context.device();
     let queue = context.queue();
+
+    // The source image is uploaded as a single wgpu texture, which is capped at the
+    // device's max 2D texture dimension (commonly 8192). Full-resolution camera RAWs
+    // routinely exceed this, so fall back to CPU preprocessing rather than tripping a
+    // fatal wgpu validation error. CPU resize handles arbitrarily large inputs.
+    let max_dim = device.limits().max_texture_dimension_2d;
+    if orig_w > max_dim || orig_h > max_dim {
+        log::debug!(
+            "source {orig_w}x{orig_h} exceeds GPU max texture dimension {max_dim}; using CPU preprocess"
+        );
+        return cpu_preprocess(image, config);
+    }
+
+    let rgba = image.to_rgba8();
 
     let src_size = wgpu::Extent3d {
         width: orig_w,
