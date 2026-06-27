@@ -55,7 +55,6 @@
   },
   "enhance": {
     "enabled": true,
-    "preset": "none",
     "auto_color": false,
     "exposure_stops": 0.0,
     "brightness": 0,
@@ -69,10 +68,6 @@
   "telemetry": {
     "enabled": true,
     "level": "trace"
-  },
-  "batch_logging": {
-    "enabled": true,
-    "format": "json"
   },
   "gpu": {
     "enabled": true,

@@ -19,7 +19,6 @@ use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool, mpsc},
 };
-use tempfile::TempPath;
 
 // ── Sidebar / inspector tab selectors ────────────────────────────────────────
 
@@ -656,7 +655,6 @@ pub struct App2 {
     pub current_job: Option<u64>,
     pub model_path_input: String,
     pub model_path_dirty: bool,
-    pub clipboard_temp_images: Vec<TempPath>,
     pub clipboard_paste_pending: bool,
     /// Set when egui handled a text paste (clipboard had text). Cleared on the
     /// next V-release so we don't also trigger an image paste in that case.

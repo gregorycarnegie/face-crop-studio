@@ -623,18 +623,6 @@ fn output_tab(ui: &mut Ui, app: &mut App2) {
         let mut q = app.settings.crop.jpeg_quality as f32;
         slider_with_label(ui, "", &mut q, 50.0, 100.0, "px");
         app.settings.crop.jpeg_quality = q as u8;
-
-        ui.add_space(8.0);
-        field_label(ui, "Output directory");
-        let mut dir_str = String::new(); // output_dir not in AppSettings; use rfd directly
-        ui.add(egui::TextEdit::singleline(&mut dir_str).desired_width(ui.available_width()));
-
-        ui.add_space(4.0);
-        if ui.button("Browse…").clicked()
-            && let Some(_dir) = rfd::FileDialog::new().pick_folder()
-        {
-            // would persist to settings if field exists
-        }
     });
 }
 

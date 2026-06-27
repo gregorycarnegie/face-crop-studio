@@ -6,7 +6,7 @@ use crate::theme::P;
 use crate::types::App2;
 use egui::{Frame, Popup, RichText, Sense, Ui, Vec2};
 use fcs_utils::{
-    config::{BatchLogFormat, MetadataMode, ResizeQuality},
+    config::{MetadataMode, ResizeQuality},
     configure_telemetry,
 };
 
@@ -226,27 +226,6 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                             app.settings.telemetry.level_filter(),
                         );
                     }
-
-                    // ── Batch Logging ──────────────────────────────────────────
-                    ui.separator();
-                    section_label(ui, "Batch Logging");
-                    ui.checkbox(
-                        &mut app.settings.batch_logging.enabled,
-                        "Enable batch logging",
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Format");
-                        ui.radio_value(
-                            &mut app.settings.batch_logging.format,
-                            BatchLogFormat::Json,
-                            "JSON",
-                        );
-                        ui.radio_value(
-                            &mut app.settings.batch_logging.format,
-                            BatchLogFormat::Csv,
-                            "CSV",
-                        );
-                    });
 
                     // ── Quality Rules ──────────────────────────────────────────
                     ui.separator();

@@ -1,4 +1,3 @@
-pub mod cache;
 pub mod detection;
 pub mod export;
 pub mod quality;

@@ -459,8 +459,6 @@ pub struct AppSettings {
     pub enhance: EnhanceSettings,
     /// Telemetry and diagnostics preferences.
     pub telemetry: TelemetrySettings,
-    /// Batch processing logging settings.
-    pub batch_logging: BatchLoggingSettings,
     /// Maximum number of worker threads used by the GUI batch export pipeline.
     /// `None` falls back to a conservative `min(4, max(1, num_cpus / 2))` default
     /// chosen to limit peak memory pressure from concurrent full-resolution images.
@@ -493,49 +491,11 @@ impl Default for AppSettings {
             crop: CropSettings::default(),
             enhance: EnhanceSettings::default(),
             telemetry: TelemetrySettings::default(),
-            batch_logging: BatchLoggingSettings::default(),
             batch_parallelism: None,
             gpu: GpuSettings::default(),
         };
         settings.crop.sanitize();
         settings
-    }
-}
-
-/// Format for batch failure logs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum BatchLogFormat {
-    #[default]
-    Json,
-    Csv,
-}
-
-impl fmt::Display for BatchLogFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BatchLogFormat::Json => write!(f, "JSON"),
-            BatchLogFormat::Csv => write!(f, "CSV"),
-        }
-    }
-}
-
-/// Settings for logging failed batch operations.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct BatchLoggingSettings {
-    /// Whether to log failed items to a file.
-    pub enabled: bool,
-    /// The format of the log file.
-    pub format: BatchLogFormat,
-}
-
-impl Default for BatchLoggingSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            format: BatchLogFormat::Json,
-        }
     }
 }
 
@@ -776,12 +736,6 @@ mod tests {
     fn resize_quality_display() {
         assert_eq!(ResizeQuality::Quality.to_string(), "quality");
         assert_eq!(ResizeQuality::Speed.to_string(), "speed");
-    }
-
-    #[test]
-    fn batch_log_format_display() {
-        assert_eq!(BatchLogFormat::Json.to_string(), "JSON");
-        assert_eq!(BatchLogFormat::Csv.to_string(), "CSV");
     }
 
     #[test]

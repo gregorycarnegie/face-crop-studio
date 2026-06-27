@@ -2,41 +2,8 @@
 
 use crate::types::DetectionWithQuality;
 use fcs_core::{CropSettings, Detection, crop_face_from_image};
-use fcs_utils::{config::AppSettings, quality::Quality};
+use fcs_utils::config::AppSettings;
 use image::DynamicImage;
-use std::collections::HashSet;
-
-pub fn apply_quality_rules_to_preview(
-    detections: &[DetectionWithQuality],
-    selected: &mut HashSet<usize>,
-    auto_skip_no_high_quality: bool,
-    auto_select_best: bool,
-) {
-    if detections.is_empty() {
-        return;
-    }
-
-    if auto_select_best {
-        let best = detections
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.quality_score.partial_cmp(&b.quality_score).unwrap())
-            .map(|(i, _)| i);
-        if let Some(idx) = best {
-            selected.clear();
-            selected.insert(idx);
-        }
-    }
-
-    if auto_skip_no_high_quality {
-        let has_high = detections
-            .iter()
-            .any(|d| matches!(d.quality, Quality::High));
-        if !has_high {
-            selected.clear();
-        }
-    }
-}
 
 pub fn refresh_thumbnail(
     ctx: &egui::Context,

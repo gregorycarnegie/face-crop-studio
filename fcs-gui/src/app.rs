@@ -177,7 +177,6 @@ impl App2 {
             current_job: None,
             model_path_input,
             model_path_dirty: false,
-            clipboard_temp_images: Vec::new(),
             clipboard_paste_pending: false,
             suppress_image_paste: false,
             webcam_state: WebcamState::default(),

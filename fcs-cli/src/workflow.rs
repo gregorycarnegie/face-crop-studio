@@ -632,7 +632,6 @@ mod tests {
         let filter = QualityFilter {
             min_quality: None,
             auto_select: true,
-            fallback: None,
             auto_skip_no_high: false,
             suffix_enabled: false,
         };
@@ -785,7 +784,6 @@ mod tests {
         let filter = Arc::new(QualityFilter {
             min_quality: None,
             auto_select: false,
-            fallback: None,
             auto_skip_no_high: true,
             suffix_enabled: false,
         });
@@ -856,7 +854,6 @@ mod tests {
         let filter = Arc::new(QualityFilter {
             min_quality: Some(Quality::High),
             auto_select: false,
-            fallback: None,
             auto_skip_no_high: false,
             suffix_enabled: false,
         });
@@ -923,7 +920,6 @@ mod tests {
         let filter = Arc::new(QualityFilter {
             min_quality: None,
             auto_select: true,
-            fallback: None,
             auto_skip_no_high: false,
             suffix_enabled: false,
         });

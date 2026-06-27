@@ -3,15 +3,7 @@
 use crate::theme::P;
 use egui::{Color32, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
-// ── Themed slider ─────────────────────────────────────────────────────────────
-
 const LABEL_W: f32 = 50.0;
-
-/// Draw a slider with the peach-thumb dark-track style and return changed flag.
-pub fn themed_slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32) -> bool {
-    ui.add(egui::Slider::new(value, min..=max).show_value(false))
-        .changed()
-}
 
 /// Slider with inline value label on the right.
 pub fn slider_with_label(
@@ -154,48 +146,6 @@ pub fn toggle_row(ui: &mut Ui, label: &str, on: &mut bool) -> bool {
     .inner
 }
 
-// ── Color swatch + hex input ──────────────────────────────────────────────────
-
-pub fn color_swatch_input(ui: &mut Ui, hex: &mut String, color: &mut [u8; 3]) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        let (resp, painter) = ui.allocate_painter(Vec2::splat(28.0), Sense::click());
-        let fill = Color32::from_rgb(color[0], color[1], color[2]);
-        painter.rect_filled(resp.rect, 6.0, fill);
-        painter.rect_stroke(
-            resp.rect,
-            6.0,
-            Stroke::new(1.0, P::RULE),
-            egui::StrokeKind::Outside,
-        );
-
-        let text_resp = ui.add(
-            egui::TextEdit::singleline(hex)
-                .desired_width(ui.available_width())
-                .font(egui::FontId::monospace(11.5)),
-        );
-        if text_resp.changed()
-            && let Some(c) = parse_hex_color(hex)
-        {
-            *color = c;
-            changed = true;
-        }
-    });
-    changed
-}
-
-fn parse_hex_color(hex: &str) -> Option<[u8; 3]> {
-    let s = hex.trim_start_matches('#');
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some([r, g, b])
-    } else {
-        None
-    }
-}
-
 // ── Panel header ──────────────────────────────────────────────────────────────
 
 /// Collapsible panel header.  Returns whether it was clicked to toggle.
@@ -249,18 +199,6 @@ pub fn panel_header(ui: &mut Ui, num: &str, title: &str, open: bool) -> bool {
         Stroke::new(1.0, P::RULE),
     );
     resp.clicked()
-}
-
-// ── Status badge ──────────────────────────────────────────────────────────────
-
-pub fn badge(ui: &mut Ui, label: &str) {
-    let (bg, fg) = crate::theme::badge_color(label);
-    let font = egui::FontId::monospace(9.5);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, fg);
-    let pad = Vec2::new(5.0, 1.5);
-    let (resp, painter) = ui.allocate_painter(galley.size() + pad * 2.0, Sense::hover());
-    painter.rect_filled(resp.rect, 3.0, bg);
-    painter.galley(resp.rect.min + pad, galley, fg);
 }
 
 // ── Face chip ─────────────────────────────────────────────────────────────────

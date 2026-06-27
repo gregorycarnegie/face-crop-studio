@@ -342,59 +342,6 @@ pub fn start_batch_export(app: &mut App2) {
     });
 }
 
-// Per-image detection diagnostic — commented out for normal use. Uncomment
-// this function and the call site in `run_batch_job` to capture per-image
-// detection counts and sorted score lists at `debug` level for diffing two
-// batch runs. See ARCHITECTURE.md "GPU Inference Determinism" for usage.
-//
-// Output lines are prefixed `[batch-diag]` for easy grepping; format:
-//   `[batch-diag] det=<n> border=<n> min=<f.4> max=<f.4> path=<...> scores=[<f.4>,...]`
-//
-// `compare_batch_diag.py` in the repo root parses two such files and reports
-// per-image mismatches.
-//
-// fn log_detection_diag(path: &Path, detections: &[Detection], score_threshold: f32) {
-//     if !log::log_enabled!(log::Level::Debug) {
-//         return;
-//     }
-//
-//     const BORDERLINE_MARGIN: f32 = 0.02;
-//     let borderline = detections
-//         .iter()
-//         .filter(|d| d.score < score_threshold + BORDERLINE_MARGIN)
-//         .count();
-//
-//     let (min_score, max_score) = detections.iter().fold((f32::MAX, f32::MIN), |(lo, hi), d| {
-//         (lo.min(d.score), hi.max(d.score))
-//     });
-//
-//     // Sort scores descending so cross-run diffs line up by rank rather than by
-//     // detection order (which can shuffle even without count change).
-//     let mut sorted_scores: Vec<f32> = detections.iter().map(|d| d.score).collect();
-//     sorted_scores.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-//     let scores_str = sorted_scores
-//         .iter()
-//         .map(|s| format!("{:.4}", s))
-//         .collect::<Vec<_>>()
-//         .join(",");
-//
-//     let (min_display, max_display) = if detections.is_empty() {
-//         ("-".to_string(), "-".to_string())
-//     } else {
-//         (format!("{:.4}", min_score), format!("{:.4}", max_score))
-//     };
-//
-//     debug!(
-//         "[batch-diag] det={} border={} min={} max={} path={} scores=[{}]",
-//         detections.len(),
-//         borderline,
-//         min_display,
-//         max_display,
-//         path.display(),
-//         scores_str
-//     );
-// }
-
 /// Run one batch job and convert any panic into a [`BatchFileStatus::Failed`].
 /// One corrupt/edge-case image must not abort the rest of the batch.
 fn run_batch_job_panic_safe(
@@ -481,11 +428,6 @@ fn run_batch_job(
             };
         }
     };
-
-    // Per-batch detection diagnostic — disabled. Re-enable by uncommenting this
-    // line and the `log_detection_diag` function below to investigate GPU inference
-    // run-to-run variance. See ARCHITECTURE.md "GPU Inference Determinism".
-    // log_detection_diag(&path, &detections, settings.detection.score_threshold);
 
     let faces_detected = detections.len();
     if detections.is_empty() {

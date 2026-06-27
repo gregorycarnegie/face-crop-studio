@@ -67,8 +67,6 @@ pub struct QualityFilter {
     pub min_quality: Option<Quality>,
     /// If true, choose the highest available crop automatically (future use).
     pub auto_select: bool,
-    /// Optional fallback quality if no crop meets `min_quality`.
-    pub fallback: Option<Quality>,
     /// Skip exporting when no detection meets `Quality::High`.
     pub auto_skip_no_high: bool,
     /// Append quality suffixes to exported filenames.
@@ -81,7 +79,6 @@ impl QualityFilter {
         Self {
             min_quality,
             auto_select: false,
-            fallback: None,
             auto_skip_no_high: false,
             suffix_enabled: false,
         }

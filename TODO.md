@@ -60,7 +60,7 @@
 ### Coverage Follow-up #2 (fcs-utils gaps identified from coverage snapshot)
 
 - [x] `fcs-utils/src/color.rs` (80%) — cover 3-char/4-char/8-char hex parsing, `0x` prefix, `RgbaColor::to_hsv`/`from_hsv`, and blue-dominant HSV branch.
-- [x] `fcs-utils/src/config.rs` (75%) — cover `DetectionSettings::sanitize`, `InputDimensions::sanitize`, `CropSettings::sanitize`, `MetadataMode::from_str`, `ResizeQuality::from_str` error, `ResizeQuality::as_label`, `BatchLogFormat` Display, and `GpuSettings→GpuContextOptions` From impls.
+- [x] `fcs-utils/src/config.rs` (75%) — cover `DetectionSettings::sanitize`, `InputDimensions::sanitize`, `CropSettings::sanitize`, `MetadataMode::from_str`, `ResizeQuality::from_str` error, `ResizeQuality::as_label`, and `GpuSettings→GpuContextOptions` From impls.
 - [x] `fcs-utils/src/fixtures.rs` (58%) — cover `fixtures_dir()` via `YUNET_FIXTURE_ROOT` env var, `load_fixture_bytes`, and `load_fixture_json`.
 - [x] `fcs-utils/src/image_utils.rs` (75%) — cover `dynamic_to_bgr_chw`, `load_image` error path, and `resize_image` Triangle (non-fast) path.
 - [x] `fcs-utils/src/gpu/mod.rs` (49%) — cover `pack_rgba_pixels`/`unpack_rgba_pixels` roundtrip, all `GpuStatusIndicator` constructors, `GpuStatusMode::as_str`, `GpuAvailability::is_available`/`context`, and `GpuContextPool` acquire/try_acquire/capacity/available (GPU-gated).

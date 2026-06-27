@@ -132,10 +132,6 @@ With `quality_rules.auto_select_best_face: true` (the GUI default), only the top
 - `nms_threshold: 0.2` (down from the YuNet upstream 0.3) — more aggressive overlap suppression absorbs IoU jitter for clearly-overlapping boxes.
 - `fcs-core::nms::dedup_close_centers` — post-NMS pass that drops detections whose centers are within 50% of the larger bbox's longest edge. Catches the multi-scale duplicates that low-IoU NMS lets through. Wired into `apply_postprocess`.
 
-#### Diagnostic logging
-
-There's a `log_detection_diag` helper in `fcs-gui/src/core/export.rs` (currently commented out) that logs per-image detection counts and sorted score lists at `debug` level. Uncomment its definition and call site in `run_batch_job`, then run two batches with `RUST_LOG="fcs_gui::core::export=debug"`, capture the `[batch-diag]` lines from each into a file, and diff with `compare_batch_diag.py` to see which images are flipping. Re-comment when done.
-
 ## Testing Matrix
 
 | Area                 | Location                               | Purpose                                         |
