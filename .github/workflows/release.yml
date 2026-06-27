@@ -36,16 +36,9 @@ jobs:
       - name: Validate WGSL shaders
         run: cargo test -p fcs-utils validate_all_wgsl_files
 
-  windows-release:
-    name: Windows Release Artifacts
-    needs: shader-validation
-    runs-on: windows-latest
-    permissions:
-      contents: write
-    env:
-      # Evaluated once at job start; used by signing steps to skip gracefully
-      # when the certificate secret is not configured.
-      HAS_CODE_SIGN: ${{ secrets.CODE_SIGN_PFX != '' }}
+  prepare-models:
+    name: Prepare Release Models
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -64,8 +57,84 @@ jobs:
           mkdir -p models
           curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
           uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
-            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
-            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
+            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --input-shape "1,3,640,640"
+
+      - name: Verify model checksums
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import sys
+
+          expected = {
+              "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
+              "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
+          }
+
+          def sha256(path: pathlib.Path) -> str:
+              h = hashlib.sha256()
+              with path.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          failed = False
+          for rel_path, expected_hash in expected.items():
+              path = pathlib.Path(rel_path)
+              if not path.exists():
+                  print(f"Missing model file: {rel_path}", file=sys.stderr)
+                  failed = True
+                  continue
+              actual_hash = sha256(path)
+              if actual_hash != expected_hash:
+                  print(
+                      f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
+                      file=sys.stderr,
+                  )
+                  failed = True
+              else:
+                  print(f"Verified {rel_path}: {actual_hash}")
+
+          if failed:
+              sys.exit(1)
+          PY
+
+      - name: Upload prepared models
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-models
+          path: |
+            models/face_detection_yunet_2023mar.onnx
+            models/face_detection_yunet_2023mar_640.onnx
+          if-no-files-found: error
+          retention-days: 1
+
+  windows-release:
+    name: Windows Release Artifacts
+    needs: [shader-validation, prepare-models]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      # Evaluated once at job start; used by signing steps to skip gracefully
+      # when the certificate secret is not configured.
+      HAS_CODE_SIGN: ${{ secrets.CODE_SIGN_PFX != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download prepared models
+        uses: actions/download-artifact@v4
+        with:
+          name: release-models
+          path: models
 
       - name: Verify model checksums
         shell: bash
@@ -319,7 +388,7 @@ jobs:
 
   macos-release:
     name: macOS Release Artifacts (Apple Silicon)
-    needs: shader-validation
+    needs: [shader-validation, prepare-models]
     runs-on: macos-latest
     permissions:
       contents: write
@@ -336,17 +405,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Download and process models
-        shell: bash
-        run: |
-          mkdir -p models
-          curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-          uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
-            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
-            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
+      - name: Download prepared models
+        uses: actions/download-artifact@v4
+        with:
+          name: release-models
+          path: models
 
       - name: Verify model checksums
         shell: bash
@@ -403,7 +466,7 @@ jobs:
         run: |
           brew update
           # dav1d + pkg-config: AVIF decode support (mirrors the Windows vcpkg setup).
-          # libheif: HEIC/HEIF decode (brew ships >= 1.17, what libheif-rs needs).
+          # libheif: HEIC/HEIF decode (brew ships a recent libheif for libheif-rs).
           # librsvg: rsvg-convert for SVG → PNG iconset generation.
           # create-dmg: drag-to-Applications DMG layout.
           brew install dav1d libheif pkg-config librsvg create-dmg
@@ -469,7 +532,7 @@ jobs:
 
   linux-release:
     name: Linux Release Artifacts (x86_64)
-    needs: shader-validation
+    needs: [shader-validation, prepare-models]
     # Build on 22.04 for broad glibc compatibility (binaries link against
     # glibc 2.35 and run on Ubuntu 22.04+ and other modern distros).
     runs-on: ubuntu-22.04
@@ -484,17 +547,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Download and process models
-        shell: bash
-        run: |
-          mkdir -p models
-          curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-          uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
-            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
-            || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
+      - name: Download prepared models
+        uses: actions/download-artifact@v4
+        with:
+          name: release-models
+          path: models
 
       - name: Verify model checksums
         shell: bash
@@ -571,11 +628,11 @@ jobs:
           echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
           pkg-config --modversion dav1d
-          # HEIC/HEIF decode: apt's libheif (1.12 on 22.04) is older than the 1.17
+          # HEIC/HEIF decode: apt's libheif (1.12 on 22.04) is older than the 1.21
           # libheif-rs needs, so build libde265 (HEVC decode) + libheif from source as
           # static libs, mirroring the dav1d-from-source approach for clean static linking.
           DE265_VERSION=1.0.15
-          LIBHEIF_VERSION=1.19.7
+          LIBHEIF_VERSION=1.23.0
           curl -fsSL -o /tmp/libde265.tar.gz \
             "https://github.com/strukturag/libde265/releases/download/v${DE265_VERSION}/libde265-${DE265_VERSION}.tar.gz"
           tar -xf /tmp/libde265.tar.gz -C /tmp
