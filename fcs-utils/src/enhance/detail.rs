@@ -134,20 +134,19 @@ pub(super) fn unsharp_with_preblur_rgba(
     );
     let mut out: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(w, h);
 
-    for ((dst, s), b) in out
-        .as_mut()
-        .chunks_exact_mut(4)
-        .zip(src.as_raw().chunks_exact(4))
-        .zip(blurred.as_raw().chunks_exact(4))
-    {
-        for c in 0..3usize {
-            let src_val = s[c] as f32;
-            let diff = src_val - b[c] as f32;
-            let val = amount.mul_add(diff, src_val);
-            dst[c] = val.round().clamp(0.0, 255.0) as u8;
-        }
-        dst[3] = s[3];
-    }
+    out.as_mut()
+        .par_chunks_exact_mut(4)
+        .zip(src.as_raw().par_chunks_exact(4))
+        .zip(blurred.as_raw().par_chunks_exact(4))
+        .for_each(|((dst, s), b)| {
+            for c in 0..3usize {
+                let src_val = s[c] as f32;
+                let diff = src_val - b[c] as f32;
+                let val = amount.mul_add(diff, src_val);
+                dst[c] = val.round().clamp(0.0, 255.0) as u8;
+            }
+            dst[3] = s[3];
+        });
 
     out
 }

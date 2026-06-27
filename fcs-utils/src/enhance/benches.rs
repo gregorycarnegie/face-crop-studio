@@ -162,6 +162,59 @@ fn baseline_background_blur(
     DynamicImage::ImageRgba8(out)
 }
 
+/// Sequential (pre-rayon) unsharp, kept only as the bench baseline.
+fn baseline_unsharp(src: &RgbaImage, blurred: &RgbaImage, amount: f32) -> RgbaImage {
+    let amount = amount.clamp(0.0, 2.0);
+    let (w, h) = src.dimensions();
+    let mut out: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(w, h);
+    for ((dst, s), b) in out
+        .as_mut()
+        .chunks_exact_mut(4)
+        .zip(src.as_raw().chunks_exact(4))
+        .zip(blurred.as_raw().chunks_exact(4))
+    {
+        for c in 0..3usize {
+            let src_val = s[c] as f32;
+            let diff = src_val - b[c] as f32;
+            let val = amount.mul_add(diff, src_val);
+            dst[c] = val.round().clamp(0.0, 255.0) as u8;
+        }
+        dst[3] = s[3];
+    }
+    out
+}
+
+#[test]
+#[ignore]
+fn bench_unsharp_variants() {
+    let src = RgbaImage::from_pixel(1920, 1080, Rgba([130, 110, 90, 255]));
+    let blurred = image::imageops::fast_blur(&src, 3.0);
+
+    let iterations = 50;
+    for _ in 0..3 {
+        let _ = super::detail::unsharp_with_preblur_rgba(&src, &blurred, 0.8);
+        let _ = baseline_unsharp(&src, &blurred, 0.8);
+    }
+
+    let start_new = Instant::now();
+    for _ in 0..iterations {
+        let _ = super::detail::unsharp_with_preblur_rgba(&src, &blurred, 0.8);
+    }
+    let new_time = start_new.elapsed();
+
+    let start_old = Instant::now();
+    for _ in 0..iterations {
+        let _ = baseline_unsharp(&src, &blurred, 0.8);
+    }
+    let old_time = start_old.elapsed();
+
+    println!(
+        "unsharp rayon avg: {:?}, sequential baseline avg: {:?}",
+        new_time / iterations,
+        old_time / iterations
+    );
+}
+
 #[test]
 #[ignore]
 fn bench_skin_smoothing_variants() {
