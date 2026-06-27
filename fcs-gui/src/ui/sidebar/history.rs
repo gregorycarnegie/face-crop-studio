@@ -1,7 +1,6 @@
 //! Crop history tab UI.
 
-use crate::theme::P;
-use crate::types::App2;
+use crate::{theme::P, types::App2};
 use egui::{RichText, Sense, Stroke, Ui, Vec2};
 
 pub(super) fn show_history(ui: &mut Ui, app: &mut App2) {

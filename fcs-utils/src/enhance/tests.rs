@@ -1,9 +1,4 @@
 use super::*;
-use super::{
-    apply_background_blur, apply_background_blur_with_preblur, apply_red_eye_removal,
-    apply_saturation, apply_unsharp_mask, apply_unsharp_with_preblur, build_equalization_lut,
-    skin_kernel,
-};
 use image::{GenericImageView, RgbaImage};
 use std::sync::Arc;
 

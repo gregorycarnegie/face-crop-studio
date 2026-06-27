@@ -1,8 +1,10 @@
-use crate::gpu::activation::ActivationKind;
-use crate::gpu::conv2d::{Conv2dChannels, Conv2dConfig, Conv2dOptions, SpatialDims};
-use crate::gpu::onnx::OnnxInitializerMap;
-use crate::gpu::ops::GpuInferenceOps;
-use crate::gpu::tensor::GpuTensor;
+use crate::gpu::{
+    activation::ActivationKind,
+    conv2d::{Conv2dChannels, Conv2dConfig, Conv2dOptions, SpatialDims},
+    onnx::OnnxInitializerMap,
+    ops::GpuInferenceOps,
+    tensor::GpuTensor,
+};
 
 use anyhow::{Context, Result};
 use std::path::Path;

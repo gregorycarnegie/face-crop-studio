@@ -1,14 +1,16 @@
 //! Centre canvas column — image viewport + face overlays + mini-log.
 
-use crate::interaction::bbox_drag::{apply_drag, hit_test_handle};
-use crate::rendering::paint::{
-    draw_confidence_badge, draw_drag_handle, draw_face_box, draw_landmark_dot,
+use crate::{
+    interaction::bbox_drag::{apply_drag, hit_test_handle},
+    rendering::paint::{draw_confidence_badge, draw_drag_handle, draw_face_box, draw_landmark_dot},
+    theme::P,
+    types::{ActiveBoxDrag, App2, DragHandle, LogKind, ManualBoxDraft, RotationDragState},
+    ui::widgets::{ctl_pill, face_chip},
 };
-use crate::theme::P;
-use crate::types::{ActiveBoxDrag, App2, DragHandle, LogKind, ManualBoxDraft, RotationDragState};
-use crate::ui::widgets::{ctl_pill, face_chip};
-use egui::epaint::{Mesh, Vertex};
-use egui::{Color32, CursorIcon, Frame, Pos2, Sense, Stroke, Ui, Vec2};
+use egui::{
+    Color32, CursorIcon, Frame, Pos2, Sense, Stroke, Ui, Vec2,
+    epaint::{Mesh, Vertex},
+};
 use fcs_core::{BoundingBox, calculate_crop_region};
 use fcs_utils::outline_points_for_rect;
 

@@ -2,8 +2,7 @@
 
 use crate::color::RgbaColor;
 
-use super::outline::build_path;
-use super::types::CropShape;
+use super::{outline::build_path, types::CropShape};
 use image::{DynamicImage, RgbaImage};
 use rayon::prelude::*;
 use std::f32::consts::FRAC_1_SQRT_2;

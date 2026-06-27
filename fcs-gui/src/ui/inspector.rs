@@ -1,10 +1,12 @@
 //! Right inspector panel — Crop / Output / Enhance tabs.
 
-use crate::theme::P;
-use crate::types::{App2, InspectorTab};
-use crate::ui::shape::shape_controls;
-use crate::ui::widgets::{
-    field_label, panel_header, segmented_control, slider_with_label, toggle_row,
+use crate::{
+    theme::P,
+    types::{App2, InspectorTab},
+    ui::{
+        shape::shape_controls,
+        widgets::{field_label, panel_header, segmented_control, slider_with_label, toggle_row},
+    },
 };
 use egui::{Sense, Stroke, Ui, Vec2};
 use fcs_core::preset_by_name;

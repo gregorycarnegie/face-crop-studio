@@ -5,9 +5,11 @@ use bytemuck::cast_slice;
 use image::{DynamicImage, RgbaImage};
 use wgpu::util::DeviceExt;
 
-use crate::shape::CropShape;
-use crate::shape::outline_points_for_rect;
-use crate::{create_gpu_pipeline, gpu_readback, storage_buffer_entry, uniform_buffer_entry};
+use crate::{
+    create_gpu_pipeline, gpu_readback,
+    shape::{CropShape, outline_points_for_rect},
+    storage_buffer_entry, uniform_buffer_entry,
+};
 
 use super::{GpuBufferPool, GpuContext, SHAPE_MASK_WGSL, pack_rgba_pixels, unpack_rgba_pixels};
 
@@ -192,8 +194,10 @@ impl GpuShapeMask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::RgbaColor;
-    use crate::gpu::{GpuAvailability, GpuContextOptions};
+    use crate::{
+        color::RgbaColor,
+        gpu::{GpuAvailability, GpuContextOptions},
+    };
     use image::RgbaImage;
 
     fn test_context() -> Option<Arc<GpuContext>> {

@@ -1,9 +1,8 @@
 //! Menu bar.
 
-use crate::app::collect_folder_images;
-use crate::core::settings::persist_with_feedback;
-use crate::theme::P;
-use crate::types::App2;
+use crate::{
+    app::collect_folder_images, core::settings::persist_with_feedback, theme::P, types::App2,
+};
 use egui::{Frame, Popup, RichText, Sense, Ui, Vec2};
 use fcs_utils::{
     config::{MetadataMode, ResizeQuality},

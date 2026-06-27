@@ -46,8 +46,7 @@ fn yunet_core_matches_opencv_parity() -> anyhow::Result<()> {
 const MAX_CASES_PER_CATEGORY: usize = 3;
 
 fn collect_parity_cases() -> anyhow::Result<Vec<(std::path::PathBuf, FixtureFile)>> {
-    use std::collections::HashMap;
-    use std::fs;
+    use std::{collections::HashMap, fs};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     enum Category {

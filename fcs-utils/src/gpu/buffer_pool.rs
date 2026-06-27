@@ -1,6 +1,8 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use crate::gpu::GpuContext;
 use thiserror::Error;

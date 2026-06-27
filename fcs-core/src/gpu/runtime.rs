@@ -1,11 +1,13 @@
-use crate::gpu::graph::{
-    self, BACKBONE_STAGES, DETECTION_HEADS, DetectionLevelOutputs, WeightProvider,
+use crate::{
+    gpu::{
+        graph::{self, BACKBONE_STAGES, DETECTION_HEADS, DetectionLevelOutputs, WeightProvider},
+        onnx::OnnxInitializerMap,
+        ops::GpuInferenceOps,
+        tensor::GpuTensor,
+    },
+    model::decode_yunet_outputs,
+    preprocess::InputSize,
 };
-use crate::gpu::onnx::OnnxInitializerMap;
-use crate::gpu::ops::GpuInferenceOps;
-use crate::gpu::tensor::GpuTensor;
-use crate::model::decode_yunet_outputs;
-use crate::preprocess::InputSize;
 use bytemuck::cast_slice;
 use std::sync::mpsc;
 use wgpu::CommandEncoderDescriptor;

@@ -1,7 +1,9 @@
 //! Queue tab and batch file tree UI.
 
-use crate::theme::P;
-use crate::types::{App2, BatchFileStatus};
+use crate::{
+    theme::P,
+    types::{App2, BatchFileStatus},
+};
 use egui::{RichText, Sense, Stroke, Ui, Vec2};
 
 pub(super) fn show_queue(ui: &mut Ui, app: &mut App2) {

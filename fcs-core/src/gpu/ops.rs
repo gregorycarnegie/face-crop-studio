@@ -1,10 +1,12 @@
-use super::activation::{ActivationKind, ActivationPipeline};
-use super::add::AddPipeline;
-use super::batch_norm::{BatchNormBindings, BatchNormConfig, BatchNormPipeline};
-use super::conv2d::{Conv2dConfig, Conv2dPipeline};
-use super::max_pool::{MaxPoolConfig, MaxPoolPipeline};
-use super::tensor::GpuTensor;
-use super::upsample2x::Upsample2xPipeline;
+use super::{
+    activation::{ActivationKind, ActivationPipeline},
+    add::AddPipeline,
+    batch_norm::{BatchNormBindings, BatchNormConfig, BatchNormPipeline},
+    conv2d::{Conv2dConfig, Conv2dPipeline},
+    max_pool::{MaxPoolConfig, MaxPoolPipeline},
+    tensor::GpuTensor,
+    upsample2x::Upsample2xPipeline,
+};
 
 use anyhow::Result;
 use fcs_utils::gpu::{GpuBufferPool, GpuContext};

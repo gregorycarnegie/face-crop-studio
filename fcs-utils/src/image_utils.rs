@@ -4,9 +4,13 @@
 //! tensor-friendly layouts while preserving compatibility with OpenCV glue code.
 
 use anyhow::{Context, Result};
-use fast_image_resize::{self as fir, images::Image as FirImage, images::ImageRef as FirImageRef};
-use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageReader, RgbImage, imageops::FilterType};
+use fast_image_resize::{
+    self as fir,
+    images::{Image as FirImage, ImageRef as FirImageRef},
+};
+use image::{
+    DynamicImage, ImageDecoder, ImageReader, RgbImage, imageops::FilterType, metadata::Orientation,
+};
 use ndarray::Array3;
 use rayon::prelude::*;
 use std::{borrow::Cow, path::Path};

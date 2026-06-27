@@ -17,8 +17,7 @@
 use fcs_core::{BoundingBox, CropRegion, CropSettings, PositioningMode, calculate_crop_region};
 use fcs_utils::fixtures_dir;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::{env, fs};
+use std::{collections::BTreeMap, env, fs};
 
 const GOLDEN_RELATIVE: &str = "golden/crop_regions.json";
 

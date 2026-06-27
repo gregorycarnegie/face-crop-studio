@@ -20,8 +20,7 @@ pub fn get_available_vram() -> Option<u64> {
 
 #[cfg(target_os = "windows")]
 fn get_vram_windows() -> Option<u64> {
-    use windows::Win32::Graphics::Dxgi::*;
-    use windows::core::Interface;
+    use windows::{Win32::Graphics::Dxgi::*, core::Interface};
 
     // Safety: FFI calls to DXGI. We act conservatively and catch errors as Option::None.
     unsafe {

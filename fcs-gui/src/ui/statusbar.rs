@@ -1,7 +1,6 @@
 //! Bottom status bar.
 
-use crate::theme::P;
-use crate::types::App2;
+use crate::{theme::P, types::App2};
 use egui::{Frame, Sense, Stroke, Vec2};
 
 pub fn show(ui: &mut egui::Ui, app: &mut App2) {
@@ -261,10 +260,12 @@ fn process_ram_mb() -> Option<u64> {
 fn gpu_vram_mb() -> Option<u64> {
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Graphics::Dxgi::{
-            CreateDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, IDXGIAdapter3, IDXGIFactory1,
+        use windows::{
+            Win32::Graphics::Dxgi::{
+                CreateDXGIFactory1, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, IDXGIAdapter3, IDXGIFactory1,
+            },
+            core::Interface as _,
         };
-        use windows::core::Interface as _;
         unsafe {
             let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
             let adapter1 = factory.EnumAdapters1(0).ok()?;

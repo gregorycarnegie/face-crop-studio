@@ -4,8 +4,10 @@ mod history;
 mod mapping;
 mod queue;
 
-use crate::theme::P;
-use crate::types::{App2, SidebarTab};
+use crate::{
+    theme::P,
+    types::{App2, SidebarTab},
+};
 use egui::{Sense, Stroke, Ui, Vec2};
 
 use history::show_history;

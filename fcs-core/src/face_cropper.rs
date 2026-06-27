@@ -3,8 +3,10 @@
 //! Provides a simple `crop_face_from_image` helper that ties a `Detection` to
 //! a `CropSettings` and returns an owned `DynamicImage` sized to the requested output.
 
-use crate::cropper::{CropRegion, CropSettings, calculate_crop_region};
-use crate::postprocess::Detection;
+use crate::{
+    cropper::{CropRegion, CropSettings, calculate_crop_region},
+    postprocess::Detection,
+};
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
 use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
@@ -98,8 +100,10 @@ pub fn crop_face_from_image(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cropper::{CropSettings, FillColor};
-    use crate::postprocess::BoundingBox;
+    use crate::{
+        cropper::{CropSettings, FillColor},
+        postprocess::BoundingBox,
+    };
     use image::{DynamicImage, Rgba, RgbaImage};
 
     #[test]

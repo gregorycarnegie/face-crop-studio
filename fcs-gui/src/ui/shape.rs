@@ -1,7 +1,9 @@
 //! Crop shape controls panel for the inspector.
 
-use crate::types::App2;
-use crate::ui::widgets::{field_label, slider_with_label};
+use crate::{
+    types::App2,
+    ui::widgets::{field_label, slider_with_label},
+};
 use egui::Ui;
 use fcs_utils::{CropShape, PolygonCornerStyle};
 use std::f32::consts::PI;

@@ -1,5 +1,7 @@
-use super::activation::ActivationKind;
-use super::utils::{buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry};
+use super::{
+    activation::ActivationKind,
+    utils::{buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry},
+};
 use crate::gpu::GpuTensor;
 use fcs_utils::create_gpu_pipeline;
 

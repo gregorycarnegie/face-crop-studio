@@ -1,8 +1,10 @@
 //! Toolbar ribbon.
 
-use crate::theme::P;
-use crate::types::App2;
-use crate::ui::widgets::{gpu_pill, tb_sep};
+use crate::{
+    theme::P,
+    types::App2,
+    ui::widgets::{gpu_pill, tb_sep},
+};
 use egui::{Color32, Frame, Sense, Stroke, Ui, Vec2};
 
 pub fn show(ui: &mut Ui, app: &mut App2) {

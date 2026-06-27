@@ -3,10 +3,12 @@
 //! This module exposes [`YuNetDetector`], the primary interface used by both the CLI and GUI
 //! front-ends to run YuNet against images.
 
-use crate::gpu::runtime::GpuYuNet;
-use crate::model::YuNetModel;
-use crate::postprocess::{Detection, PostprocessConfig, apply_postprocess};
-use crate::preprocess::{CpuPreprocessor, PreprocessConfig, PreprocessOutput, Preprocessor};
+use crate::{
+    gpu::runtime::GpuYuNet,
+    model::YuNetModel,
+    postprocess::{Detection, PostprocessConfig, apply_postprocess},
+    preprocess::{CpuPreprocessor, PreprocessConfig, PreprocessOutput, Preprocessor},
+};
 
 use anyhow::{Context, Result};
 use fcs_utils::{load_image, timing_guard};

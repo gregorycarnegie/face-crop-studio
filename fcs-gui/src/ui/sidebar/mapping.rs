@@ -1,7 +1,6 @@
 //! Mapping tab UI and queue application helpers.
 
-use crate::theme::P;
-use crate::types::App2;
+use crate::{theme::P, types::App2};
 use egui::{RichText, Sense, Ui, Vec2};
 
 use super::queue::draw_dashed_border;

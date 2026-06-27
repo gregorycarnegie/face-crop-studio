@@ -3,8 +3,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Context, Result};
-use fcs_core::PositioningMode;
-use fcs_core::preset_by_name;
+use fcs_core::{PositioningMode, preset_by_name};
 use fcs_utils::{
     ImageFormatHint, PngCompression, Quality,
     config::{AppSettings, MetadataMode, default_settings_path},

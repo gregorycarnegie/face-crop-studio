@@ -6,5 +6,4 @@ pub mod theme;
 pub mod types;
 pub mod ui;
 
-pub use types::App2;
 pub use types::*;

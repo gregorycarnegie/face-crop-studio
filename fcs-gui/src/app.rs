@@ -1,8 +1,10 @@
 //! eframe::App implementation for fcs-gui.
 
-use crate::core::{detection::build_detector, settings::load_settings};
-use crate::types::*;
-use crate::ui;
+use crate::{
+    core::{detection::build_detector, settings::load_settings},
+    types::*,
+    ui,
+};
 
 use eframe::{App, CreationContext, Frame};
 use egui::{CursorIcon, ResizeDirection, ViewportCommand};
@@ -58,12 +60,16 @@ fn read_clipboard_image() -> anyhow::Result<Arc<DynamicImage>> {
 /// under this format instead of CF_DIB, which arboard does not handle.
 #[cfg(target_os = "windows")]
 fn windows_png_from_clipboard() -> anyhow::Result<image::DynamicImage> {
-    use windows::Win32::Foundation::HGLOBAL;
-    use windows::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
-        RegisterClipboardFormatW,
+    use windows::Win32::{
+        Foundation::HGLOBAL,
+        System::{
+            DataExchange::{
+                CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+                RegisterClipboardFormatW,
+            },
+            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
+        },
     };
-    use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 
     unsafe {
         let format = RegisterClipboardFormatW(windows::core::w!("PNG"));
