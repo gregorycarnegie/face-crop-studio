@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use log::debug;
 
 /// Query the available VRAM (in bytes) on the system.
@@ -8,19 +9,13 @@ use log::debug;
 /// - **Linux/Other**: Returns `None` (implementing reliable VRAM queries via Vulkan/sysfs is complex).
 pub fn get_available_vram() -> Option<u64> {
     #[cfg(target_os = "windows")]
-    {
-        get_vram_windows()
-    }
+    return get_vram_windows();
 
     #[cfg(target_os = "macos")]
-    {
-        get_vram_macos()
-    }
+    return get_vram_macos();
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        None
-    }
+    None
 }
 
 #[cfg(target_os = "windows")]
