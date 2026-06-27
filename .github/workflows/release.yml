@@ -662,6 +662,10 @@ jobs:
           sudo cmake --install "/tmp/libheif-${LIBHEIF_VERSION}/build"
           pkg-config --modversion libheif
           pkg-config --libs --static libheif
+          echo "SYSTEM_DEPS_LIBHEIF_LINK=static" >> "$GITHUB_ENV"
+          echo "SYSTEM_DEPS_LIBHEIF_SEARCH_NATIVE=/usr/local/lib" >> "$GITHUB_ENV"
+          echo "SYSTEM_DEPS_LIBHEIF_LIB=heif de265" >> "$GITHUB_ENV"
+          echo "SYSTEM_DEPS_LIBHEIF_INCLUDE=/usr/local/include" >> "$GITHUB_ENV"
           echo "RUSTFLAGS=-l dylib=stdc++" >> "$GITHUB_ENV"
 
       - name: Install Rust
