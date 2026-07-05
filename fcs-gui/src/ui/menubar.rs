@@ -65,6 +65,19 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 });
 
                 menu_item(ui, "Edit", 180.0, |ui| {
+                    if ui
+                        .add_enabled(!app.undo_stack.is_empty(), egui::Button::new("Undo"))
+                        .clicked()
+                    {
+                        app.undo();
+                    }
+                    if ui
+                        .add_enabled(!app.redo_stack.is_empty(), egui::Button::new("Redo"))
+                        .clicked()
+                    {
+                        app.redo();
+                    }
+                    ui.separator();
                     if ui.button("Select All").clicked() {
                         let n = app.preview.detections.len();
                         app.selected_faces = (0..n).collect();
@@ -100,7 +113,9 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                         app.load_image_path(path);
                     }
                     ui.separator();
-                    if ui.button("Clear Detections").clicked() {
+                    if ui.button("Clear Detections").clicked() && !app.preview.detections.is_empty()
+                    {
+                        app.push_undo();
                         app.preview.detections.clear();
                         app.selected_faces.clear();
                     }

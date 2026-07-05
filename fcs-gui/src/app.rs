@@ -154,6 +154,8 @@ impl App2 {
             crop_preview_cache: LruCache::new(NonZeroUsize::new(500).unwrap()),
             image_cache: LruCache::new(NonZeroUsize::new(20).unwrap()),
             selected_faces: HashSet::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             show_crop_overlay: true,
             crop_history,
             crop_history_index: 0,
@@ -313,6 +315,19 @@ impl App for App2 {
         self.sync_window_title(ctx);
         if std::mem::take(&mut self.clipboard_paste_pending) {
             self.paste_clipboard_image();
+        }
+        // Undo/Redo shortcuts — skipped while a text field has focus so
+        // TextEdit keeps its own internal undo.
+        if ctx.memory(|m| m.focused().is_none()) {
+            use egui::{Key, KeyboardShortcut, Modifiers};
+            let redo_y = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
+            let redo_shift_z = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+            let undo = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+            if ctx.input_mut(|i| i.consume_shortcut(&redo_y) || i.consume_shortcut(&redo_shift_z)) {
+                self.redo();
+            } else if ctx.input_mut(|i| i.consume_shortcut(&undo)) {
+                self.undo();
+            }
         }
         if self.is_busy || self.webcam_state.status == WebcamStatus::Active {
             ctx.request_repaint();
@@ -544,6 +559,7 @@ impl App2 {
                 self.active_bbox_drag = None;
                 self.manual_box_tool_enabled = false;
                 self.canvas_rotation = 0.0;
+                self.clear_edit_history();
 
                 self.last_detect_ms = Some(data.detect_ms);
                 let n = self.preview.detections.len();
@@ -711,6 +727,7 @@ impl App2 {
         self.preview.detections.clear();
         self.preview.source_image = None;
         self.preview.is_loading = false;
+        self.clear_edit_history();
         let idx = self.webcam_state.device_index;
         let w = self.webcam_state.width;
         let h = self.webcam_state.height;
@@ -834,7 +851,58 @@ impl App2 {
         (&self.settings.crop).into()
     }
 
+    // ── Edit history (Undo/Redo) ─────────────────────────────────────────────
+
+    fn edit_snapshot(&self) -> EditSnapshot {
+        EditSnapshot {
+            detections: self.preview.detections.clone(),
+            selected: self.selected_faces.clone(),
+        }
+    }
+
+    fn restore_snapshot(&mut self, snap: EditSnapshot) {
+        self.preview.detections = snap.detections;
+        self.selected_faces = snap.selected;
+        self.crop_preview_cache.clear();
+    }
+
+    /// Capture the current face state before a mutation. Clears the redo stack.
+    pub fn push_undo(&mut self) {
+        self.undo_stack.push(self.edit_snapshot());
+        if self.undo_stack.len() > 50 {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(snap) = self.undo_stack.pop() {
+            let current = self.edit_snapshot();
+            self.redo_stack.push(current);
+            self.restore_snapshot(snap);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(snap) = self.redo_stack.pop() {
+            let current = self.edit_snapshot();
+            self.undo_stack.push(current);
+            self.restore_snapshot(snap);
+        }
+    }
+
+    /// Drop edit history — called when a new image's detections arrive so undo
+    /// can't restore boxes from a previous image.
+    pub fn clear_edit_history(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
     pub fn delete_selected_faces(&mut self) {
+        if self.selected_faces.is_empty() {
+            return;
+        }
+        self.push_undo();
         let mut i = 0;
         self.preview.detections.retain(|_| {
             let keep = !self.selected_faces.contains(&i);
@@ -848,6 +916,7 @@ impl App2 {
     pub fn commit_manual_box(&mut self, bbox: fcs_core::BoundingBox) {
         use fcs_core::{Detection, Landmark};
         use fcs_utils::quality::Quality;
+        self.push_undo();
         let det = crate::types::DetectionWithQuality {
             detection: Detection {
                 bbox,

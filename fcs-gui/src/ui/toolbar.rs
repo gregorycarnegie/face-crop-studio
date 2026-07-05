@@ -37,7 +37,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 tb_sep(ui);
 
                 // Icon buttons
-                icon_btn(ui, "📂", "Open", || {
+                icon_btn(ui, "📂", "Open", true, || {
                     if let Some(paths) = rfd::FileDialog::new()
                         .add_filter("Images", fcs_utils::SUPPORTED_IMAGE_EXTENSIONS)
                         .pick_files()
@@ -49,11 +49,13 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                         }
                     }
                 });
-                icon_btn(ui, "💾", "Save", || {
+                icon_btn(ui, "💾", "Save", true, || {
                     crate::core::export::export_selected_faces(app);
                 });
-                icon_btn(ui, "↩", "Undo", || {});
-                icon_btn(ui, "↪", "Redo", || {});
+                let can_undo = !app.undo_stack.is_empty();
+                let can_redo = !app.redo_stack.is_empty();
+                icon_btn(ui, "↩", "Undo (Ctrl+Z)", can_undo, || app.undo());
+                icon_btn(ui, "↪", "Redo (Ctrl+Y)", can_redo, || app.redo());
                 tb_sep(ui);
 
                 // Rotation
@@ -174,17 +176,27 @@ fn ghost_btn(ui: &mut egui::Ui, label: &str) -> bool {
     resp.clicked()
 }
 
-fn icon_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str, action: impl FnOnce()) -> bool {
+fn icon_btn(
+    ui: &mut egui::Ui,
+    icon: &str,
+    tooltip: &str,
+    enabled: bool,
+    action: impl FnOnce(),
+) -> bool {
     let (resp, painter) = ui.allocate_painter(Vec2::splat(34.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = if enabled {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        resp
+    };
     let r = resp.rect;
-    if resp.hovered() {
+    if enabled && resp.hovered() {
         painter.rect_filled(r, 7.0, P::white_alpha(15));
     }
     painter.rect_stroke(
         r,
         7.0,
-        Stroke::new(1.0, P::RULE2),
+        Stroke::new(1.0, if enabled { P::RULE2 } else { P::RULE }),
         egui::StrokeKind::Outside,
     );
     painter.text(
@@ -192,9 +204,9 @@ fn icon_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str, action: impl FnOnce())
         egui::Align2::CENTER_CENTER,
         icon,
         egui::FontId::proportional(14.0),
-        P::INK2,
+        if enabled { P::INK2 } else { P::white_alpha(50) },
     );
-    let clicked = resp.clicked();
+    let clicked = enabled && resp.clicked();
     resp.on_hover_text(tooltip);
     if clicked {
         action();

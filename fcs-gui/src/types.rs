@@ -123,6 +123,14 @@ impl DetectionWithQuality {
     }
 }
 
+// ── Edit history (Undo/Redo) ──────────────────────────────────────────────────
+
+/// Snapshot of the editable face state, captured before each mutation.
+pub struct EditSnapshot {
+    pub detections: Vec<DetectionWithQuality>,
+    pub selected: HashSet<usize>,
+}
+
 // ── Cache keys ────────────────────────────────────────────────────────────────
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -620,6 +628,8 @@ pub struct App2 {
 
     // Selection & editing
     pub selected_faces: HashSet<usize>,
+    pub undo_stack: Vec<EditSnapshot>,
+    pub redo_stack: Vec<EditSnapshot>,
     pub show_crop_overlay: bool,
     pub crop_history: Vec<ConfigCropSettings>,
     pub crop_history_index: usize,

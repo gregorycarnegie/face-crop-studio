@@ -700,6 +700,8 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                         rot,
                     );
                     if let Some(handle) = hit_test_handle(sr, press_pos) {
+                        // ponytail: snapshots even a zero-movement drag; harmless no-op undo entry
+                        app.push_undo();
                         app.active_bbox_drag = Some(ActiveBoxDrag {
                             index: sel_i,
                             handle,
