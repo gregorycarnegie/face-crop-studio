@@ -58,22 +58,19 @@ fn tab_bar(ui: &mut Ui, app: &mut App2) {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.set_height(32.0);
         let w = ui.available_width() / tabs.len() as f32;
+        let row_left = ui.cursor().min.x;
+        let mut underline_y = 0.0;
         for (label, variant) in &tabs {
             let is_active = app.sidebar_tab == *variant;
             let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            underline_y = resp.rect.max.y - 2.0;
             let text_color = if is_active { P::PEACH } else { P::INK3 };
             if resp.hovered() && !is_active {
                 painter.rect_filled(resp.rect, 0.0, P::white_alpha(5));
             }
             if is_active {
                 painter.rect_filled(resp.rect, 0.0, P::peach_alpha(10));
-                painter.line_segment(
-                    [
-                        egui::pos2(resp.rect.min.x, resp.rect.max.y - 2.0),
-                        egui::pos2(resp.rect.max.x, resp.rect.max.y - 2.0),
-                    ],
-                    Stroke::new(2.0, P::PEACH),
-                );
             }
             painter.text(
                 resp.rect.center(),
@@ -86,5 +83,22 @@ fn tab_bar(ui: &mut Ui, app: &mut App2) {
                 app.sidebar_tab = *variant;
             }
         }
+        // Sliding underline under the active tab
+        let active_idx = tabs
+            .iter()
+            .position(|(_, v)| app.sidebar_tab == *v)
+            .unwrap_or(0);
+        let anim = ui.ctx().animate_value_with_time(
+            ui.id().with("tab_underline"),
+            active_idx as f32,
+            0.15,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(row_left + anim * w, underline_y),
+                egui::pos2(row_left + (anim + 1.0) * w, underline_y),
+            ],
+            Stroke::new(2.0, P::PEACH),
+        );
     });
 }

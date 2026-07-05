@@ -113,13 +113,27 @@ fn primary_btn(ui: &mut egui::Ui, label: &str, fg: Color32, bg: Color32) -> bool
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, fg);
     let w = galley.size().x + 26.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let r = resp.rect;
-    let fill = if resp.hovered() {
+    let fill = if resp.is_pointer_button_down_on() {
+        lighten(bg, -0.04)
+    } else if resp.hovered() {
         lighten(bg, 0.08)
     } else {
         bg
     };
     painter.rect_filled(r, 7.0, fill);
+    // Accent border makes the two primary actions read as primary.
+    let border_a = if resp.hovered() { 130 } else { 70 };
+    painter.rect_stroke(
+        r,
+        7.0,
+        Stroke::new(
+            1.0,
+            Color32::from_rgba_unmultiplied(fg.r(), fg.g(), fg.b(), border_a),
+        ),
+        egui::StrokeKind::Outside,
+    );
     painter.galley(
         r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
         galley,
@@ -133,6 +147,7 @@ fn ghost_btn(ui: &mut egui::Ui, label: &str) -> bool {
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, P::INK);
     let w = galley.size().x + 26.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let r = resp.rect;
     if resp.hovered() {
         painter.rect_filled(r, 7.0, P::white_alpha(15));
@@ -161,6 +176,7 @@ fn ghost_btn(ui: &mut egui::Ui, label: &str) -> bool {
 
 fn icon_btn(ui: &mut egui::Ui, icon: &str, tooltip: &str, action: impl FnOnce()) -> bool {
     let (resp, painter) = ui.allocate_painter(Vec2::splat(34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let r = resp.rect;
     if resp.hovered() {
         painter.rect_filled(r, 7.0, P::white_alpha(15));
@@ -192,6 +208,7 @@ fn toggle_btn(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
     let w = galley.size().x + 26.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let r = resp.rect;
     if active {
         painter.rect_filled(r, 7.0, P::cyan_alpha(30));
@@ -225,6 +242,7 @@ fn danger_btn(ui: &mut egui::Ui, label: &str, action: impl FnOnce()) -> bool {
         .layout_no_wrap(label.to_string(), font, P::ROSE);
     let w = galley.size().x + 26.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let r = resp.rect;
     let bg = if resp.hovered() {
         P::rose_alpha(30)

@@ -97,7 +97,9 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
         );
 
         // Detect button
-        let detect_resp = ui.interact(detect_rect, resp.id.with("detect_btn"), Sense::click());
+        let detect_resp = ui
+            .interact(detect_rect, resp.id.with("detect_btn"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         let detect_bg = if app.is_busy {
             P::white_alpha(8)
         } else if detect_resp.hovered() {
@@ -119,7 +121,9 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
         detect_resp.on_hover_text("Freeze frame and run face detection");
 
         // Close button
-        let close_resp = ui.interact(close_rect, resp.id.with("close_btn"), Sense::click());
+        let close_resp = ui
+            .interact(close_rect, resp.id.with("close_btn"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         let close_bg = if close_resp.hovered() {
             P::rose_alpha(60)
         } else {
@@ -145,7 +149,9 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
             egui::pos2(row_rect.max.x - btn_w / 2.0 - 4.0, row_rect.center().y),
             Vec2::new(btn_w, btn_h),
         );
-        let btn_resp = ui.interact(btn_rect, resp.id.with("open_btn"), Sense::click());
+        let btn_resp = ui
+            .interact(btn_rect, resp.id.with("open_btn"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         let btn_bg = if btn_resp.hovered() {
             P::lime_alpha(55)
         } else {
@@ -276,7 +282,9 @@ fn drop_zone(ui: &mut Ui, app: &mut App2) {
         egui::pos2(ui.min_rect().min.x + 8.0, ui.cursor().min.y),
         Vec2::new(ui.available_width() - 16.0, 100.0),
     );
-    let resp = ui.allocate_rect(dz_rect, Sense::click());
+    let resp = ui
+        .allocate_rect(dz_rect, Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
     let painter = ui.painter();
 
     let border_color = if resp.hovered() {
@@ -506,6 +514,7 @@ fn tree_row(ui: &mut Ui, app: &App2, idx: usize) -> Option<TreeAction> {
     let row_h = 32.0;
     let (resp, painter) =
         ui.allocate_painter(Vec2::new(ui.available_width(), row_h), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let r = resp.rect;
 
     let bg = if is_active {
@@ -598,7 +607,9 @@ fn row_icon_button(
     color: egui::Color32,
     tooltip: &str,
 ) -> bool {
-    let resp = ui.interact(rect, ui.id().with((salt, idx)), Sense::click());
+    let resp = ui
+        .interact(rect, ui.id().with((salt, idx)), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
     let bg = if resp.hovered() {
         P::white_alpha(20)
     } else {

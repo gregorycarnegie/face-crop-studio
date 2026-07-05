@@ -68,22 +68,19 @@ fn inspector_tab_bar(ui: &mut Ui, app: &mut App2) {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.set_height(32.0);
         let w = ui.available_width() / tabs.len() as f32;
+        let row_left = ui.cursor().min.x;
+        let mut underline_y = 0.0;
         for (label, variant) in &tabs {
             let is_active = app.inspector_tab == *variant;
             let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            underline_y = resp.rect.max.y - 2.0;
             let text_color = if is_active { P::CYAN } else { P::INK3 };
             if resp.hovered() && !is_active {
                 painter.rect_filled(resp.rect, 0.0, P::white_alpha(5));
             }
             if is_active {
                 painter.rect_filled(resp.rect, 0.0, P::cyan_alpha(10));
-                painter.line_segment(
-                    [
-                        egui::pos2(resp.rect.min.x, resp.rect.max.y - 2.0),
-                        egui::pos2(resp.rect.max.x, resp.rect.max.y - 2.0),
-                    ],
-                    Stroke::new(2.0, P::CYAN),
-                );
             }
             painter.text(
                 resp.rect.center(),
@@ -96,6 +93,23 @@ fn inspector_tab_bar(ui: &mut Ui, app: &mut App2) {
                 app.inspector_tab = *variant;
             }
         }
+        // Sliding underline under the active tab
+        let active_idx = tabs
+            .iter()
+            .position(|(_, v)| app.inspector_tab == *v)
+            .unwrap_or(0);
+        let anim = ui.ctx().animate_value_with_time(
+            ui.id().with("tab_underline"),
+            active_idx as f32,
+            0.15,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(row_left + anim * w, underline_y),
+                egui::pos2(row_left + (anim + 1.0) * w, underline_y),
+            ],
+            Stroke::new(2.0, P::CYAN),
+        );
     });
 }
 
@@ -531,6 +545,7 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let (resp, painter) =
                             ui.allocate_painter(Vec2::new(46.0, 26.0), Sense::click());
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let bg = if resp.hovered() {
                             P::lime_alpha(50)
                         } else {

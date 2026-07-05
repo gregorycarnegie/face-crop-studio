@@ -435,29 +435,50 @@ fn stage(ui: &mut Ui, app: &mut App2) {
 
     if let Some(texture) = &app.preview.texture {
         painter.add(image_shape(texture.id(), draw_rect, app.canvas_rotation));
-    } else if app.is_busy {
-        painter.text(
-            fit_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Detecting faces…",
-            egui::FontId::proportional(14.0),
-            P::INK3,
-        );
     } else {
-        painter.text(
-            fit_rect.center() - Vec2::new(0.0, 12.0),
-            egui::Align2::CENTER_CENTER,
-            "Drop an image to begin",
-            egui::FontId::proportional(14.0),
-            P::INK3,
-        );
-        painter.text(
-            fit_rect.center() + Vec2::new(0.0, 12.0),
-            egui::Align2::CENTER_CENTER,
-            "or click Detect faces →",
-            egui::FontId::monospace(11.0),
-            P::INK3,
-        );
+        // Dot-grid backdrop gives the empty stage some depth.
+        let spacing = 24.0;
+        let dot = P::white_alpha(8);
+        let mut y = fit_rect.min.y + spacing / 2.0;
+        while y < fit_rect.max.y {
+            let mut x = fit_rect.min.x + spacing / 2.0;
+            while x < fit_rect.max.x {
+                painter.circle_filled(egui::pos2(x, y), 1.0, dot);
+                x += spacing;
+            }
+            y += spacing;
+        }
+
+        if app.is_busy {
+            painter.text(
+                fit_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Detecting faces…",
+                egui::FontId::proportional(14.0),
+                P::INK2,
+            );
+        } else {
+            // Dashed face-box hint above the prompt text
+            let hint_rect = egui::Rect::from_center_size(
+                fit_rect.center() - Vec2::new(0.0, 52.0),
+                Vec2::splat(56.0),
+            );
+            draw_face_box(&painter, hint_rect, P::INK3, false);
+            painter.text(
+                fit_rect.center() - Vec2::new(0.0, 4.0),
+                egui::Align2::CENTER_CENTER,
+                "Drop an image to begin",
+                egui::FontId::proportional(14.0),
+                P::INK2,
+            );
+            painter.text(
+                fit_rect.center() + Vec2::new(0.0, 20.0),
+                egui::Align2::CENTER_CENTER,
+                "or click Detect faces →",
+                egui::FontId::monospace(11.0),
+                P::INK3,
+            );
+        }
     }
 
     // Face detection overlays
@@ -795,6 +816,9 @@ fn stage(ui: &mut Ui, app: &mut App2) {
 }
 
 fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
+    if app.log_lines.is_empty() {
+        return;
+    }
     let log_w = 300.0;
     let log_max_lines = 5;
     let line_h = 16.0;
@@ -922,6 +946,7 @@ fn zoom_btn(ui: &mut egui::Ui, label: impl Into<String>, _tip: &str) -> bool {
     let galley = ui.painter().layout_no_wrap(label.into(), font, P::INK2);
     let w = (galley.size().x + 14.0).max(26.0);
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 26.0), Sense::click());
+    let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
     let r = resp.rect;
     let bg = if resp.hovered() {
         P::white_alpha(20)

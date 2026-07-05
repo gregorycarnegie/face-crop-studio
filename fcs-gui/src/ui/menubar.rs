@@ -326,6 +326,7 @@ fn menu_item(
         .layout_no_wrap(label.to_string(), font, P::INK2);
     let w = galley.size().x + 20.0;
     let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     let popup_id = Popup::default_response_id(&resp);
     let is_open = Popup::is_id_open(ui.ctx(), popup_id);

@@ -1,7 +1,7 @@
 //! Custom widgets matching the HTML mockup design language.
 
 use crate::theme::P;
-use egui::{Color32, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, CursorIcon, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 const LABEL_W: f32 = 50.0;
 
@@ -57,21 +57,29 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: &mut usize) ->
         StrokeKind::Outside,
     );
 
+    // Sliding selection pill — animates between segments.
+    let anim_i =
+        ui.ctx()
+            .animate_value_with_time(outer_resp.id.with("sel"), *selected as f32, 0.15);
+    let pill_rect = egui::Rect::from_min_size(
+        outer_rect.min + Vec2::new(anim_i * btn_w + 2.0, 2.0),
+        Vec2::new(btn_w - 4.0, 24.0),
+    );
+    painter.rect_filled(pill_rect, 5.0, P::PEACH);
+
     for (i, &label) in options.iter().enumerate() {
         let btn_rect = egui::Rect::from_min_size(
             outer_rect.min + Vec2::new(i as f32 * btn_w + 2.0, 2.0),
             Vec2::new(btn_w - 4.0, 24.0),
         );
         let btn_id = outer_resp.id.with(i);
-        let resp = ui.interact(btn_rect, btn_id, Sense::click());
+        let resp = ui
+            .interact(btn_rect, btn_id, Sense::click())
+            .on_hover_cursor(CursorIcon::PointingHand);
         let is_on = i == *selected;
-        let bg_fill = if is_on {
-            P::PEACH
-        } else if resp.hovered() {
-            P::white_alpha(10)
-        } else {
-            Color32::TRANSPARENT
-        };
+        if !is_on && resp.hovered() {
+            painter.rect_filled(btn_rect, 5.0, P::white_alpha(10));
+        }
         let text_color = if is_on {
             P::BG
         } else if resp.hovered() {
@@ -79,9 +87,6 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: &mut usize) ->
         } else {
             P::INK2
         };
-        if bg_fill != Color32::TRANSPARENT {
-            painter.rect_filled(btn_rect, 5.0, bg_fill);
-        }
         painter.text(
             btn_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -102,33 +107,24 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: &mut usize) ->
 /// Returns (response, changed).
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool) -> (Response, bool) {
     let (resp, painter) = ui.allocate_painter(Vec2::new(30.0, 18.0), Sense::click());
-    let rect = resp.rect;
-    let bg = if *on { P::cyan_alpha(64) } else { P::RULE };
-    painter.rect_filled(rect, 9.0, bg);
-    painter.rect_stroke(
-        rect,
-        9.0,
-        Stroke::new(1.0, if *on { P::cyan_alpha(120) } else { P::RULE2 }),
-        StrokeKind::Outside,
-    );
-    let cx = if *on {
-        rect.max.x - 9.0
-    } else {
-        rect.min.x + 9.0
-    };
-    let thumb_color = if *on { P::CYAN } else { P::INK3 };
-    painter.circle_filled(egui::pos2(cx, rect.center().y), 5.5, thumb_color);
-    if *on {
-        painter.circle_stroke(
-            egui::pos2(cx, rect.center().y),
-            5.5,
-            Stroke::new(0.5, P::CYAN),
-        );
-    }
+    let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
     let changed = resp.clicked();
     if changed {
         *on = !*on;
     }
+    // Animate thumb position and colors between off/on.
+    let t = ui.ctx().animate_bool(resp.id, *on);
+    let rect = resp.rect;
+    painter.rect_filled(rect, 9.0, P::RULE.lerp_to_gamma(P::cyan_alpha(64), t));
+    painter.rect_stroke(
+        rect,
+        9.0,
+        Stroke::new(1.0, P::RULE2.lerp_to_gamma(P::cyan_alpha(120), t)),
+        StrokeKind::Outside,
+    );
+    let cx = egui::lerp((rect.min.x + 9.0)..=(rect.max.x - 9.0), t);
+    let thumb_color = P::INK3.lerp_to_gamma(P::CYAN, t);
+    painter.circle_filled(egui::pos2(cx, rect.center().y), 5.5, thumb_color);
     (resp, changed)
 }
 
@@ -150,11 +146,22 @@ pub fn toggle_row(ui: &mut Ui, label: &str, on: &mut bool) -> bool {
 
 /// Collapsible panel header.  Returns whether it was clicked to toggle.
 pub fn panel_header(ui: &mut Ui, num: &str, title: &str, open: bool) -> bool {
-    let resp = ui.allocate_response(Vec2::new(ui.available_width(), 36.0), Sense::click());
+    let resp = ui
+        .allocate_response(Vec2::new(ui.available_width(), 36.0), Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand);
     let rect = resp.rect;
     let painter = ui.painter();
     if resp.hovered() {
         painter.rect_filled(rect, 0.0, P::white_alpha(4));
+    }
+    // Peach accent bar when open
+    let t = ui.ctx().animate_bool(resp.id.with("open"), open);
+    if t > 0.0 {
+        let bar = egui::Rect::from_min_size(
+            rect.min + Vec2::new(0.0, 9.0),
+            Vec2::new(3.0, (rect.height() - 18.0) * t),
+        );
+        painter.rect_filled(bar, 2.0, P::peach_alpha((230.0 * t) as u8));
     }
     // Number badge
     let num_rect =
@@ -204,7 +211,7 @@ pub fn panel_header(ui: &mut Ui, num: &str, title: &str, open: bool) -> bool {
 // ── Face chip ─────────────────────────────────────────────────────────────────
 
 pub fn face_chip(ui: &mut Ui, label: String, selected: bool, alt: bool) -> Response {
-    let (bg, border, check_bg, text) = if !selected {
+    let (mut bg, mut border, check_bg, text) = if !selected {
         (P::white_alpha(8), P::RULE, Color32::TRANSPARENT, P::INK3)
     } else if alt {
         (P::cyan_alpha(25), P::cyan_alpha(76), P::CYAN, P::CYAN)
@@ -219,6 +226,11 @@ pub fn face_chip(ui: &mut Ui, label: String, selected: bool, alt: bool) -> Respo
     let total_h = 24.0_f32.max(galley.size().y + 8.0);
 
     let (resp, painter) = ui.allocate_painter(Vec2::new(total_w, total_h), Sense::click());
+    let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
+    if resp.hovered() && !selected {
+        bg = P::white_alpha(16);
+        border = P::RULE2;
+    }
     let r = resp.rect;
     painter.rect_filled(r, 12.0, bg);
     painter.rect_stroke(r, 12.0, Stroke::new(1.0, border), egui::StrokeKind::Outside);
