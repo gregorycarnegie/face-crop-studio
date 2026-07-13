@@ -44,6 +44,7 @@ in [draw.io](https://www.drawio.com/) recovers the editable diagram).
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
 - **Enhancement pipeline** – Optional post-crop adjustments (auto colour, exposure, brightness, contrast, saturation, sharpening, skin smoothing, red-eye removal, and portrait background blur) with both CPU (pure Rust) and GPU (WGSL compute shaders) implementations.
+- **Camera RAW input** – DNG, CR2, CR3, NEF, ARW, RW2, ORF, RAF, SRW, and PEF decode via a pure-Rust pipeline in both CLI and GUI, alongside the standard formats (PNG, JPEG, WebP, TIFF, BMP, AVIF, HEIC). Unsupported DNG variants are skipped rather than crashing a batch.
 - **Metadata & export** – Preserve, strip, or customise metadata. Exports support PNG, JPEG (with quality controls), and WebP.
 - **Batch processing** – Both CLI and GUI support multi-image workflows with status tracking, filenames derived from templates, and quality-aware selection.
 - **Clipboard & drag-and-drop import** – Drop/paste a single image to preview instantly, drop a folder/clipboard path list to enqueue its supported images for batch export, or drop CSV/XLSX/Parquet/SQLite tables to seed the mapping workflow.
@@ -70,13 +71,23 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 - **Live preview in the GUI** - Use the Mapping Import panel to choose a file, pick the source/output columns, and inspect a truncated preview before queueing rows.
 - **Batch-aware overrides** - Batch exports respect mapping-provided output names (including nested folders) while still falling back to the existing naming template when no mapping is configured.
 
+## Supported Architectures
+
+Official release binaries are built for:
+
+| Platform | Architecture | Artifacts |
+|----------|--------------|-----------|
+| Windows | x86_64 | MSI, EXE installer, portable ZIP |
+| macOS | aarch64 (Apple Silicon) | DMG (`.app` bundle, GUI only) |
+| Linux | x86_64 | AppImage, `.deb` |
+
+All x86_64 binaries are compiled for the `x86-64-v3` microarchitecture level (AVX2/FMA — Intel Haswell 2013+ or AMD Excavator 2015+). Older CPUs need a local build with `-C target-cpu=x86-64` (edit `.cargo/config.toml`). Intel Macs (x86_64) are not shipped as binaries but build from source.
+
 ## Prerequisites
 
 - **NASM**: You must have [NASM](https://www.nasm.us/) installed and added to your system `PATH` to build the project.
 
 ## Installation (Windows)
-
-For `v1.0.0`, official binaries are Windows-focused.
 
 1. Download either:
    - `face-crop-studio-windows-x86_64.msi` (enterprise installer), or
