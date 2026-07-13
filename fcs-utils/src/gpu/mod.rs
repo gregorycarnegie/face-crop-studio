@@ -44,7 +44,7 @@ pub use buffer_pool::GpuBufferPool;
 pub mod memory;
 pub use memory::get_available_vram;
 
-use std::{fmt, num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct GpuReport {
@@ -52,7 +52,6 @@ pub struct GpuReport {
 }
 
 use crate::telemetry::telemetry_allows;
-use async_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded};
 use log::{Level, debug, info, warn};
 use pollster::block_on;
 use serde::Serialize;
@@ -278,8 +277,8 @@ impl GpuStatusIndicator {
     }
 
     /// Emit a telemetry payload describing this status when runtime telemetry is enabled.
-    pub fn emit_telemetry(&self, pool_capacity: Option<usize>, pool_available: Option<usize>) {
-        emit_gpu_status_event(self, pool_capacity, pool_available);
+    pub fn emit_telemetry(&self) {
+        emit_gpu_status_event(self);
     }
 }
 
@@ -294,15 +293,9 @@ struct GpuStatusTelemetryPayload {
     driver: Option<String>,
     vendor_id: Option<u32>,
     device_id: Option<u32>,
-    pool_capacity: Option<usize>,
-    pool_available: Option<usize>,
 }
 
-fn emit_gpu_status_event(
-    status: &GpuStatusIndicator,
-    pool_capacity: Option<usize>,
-    pool_available: Option<usize>,
-) {
+fn emit_gpu_status_event(status: &GpuStatusIndicator) {
     use log::log;
 
     if !telemetry_allows(Level::Info) {
@@ -319,8 +312,6 @@ fn emit_gpu_status_event(
         driver: status.driver.clone(),
         vendor_id: status.vendor_id,
         device_id: status.device_id,
-        pool_capacity,
-        pool_available,
     };
 
     match serde_json::to_string(&payload) {
@@ -581,143 +572,9 @@ pub enum GpuInitError {
     Disabled,
 }
 
-/// Concurrency guard that keeps GPU contexts balanced across worker threads.
-#[derive(Clone)]
-pub struct GpuContextPool {
-    size: NonZeroUsize,
-    sender: Sender<Arc<GpuContext>>,
-    receiver: Receiver<Arc<GpuContext>>,
-}
-
-impl GpuContextPool {
-    /// Create a bounded pool backed by the provided GPU context.
-    pub fn new(context: Arc<GpuContext>, size: NonZeroUsize) -> Result<Self, GpuPoolError> {
-        let (sender, receiver) = bounded(size.get());
-        for _ in 0..size.get() {
-            sender
-                .send_blocking(context.clone())
-                .map_err(|_| GpuPoolError::Closed)?;
-        }
-
-        Ok(Self {
-            size,
-            sender,
-            receiver,
-        })
-    }
-
-    /// Acquire a GPU context using a blocking call (handy for rayon/CLI threads).
-    pub fn acquire(&self) -> Result<GpuContextGuard, GpuPoolError> {
-        let ctx = self
-            .receiver
-            .recv_blocking()
-            .map_err(|_| GpuPoolError::Closed)?;
-        Ok(GpuContextGuard::new(ctx, &self.sender))
-    }
-
-    /// Acquire a GPU context asynchronously.
-    pub async fn acquire_async(&self) -> Result<GpuContextGuard, GpuPoolError> {
-        let ctx = self
-            .receiver
-            .recv()
-            .await
-            .map_err(|_| GpuPoolError::Closed)?;
-        Ok(GpuContextGuard::new(ctx, &self.sender))
-    }
-
-    /// Try acquiring without blocking, returning `None` when the pool is currently empty.
-    pub fn try_acquire(&self) -> Result<Option<GpuContextGuard>, GpuPoolError> {
-        match self.receiver.try_recv() {
-            Ok(ctx) => Ok(Some(GpuContextGuard::new(ctx, &self.sender))),
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Closed) => Err(GpuPoolError::Closed),
-        }
-    }
-
-    /// Total capacity enforced by this pool.
-    pub fn capacity(&self) -> usize {
-        self.size.get()
-    }
-
-    /// Current number of idle contexts.
-    pub fn available(&self) -> usize {
-        self.receiver.len()
-    }
-}
-
-impl fmt::Debug for GpuContextPool {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GpuContextPool")
-            .field("capacity", &self.capacity())
-            .field("available", &self.available())
-            .finish()
-    }
-}
-
-/// RAII guard for a borrowed GPU context from a [`GpuContextPool`].
-pub struct GpuContextGuard {
-    context: Option<Arc<GpuContext>>,
-    sender: Sender<Arc<GpuContext>>,
-}
-
-impl GpuContextGuard {
-    fn new(context: Arc<GpuContext>, sender: &Sender<Arc<GpuContext>>) -> Self {
-        Self {
-            context: Some(context),
-            sender: sender.clone(),
-        }
-    }
-
-    /// Returns a reference to the inner GPU context.
-    pub fn context(&self) -> &GpuContext {
-        self
-    }
-}
-
-impl std::ops::Deref for GpuContextGuard {
-    type Target = GpuContext;
-
-    fn deref(&self) -> &Self::Target {
-        self.context
-            .as_deref()
-            .expect("GPU context guard should always hold a context")
-    }
-}
-
-impl Drop for GpuContextGuard {
-    fn drop(&mut self) {
-        if let Some(ctx) = self.context.take()
-            && let Err(err) = self.sender.try_send(ctx)
-        {
-            match err {
-                TrySendError::Full(ctx) => {
-                    if let Err(send_err) = self.sender.send_blocking(ctx) {
-                        debug!(
-                            target: "fcs::gpu",
-                            "GPU pool closed while returning guard: {send_err}"
-                        );
-                    }
-                }
-                TrySendError::Closed(_) => debug!(
-                    target: "fcs::gpu",
-                    "GPU pool closed; dropping context guard."
-                ),
-            }
-        }
-    }
-}
-
-/// Errors that can occur while interacting with a [`GpuContextPool`].
-#[derive(Debug, Error)]
-pub enum GpuPoolError {
-    #[error("GPU context pool has been closed")]
-    Closed,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroUsize;
 
     #[test]
     fn disabled_options_skip_gpu_setup() {
@@ -797,60 +654,5 @@ mod tests {
         };
         assert!(!err.is_available());
         assert!(err.context().is_none());
-    }
-
-    #[test]
-    fn gpu_context_pool_acquire_and_release() {
-        let ctx = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => ctx,
-            _ => {
-                eprintln!("Skipping GpuContextPool test: no GPU");
-                return;
-            }
-        };
-
-        let pool = GpuContextPool::new(
-            ctx,
-            NonZeroUsize::new(2).expect("test pool size should be non-zero"),
-        )
-        .expect("GPU context pool should be created");
-
-        assert_eq!(pool.capacity(), 2);
-        assert_eq!(pool.available(), 2);
-
-        let guard1 = pool.acquire().expect("acquire 1");
-        assert_eq!(pool.available(), 1);
-
-        let guard2 = pool.acquire().expect("acquire 2");
-        assert_eq!(pool.available(), 0);
-
-        // try_acquire on empty pool returns None
-        assert!(pool.try_acquire().expect("try_acquire ok").is_none());
-
-        drop(guard1);
-        assert_eq!(pool.available(), 1);
-        drop(guard2);
-        assert_eq!(pool.available(), 2);
-    }
-
-    #[test]
-    fn gpu_context_guard_deref() {
-        let ctx = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => ctx,
-            _ => {
-                eprintln!("Skipping GpuContextGuard test: no GPU");
-                return;
-            }
-        };
-        let pool = GpuContextPool::new(
-            ctx,
-            NonZeroUsize::new(1).expect("test pool size should be non-zero"),
-        )
-        .expect("GPU context pool should be created");
-        let guard = pool
-            .acquire()
-            .expect("GPU context guard should acquire from pool");
-        // Deref should give us access to GpuContext methods
-        let _ = guard.adapter_info();
     }
 }

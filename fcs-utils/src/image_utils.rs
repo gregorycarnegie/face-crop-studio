@@ -11,7 +11,6 @@ use fast_image_resize::{
 use image::{
     DynamicImage, ImageDecoder, ImageReader, RgbImage, imageops::FilterType, metadata::Orientation,
 };
-use ndarray::Array3;
 use rayon::prelude::*;
 use std::{borrow::Cow, path::Path};
 
@@ -285,7 +284,7 @@ fn resize_image_fast(image: &DynamicImage, width: u32, height: u32) -> Option<Rg
 /// # Arguments
 ///
 /// * `image` - The RGB image to convert.
-pub fn rgb_to_bgr_chw(image: &RgbImage) -> Array3<f32> {
+pub fn rgb_to_bgr_chw(image: &RgbImage) -> Vec<f32> {
     let (width, height) = image.dimensions();
     let w = width as usize;
     let h = height as usize;
@@ -314,7 +313,7 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Array3<f32> {
             }
         });
 
-    Array3::from_shape_vec((3, h, w), data).expect("shape matches data length")
+    data
 }
 
 /// Convert any dynamic image into a BGR CHW array by first converting to RGB.
@@ -322,7 +321,7 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Array3<f32> {
 /// # Arguments
 ///
 /// * `image` - The dynamic image to convert.
-pub fn dynamic_to_bgr_chw(image: &DynamicImage) -> Array3<f32> {
+pub fn dynamic_to_bgr_chw(image: &DynamicImage) -> Vec<f32> {
     match image.as_rgb8() {
         Some(rgb) => rgb_to_bgr_chw(rgb),
         None => rgb_to_bgr_chw(&image.to_rgb8()),
@@ -368,11 +367,12 @@ mod tests {
         image.put_pixel(1, 1, image::Rgb([255, 255, 255]));
 
         let array = rgb_to_bgr_chw(&image);
-        assert_eq!(array.shape(), &[3, 2, 2]);
+        assert_eq!(array.len(), 3 * 2 * 2);
 
-        assert_eq!(array[(0, 0, 0)], 255.0);
-        assert_eq!(array[(2, 0, 0)], 0.0);
-        assert_eq!(array[(1, 0, 1)], 128.0);
+        // Flat CHW layout: index = channel * h * w + y * w + x
+        assert_eq!(array[0], 255.0); // B at (0, 0)
+        assert_eq!(array[2 * 4], 0.0); // R at (0, 0)
+        assert_eq!(array[4 + 1], 128.0); // G at (1, 0)
     }
 
     #[test]
@@ -507,7 +507,7 @@ mod benchmarks {
     use image::RgbImage;
     use std::time::Instant;
 
-    fn rgb_to_bgr_chw_baseline(image: &RgbImage) -> Array3<f32> {
+    fn rgb_to_bgr_chw_baseline(image: &RgbImage) -> Vec<f32> {
         let (width, height) = image.dimensions();
         let w = width as usize;
         let h = height as usize;
@@ -534,7 +534,7 @@ mod benchmarks {
                 }
             });
 
-        Array3::from_shape_vec((3, h, w), data).expect("shape matches data length")
+        data
     }
 
     #[test]

@@ -6,9 +6,8 @@
 use eframe::{NativeOptions, egui};
 use fcs_gui::App2;
 use fcs_utils::init_logging;
-use ico::IconDir;
 use log::{LevelFilter, warn};
-use std::{io::Cursor, sync::Arc};
+use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
     init_logging(LevelFilter::Info).expect("failed to initialize logging");
@@ -33,25 +32,20 @@ fn main() -> eframe::Result<()> {
 
 fn load_app_icon() -> Option<egui::IconData> {
     const ICON_BYTES: &[u8] = include_bytes!("../assets/app_icon.ico");
-    let dir = match IconDir::read(Cursor::new(ICON_BYTES)) {
-        Ok(d) => d,
+    // The `image` ico decoder picks the best-quality frame in the file.
+    match image::load_from_memory_with_format(ICON_BYTES, image::ImageFormat::Ico) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (width, height) = rgba.dimensions();
+            Some(egui::IconData {
+                rgba: rgba.into_raw(),
+                width,
+                height,
+            })
+        }
         Err(err) => {
             warn!("Failed to read app icon: {err}");
-            return None;
-        }
-    };
-    let mut best: Option<(ico::IconImage, u32)> = None;
-    for entry in dir.entries() {
-        if let Ok(img) = entry.decode() {
-            let score = img.width().saturating_mul(img.height());
-            if best.as_ref().is_none_or(|(_, s)| score > *s) {
-                best = Some((img, score));
-            }
+            None
         }
     }
-    best.map(|(img, _)| egui::IconData {
-        rgba: img.rgba_data().to_vec(),
-        width: img.width(),
-        height: img.height(),
-    })
 }

@@ -6,8 +6,8 @@ use crate::gpu::{
     tensor::GpuTensor,
 };
 
-use anyhow::{Context, Result};
-use std::path::Path;
+use anyhow::{Context, Result, anyhow};
+use std::{collections::HashMap, path::Path};
 
 #[derive(Clone, Copy)]
 pub struct StageBlock {
@@ -117,8 +117,14 @@ pub const DETECTION_HEADS: [DetectionHeadConfig; 3] = [
     crate::detection_head!("2"),
 ];
 
-pub trait WeightProvider {
-    fn tensor(&self, name: &str) -> Result<GpuTensor>;
+/// GPU-resident weights, keyed by ONNX initializer name.
+pub type GpuWeights = HashMap<String, GpuTensor>;
+
+fn weight(weights: &GpuWeights, name: &str) -> Result<GpuTensor> {
+    weights
+        .get(name)
+        .cloned()
+        .ok_or_else(|| anyhow!("cached weight '{name}' missing"))
 }
 
 pub fn load_backbone_weights(
@@ -166,69 +172,18 @@ pub fn load_backbone_weights(
     OnnxInitializerMap::load(model_path, &names)
 }
 
-pub fn run_stage0_block<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    input: &GpuTensor,
-) -> Result<GpuTensor> {
-    let conv0_weight = weights.tensor("420")?;
-    let conv0_bias = weights.tensor("421")?;
-    let pw_weight = weights.tensor("backbone.model0.conv2.conv1.weight")?;
-    let pw_bias = weights.tensor("backbone.model0.conv2.conv1.bias")?;
-    let dw_weight = weights.tensor("423")?;
-    let dw_bias = weights.tensor("424")?;
-
-    let conv_cfg = Conv2dConfig::new(
-        1,
-        Conv2dChannels::new(3, 16),
-        SpatialDims::new(640, 640),
-        SpatialDims::new(3, 3),
-        SpatialDims::new(2, 2),
-        SpatialDims::new(1, 1),
-        Conv2dOptions::new(1, Some(ActivationKind::Relu)),
-    )?;
-    let relu0 = ops
-        .conv2d_tensor(input, &conv0_weight, &conv0_bias, &conv_cfg)
-        .context("stage0 conv")?;
-
-    let point_cfg = Conv2dConfig::new(
-        1,
-        Conv2dChannels::new(16, 16),
-        SpatialDims::new(320, 320),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(0, 0),
-        Conv2dOptions::new(1, None),
-    )?;
-    let point = ops
-        .conv2d_tensor(&relu0, &pw_weight, &pw_bias, &point_cfg)
-        .context("stage0 pointwise")?;
-
-    let depth_cfg = Conv2dConfig::new(
-        1,
-        Conv2dChannels::new(16, 16),
-        SpatialDims::new(320, 320),
-        SpatialDims::new(3, 3),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(1, 1),
-        Conv2dOptions::new(16, Some(ActivationKind::Relu)),
-    )?;
-    ops.conv2d_tensor(&point, &dw_weight, &dw_bias, &depth_cfg)
-        .context("stage0 depthwise")
-}
-
-fn encode_stage0_block<W: WeightProvider>(
+fn encode_stage0_block(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     input: &GpuTensor,
 ) -> Result<GpuTensor> {
-    let conv0_weight = weights.tensor("420")?;
-    let conv0_bias = weights.tensor("421")?;
-    let pw_weight = weights.tensor("backbone.model0.conv2.conv1.weight")?;
-    let pw_bias = weights.tensor("backbone.model0.conv2.conv1.bias")?;
-    let dw_weight = weights.tensor("423")?;
-    let dw_bias = weights.tensor("424")?;
+    let conv0_weight = weight(weights, "420")?;
+    let conv0_bias = weight(weights, "421")?;
+    let pw_weight = weight(weights, "backbone.model0.conv2.conv1.weight")?;
+    let pw_bias = weight(weights, "backbone.model0.conv2.conv1.bias")?;
+    let dw_weight = weight(weights, "423")?;
+    let dw_bias = weight(weights, "424")?;
 
     let conv_cfg = Conv2dConfig::new(
         1,
@@ -269,42 +224,10 @@ fn encode_stage0_block<W: WeightProvider>(
         .context("stage0 depthwise")
 }
 
-pub fn run_stage_blocks<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    input: &GpuTensor,
-    blocks: &[StageBlock],
-) -> Result<GpuTensor> {
-    let Some((first, rest)) = blocks.split_first() else {
-        anyhow::bail!("stage block list cannot be empty");
-    };
-    let mut current = run_stage_block(
-        ops,
-        weights,
-        input,
-        first.point_weight,
-        first.point_bias,
-        first.depth_weight,
-        first.depth_bias,
-    )?;
-    for block in rest {
-        current = run_stage_block(
-            ops,
-            weights,
-            &current,
-            block.point_weight,
-            block.point_bias,
-            block.depth_weight,
-            block.depth_bias,
-        )?;
-    }
-    Ok(current)
-}
-
-fn encode_stage_blocks<W: WeightProvider>(
+fn encode_stage_blocks(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     input: &GpuTensor,
     blocks: &[StageBlock],
 ) -> Result<GpuTensor> {
@@ -336,11 +259,6 @@ fn encode_stage_blocks<W: WeightProvider>(
     Ok(current)
 }
 
-pub fn pool_tensor(ops: &GpuInferenceOps, tensor: &GpuTensor) -> Result<GpuTensor> {
-    let cfg = crate::gpu::max_pool::MaxPoolConfig::from_tensor(tensor, 2, 2, 0)?;
-    ops.max_pool_tensor(tensor, &cfg)
-}
-
 fn encode_pool_tensor(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
@@ -350,28 +268,10 @@ fn encode_pool_tensor(
     ops.encode_max_pool_tensor(encoder, tensor, &cfg)
 }
 
-pub fn run_backbone_features<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    input: &GpuTensor,
-    stage_count: usize,
-) -> Result<Vec<GpuTensor>> {
-    let mut features = Vec::with_capacity(stage_count);
-    let mut current = run_stage0_block(ops, weights, input)?;
-    for stage in BACKBONE_STAGES.iter().take(stage_count) {
-        if stage.pool_before {
-            current = pool_tensor(ops, &current)?;
-        }
-        current = run_stage_blocks(ops, weights, &current, stage.blocks)?;
-        features.push(current.clone());
-    }
-    Ok(features)
-}
-
-pub fn encode_backbone_features<W: WeightProvider>(
+pub fn encode_backbone_features(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     input: &GpuTensor,
     stage_count: usize,
 ) -> Result<Vec<GpuTensor>> {
@@ -395,10 +295,10 @@ pub struct DetectionLevelOutputs {
     pub kps: GpuTensor,
 }
 
-pub fn encode_neck_and_heads<W: WeightProvider>(
+pub fn encode_neck_and_heads(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     features: &[GpuTensor],
 ) -> Result<[DetectionLevelOutputs; 3]> {
     anyhow::ensure!(
@@ -430,41 +330,10 @@ pub fn encode_neck_and_heads<W: WeightProvider>(
     Ok([level0, level1, level2])
 }
 
-pub fn run_neck_and_heads<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    features: &[GpuTensor],
-) -> Result<[DetectionLevelOutputs; 3]> {
-    anyhow::ensure!(
-        features.len() >= 5,
-        "need at least five backbone outputs (got {})",
-        features.len()
-    );
-
-    let c3 = features[2].clone();
-    let c4 = features[3].clone();
-    let c5 = features[4].clone();
-
-    let p5_raw = run_stage_blocks(ops, weights, &c5, &NECK_BLOCKS[2..3])?;
-    let level2 = run_detection_level(ops, weights, p5_raw.clone(), &DETECTION_HEADS[2])?;
-
-    let up_p5 = ops.resize2x_tensor(&p5_raw)?;
-    let merged_p4_input = ops.add_tensors(&up_p5, &c4)?;
-    let p4_raw = run_stage_blocks(ops, weights, &merged_p4_input, &NECK_BLOCKS[1..2])?;
-    let level1 = run_detection_level(ops, weights, p4_raw.clone(), &DETECTION_HEADS[1])?;
-
-    let up_p4 = ops.resize2x_tensor(&p4_raw)?;
-    let merged_p3_input = ops.add_tensors(&up_p4, &c3)?;
-    let p3_raw = run_stage_blocks(ops, weights, &merged_p3_input, &NECK_BLOCKS[0..1])?;
-    let level0 = run_detection_level(ops, weights, p3_raw.clone(), &DETECTION_HEADS[0])?;
-
-    Ok([level0, level1, level2])
-}
-
-fn encode_detection_level<W: WeightProvider>(
+fn encode_detection_level(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     feature: GpuTensor,
     head: &DetectionHeadConfig,
 ) -> Result<DetectionLevelOutputs> {
@@ -481,36 +350,17 @@ fn encode_detection_level<W: WeightProvider>(
     })
 }
 
-pub fn run_detection_level<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    feature: GpuTensor,
-    head: &DetectionHeadConfig,
-) -> Result<DetectionLevelOutputs> {
-    let cls = run_head_branch(ops, weights, &feature, &head.cls)?;
-    let obj = run_head_branch(ops, weights, &feature, &head.obj)?;
-    let bbox = run_head_branch(ops, weights, &feature, &head.bbox)?;
-    let kps = run_head_branch(ops, weights, &feature, &head.kps)?;
-    Ok(DetectionLevelOutputs {
-        feature,
-        cls,
-        obj,
-        bbox,
-        kps,
-    })
-}
-
-fn encode_head_branch<W: WeightProvider>(
+fn encode_head_branch(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     input: &GpuTensor,
     branch: &HeadBlock,
 ) -> Result<GpuTensor> {
-    let point_weight = weights.tensor(branch.conv1_weight)?;
-    let point_bias = weights.tensor(branch.conv1_bias)?;
-    let depth_weight = weights.tensor(branch.conv2_weight)?;
-    let depth_bias = weights.tensor(branch.conv2_bias)?;
+    let point_weight = weight(weights, branch.conv1_weight)?;
+    let point_bias = weight(weights, branch.conv1_bias)?;
+    let depth_weight = weight(weights, branch.conv2_weight)?;
+    let depth_bias = weight(weights, branch.conv2_bias)?;
 
     let dims = input.shape().dims();
     anyhow::ensure!(
@@ -555,91 +405,22 @@ fn encode_head_branch<W: WeightProvider>(
     ops.encode_conv2d_tensor(encoder, &reduced, &depth_weight, &depth_bias, &depth_cfg)
 }
 
-fn run_head_branch<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    input: &GpuTensor,
-    branch: &HeadBlock,
-) -> Result<GpuTensor> {
-    let point_weight = weights.tensor(branch.conv1_weight)?;
-    let point_bias = weights.tensor(branch.conv1_bias)?;
-    let depth_weight = weights.tensor(branch.conv2_weight)?;
-    let depth_bias = weights.tensor(branch.conv2_bias)?;
-
-    let dims = input.shape().dims();
-    anyhow::ensure!(
-        dims.len() == 4,
-        "head branch expects NCHW tensor (got {:?})",
-        dims
-    );
-    let batch = dims[0] as u32;
-    let in_channels = dims[1] as u32;
-    let height = dims[2] as u32;
-    let width = dims[3] as u32;
-    let point_out = point_weight.shape().dims()[0] as u32;
-
-    let point_cfg = Conv2dConfig::new(
-        batch,
-        Conv2dChannels::new(in_channels, point_out),
-        SpatialDims::new(width, height),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(0, 0),
-        Conv2dOptions::new(1, None),
-    )?;
-    let reduced = ops.conv2d_tensor(input, &point_weight, &point_bias, &point_cfg)?;
-
-    let depth_out = depth_weight.shape().dims()[0] as u32;
-    anyhow::ensure!(
-        depth_out == point_out,
-        "depthwise conv expects {} channels but got {}",
-        point_out,
-        depth_out
-    );
-    let depth_cfg = Conv2dConfig::new(
-        batch,
-        Conv2dChannels::new(point_out, depth_out),
-        SpatialDims::new(width, height),
-        SpatialDims::new(3, 3),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(1, 1),
-        Conv2dOptions::new(depth_out, None),
-    )?;
-    ops.conv2d_tensor(&reduced, &depth_weight, &depth_bias, &depth_cfg)
-}
-
 #[allow(clippy::too_many_arguments)]
-fn encode_stage_block<W: WeightProvider>(
+fn encode_stage_block(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
-    weights: &W,
+    weights: &GpuWeights,
     input: &GpuTensor,
     point_weight: &str,
     point_bias: &str,
     depth_weight: &str,
     depth_bias: &str,
 ) -> Result<GpuTensor> {
-    let pw = weights.tensor(point_weight)?;
-    let pb = weights.tensor(point_bias)?;
-    let dw = weights.tensor(depth_weight)?;
-    let db = weights.tensor(depth_bias)?;
+    let pw = weight(weights, point_weight)?;
+    let pb = weight(weights, point_bias)?;
+    let dw = weight(weights, depth_weight)?;
+    let db = weight(weights, depth_bias)?;
     encode_separable_block(encoder, ops, input, &pw, &pb, &dw, &db)
-}
-
-pub fn run_stage_block<W: WeightProvider>(
-    ops: &GpuInferenceOps,
-    weights: &W,
-    input: &GpuTensor,
-    point_weight: &str,
-    point_bias: &str,
-    depth_weight: &str,
-    depth_bias: &str,
-) -> Result<GpuTensor> {
-    let pw = weights.tensor(point_weight)?;
-    let pb = weights.tensor(point_bias)?;
-    let dw = weights.tensor(depth_weight)?;
-    let db = weights.tensor(depth_bias)?;
-    run_separable_block(ops, input, &pw, &pb, &dw, &db)
 }
 
 fn encode_separable_block(
@@ -725,88 +506,4 @@ fn encode_separable_block(
         Conv2dOptions::new(depth_out, Some(ActivationKind::Relu)),
     )?;
     ops.encode_conv2d_tensor(encoder, &point, depth_weight, depth_bias, &depth_cfg)
-}
-
-pub fn run_separable_block(
-    ops: &GpuInferenceOps,
-    input: &GpuTensor,
-    point_weight: &GpuTensor,
-    point_bias: &GpuTensor,
-    depth_weight: &GpuTensor,
-    depth_bias: &GpuTensor,
-) -> Result<GpuTensor> {
-    let dims = input.shape().dims();
-    anyhow::ensure!(
-        dims.len() == 4,
-        "expected NCHW tensor for separable block (got {:?})",
-        dims
-    );
-    let batch = dims[0] as u32;
-    let channels = dims[1] as u32;
-    let height = dims[2] as u32;
-    let width = dims[3] as u32;
-
-    let point_shape = point_weight.shape().dims();
-    anyhow::ensure!(
-        point_shape.len() == 4,
-        "pointwise weights must be 4D (got {:?})",
-        point_shape
-    );
-    let point_out = point_shape[0] as u32;
-    let point_kernel_h = point_shape[2] as u32;
-    let point_kernel_w = point_shape[3] as u32;
-    anyhow::ensure!(
-        point_kernel_h == 1 && point_kernel_w == 1,
-        "pointwise kernels must be 1x1 (got {}x{})",
-        point_kernel_h,
-        point_kernel_w
-    );
-
-    let point_cfg = Conv2dConfig::new(
-        batch,
-        Conv2dChannels::new(channels, point_out),
-        SpatialDims::new(width, height),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(0, 0),
-        Conv2dOptions::new(1, None),
-    )?;
-    let point = ops.conv2d_tensor(input, point_weight, point_bias, &point_cfg)?;
-
-    let depth_shape = depth_weight.shape().dims();
-    anyhow::ensure!(
-        depth_shape.len() == 4,
-        "depthwise weights must be 4D (got {:?})",
-        depth_shape
-    );
-    let depth_out = depth_shape[0] as u32;
-    anyhow::ensure!(
-        depth_out == point_out,
-        "depthwise output ({depth_out}) must match pointwise output ({point_out})"
-    );
-    anyhow::ensure!(
-        depth_shape[1] as u32 == 1,
-        "depthwise weights expect channel multiplier 1 (got {})",
-        depth_shape[1]
-    );
-    let depth_kernel_h = depth_shape[2] as u32;
-    let depth_kernel_w = depth_shape[3] as u32;
-    anyhow::ensure!(
-        depth_kernel_h == depth_kernel_w,
-        "depthwise kernels must be square (got {}x{})",
-        depth_kernel_h,
-        depth_kernel_w
-    );
-    let pad = depth_kernel_w / 2;
-
-    let depth_cfg = Conv2dConfig::new(
-        batch,
-        Conv2dChannels::new(point_out, depth_out),
-        SpatialDims::new(width, height),
-        SpatialDims::new(depth_kernel_w, depth_kernel_h),
-        SpatialDims::new(1, 1),
-        SpatialDims::new(pad, pad),
-        Conv2dOptions::new(depth_out, Some(ActivationKind::Relu)),
-    )?;
-    ops.conv2d_tensor(&point, depth_weight, depth_bias, &depth_cfg)
 }

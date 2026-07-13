@@ -45,8 +45,8 @@ rfd = "0.17.2"
 
 # Image processing and graphics
 fast_image_resize = "6.0.0"
-ico = "0.5.0"
 image = { version = "0.25.10", default-features = false, features = [
+    "ico",
     "png",
     "jpeg",
     "webp",
@@ -71,7 +71,6 @@ tiny-skia = "0.12.0"
 
 # Machine learning and numeric processing
 bytemuck = { version = "1.25.1", features = ["derive"] }
-ndarray = { version = "0.17.2", features = ["rayon"] }
 prost = "0.14.4"
 tract-onnx = "0.23.4"
 
@@ -114,7 +113,6 @@ serde_json = "1.0.150"
 sha2 = "0.11.0"
 
 # Concurrency and utilities
-async-channel = "2.5.0"
 lru = "0.18.1"
 rayon = "1.12.0"
 walkdir = "2.5.0"

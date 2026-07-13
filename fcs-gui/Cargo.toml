@@ -22,7 +22,6 @@ fcs-core.workspace = true
 fcs-utils = { workspace = true, features = ["mapping", "webcam", "raw", "heic"] }
 image.workspace = true
 imageproc.workspace = true
-ico.workspace = true
 log.workspace = true
 lru.workspace = true
 rayon.workspace = true

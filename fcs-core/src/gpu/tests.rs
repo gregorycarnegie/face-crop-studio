@@ -157,54 +157,9 @@ fn upload_named(
 }
 
 use crate::gpu::graph::{
-    BACKBONE_STAGES, DETECTION_HEADS, DetectionHeadConfig, HeadBlock, NECK_BLOCKS,
-    STAGE0_WEIGHT_NAMES, STAGE1_BLOCKS, StageBlock,
+    BACKBONE_STAGES, DETECTION_HEADS, DetectionHeadConfig, HeadBlock, NECK_BLOCKS, STAGE1_BLOCKS,
+    StageBlock, load_backbone_weights,
 };
-
-fn load_backbone_weights(
-    model_path: &Path,
-    stage_count: usize,
-    include_neck: bool,
-    head_levels: usize,
-) -> Result<OnnxInitializerMap> {
-    anyhow::ensure!(
-        stage_count <= BACKBONE_STAGES.len(),
-        "requested {stage_count} backbone stages but only {} are available",
-        BACKBONE_STAGES.len()
-    );
-    anyhow::ensure!(
-        head_levels <= DETECTION_HEADS.len(),
-        "requested {head_levels} head levels but only {} are available",
-        DETECTION_HEADS.len()
-    );
-    let mut names: Vec<&str> = Vec::new();
-    names.extend_from_slice(&STAGE0_WEIGHT_NAMES);
-    for stage in BACKBONE_STAGES.iter().take(stage_count) {
-        for block in stage.blocks.iter() {
-            names.push(block.point_weight);
-            names.push(block.point_bias);
-            names.push(block.depth_weight);
-            names.push(block.depth_bias);
-        }
-    }
-    if include_neck {
-        for block in NECK_BLOCKS.iter() {
-            names.push(block.point_weight);
-            names.push(block.point_bias);
-            names.push(block.depth_weight);
-            names.push(block.depth_bias);
-        }
-    }
-    if head_levels > 0 {
-        for head in DETECTION_HEADS.iter().take(head_levels) {
-            names.extend_from_slice(&head.cls.names());
-            names.extend_from_slice(&head.obj.names());
-            names.extend_from_slice(&head.bbox.names());
-            names.extend_from_slice(&head.kps.names());
-        }
-    }
-    OnnxInitializerMap::load(model_path, &names)
-}
 
 fn run_stage_blocks(
     ops: &GpuInferenceOps,

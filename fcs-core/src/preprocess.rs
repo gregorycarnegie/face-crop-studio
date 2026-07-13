@@ -215,10 +215,7 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
             config.resize_filter(),
         ))
     };
-    let chw = rgb_to_bgr_chw(&resized_rgb);
-
-    let (data, offset) = chw.into_raw_vec_and_offset();
-    debug_assert_eq!(offset, Some(0), "expected contiguous array");
+    let data = rgb_to_bgr_chw(&resized_rgb);
     let tensor = chw_tensor_from_vec(data, input_w, input_h)?;
 
     let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;

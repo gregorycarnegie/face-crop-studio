@@ -1,6 +1,6 @@
 use crate::{
     gpu::{
-        graph::{self, BACKBONE_STAGES, DETECTION_HEADS, DetectionLevelOutputs, WeightProvider},
+        graph::{self, BACKBONE_STAGES, DETECTION_HEADS, DetectionLevelOutputs},
         onnx::OnnxInitializerMap,
         ops::GpuInferenceOps,
         tensor::GpuTensor,
@@ -29,7 +29,7 @@ struct GpuYuNetWorkspace {
 #[derive(Debug)]
 pub struct GpuYuNet {
     ops: Arc<GpuInferenceOps>,
-    weights: Arc<HashMap<String, GpuTensor>>,
+    weights: graph::GpuWeights,
     input_size: InputSize,
     workspace: Mutex<GpuYuNetWorkspace>,
 }
@@ -58,7 +58,7 @@ impl GpuYuNet {
         let weight_map = upload_gpu_weights(&ops, loader)?;
         Ok(Self {
             ops,
-            weights: Arc::new(weight_map),
+            weights: weight_map,
             input_size,
             workspace: Mutex::new(GpuYuNetWorkspace::default()),
         })
@@ -119,10 +119,6 @@ impl GpuYuNet {
     }
 
     fn run_inference(&self, input_gpu: &GpuTensor) -> Result<Tensor> {
-        let weight_provider = CachedWeights {
-            tensors: Arc::clone(&self.weights),
-        };
-
         // Accumulate the entire forward pass into one command buffer and submit
         // once. This eliminates ~53 individual queue.submit() calls (one per op)
         // and gives the GPU a full workload to pipeline, dramatically improving
@@ -137,12 +133,12 @@ impl GpuYuNet {
         let features = graph::encode_backbone_features(
             &mut encoder,
             &self.ops,
-            &weight_provider,
+            &self.weights,
             input_gpu,
             BACKBONE_STAGES.len(),
         )?;
         let levels =
-            graph::encode_neck_and_heads(&mut encoder, &self.ops, &weight_provider, &features)?;
+            graph::encode_neck_and_heads(&mut encoder, &self.ops, &self.weights, &features)?;
         self.ops.context().queue().submit(Some(encoder.finish()));
 
         let outputs = build_decode_tensors(&levels)?;
@@ -168,19 +164,6 @@ fn upload_gpu_weights(
         map.insert(name, gpu_tensor);
     }
     Ok(map)
-}
-
-struct CachedWeights {
-    tensors: Arc<HashMap<String, GpuTensor>>,
-}
-
-impl WeightProvider for CachedWeights {
-    fn tensor(&self, name: &str) -> Result<GpuTensor> {
-        self.tensors
-            .get(name)
-            .cloned()
-            .ok_or_else(|| anyhow!("cached weight '{name}' missing"))
-    }
 }
 
 fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tensor>> {

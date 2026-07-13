@@ -10,7 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
-async-channel.workspace = true
 base64.workspace = true
 bytemuck.workspace = true
 crc32fast.workspace = true
@@ -19,7 +18,6 @@ fast_image_resize.workspace = true
 image.workspace = true
 imgref.workspace = true
 log.workspace = true
-ndarray.workspace = true
 pollster.workspace = true
 ravif.workspace = true
 rayon.workspace = true
@@ -59,6 +57,8 @@ workspace = true
 optional = true
 
 [features]
+# Test fixture helpers; enabled by dev-dependencies only so they stay out of release builds.
+fixtures = []
 mapping = ["dep:csv", "dep:calamine", "dep:parquet", "dep:rusqlite"]
 webcam = ["dep:nokhwa"]
 raw = ["dep:imagepipe"]

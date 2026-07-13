@@ -2192,7 +2192,6 @@ dependencies = [
  "egui_extras",
  "fcs-core",
  "fcs-utils",
- "ico",
  "image 0.25.10",
  "imageproc",
  "log",
@@ -2211,7 +2210,6 @@ name = "fcs-utils"
 version = "1.4.0"
 dependencies = [
  "anyhow",
- "async-channel",
  "base64",
  "bytemuck",
  "calamine",
@@ -2226,7 +2224,6 @@ dependencies = [
  "log",
  "metal 0.33.0",
  "naga",
- "ndarray",
  "nokhwa",
  "parquet",
  "pollster 1.0.1",
@@ -2869,16 +2866,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "ico"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e795dff5605e0f04bff85ca41b51a96b83e80b281e96231bcaaf1ac35103371"
-dependencies = [
- "byteorder",
- "png 0.17.16",
 ]
 
 [[package]]
@@ -3786,7 +3773,6 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
- "rayon",
 ]
 
 [[package]]

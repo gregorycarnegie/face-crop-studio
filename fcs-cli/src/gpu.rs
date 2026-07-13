@@ -1,13 +1,12 @@
 //! GPU runtime and context management for fcs-cli.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use fcs_core::{CropSettings, Detection, calculate_crop_region};
 use fcs_utils::{
     BatchCropRequest, CropShape, EnhancementSettings, GpuAvailability, GpuBatchCropper, GpuContext,
-    GpuContextOptions, GpuContextPool, GpuPoolError, WgpuEnhancer, apply_enhancements,
-    apply_shape_mask_dynamic,
+    GpuContextOptions, WgpuEnhancer, apply_enhancements, apply_shape_mask_dynamic,
     config::AppSettings,
     gpu::{GpuStatusIndicator, GpuStatusMode},
 };
@@ -16,7 +15,6 @@ use log::{debug, info, warn};
 
 pub struct CliGpuRuntime {
     context: Option<Arc<GpuContext>>,
-    pool: Option<GpuContextPool>,
     status: GpuStatusIndicator,
     enhancer: Option<Arc<WgpuEnhancer>>,
     cropper: Option<Arc<GpuBatchCropper>>,
@@ -27,18 +25,8 @@ impl CliGpuRuntime {
         self.context.as_ref()
     }
 
-    pub fn log_pool_state(&self) {
-        if let Some(pool) = self.pool.as_ref() {
-            debug!(
-                "GPU context pool ready (available {} of {})",
-                pool.available(),
-                pool.capacity()
-            );
-        }
-    }
-
     pub fn log_status(&self) {
-        log_gpu_status(&self.status, self.pool.as_ref());
+        log_gpu_status(&self.status);
     }
 
     pub fn enhance(&self, image: &DynamicImage, settings: &EnhancementSettings) -> DynamicImage {
@@ -137,22 +125,10 @@ impl CliGpuRuntime {
             }
         }
     }
-
-    #[allow(dead_code)]
-    pub fn pool(&self) -> Option<&GpuContextPool> {
-        self.pool.as_ref()
-    }
-
-    #[allow(dead_code)]
-    pub fn status(&self) -> &GpuStatusIndicator {
-        &self.status
-    }
 }
 
-fn log_gpu_status(status: &GpuStatusIndicator, pool: Option<&GpuContextPool>) {
+fn log_gpu_status(status: &GpuStatusIndicator) {
     let detail = status.detail.as_deref();
-    let pool_capacity = pool.map(|p| p.capacity());
-    let pool_available = pool.map(|p| p.available());
     match status.mode {
         GpuStatusMode::Available => {
             let adapter = status.adapter_name.as_deref().unwrap_or("GPU adapter");
@@ -166,17 +142,9 @@ fn log_gpu_status(status: &GpuStatusIndicator, pool: Option<&GpuContextPool>) {
                 .device_id
                 .map(|d| format!("{d:#06x}"))
                 .unwrap_or_else(|| "n/a".to_string());
-            if let Some(pool) = pool {
-                info!(
-                    "GPU ready: {adapter} via {backend} (driver: {driver}, vendor={vendor}, device={device}). Pool capacity {} ({} idle).",
-                    pool.capacity(),
-                    pool.available()
-                );
-            } else {
-                info!(
-                    "GPU ready: {adapter} via {backend} (driver: {driver}, vendor={vendor}, device={device})."
-                );
-            }
+            info!(
+                "GPU ready: {adapter} via {backend} (driver: {driver}, vendor={vendor}, device={device})."
+            );
         }
         GpuStatusMode::Disabled => {
             if let Some(reason) = detail {
@@ -203,22 +171,15 @@ fn log_gpu_status(status: &GpuStatusIndicator, pool: Option<&GpuContextPool>) {
             debug!("GPU status pending...");
         }
     }
-    status.emit_telemetry(pool_capacity, pool_available);
+    status.emit_telemetry();
 }
 
 pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
     let options: GpuContextOptions = (&settings.gpu).into();
     let availability = GpuContext::init_with_fallback(&options);
 
-    let (context, pool, status) = match &availability {
+    let (context, status) = match &availability {
         GpuAvailability::Available(context) => {
-            let pool_size = NonZeroUsize::new(rayon::current_num_threads())
-                .unwrap_or_else(|| NonZeroUsize::new(1).expect("non-zero pool size fallback"));
-            let pool =
-                GpuContextPool::new(context.clone(), pool_size).map_err(|err| match err {
-                    GpuPoolError::Closed => anyhow!("failed to initialize GPU pool: {err}"),
-                })?;
-
             let info = context.adapter_info();
             let status = GpuStatusIndicator::available(
                 info.name.clone(),
@@ -227,13 +188,13 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
                 Some(info.vendor),
                 Some(info.device),
             );
-            (Some(context.clone()), Some(pool), status)
+            (Some(context.clone()), status)
         }
         GpuAvailability::Disabled { reason } => {
-            (None, None, GpuStatusIndicator::disabled(reason.clone()))
+            (None, GpuStatusIndicator::disabled(reason.clone()))
         }
         GpuAvailability::Unavailable { error } => {
-            (None, None, GpuStatusIndicator::error(error.to_string()))
+            (None, GpuStatusIndicator::error(error.to_string()))
         }
     };
 
@@ -275,13 +236,11 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
 
     let runtime = CliGpuRuntime {
         context,
-        pool,
         status,
         enhancer,
         cropper,
     };
     runtime.log_status();
-    runtime.log_pool_state();
     Ok(runtime)
 }
 
@@ -305,7 +264,6 @@ mod tests {
     fn manual_runtime(status: GpuStatusIndicator) -> CliGpuRuntime {
         CliGpuRuntime {
             context: None,
-            pool: None,
             status,
             enhancer: None,
             cropper: None,
@@ -317,28 +275,28 @@ mod tests {
     #[test]
     fn log_gpu_status_disabled_does_not_panic() {
         let status = GpuStatusIndicator::disabled("unit test");
-        log_gpu_status(&status, None);
+        log_gpu_status(&status);
         assert_eq!(status.mode, GpuStatusMode::Disabled);
     }
 
     #[test]
     fn log_gpu_status_error_does_not_panic() {
         let status = GpuStatusIndicator::error("unit test error");
-        log_gpu_status(&status, None);
+        log_gpu_status(&status);
         assert_eq!(status.mode, GpuStatusMode::Error);
     }
 
     #[test]
     fn log_gpu_status_fallback_does_not_panic() {
         let status = GpuStatusIndicator::fallback("no reason", None, None);
-        log_gpu_status(&status, None);
+        log_gpu_status(&status);
         assert_eq!(status.mode, GpuStatusMode::Fallback);
     }
 
     #[test]
     fn log_gpu_status_pending_does_not_panic() {
         let status = GpuStatusIndicator::pending();
-        log_gpu_status(&status, None);
+        log_gpu_status(&status);
         assert_eq!(status.mode, GpuStatusMode::Pending);
     }
 
@@ -351,16 +309,13 @@ mod tests {
             Some(0x1234),
             Some(0xabcd),
         );
-        log_gpu_status(&status, None);
+        log_gpu_status(&status);
         assert_eq!(status.mode, GpuStatusMode::Available);
     }
 
     #[test]
     fn runtime_accessors_return_expected_state() {
         let runtime = manual_runtime(GpuStatusIndicator::pending());
-        assert!(runtime.pool().is_none());
-        assert_eq!(runtime.status().mode, GpuStatusMode::Pending);
-        runtime.log_pool_state();
         runtime.log_status();
     }
 
@@ -373,9 +328,8 @@ mod tests {
     }
 
     #[test]
-    fn log_pool_state_and_log_status_do_not_panic() {
+    fn log_status_does_not_panic() {
         let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
-        runtime.log_pool_state();
         runtime.log_status();
     }
 

@@ -6,7 +6,8 @@ pub mod color;
 pub mod config;
 /// Image enhancement utilities (unsharp mask, contrast, exposure, etc.)
 pub mod enhance;
-/// Test fixture loading and path resolution.
+/// Test fixture loading and path resolution (tests/benches/examples only).
+#[cfg(feature = "fixtures")]
 pub mod fixtures;
 /// Shared GPU context initialization and pooling helpers.
 pub mod gpu;
@@ -42,12 +43,13 @@ pub use color::{
 };
 pub use config::PositioningMode;
 pub use enhance::{EnhancementSettings, WgpuEnhancer, apply_enhancements};
+#[cfg(feature = "fixtures")]
 pub use fixtures::{
     fixture_path, fixtures_dir, load_fixture_bytes, load_fixture_image, load_fixture_json,
 };
 pub use gpu::{
-    BatchCropRequest, GpuAvailability, GpuBatchCropper, GpuContext, GpuContextGuard,
-    GpuContextOptions, GpuContextPool, GpuInitError, GpuPoolError, RedEye,
+    BatchCropRequest, GpuAvailability, GpuBatchCropper, GpuContext, GpuContextOptions,
+    GpuInitError, RedEye,
 };
 pub use image_utils::{
     SUPPORTED_IMAGE_EXTENSIONS, compute_resize_scales, dynamic_to_bgr_chw, is_supported_image_path,
