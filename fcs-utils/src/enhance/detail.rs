@@ -61,7 +61,7 @@ pub(super) fn background_blur_from_rgba(
     let outer_thresh_sq = 1.21; // 1.1 * 1.1
 
     let mut out: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(w, h);
-    let row_stride = (w as usize) << 2; // Optimized: w * 4
+    let row_stride = w as usize * 4;
     let sharp_raw = sharp.as_raw();
     let blur_raw = blurred.as_raw();
     let out_raw = out.as_mut();
@@ -89,7 +89,7 @@ pub(super) fn background_blur_from_rgba(
                     (dist - 0.9) * 5.0
                 };
 
-                let idx = x << 2; // Optimized: x * 4
+                let idx = x * 4;
                 if blend <= 0.0 {
                     row[idx..idx + 4].copy_from_slice(&sharp_row[idx..idx + 4]);
                 } else if blend >= 1.0 {
@@ -99,8 +99,8 @@ pub(super) fn background_blur_from_rgba(
                     let blur_px = &blur_row[idx..idx + 4];
                     for c in 0..4 {
                         let sharp_val = sharp_px[c] as f32;
-                        let mix = blend.mul_add(blur_px[c] as f32 - sharp_val, sharp_val);
-                        row[idx + c] = mix.round().clamp(0.0, 255.0) as u8;
+                        let mix = sharp_val + blend * (blur_px[c] as f32 - sharp_val);
+                        row[idx + c] = (mix + 0.5) as u8;
                     }
                 }
             }
@@ -139,11 +139,12 @@ pub(super) fn unsharp_with_preblur_rgba(
         .zip(src.as_raw().par_chunks_exact(4))
         .zip(blurred.as_raw().par_chunks_exact(4))
         .for_each(|((dst, s), b)| {
+            // ponytail: plain a*b+c and saturating cast, not mul_add/round —
+            // both are libm calls on the SSE2 baseline this project targets.
             for c in 0..3usize {
                 let src_val = s[c] as f32;
                 let diff = src_val - b[c] as f32;
-                let val = amount.mul_add(diff, src_val);
-                dst[c] = val.round().clamp(0.0, 255.0) as u8;
+                dst[c] = (src_val + amount * diff + 0.5) as u8;
             }
             dst[3] = s[3];
         });

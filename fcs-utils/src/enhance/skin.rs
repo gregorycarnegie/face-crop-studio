@@ -106,7 +106,7 @@ pub(super) fn skin_smooth_rgba(
 
     let max_y = h as i32 - 1;
     let max_x = w as i32 - 1;
-    let row_stride = (w as usize) << 2; // Optimized: w * 4
+    let row_stride = w as usize * 4;
     let src_data = src.as_raw();
     let out_data = out_buffer.as_mut();
 
@@ -117,7 +117,7 @@ pub(super) fn skin_smooth_rgba(
             let y_i = y as i32;
             let base_y = y * row_stride;
             for x in 0..w as usize {
-                let src_idx = base_y + (x << 2); // Optimized: x * 4
+                let src_idx = base_y + x * 4;
                 let center = &src_data[src_idx..src_idx + 4];
                 let mut sum_r = 0.0f32;
                 let mut sum_g = 0.0f32;
@@ -130,7 +130,7 @@ pub(super) fn skin_smooth_rgba(
                     let spatial_row = (dy + radius) as usize * kernel_side;
                     for dx in -radius..=radius {
                         let nx = (x as i32 + dx).clamp(0, max_x) as usize;
-                        let neighbor_idx = ny_offset + (nx << 2); // Optimized: nx * 4
+                        let neighbor_idx = ny_offset + nx * 4;
                         let neighbor = &src_data[neighbor_idx..neighbor_idx + 4];
 
                         let spatial_w = spatial_weights[spatial_row + (dx + radius) as usize];
@@ -140,41 +140,34 @@ pub(super) fn skin_smooth_rgba(
                         let color_dist_sq = (dr * dr + dg * dg + db * db) as usize;
                         let weight = spatial_w * color_lut[color_dist_sq];
 
-                        sum_r = weight.mul_add(neighbor[0] as f32, sum_r);
-                        sum_g = weight.mul_add(neighbor[1] as f32, sum_g);
-                        sum_b = weight.mul_add(neighbor[2] as f32, sum_b);
+                        // ponytail: plain a*b+c, not mul_add — fma is a libm
+                        // call on the SSE2 baseline this project targets.
+                        sum_r += weight * neighbor[0] as f32;
+                        sum_g += weight * neighbor[1] as f32;
+                        sum_b += weight * neighbor[2] as f32;
                         sum_weight += weight;
                     }
                 }
 
                 if sum_weight > 0.0 {
-                    let filtered_r = (sum_r / sum_weight).round().clamp(0.0, 255.0) as u8;
-                    let filtered_g = (sum_g / sum_weight).round().clamp(0.0, 255.0) as u8;
-                    let filtered_b = (sum_b / sum_weight).round().clamp(0.0, 255.0) as u8;
+                    let filtered_r = (sum_r / sum_weight + 0.5) as u8;
+                    let filtered_g = (sum_g / sum_weight + 0.5) as u8;
+                    let filtered_b = (sum_b / sum_weight + 0.5) as u8;
 
                     let center_r = center[0] as f32;
                     let center_g = center[1] as f32;
                     let center_b = center[2] as f32;
-                    let final_r = amount
-                        .mul_add(filtered_r as f32 - center_r, center_r)
-                        .round()
-                        .clamp(0.0, 255.0) as u8;
-                    let final_g = amount
-                        .mul_add(filtered_g as f32 - center_g, center_g)
-                        .round()
-                        .clamp(0.0, 255.0) as u8;
-                    let final_b = amount
-                        .mul_add(filtered_b as f32 - center_b, center_b)
-                        .round()
-                        .clamp(0.0, 255.0) as u8;
+                    let final_r = (center_r + amount * (filtered_r as f32 - center_r) + 0.5) as u8;
+                    let final_g = (center_g + amount * (filtered_g as f32 - center_g) + 0.5) as u8;
+                    let final_b = (center_b + amount * (filtered_b as f32 - center_b) + 0.5) as u8;
 
-                    let out_idx = x << 2; // Optimized: x * 4
+                    let out_idx = x * 4;
                     row[out_idx] = final_r;
                     row[out_idx + 1] = final_g;
                     row[out_idx + 2] = final_b;
                     row[out_idx + 3] = center[3];
                 } else {
-                    let out_idx = x << 2; // Optimized: x * 4
+                    let out_idx = x * 4;
                     row[out_idx..out_idx + 4].copy_from_slice(center);
                 }
             }

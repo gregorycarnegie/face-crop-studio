@@ -74,7 +74,6 @@ bytemuck = { version = "1.25.1", features = ["derive"] }
 ndarray = { version = "0.17.2", features = ["rayon"] }
 prost = "0.14.4"
 tract-onnx = "0.23.4"
-wide = "1.5.0"
 
 # GPU and shader support
 metal = "0.33.0"

@@ -29,7 +29,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
 wgpu.workspace = true
-wide.workspace = true
 
 [dependencies.csv]
 workspace = true
@@ -67,12 +66,7 @@ heic = ["dep:libheif-rs"]
 
 [dev-dependencies]
 tempfile.workspace = true
-criterion.workspace = true
 naga.workspace = true
-
-[[bench]]
-name = "bitwise_optimizations"
-harness = false
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

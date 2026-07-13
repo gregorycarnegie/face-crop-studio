@@ -2216,7 +2216,6 @@ dependencies = [
  "bytemuck",
  "calamine",
  "crc32fast",
- "criterion",
  "csv",
  "env_logger",
  "fast_image_resize",
@@ -2241,7 +2240,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tiny-skia 0.12.0",
  "wgpu",
- "wide",
  "windows",
 ]
 

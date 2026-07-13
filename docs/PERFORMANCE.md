@@ -53,6 +53,7 @@
 | Exposure/brightness/contrast LUT | Criterion: 895ms → 798ms |
 | Saturation `wide::f32x4` SIMD    | Included in above        |
 | `mul_add` audit across hotspots  | Minor precision + perf   |
+| Reverted `mul_add`/`round`/SIMD to plain ops + saturating cast (libm calls on SSE2 baseline) | Saturation 7.6→6.2ms, skin 8.0→2.3ms, unsharp 4.9→1.9ms; `wide` dep removed |
 
 ### Phase 12 — GPU Acceleration
 
