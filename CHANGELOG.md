@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-07-17
+
+### Fixed
+
+- Custom position offsets X/Y are now drag-value fields covering the full
+  -1.00 to 1.00 range; the previous text boxes reformatted to whole numbers on
+  every frame, making values like 0.5 or -1 impossible to enter. The fields
+  are greyed out unless positioning mode is Custom. ([#4])
+- Chinese (and other CJK) file names now display in the GUI: a system font
+  (Microsoft YaHei, PingFang, or Noto Sans CJK) is loaded as a glyph fallback
+  when available. ([#4])
+
+## [1.4.1] - 2026-07-13
+
+### Changed
+
+- Targeted release binaries at `x86-64-v3` and replaced slower `libm`-style
+  calls in hot loops with native floating-point methods.
+- Updated dependencies, removed three unused dependencies and dead code, and
+  documented supported architectures and RAW input.
+
+## [1.4.0] - 2026-07-05
+
+### Added
+
+- Undo and redo for manual face-box edits.
+- Animated GUI widgets, hover cursors, and an empty-canvas backdrop.
+
+### Changed
+
+- Parallelized unsharp masking with Rayon.
+- Improved Linux build and release compatibility.
+
+## [1.3.0-beta] - 2026-06-26
+
 ### Added
 
 - Camera RAW input behind the `raw` Cargo feature (enabled in CLI and GUI):
@@ -14,6 +49,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `imagepipe`/`rawloader` stack, routed through the existing image-load path so
   batch and single-image flows both accept RAW. Note: `rawloader` does not
   support every DNG variant; unsupported files are skipped rather than crashing.
+- HEIC and HEIF input behind the `heic` Cargo feature.
+- Architecture and detection-pipeline diagrams.
+
+### Changed
+
+- Updated `egui`/`eframe`/`egui_extras` to 0.35 and bumped `anyhow`,
+  `env_logger`, `log`, and `tract-onnx`.
+- Release builds now use `panic = "unwind"`, allowing per-file panic recovery
+  to skip an undecodable batch item instead of terminating the process.
+
+### Fixed
+
+- GPU preprocessing falls back to CPU for images larger than the device's
+  maximum 2D texture dimension.
+- GUI preview and thumbnail textures are downscaled to the texture-side limit;
+  detection and cropping still use the full-resolution source.
+
+## [1.2.7-beta] - 2026-06-13
+
+### Changed
+
+- Split large modules into focused files and removed redundant copies and image
+  passes from hot paths.
+- Updated Rust dependencies, including `imageproc` 0.27 and `tract-onnx` 0.23.
+
+### Fixed
+
+- Corrected the macOS release build and the `nokhwa` dependency resolution.
+
+## [1.2.4-beta] - 2026-06-03
+
+### Added
+
+- A redesigned gallery and updated workflow documentation.
 - Batch export failure log now records skipped-but-detected images, not just
   hard failures. Items with `BatchFileStatus::Failed`, and items marked
   `Completed` with `faces_exported == 0`, are both logged.
@@ -51,23 +120,72 @@ index,path,error,faces_detected
 
 ### Changed
 
-- Updated `egui`/`eframe`/`egui_extras` to 0.35 (panel `show_inside` → `show`)
-  and bumped `anyhow`, `env_logger`, `log`, and `tract-onnx` to their latest
-  patch releases.
-- Release builds now use `panic = "unwind"` instead of `"abort"`, so the
-  per-file `catch_unwind` panic-safety in batch processing actually takes
-  effect in shipped binaries (one undecodable file is skipped, not fatal).
+- Centralized workspace dependencies and bundled GUI GPU state into one
+  pipeline.
+
+## [1.2.3-beta] - 2026-05-25
+
+### Added
+
+- Cross-platform copy and paste support for Windows, macOS, and Linux.
+
+### Changed
+
+- Improved documentation screenshots and release workflow portability.
+
+## [1.2.2-beta] - 2026-05-17
+
+### Added
+
+- Linux and macOS release binaries.
+- Multithreaded batch export.
+
+### Changed
+
+- Replaced custom window chrome with native platform chrome.
+- Pooled GPU storage and readback buffers and reduced preview-cache memory use.
+- Consolidated supported-image extension handling across CLI and GUI.
 
 ### Fixed
 
-- GPU preprocessing no longer crashes on images whose width or height exceeds
-  the device's maximum 2D texture dimension (e.g. full-resolution RAWs); it
-  falls back to CPU preprocessing above the limit.
-- GUI preview/thumbnail textures are downscaled to the texture-side limit, so
-  loading a very large image no longer panics on upload. Detection overlays and
-  crops still use the full-resolution source.
+- Custom output dimensions now take precedence over stale preset labels.
+- Crop mode configuration parsing and redundant image reads.
 
-## [1.0.0]
+## [1.2.0-beta] - 2026-05-13
+
+### Added
+
+- Live webcam streaming, manual face-box drawing, free rotation, and 90-degree
+  rotation controls.
+- Face thumbnails, detection timing, and GPU status in the GUI.
+- Enhancement settings in both single-image and batch export paths.
+
+### Changed
+
+- Restricted red-eye correction to detected eye landmarks when available.
+- Limited scroll-to-zoom input to the image canvas.
+
+## [1.1.0-beta] - 2026-05-09
+
+### Added
+
+- A redesigned GUI with menus, presets, aspect-ratio controls, shape selection,
+  mapping drop zones, and persistent batch actions.
+- Windows MSI and NSIS installers with optional `PATH` integration.
+- AVIF decoding support.
+
+### Changed
+
+- Applied EXIF orientation during image loading and normalized JPEG orientation
+  metadata.
+- Renamed packages to the `fcs-*` names and aligned release branding.
+
+### Fixed
+
+- Transparent fill compositing, aspect-ratio selection, narrow-layout clipping,
+  and installer/release workflow failures.
+
+## [1.0.0] - 2026-02-15
 
 First public release. Windows release binaries (`fcs-cli.exe`, `fcs-gui.exe`).
 See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release notes.
@@ -103,5 +221,17 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
   matching preview behavior (with regression tests for opaque and
   semi-transparent compositing).
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.0.0...HEAD
+[#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
+
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.3.0-beta...v1.4.0
+[1.3.0-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.2.7-beta...v1.3.0-beta
+[1.2.7-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.2.4-beta...v1.2.7-beta
+[1.2.4-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.2.3-beta...v1.2.4-beta
+[1.2.3-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.2.2-beta...v1.2.3-beta
+[1.2.2-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.2.0-beta...v1.2.2-beta
+[1.2.0-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.1.0-beta...v1.2.0-beta
+[1.1.0-beta]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.0.0...v1.1.0-beta
 [1.0.0]: https://github.com/gregorycarnegie/face-crop-studio/releases/tag/v1.0.0

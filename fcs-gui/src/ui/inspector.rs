@@ -423,31 +423,30 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
             };
         }
 
-        // Offsets
+        // Offsets (fractions -1.0..=1.0, only used in Custom mode)
+        let custom = app.settings.crop.positioning_mode == PositioningMode::Custom;
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 6.0) / 2.0);
                 field_label(ui, "Offset X");
-                let mut x_str = format!("{:.0}", app.settings.crop.horizontal_offset);
-                if ui
-                    .add(egui::TextEdit::singleline(&mut x_str).desired_width(ui.available_width()))
-                    .changed()
-                    && let Ok(v) = x_str.parse::<f32>()
-                {
-                    app.settings.crop.horizontal_offset = v;
-                }
+                ui.add_enabled(
+                    custom,
+                    egui::DragValue::new(&mut app.settings.crop.horizontal_offset)
+                        .range(-1.0..=1.0)
+                        .speed(0.01)
+                        .fixed_decimals(2),
+                );
             });
             ui.add_space(6.0);
             ui.vertical(|ui| {
                 field_label(ui, "Offset Y");
-                let mut y_str = format!("{:.0}", app.settings.crop.vertical_offset);
-                if ui
-                    .add(egui::TextEdit::singleline(&mut y_str).desired_width(ui.available_width()))
-                    .changed()
-                    && let Ok(v) = y_str.parse::<f32>()
-                {
-                    app.settings.crop.vertical_offset = v;
-                }
+                ui.add_enabled(
+                    custom,
+                    egui::DragValue::new(&mut app.settings.crop.vertical_offset)
+                        .range(-1.0..=1.0)
+                        .speed(0.01)
+                        .fixed_decimals(2),
+                );
             });
         });
 
