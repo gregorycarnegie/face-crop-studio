@@ -79,8 +79,8 @@ fn setup_fonts(ctx: &Context) {
     // CJK fallback: the bundled fonts have no CJK glyphs, so Chinese/Japanese/
     // Korean file names render as boxes. Load a system font if one exists.
     let cjk_candidates = [
-        "C:/Windows/Fonts/msyh.ttc",                              // Windows: Microsoft YaHei
-        "/System/Library/Fonts/PingFang.ttc",                     // macOS
+        "C:/Windows/Fonts/msyh.ttc",          // Windows: Microsoft YaHei
+        "/System/Library/Fonts/PingFang.ttc", // macOS
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", // Linux (Noto)
     ];
     for path in cjk_candidates {
