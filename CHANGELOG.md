@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-07-22
+
 ### Changed
 
 - Strengthened CI with cargo-nextest, separate doctest coverage, and
@@ -14,11 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementation.
 - Updated Rust dependencies, including `anyhow`, `thiserror`, `clap`,
   `fast_image_resize`, `bytemuck`, `serde`, and `serde_json`.
+- Documented how to curate local face fixtures and generate OpenCV golden
+  detections.
 
 ### Fixed
 
 - CLI JSON snapshot regressions now fail when the command exits unsuccessfully
   instead of being reported as passing.
+- Local OpenCV parity tests now resolve models and fixtures from the workspace
+  instead of silently skipping them from the crate directory.
 
 ## [1.4.2] - 2026-07-17
 
@@ -236,7 +242,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.3...HEAD
+[1.4.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.3.0-beta...v1.4.0
