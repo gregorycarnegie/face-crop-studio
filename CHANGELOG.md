@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Strengthened CI with cargo-nextest, separate doctest coverage, and
   property-based verification that optimized NMS matches its reference
   implementation.
+- Updated Rust dependencies, including `anyhow`, `thiserror`, `clap`,
+  `fast_image_resize`, `bytemuck`, `serde`, and `serde_json`.
 
 ### Fixed
 
