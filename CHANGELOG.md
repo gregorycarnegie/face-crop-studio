@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Strengthened CI with cargo-nextest, separate doctest coverage, and
+  property-based verification that optimized NMS matches its reference
+  implementation.
+
+### Fixed
+
+- CLI JSON snapshot regressions now fail when the command exits unsuccessfully
+  instead of being reported as passing.
+
 ## [1.4.2] - 2026-07-17
 
 ### Fixed

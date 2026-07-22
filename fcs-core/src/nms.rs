@@ -270,12 +270,49 @@ fn apply_nms_naive(detections: &mut Vec<Detection>, threshold: f32) {
 mod tests {
     use super::*;
     use crate::postprocess::{BoundingBox, Detection, Landmark};
+    use proptest::prelude::*;
 
     fn detection_with_score(score: f32, bbox: BoundingBox) -> Detection {
         Detection {
             bbox,
             landmarks: [Landmark::new(0.0, 0.0); 5],
             score,
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        #[test]
+        fn grid_nms_matches_naive_reference(
+            boxes in prop::collection::vec(
+                (0_u16..2_000, 0_u16..2_000, 1_u16..200, 1_u16..200),
+                200..240,
+            ),
+            threshold in 0_u16..=1_000,
+        ) {
+            let mut optimized: Vec<_> = boxes
+                .into_iter()
+                .enumerate()
+                .map(|(i, (x, y, width, height))| {
+                    detection_with_score(
+                        1.0 - i as f32 * 0.001,
+                        BoundingBox {
+                            x: x.into(),
+                            y: y.into(),
+                            width: width.into(),
+                            height: height.into(),
+                        },
+                    )
+                })
+                .collect();
+            let mut expected = optimized.clone();
+            let threshold = threshold as f32 / 1_000.0;
+
+            apply_nms_in_place(&mut optimized, threshold);
+            apply_nms_naive(&mut expected, threshold);
+
+            prop_assert_eq!(optimized, expected);
         }
     }
 

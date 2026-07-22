@@ -284,15 +284,7 @@ fn cli_json_output_matches_snapshot() -> Result<(), Box<dyn Error>> {
         .arg("--json")
         .arg(&json_path);
 
-    let output = cmd.output()?;
-    if !output.status.success() {
-        eprintln!(
-            "skipping snapshot test; iron-cropper-cli exited with {:?}\nstderr: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return Ok(());
-    }
+    cmd.assert().success();
 
     let raw = fs::read_to_string(&json_path)?;
     let sanitized = sanitize_cli_json(&raw)?;
