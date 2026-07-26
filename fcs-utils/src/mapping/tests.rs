@@ -465,6 +465,279 @@ fn validate_sql_query_allows_keyword_as_substring() {
     );
 }
 
+/// Build a minimal `.xlsx` holding `sheets` of `(name, rows)`.
+///
+/// Only the five parts calamine needs, with inline strings so there is no shared-string
+/// table to maintain. An empty cell string is written as a genuinely absent cell, which is
+/// what the reader's blank-row skipping keys off.
+fn write_xlsx(path: &Path, sheets: &[(&str, &[&[&str]])]) {
+    use std::io::Write as _;
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    fn escape(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    fn part(zw: &mut ZipWriter<fs::File>, name: &str, body: &str) {
+        zw.start_file(name, SimpleFileOptions::default()).unwrap();
+        zw.write_all(body.as_bytes()).unwrap();
+    }
+
+    let mut zw = ZipWriter::new(fs::File::create(path).expect("create workbook"));
+
+    let overrides: String = (1..=sheets.len())
+        .map(|n| {
+            format!(
+                r#"<Override PartName="/xl/worksheets/sheet{n}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#
+            )
+        })
+        .collect();
+    part(
+        &mut zw,
+        "[Content_Types].xml",
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+{overrides}</Types>"#
+        ),
+    );
+
+    part(
+        &mut zw,
+        "_rels/.rels",
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#,
+    );
+
+    let sheet_tags: String = sheets
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| {
+            format!(
+                r#"<sheet name="{}" sheetId="{n}" r:id="rId{n}"/>"#,
+                escape(name),
+                n = i + 1
+            )
+        })
+        .collect();
+    part(
+        &mut zw,
+        "xl/workbook.xml",
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>{sheet_tags}</sheets></workbook>"#
+        ),
+    );
+
+    let sheet_rels: String = (1..=sheets.len())
+        .map(|n| {
+            format!(
+                r#"<Relationship Id="rId{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{n}.xml"/>"#
+            )
+        })
+        .collect();
+    part(
+        &mut zw,
+        "xl/_rels/workbook.xml.rels",
+        &format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{sheet_rels}</Relationships>"#
+        ),
+    );
+
+    for (idx, (_, rows)) in sheets.iter().enumerate() {
+        let body: String = rows
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                let cells: String = row
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, value)| !value.is_empty())
+                    .map(|(c, value)| {
+                        let col = (b'A' + u8::try_from(c).expect("column index")) as char;
+                        format!(
+                            r#"<c r="{col}{}" t="inlineStr"><is><t>{}</t></is></c>"#,
+                            r + 1,
+                            escape(value)
+                        )
+                    })
+                    .collect();
+                format!(r#"<row r="{}">{cells}</row>"#, r + 1)
+            })
+            .collect();
+        part(
+            &mut zw,
+            &format!("xl/worksheets/sheet{}.xml", idx + 1),
+            &format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{body}</sheetData></worksheet>"#
+            ),
+        );
+    }
+
+    zw.finish().expect("finish workbook");
+}
+
+#[test]
+fn excel_preview_reads_headers_and_truncates_rows() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("mapping.xlsx");
+    write_xlsx(
+        &path,
+        &[(
+            "Sheet1",
+            &[
+                &["source", "output"],
+                &["a.jpg", "out-a"],
+                &["b.jpg", "out-b"],
+                &["c.jpg", "out-c"],
+            ],
+        )],
+    );
+
+    let options = MappingReadOptions {
+        preview_rows: 2,
+        ..Default::default()
+    };
+    let preview = load_mapping_preview(&path, &options).unwrap();
+
+    assert_eq!(preview.format, MappingFormat::Excel);
+    assert_eq!(preview.columns, vec!["source", "output"]);
+    assert_eq!(preview.total_rows, 3);
+    assert!(preview.truncated);
+    assert_eq!(
+        preview.rows,
+        vec![vec!["a.jpg", "out-a"], vec!["b.jpg", "out-b"]]
+    );
+}
+
+#[test]
+fn excel_without_headers_generates_default_column_names() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("mapping.xlsx");
+    write_xlsx(
+        &path,
+        &[("Sheet1", &[&["a.jpg", "out-a"], &["b.jpg", "out-b"]])],
+    );
+
+    let options = MappingReadOptions {
+        has_headers: Some(false),
+        ..Default::default()
+    };
+    let preview = load_mapping_preview(&path, &options).unwrap();
+
+    assert_eq!(preview.columns.len(), 2);
+    assert_eq!(preview.total_rows, 2);
+    assert_eq!(preview.rows[0], vec!["a.jpg", "out-a"]);
+}
+
+#[test]
+fn excel_skips_fully_blank_rows_but_keeps_partial_ones() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("mapping.xlsx");
+    write_xlsx(
+        &path,
+        &[(
+            "Sheet1",
+            &[
+                &["source", "output"],
+                &["a.jpg", "out-a"],
+                &["", ""],
+                &["b.jpg", ""],
+            ],
+        )],
+    );
+
+    let preview = load_mapping_preview(&path, &MappingReadOptions::default()).unwrap();
+
+    // The all-empty row is dropped; the half-empty one is padded back to the column count.
+    assert_eq!(preview.total_rows, 2);
+    assert_eq!(
+        preview.rows,
+        vec![vec!["a.jpg", "out-a"], vec!["b.jpg", ""]]
+    );
+}
+
+#[test]
+fn excel_uses_explicit_sheet_name_over_the_first_sheet() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("mapping.xlsx");
+    write_xlsx(
+        &path,
+        &[
+            ("First", &[&["source", "output"], &["wrong.jpg", "no"]]),
+            ("Second", &[&["source", "output"], &["right.jpg", "yes"]]),
+        ],
+    );
+
+    let options = MappingReadOptions {
+        sheet_name: Some("Second".to_string()),
+        ..Default::default()
+    };
+    let preview = load_mapping_preview(&path, &options).unwrap();
+
+    assert_eq!(preview.rows, vec![vec!["right.jpg", "yes"]]);
+
+    // A blank or whitespace-only name falls back to the first sheet rather than erroring.
+    let options = MappingReadOptions {
+        sheet_name: Some("   ".to_string()),
+        ..Default::default()
+    };
+    let preview = load_mapping_preview(&path, &options).unwrap();
+    assert_eq!(preview.rows, vec![vec!["wrong.jpg", "no"]]);
+}
+
+#[test]
+fn excel_entries_resolved_by_name() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("mapping.xlsx");
+    write_xlsx(
+        &path,
+        &[(
+            "Sheet1",
+            &[
+                &["source", "output"],
+                &["a.jpg", "out-a"],
+                &["b.jpg", "out-b"],
+            ],
+        )],
+    );
+
+    let entries = load_mapping_entries(
+        &path,
+        &MappingReadOptions::default(),
+        &ColumnSelector::Name("source".to_string()),
+        &ColumnSelector::Name("output".to_string()),
+    )
+    .unwrap();
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].source_path, "a.jpg");
+    assert_eq!(entries[1].output_name, "out-b");
+}
+
+#[test]
+fn excel_reports_context_when_the_workbook_cannot_be_opened() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("missing.xlsx");
+
+    let err = load_mapping_preview(&path, &MappingReadOptions::default())
+        .expect_err("missing workbook should fail");
+
+    assert!(
+        format!("{err:#}").contains("failed to open workbook"),
+        "unexpected error: {err:#}"
+    );
+}
+
 fn write_parquet(path: &Path, rows: &[(&str, &str)]) {
     use ::parquet::{
         basic::{ConvertedType, Repetition, Type as PhysicalType},

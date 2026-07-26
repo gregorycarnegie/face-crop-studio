@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::Result;
 use fcs_utils::{
@@ -74,7 +74,26 @@ pub(crate) fn build_crop_output_path(
         source_stem,
         ..spec
     };
-    out_dir.join(build_crop_filename(spec))
+    // A naming template like `../{original}` — or a source stem holding separators — must
+    // not write outside the chosen output directory. Drop every path component but the
+    // last, then neutralise what Windows still re-parses when joined (a `a:` drive
+    // prefix replaces the whole path), so the result is always one plain filename.
+    let name = build_crop_filename(spec);
+    let file = Path::new(&name)
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or_default()
+        .replace([':', '/', '\\'], "_");
+
+    if file.trim_matches('.').is_empty() {
+        out_dir.join("image")
+    } else {
+        out_dir.join(file)
+    }
 }
 
 pub(crate) fn save_processed_crop(
@@ -201,6 +220,42 @@ mod tests {
             out.file_name().and_then(|s| s.to_str()),
             Some("image_face1.png")
         );
+    }
+
+    proptest::proptest! {
+        /// No template or source stem may place a crop outside the requested output
+        /// directory — `--naming-template "../{original}"` must stay put.
+        #[test]
+        fn build_crop_output_path_stays_under_out_dir(
+            stem in r"[^\x00]{0,24}",
+            template in proptest::option::of(r"[^\x00]{0,24}"),
+            suffix in proptest::option::of(r"[^\x00]{0,8}"),
+        ) {
+            let out_dir = Path::new("out");
+            let path = build_crop_output_path(
+                out_dir,
+                Path::new(&stem),
+                spec("", 0, "png", template.as_deref(), suffix.as_deref(), 0),
+            );
+
+            proptest::prop_assert!(path.starts_with(out_dir), "escaped out_dir: {path:?}");
+            proptest::prop_assert!(
+                path.components().all(|c| matches!(c, Component::Normal(_))),
+                "non-normal component in {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_crop_output_path_strips_template_traversal() {
+        let dir = tempdir().unwrap();
+        let out = build_crop_output_path(
+            dir.path(),
+            Path::new("portrait.jpg"),
+            spec("", 0, "png", Some("../../{original}"), None, 0),
+        );
+
+        assert_eq!(out, dir.path().join("portrait.png"));
     }
 
     #[test]

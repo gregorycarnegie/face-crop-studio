@@ -24,6 +24,11 @@ fixtures/*
 *.log
 cache/
 
+# cargo-mutants run output (the `proptest-regressions` seeds stay tracked)
+mutants.out*/
+# cargo-llvm-cov summary captured for the CI job summary
+coverage.txt
+
 # Misc / Local
 # Anchored to the repo root so crate-level `tests/` directories (e.g.
 # fcs-core/tests/) stay tracked; only a root-level scratch dir is ignored.

@@ -67,6 +67,7 @@ heic = ["dep:libheif-rs"]
 [dev-dependencies]
 tempfile.workspace = true
 naga.workspace = true
+zip.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-07-26
+
+### Changed
+
+- CI now runs the `ci` nextest profile (no fail-fast, one retry for flaky GPU
+  adapter acquisition, five-minute hang timeout) with `FCS_STRICT_TESTS=1`, so a
+  missing model or fixture fails the run instead of silently skipping tests.
+- CI reports line and region coverage via `cargo llvm-cov nextest`, writing the
+  totals to the job summary and failing below 60% line coverage. The same single
+  test run is instrumented, so this does not add a second pass.
+
+### Added
+
+- Excel mapping reader tests covering headers, header-less sheets, blank-row
+  skipping, preview truncation, explicit sheet selection, and open failures,
+  built on an in-test minimal `.xlsx` writer. Coverage of
+  `fcs-utils/src/mapping/excel.rs` went from 0% to 97% of lines.
+- Regression test pinning `CropRegion::requires_padding` for a face fully inside
+  the source image; only the padded case had been asserted.
+- A "Test tooling" section in the README covering nextest, coverage, strict
+  fixture mode, and the `cargo mutants` commands, including why mutation testing
+  stays out of CI.
+
+### Fixed
+
+- `--naming-template` can no longer write outside the chosen output directory;
+  path separators, `..` segments, and Windows drive prefixes in a template or
+  source filename are reduced to a single plain filename.
+
 ## [1.4.3] - 2026-07-22
 
 ### Changed
@@ -242,7 +271,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.3...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.4...HEAD
+[1.4.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.0...v1.4.1

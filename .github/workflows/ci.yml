@@ -95,15 +95,15 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: 1.96.0
-        components: clippy, rustfmt
+        components: clippy, rustfmt, llvm-tools-preview
 
     - name: Rust Cache
       uses: swatinem/rust-cache@v2
 
-    - name: Install cargo-nextest
+    - name: Install cargo-nextest and cargo-llvm-cov
       uses: taiki-e/install-action@v2
       with:
-        tool: nextest
+        tool: nextest,cargo-llvm-cov
 
     - name: Install pkg-config
       shell: pwsh
@@ -142,8 +142,35 @@ jobs:
     - name: Check
       run: cargo check --workspace
 
-    - name: Test
-      run: cargo nextest run --workspace --all-features
+    - name: Test with coverage
+      # One instrumented run, not a second pass: `cargo llvm-cov nextest` wraps the same
+      # nextest invocation. The nextest profile has to travel via NEXTEST_PROFILE because
+      # `--profile` on the command line belongs to cargo-llvm-cov (build profile).
+      #
+      # FCS_STRICT_TESTS turns "model/fixture missing, skipping" into a failure: both are
+      # downloaded above, so a skip here means a broken path, not an unavailable asset.
+      #
+      # The 60% floor sits a couple of points under the current 62.2% line coverage:
+      # ordinary refactors should not turn the pipeline red, but deleting a test module or
+      # landing a large untested file will. Raise it as coverage climbs, don't lower it.
+      #
+      # `|| status=$?` rather than letting the pipeline fail outright, so the job summary
+      # still records the number on the very run that tripped the gate.
+      shell: bash
+      env:
+        FCS_STRICT_TESTS: "1"
+        NEXTEST_PROFILE: ci
+      run: |
+        status=0
+        cargo llvm-cov nextest --workspace --all-features \
+          --summary-only --fail-under-lines 60 | tee coverage.txt || status=$?
+        {
+          echo '### Coverage'
+          echo '```'
+          grep -E '^(Filename|TOTAL)' coverage.txt
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "$status"
 
     - name: Test docs
       run: cargo test --workspace --all-features --doc

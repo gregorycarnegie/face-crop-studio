@@ -669,6 +669,39 @@ mod tests {
     }
 
     #[test]
+    fn reports_no_padding_for_a_face_well_inside_the_image() {
+        // The `true` direction is covered above; without this the negative case is
+        // unasserted, so a `requires_padding` stuck at `true` passes the whole suite
+        // while sending every crop down the padded path (see fcs-cli `gpu.rs`).
+        let img_w = 800;
+        let img_h = 800;
+        let face = BoundingBox {
+            x: 350.0,
+            y: 350.0,
+            width: 100.0,
+            height: 100.0,
+        };
+
+        let settings = CropSettings {
+            output_width: 200,
+            output_height: 200,
+            face_height_pct: 60.0,
+            positioning_mode: PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::default(),
+            eye_line_align: false,
+        };
+
+        let crop = calculate_crop_region(img_w, img_h, face, &settings);
+        assert!(!crop.requires_padding(), "unexpected padding: {crop:?}");
+        assert_eq!(
+            (crop.in_bounds_width(), crop.in_bounds_height()),
+            (crop.width, crop.height)
+        );
+    }
+
+    #[test]
     fn respects_non_square_output_aspect_ratio() {
         let img_w = 1200;
         let img_h = 800;

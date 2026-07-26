@@ -21,7 +21,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "1.4.3"
+version = "1.4.4"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 [workspace.dependencies]
@@ -121,4 +121,8 @@ walkdir = "2.5.0"
 assert_cmd = "2.2.2"
 criterion = "0.8.2"
 predicates = "3.1.4"
+proptest = "1.11.0"
 tempfile = "3.27.0"
+# Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
+# off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
+zip = { version = "8.6.0", default-features = false }

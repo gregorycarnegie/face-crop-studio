@@ -192,6 +192,18 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 - `cargo bench -p fcs-core crop_enhance` – Measure the crop + enhancement micro-benchmark.
 - `cargo fmt --all && cargo clippy --workspace -- -D warnings` – Formatting and linting hygiene.
 
+### Test tooling
+
+The extra runners are optional for day-to-day work but match what CI does:
+`cargo install cargo-nextest cargo-llvm-cov cargo-mutants`.
+
+- `cargo nextest run --workspace --all-features` – The suite as CI runs it. Add `--profile ci` for no fail-fast, one retry on flaky GPU adapter acquisition, and a five-minute hang timeout.
+- `FCS_STRICT_TESTS=1 cargo nextest run --workspace --all-features` – Turn "model/fixture missing, skipping" into a hard failure. CI sets this so a broken asset path cannot masquerade as a green run; leave it unset on a fresh clone, where skipping is the correct behaviour.
+- `cargo llvm-cov nextest --workspace --all-features --summary-only` – Line and region coverage. CI fails below 60% line coverage; pass `--fail-under-lines 60` to check the gate locally. Note that the nextest profile must travel via `NEXTEST_PROFILE`, because `--profile` on the command line belongs to `cargo-llvm-cov`.
+- `cargo mutants -p fcs-core --test-tool nextest -j 4 --file fcs-core/src/postprocess.rs --file fcs-core/src/cropper.rs` – Mutation testing: mutates the source and reports which changes no test caught, which is a sharper signal than coverage about where tests are missing. Results land in `mutants.out/missed.txt` (the gaps), `caught.txt`, and `unviable.txt` (mutants that did not compile — ignore those).
+
+Mutation testing is deliberately not in CI: every mutant is a fresh incremental rebuild, so the two files above take one to two hours and the whole of `fcs-core` (831 mutants) takes closer to ten. Run it locally against a couple of files at a time, on an otherwise idle machine — drop to `-j 2` if it becomes unusable, since the per-job source-tree copies are I/O heavy. Skip `fcs-core/src/gpu/*`: those mutants mostly land in adapter plumbing that only executes with hardware present, so they report as missed without telling you anything.
+
 ## Configuration
 
 - Settings persist to `config/gui_settings.json`. The GUI saves changes automatically, and the CLI now reads the same file by default when `--config` is omitted, keeping thresholds and input dimensions in sync across surfaces.

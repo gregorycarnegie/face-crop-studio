@@ -94,7 +94,14 @@ fn model_file_path() -> Option<PathBuf> {
         candidates.push(workspace_root.join(MODEL_REL_PATH));
     }
 
-    candidates.into_iter().find(|path| path.exists())
+    let found = candidates.into_iter().find(|path| path.exists());
+    // The GPU tests skip themselves when the model is missing, which is right on a fresh
+    // clone but hides a broken path in CI, where the model is always downloaded first.
+    assert!(
+        !(found.is_none() && std::env::var_os("FCS_STRICT_TESTS").is_some()),
+        "model {MODEL_REL_PATH} not found while FCS_STRICT_TESTS is set"
+    );
+    found
 }
 
 fn reference_tensor(model_path: &Path, node: &str, input: &[f32]) -> (Vec<f32>, Vec<usize>) {

@@ -5,23 +5,43 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Turn a missing asset into a hard failure when `FCS_STRICT_TESTS` is set (CI does).
+///
+/// Every test here skips itself when the model or fixtures are absent, which is right
+/// on a fresh clone but means a broken path makes the whole suite pass vacuously. In
+/// CI the assets are always present, so "not found" is a bug, not a reason to skip.
+fn require(found: Option<PathBuf>, what: &str) -> Option<PathBuf> {
+    assert!(
+        !(found.is_none() && std::env::var_os("FCS_STRICT_TESTS").is_some()),
+        "{what} not found while FCS_STRICT_TESTS is set (cwd {:?})",
+        std::env::current_dir()
+    );
+    found
+}
+
 pub fn find_model_path() -> Option<PathBuf> {
     let candidates = vec![
         "models/face_detection_yunet_2023mar_640.onnx",
         "../models/face_detection_yunet_2023mar_640.onnx",
     ];
-    candidates
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|p| p.exists())
+    require(
+        candidates
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| p.exists()),
+        "ONNX model",
+    )
 }
 
 pub fn find_fixture_image() -> Option<PathBuf> {
     let candidates = vec!["fixtures/images/006.jpg", "../fixtures/images/006.jpg"];
-    candidates
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|p| p.exists())
+    require(
+        candidates
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|p| p.exists()),
+        "fixture image",
+    )
 }
 
 #[allow(dead_code)]
