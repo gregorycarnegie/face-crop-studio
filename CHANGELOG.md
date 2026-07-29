@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for both: a single smoothed pixel is a ratio of two 25-term sums of products
   of two exponentials, and the raster mask depends on tiny-skia's antialiased
   coverage.
+- GUI widget tests built on [`egui_kittest`](https://github.com/emilk/egui/tree/main/crates/egui_kittest)
+  (new dev-dependency, pinned to the same 0.35 line as `egui`). Eight tests in
+  `fcs-gui/src/ui/widgets.rs` run the custom widgets against a real
+  `egui::Ui`, clicking at coordinates the test derives independently from the
+  widget's own layout inputs — so wrong hit geometry sends the click to the
+  wrong place and fails the assertion. These cover segment selection, toggle
+  state, panel-header clicks, and the slider's five value-format arms.
 
 ### Changed
 
@@ -37,11 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   currently reaches any of them — `fcs-gui` has 2 tests against 1608 mutants,
   and the other two need an enumerable camera and a wgpu adapter — so mutating
   them only inflated the missed count and obscured the gaps worth closing. This
-  drops the workspace mutant count from 5269 to 3535. The `fcs-gui` exclusion
-  is provisional rather than a claim that the crate is untestable:
-  [`egui_kittest`](https://github.com/emilk/egui/tree/main/crates/egui_kittest)
-  can drive a real egui app under test, so that line should come back out once
-  a harness exists.
+  drops the workspace mutant count from 5269 to 3535. `fcs-gui` stays excluded
+  even though it now has a kittest harness: measured on `ui/widgets.rs`, the
+  most logic-heavy file in the crate, interaction tests catch 23 of 116 viable
+  mutants (20%). Everything caught is a return value, click route, state
+  change, or format string; everything missed is a paint parameter — colours,
+  corner radii, stroke widths, text offsets. `gpu_pill`, `ctl_pill`, `tb_sep`,
+  and `field_label` return nothing and only paint, so even replacing the whole
+  function body with `()` survives. Reaching those needs snapshot testing and
+  committed baseline images; the measurement is recorded in
+  `.cargo/mutants.toml` so the experiment need not be repeated.
 - Removed two redundant clamps in `shape/outline.rs`, both behaviour
   preserving: `outline_points` re-clamped corner percentages that
   `CropShape::sanitized()` has already capped at 0.5, and `rounded_polygon`

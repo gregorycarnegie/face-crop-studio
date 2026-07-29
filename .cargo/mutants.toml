@@ -6,14 +6,23 @@
 
 exclude_globs = [
     # egui immediate-mode UI: painting, layout, and widget state only exist
-    # inside a live frame, so plain unit tests cannot reach them. 1608 mutants,
-    # 8 caught, against 2 tests in the whole crate.
+    # inside a live frame. 1608 mutants, 8 caught at the time this was written.
     #
-    # PROVISIONAL. This one is coverable — `egui_kittest` builds a test harness
-    # that drives a real egui app (simulated input, frame stepping, snapshot
-    # assertions): https://github.com/emilk/egui/tree/main/crates/egui_kittest
-    # Once a harness exists, drop this line and re-measure rather than assuming
-    # the crate is untestable.
+    # `egui_kittest` (https://github.com/emilk/egui/tree/main/crates/egui_kittest)
+    # does let tests drive a real egui app, and `ui/widgets.rs` now has 8 such
+    # tests. Measured result on that file: 23 of 116 viable mutants caught, 20%.
+    # The split is sharp and worth knowing before repeating the experiment:
+    #
+    #   caught  — return values, click routing, state mutation, format strings
+    #   missed  — every paint parameter: colours, corner radii, stroke widths,
+    #             text offsets. `gpu_pill`, `ctl_pill`, `tb_sep` and
+    #             `field_label` return nothing and only paint, so even
+    #             "replace <fn> with ()" survives.
+    #
+    # Killing paint mutants needs kittest's `snapshot`/`wgpu` features and
+    # committed baseline images. Until that call is made, the crate stays
+    # excluded so the reported score is not dominated by pixels no assertion
+    # looks at. Run with `--no-config` to measure it anyway.
     "fcs-gui/**",
 
     # These two genuinely need hardware in the loop: an enumerable camera and a

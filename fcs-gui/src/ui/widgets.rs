@@ -342,3 +342,225 @@ pub fn ctl_pill(ui: &mut Ui, key: &str, val: &str, accent: Option<Color32>) {
     painter.galley(egui::pos2(r.min.x + 6.0, y), key_g, key_color);
     painter.galley(egui::pos2(r.min.x + 6.0 + key_w + 4.0, y), val_g, val_color);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// Captured layout inputs plus whatever the widget under test mutates.
+    ///
+    /// Click positions are computed in the test from `origin` and `width` —
+    /// plain inputs the widget did not derive. The widget derives its own hit
+    /// rectangles from those same inputs, so if that geometry is wrong the
+    /// click lands elsewhere and the assertion fails, which is the point.
+    /// Recomputing positions from the widget's own output would track any
+    /// error and assert nothing.
+    #[derive(Default)]
+    struct Probe {
+        origin: egui::Pos2,
+        width: f32,
+        value: f32,
+        selected: usize,
+        on: bool,
+        clicked: bool,
+    }
+
+    /// A fixed viewport keeps the width-derived geometry deterministic.
+    fn harness<'a>(app: impl FnMut(&mut Ui, &mut Probe) + 'a) -> Harness<'a, Probe> {
+        Harness::builder()
+            .with_size(egui::vec2(240.0, 120.0))
+            .build_ui_state(app, Probe::default())
+    }
+
+    /// egui needs the pointer over the target on the frame the press lands, so
+    /// hover, press, and release each get their own frame.
+    fn click_at(h: &mut Harness<'_, Probe>, pos: egui::Pos2) {
+        h.hover_at(pos);
+        h.run();
+        h.drag_at(pos);
+        h.run();
+        h.drop_at(pos);
+        h.run();
+    }
+
+    #[test]
+    fn segmented_control_selects_the_segment_under_the_cursor() {
+        let options = ["ONE", "TWO", "THREE"];
+        let mut h = harness(move |ui, probe| {
+            probe.origin = ui.cursor().min;
+            probe.width = ui.available_width();
+            segmented_control(ui, &options, &mut probe.selected);
+        });
+        h.run();
+
+        let (origin, width) = (h.state().origin, h.state().width);
+        assert!(width > 0.0, "harness gave the control no width");
+        // Segment i is inset 2px inside a btn_w-wide cell, and 28px tall.
+        let btn_w = width / 3.0;
+        let centre = |i: usize| origin + egui::vec2(i as f32 * btn_w + btn_w * 0.5, 14.0);
+
+        assert_eq!(h.state().selected, 0, "starts on the first segment");
+
+        click_at(&mut h, centre(2));
+        assert_eq!(h.state().selected, 2, "third segment");
+
+        click_at(&mut h, centre(1));
+        assert_eq!(h.state().selected, 1, "second segment");
+
+        click_at(&mut h, centre(0));
+        assert_eq!(h.state().selected, 0, "back to the first");
+    }
+
+    #[test]
+    fn segmented_control_ignores_clicks_below_its_row() {
+        // The control allocates 28px of height; a click well past that belongs
+        // to whatever comes next, not to a segment.
+        let options = ["ONE", "TWO"];
+        let mut h = harness(move |ui, probe| {
+            probe.origin = ui.cursor().min;
+            probe.width = ui.available_width();
+            segmented_control(ui, &options, &mut probe.selected);
+        });
+        h.run();
+
+        let (origin, width) = (h.state().origin, h.state().width);
+        click_at(&mut h, origin + egui::vec2(width * 0.75, 60.0));
+        assert_eq!(
+            h.state().selected,
+            0,
+            "a click below the row selects nothing"
+        );
+    }
+
+    #[test]
+    fn toggle_switch_flips_on_each_click() {
+        let mut h = harness(|ui, probe| {
+            probe.origin = ui.cursor().min;
+            let (_, changed) = toggle_switch(ui, &mut probe.on);
+            if changed {
+                probe.clicked = true;
+            }
+        });
+        h.run();
+
+        // The switch allocates a fixed 30x18 box at the cursor.
+        let centre = h.state().origin + egui::vec2(15.0, 9.0);
+        assert!(!h.state().on);
+
+        click_at(&mut h, centre);
+        assert!(h.state().on, "first click turns it on");
+        assert!(h.state().clicked, "and reports the change");
+
+        click_at(&mut h, centre);
+        assert!(!h.state().on, "second click turns it back off");
+    }
+
+    #[test]
+    fn toggle_switch_ignores_clicks_well_outside_its_box() {
+        let mut h = harness(|ui, probe| {
+            probe.origin = ui.cursor().min;
+            toggle_switch(ui, &mut probe.on);
+        });
+        h.run();
+
+        // Clear of the 30x18 box and of egui's interact radius.
+        let outside = h.state().origin + egui::vec2(80.0, 9.0);
+        click_at(&mut h, outside);
+        assert!(!h.state().on);
+    }
+
+    #[test]
+    fn toggle_row_wires_the_label_and_the_switch_together() {
+        let mut h = harness(|ui, probe| {
+            probe.width = ui.available_width();
+            probe.origin = ui.cursor().min;
+            if toggle_row(ui, "AUTO COLOR", &mut probe.on) {
+                probe.clicked = true;
+            }
+        });
+        h.run();
+
+        // The label is a real widget, so it appears in the accessibility tree.
+        h.get_by_label("AUTO COLOR");
+
+        // The switch is right-aligned within the row, which is 30px tall.
+        let (origin, width) = (h.state().origin, h.state().width);
+        click_at(&mut h, origin + egui::vec2(width - 15.0, 15.0));
+        assert!(
+            h.state().on,
+            "clicking the right-hand switch toggles the row"
+        );
+        assert!(h.state().clicked);
+    }
+
+    #[test]
+    fn panel_header_reports_a_click_anywhere_on_its_row() {
+        let mut h = harness(|ui, probe| {
+            probe.origin = ui.cursor().min;
+            probe.width = ui.available_width();
+            if panel_header(ui, "01", "SOURCE", true) {
+                probe.clicked = true;
+            }
+        });
+        h.run();
+        assert!(!h.state().clicked, "no click yet");
+
+        // A full-width, 36px-tall row.
+        let pos = h.state().origin + egui::vec2(h.state().width * 0.5, 18.0);
+        click_at(&mut h, pos);
+        assert!(h.state().clicked);
+    }
+
+    #[test]
+    fn slider_label_formats_by_kind() {
+        // Each `fmt` key renders the value differently, and the label text is
+        // the only externally visible difference between the match arms.
+        for (fmt, value, expected) in [
+            ("pct", 42.0_f32, "42%"),
+            ("conf", 0.5, "0.50"),
+            ("deg", 90.0, "90\u{b0}"),
+            ("px", 12.0, "12px"),
+            ("", 3.25, "3.2"),
+        ] {
+            let mut h = harness(move |ui, probe| {
+                probe.value = value;
+                slider_with_label(ui, "L", &mut probe.value, 0.0, 100.0, fmt);
+            });
+            h.run();
+            // Panics listing the available labels if the text is absent.
+            h.get_by_label(expected);
+        }
+    }
+
+    #[test]
+    fn face_chip_sizes_itself_around_its_label() {
+        let sizes = std::cell::RefCell::new(Vec::new());
+        {
+            let sizes = &sizes;
+            let mut h = harness(move |ui, _| {
+                let narrow = face_chip(ui, "A".to_string(), true, false).rect;
+                let wide = face_chip(ui, "AAAAAAAAAA".to_string(), false, true).rect;
+                sizes
+                    .borrow_mut()
+                    .push((narrow.width(), wide.width(), narrow.height()));
+            });
+            h.run();
+        }
+
+        let (narrow, wide, height) = sizes.borrow()[0];
+        assert!(
+            wide > narrow,
+            "a longer label must widen the chip: {narrow} vs {wide}"
+        );
+        // 12px check square + 6px gap + 20px padding is fixed overhead.
+        assert!(
+            narrow >= 38.0,
+            "chip narrower than its fixed padding: {narrow}"
+        );
+        assert!(
+            height >= 24.0,
+            "chip shorter than its 24px minimum: {height}"
+        );
+    }
+}
