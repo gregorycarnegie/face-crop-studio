@@ -40,11 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `cargo mutants` now reads `.cargo/mutants.toml`, which excludes `fcs-gui`
-  along with `fcs-cli/src/webcam.rs` and `fcs-cli/src/gpu.rs`. No test
-  currently reaches any of them — `fcs-gui` has 2 tests against 1608 mutants,
-  and the other two need an enumerable camera and a wgpu adapter — so mutating
-  them only inflated the missed count and obscured the gaps worth closing. This
-  drops the workspace mutant count from 5269 to 3535. `fcs-gui` stays excluded
+  along with `fcs-cli/src/webcam.rs` and `fcs-cli/src/gpu.rs`. When the config
+  was added no test reached any of them — `fcs-gui` had 2 tests against 1608
+  mutants, and the other two need an enumerable camera and a wgpu adapter — so
+  mutating them only inflated the missed count and obscured the gaps worth
+  closing. This drops the workspace mutant count from 5269 to 3535. `fcs-gui`
+  stays excluded
   even though it now has a kittest harness: measured on `ui/widgets.rs`, the
   most logic-heavy file in the crate, interaction tests catch 23 of 116 viable
   mutants (20%). Everything caught is a return value, click route, state
