@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-07-29
+
+### Added
+
+- Golden-value tests across the enhancement and shape modules. The existing
+  assertions largely checked that an operation had *run* — dimensions
+  preserved, a value moving in the right direction, a signed distance having
+  the right sign — which an arithmetic operator swap survives unchanged. These
+  pin exact outputs for hand-computed inputs instead. Surviving `cargo mutants`
+  mutants across `enhance/tone.rs`, `enhance/detail.rs`, `enhance/skin.rs`,
+  `shape/outline.rs`, and `shape/mask.rs` fell from 463 to 40.
+- Inline test modules for `shape/outline.rs` and `enhance/skin.rs`, neither of
+  which had one. The outline geometry helpers (`cubic_bezier`, `koch_fractal`,
+  `rounded_rect_points`, `chamfer_polygon`, `rounded_polygon`,
+  `bezier_polygon`, `fit_points_to_bounds`) were reachable only through the
+  public API and so were untested directly.
+- Differential tests for the bilateral skin-smoothing filter and the raster
+  mask loop, comparing each against an independent reference implementation
+  written from the definition. Hand-computing expected pixels is impractical
+  for both: a single smoothed pixel is a ratio of two 25-term sums of products
+  of two exponentials, and the raster mask depends on tiny-skia's antialiased
+  coverage.
+
+### Changed
+
+- `cargo mutants` now reads `.cargo/mutants.toml`, which excludes `fcs-gui`
+  along with `fcs-cli/src/webcam.rs` and `fcs-cli/src/gpu.rs`. No test
+  currently reaches any of them — `fcs-gui` has 2 tests against 1608 mutants,
+  and the other two need an enumerable camera and a wgpu adapter — so mutating
+  them only inflated the missed count and obscured the gaps worth closing. This
+  drops the workspace mutant count from 5269 to 3535. The `fcs-gui` exclusion
+  is provisional rather than a claim that the crate is untestable:
+  [`egui_kittest`](https://github.com/emilk/egui/tree/main/crates/egui_kittest)
+  can drive a real egui app under test, so that line should come back out once
+  a harness exists.
+- Removed two redundant clamps in `shape/outline.rs`, both behaviour
+  preserving: `outline_points` re-clamped corner percentages that
+  `CropShape::sanitized()` has already capped at 0.5, and `rounded_polygon`
+  halved each adjacent edge length separately when `min(a*0.5, b*0.5)` is just
+  `min(a, b)*0.5`. The equivalent clamp in `shape/mask.rs` is retained —
+  `apply_shape_mask` accepts an unsanitized shape, so there it still binds.
+
 ## [1.4.4] - 2026-07-26
 
 ### Changed
@@ -271,7 +313,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.4...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.5...HEAD
+[1.4.5]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.1...v1.4.2

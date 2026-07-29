@@ -43,13 +43,15 @@ fn outline_points(width: u32, height: u32, shape: &CropShape) -> Vec<Point> {
                 })
                 .collect()
         }
+        // `sanitized()` above already caps both percentages at 0.5, so the
+        // scaled value can never exceed half the short side and needs no clamp
+        // of its own. (`mask.rs` does still clamp: `apply_shape_mask` takes an
+        // unsanitized shape.)
         CropShape::RoundedRectangle { radius_pct } => {
-            let radius = (w.min(h) * radius_pct).clamp(0.0, w.min(h) * 0.5);
-            rounded_rect_points(w, h, radius, ROUNDED_RECT_CORNER_SEGMENTS)
+            rounded_rect_points(w, h, w.min(h) * radius_pct, ROUNDED_RECT_CORNER_SEGMENTS)
         }
         CropShape::ChamferedRectangle { size_pct } => {
-            let inset = (w.min(h) * size_pct).clamp(0.0, w.min(h) * 0.5);
-            chamfered_rect_points(w, h, inset)
+            chamfered_rect_points(w, h, w.min(h) * size_pct)
         }
         CropShape::Polygon {
             sides,
@@ -331,7 +333,10 @@ fn rounded_polygon(vertices: &[Point], radius: f32, segments: usize) -> Vec<Poin
         let mut offset = radius / half_angle.tan();
         let incoming_len = distance(prev, current);
         let outgoing_len = distance(current, next);
-        offset = offset.min(incoming_len * 0.5).min(outgoing_len * 0.5);
+        // min(o, a*0.5, b*0.5) == min(o, min(a,b)*0.5); the chained form halved
+        // both edges separately, so on the regular polygons this is called with
+        // the second clamp was always a no-op.
+        offset = offset.min(incoming_len.min(outgoing_len) * 0.5);
 
         let start = (-incoming).mul_add(offset, current);
         let end = outgoing.mul_add(offset, current);
@@ -484,4 +489,475 @@ fn push_point(points: &mut Vec<Point>, angle: f32, cx: f32, cy: f32, radius: f32
         x: angle.cos().mul_add(radius, cx),
         y: angle.sin().mul_add(radius, cy),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every probe below is placed on an exact geometric landmark, but the
+    /// trig involved means `cos(PI/2)` lands a few ULPs off zero. The
+    /// tolerance is far below any error an operator swap could produce.
+    #[track_caller]
+    fn approx_point(actual: Point, x: f32, y: f32) {
+        assert!(
+            (actual.x - x).abs() < 1e-3 && (actual.y - y).abs() < 1e-3,
+            "expected ({x}, {y}), got ({}, {})",
+            actual.x,
+            actual.y
+        );
+    }
+
+    fn square() -> Vec<Point> {
+        vec![
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+        ]
+    }
+
+    #[test]
+    fn distance_is_euclidean() {
+        assert_eq!(distance(Point::new(0.0, 0.0), Point::new(3.0, 4.0)), 5.0);
+        assert_eq!(distance(Point::new(3.0, 4.0), Point::new(0.0, 0.0)), 5.0);
+        assert_eq!(distance(Point::new(1.0, 1.0), Point::new(1.0, 1.0)), 0.0);
+    }
+
+    #[test]
+    fn normalize_returns_unit_vector_and_guards_zero_length() {
+        approx_point(normalize(Point::new(0.0, -10.0)), 0.0, -1.0);
+        approx_point(normalize(Point::new(3.0, 4.0)), 0.6, 0.8);
+        // Degenerate input must not divide by zero.
+        approx_point(normalize(Point::new(0.0, 0.0)), 0.0, 0.0);
+    }
+
+    #[test]
+    fn cubic_bezier_hits_exact_interpolants() {
+        let p0 = Point::new(0.0, 0.0);
+        let p1 = Point::new(1.0, 2.0);
+        let p2 = Point::new(3.0, 4.0);
+        let p3 = Point::new(4.0, 0.0);
+
+        // Endpoints are interpolated exactly.
+        approx_point(cubic_bezier(p0, p1, p2, p3, 0.0), 0.0, 0.0);
+        approx_point(cubic_bezier(p0, p1, p2, p3, 1.0), 4.0, 0.0);
+
+        // t = 0.5 weights the control points 1/8, 3/8, 3/8, 1/8.
+        approx_point(cubic_bezier(p0, p1, p2, p3, 0.5), 2.0, 2.25);
+
+        // t = 0.25 gives four distinct weights (0.421875, 0.421875,
+        // 0.140625, 0.015625), so a swapped coefficient cannot hide.
+        approx_point(cubic_bezier(p0, p1, p2, p3, 0.25), 0.90625, 1.40625);
+    }
+
+    #[test]
+    fn chamfered_rect_points_cuts_each_corner() {
+        let pts = chamfered_rect_points(10.0, 8.0, 2.0);
+        let expected = [
+            (2.0, 0.0),
+            (8.0, 0.0),
+            (10.0, 2.0),
+            (10.0, 6.0),
+            (8.0, 8.0),
+            (2.0, 8.0),
+            (0.0, 6.0),
+            (0.0, 2.0),
+        ];
+        assert_eq!(pts.len(), expected.len());
+        for (got, (x, y)) in pts.iter().zip(expected) {
+            approx_point(*got, x, y);
+        }
+    }
+
+    #[test]
+    fn chamfered_rect_points_degenerates_to_a_rectangle() {
+        let pts = chamfered_rect_points(10.0, 8.0, 0.0);
+        assert_eq!(pts.len(), 4);
+        approx_point(pts[0], 0.0, 0.0);
+        approx_point(pts[2], 10.0, 8.0);
+    }
+
+    #[test]
+    fn rounded_rect_points_lands_on_the_tangent_points() {
+        // 16 segments per corner -> 17 points each, 68 total.
+        let pts = rounded_rect_points(10.0, 8.0, 2.0, 16);
+        assert_eq!(pts.len(), 68);
+
+        // Each corner arc starts and ends where the straight edges meet it.
+        approx_point(pts[0], 8.0, 0.0);
+        approx_point(pts[16], 10.0, 2.0);
+        approx_point(pts[17], 10.0, 6.0);
+        approx_point(pts[33], 8.0, 8.0);
+        approx_point(pts[34], 2.0, 8.0);
+        approx_point(pts[50], 0.0, 6.0);
+        approx_point(pts[51], 0.0, 2.0);
+        approx_point(pts[67], 2.0, 0.0);
+    }
+
+    #[test]
+    fn rounded_rect_points_degenerates_to_a_rectangle() {
+        let pts = rounded_rect_points(10.0, 8.0, 0.0, 16);
+        assert_eq!(pts.len(), 4);
+        approx_point(pts[1], 10.0, 0.0);
+        approx_point(pts[3], 0.0, 8.0);
+    }
+
+    #[test]
+    fn fit_points_to_bounds_scales_uniformly_and_centres() {
+        // 2x1 bbox into a 10x10 box: the limiting axis is x, so scale = 5 and
+        // the 5-tall result is centred vertically with a 2.5 offset.
+        let mut pts = vec![
+            Point::new(0.0, 0.0),
+            Point::new(2.0, 0.0),
+            Point::new(2.0, 1.0),
+            Point::new(0.0, 1.0),
+        ];
+        fit_points_to_bounds(&mut pts, 10.0, 10.0);
+        approx_point(pts[0], 0.0, 2.5);
+        approx_point(pts[1], 10.0, 2.5);
+        approx_point(pts[2], 10.0, 7.5);
+        approx_point(pts[3], 0.0, 7.5);
+    }
+
+    #[test]
+    fn fit_points_to_bounds_is_translation_invariant() {
+        // Same shape shifted away from the origin must land identically —
+        // this is what catches a dropped `-min * scale` offset term.
+        let mut pts = vec![
+            Point::new(1.0, 1.0),
+            Point::new(3.0, 1.0),
+            Point::new(3.0, 2.0),
+            Point::new(1.0, 2.0),
+        ];
+        fit_points_to_bounds(&mut pts, 10.0, 10.0);
+        approx_point(pts[0], 0.0, 2.5);
+        approx_point(pts[2], 10.0, 7.5);
+    }
+
+    #[test]
+    fn fit_points_to_bounds_leaves_degenerate_input_alone() {
+        // Zero-area bbox would divide by zero.
+        let mut collapsed = vec![Point::new(4.0, 4.0), Point::new(4.0, 4.0)];
+        fit_points_to_bounds(&mut collapsed, 10.0, 10.0);
+        approx_point(collapsed[0], 4.0, 4.0);
+
+        let mut empty: Vec<Point> = Vec::new();
+        fit_points_to_bounds(&mut empty, 10.0, 10.0);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn koch_fractal_replaces_each_edge_with_four() {
+        // One segment pair (there and back) subdivided once. Each edge becomes
+        // p0, p0+d/3, the apex, p0+2d/3 — the apex sits sqrt(3)/6 of the edge
+        // length off to one side.
+        let base = vec![Point::new(0.0, 0.0), Point::new(3.0, 0.0)];
+        let out = koch_fractal(&base, 1);
+        assert_eq!(out.len(), 8);
+
+        approx_point(out[0], 0.0, 0.0);
+        approx_point(out[1], 1.0, 0.0);
+        approx_point(out[2], 1.5, -KOCH_SIN_60);
+        approx_point(out[3], 2.0, 0.0);
+        // The return edge bulges the opposite way.
+        approx_point(out[4], 3.0, 0.0);
+        approx_point(out[5], 2.0, 0.0);
+        approx_point(out[6], 1.5, KOCH_SIN_60);
+        approx_point(out[7], 1.0, 0.0);
+    }
+
+    #[test]
+    fn koch_fractal_iteration_count_drives_growth() {
+        let base = square();
+        // Zero iterations is a straight passthrough.
+        assert_eq!(koch_fractal(&base, 0), base);
+        // Each iteration quadruples the vertex count.
+        assert_eq!(koch_fractal(&base, 1).len(), 16);
+        assert_eq!(koch_fractal(&base, 2).len(), 64);
+    }
+
+    #[test]
+    fn polygon_points_places_vertices_on_the_circumcircle() {
+        // A 4-gon in a 20x20 box: radius 10 about (10, 10), first vertex at
+        // angle 0 and the rest counter-clockwise in screen coordinates.
+        let pts = polygon_points(20.0, 20.0, 4, 0.0, PolygonCornerStyle::Sharp);
+        assert_eq!(pts.len(), 4);
+        approx_point(pts[0], 20.0, 10.0);
+        approx_point(pts[1], 10.0, 20.0);
+        approx_point(pts[2], 0.0, 10.0);
+        approx_point(pts[3], 10.0, 0.0);
+    }
+
+    #[test]
+    fn polygon_points_applies_rotation_and_minimum_sides() {
+        // 90 degrees of rotation moves the first vertex a quarter turn on.
+        let rotated = polygon_points(20.0, 20.0, 4, 90.0, PolygonCornerStyle::Sharp);
+        approx_point(rotated[0], 10.0, 20.0);
+
+        // Fewer than three sides is clamped up to a triangle.
+        assert_eq!(
+            polygon_points(20.0, 20.0, 1, 0.0, PolygonCornerStyle::Sharp).len(),
+            MIN_POLYGON_SIDES as usize
+        );
+    }
+
+    #[test]
+    fn star_points_alternates_outer_and_inner_radii() {
+        // 4-point star in a 20x20 box: outer radius 10, inner 5, and the inner
+        // vertices sit half a step (PI/4) past each outer one.
+        let pts = star_points(20.0, 20.0, 4, 0.5, 0.0);
+        assert_eq!(pts.len(), 8);
+
+        let diag = 5.0 * std::f32::consts::FRAC_1_SQRT_2;
+        approx_point(pts[0], 20.0, 10.0);
+        approx_point(pts[1], 10.0 + diag, 10.0 + diag);
+        approx_point(pts[2], 10.0, 20.0);
+        approx_point(pts[3], 10.0 - diag, 10.0 + diag);
+        approx_point(pts[4], 0.0, 10.0);
+        approx_point(pts[6], 10.0, 0.0);
+    }
+
+    #[test]
+    fn chamfer_polygon_trims_each_vertex_along_both_edges() {
+        // A 10x10 square inset by 2 yields two points per corner, each 2 units
+        // back from the vertex along the incoming and outgoing edges.
+        let pts = chamfer_polygon(&square(), 2.0);
+        let expected = [
+            (0.0, 2.0),
+            (2.0, 0.0),
+            (8.0, 0.0),
+            (10.0, 2.0),
+            (10.0, 8.0),
+            (8.0, 10.0),
+            (2.0, 10.0),
+            (0.0, 8.0),
+        ];
+        assert_eq!(pts.len(), expected.len());
+        for (got, (x, y)) in pts.iter().zip(expected) {
+            approx_point(*got, x, y);
+        }
+    }
+
+    #[test]
+    fn chamfer_polygon_clamps_inset_to_half_the_edge() {
+        // An inset larger than half the edge would overshoot past the midpoint
+        // and invert the corner; it must clamp to exactly the midpoint.
+        let pts = chamfer_polygon(&square(), 50.0);
+        approx_point(pts[0], 0.0, 5.0);
+        approx_point(pts[1], 5.0, 0.0);
+
+        // Non-positive inset is a passthrough.
+        assert_eq!(chamfer_polygon(&square(), 0.0), square());
+    }
+
+    #[test]
+    fn rounded_polygon_arcs_between_the_tangent_points() {
+        // Right-angle corners: half-angle PI/4, so offset == radius and the
+        // arc centre sits at (2, 2) for the corner at the origin.
+        let pts = rounded_polygon(&square(), 2.0, 8);
+        // 4 corners x (8 segments + 1) points.
+        assert_eq!(pts.len(), 36);
+
+        // The arc runs from the tangent point on the incoming edge to the one
+        // on the outgoing edge, sweeping a quarter turn.
+        approx_point(pts[0], 0.0, 2.0);
+        approx_point(pts[8], 2.0, 0.0);
+        // Midway round the arc, 45 degrees from centre (2, 2) at radius 2.
+        let inset = 2.0 - 2.0 * std::f32::consts::FRAC_1_SQRT_2;
+        approx_point(pts[4], inset, inset);
+
+        // The next corner picks up at the far end of the top edge.
+        approx_point(pts[9], 8.0, 0.0);
+        approx_point(pts[17], 10.0, 2.0);
+    }
+
+    #[test]
+    fn rounded_polygon_passthrough_on_zero_radius() {
+        assert_eq!(rounded_polygon(&square(), 0.0, 8), square());
+    }
+
+    #[test]
+    fn bezier_polygon_passes_through_every_vertex() {
+        let pts = bezier_polygon(&square(), 0.5, 16);
+        // One run of `segments` points per edge.
+        assert_eq!(pts.len(), 64);
+
+        // t = 0 on each edge reproduces that edge's starting vertex exactly.
+        approx_point(pts[0], 0.0, 0.0);
+        approx_point(pts[16], 10.0, 0.0);
+        approx_point(pts[32], 10.0, 10.0);
+        approx_point(pts[48], 0.0, 10.0);
+
+        // Non-positive tension is a passthrough.
+        assert_eq!(bezier_polygon(&square(), 0.0, 16), square());
+    }
+
+    #[test]
+    fn outline_points_fits_complex_shapes_to_the_bounds() {
+        // A polygon is refitted to fill the box; a plain rectangle is not.
+        let shape = CropShape::Polygon {
+            sides: 5,
+            rotation_deg: 0.0,
+            corner_style: PolygonCornerStyle::Sharp,
+        };
+        let pts = outline_points(100, 100, &shape);
+
+        let min_x = pts.iter().map(|p| p.x).fold(f32::MAX, f32::min);
+        let max_x = pts.iter().map(|p| p.x).fold(f32::MIN, f32::max);
+        let min_y = pts.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+        let max_y = pts.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+
+        // The fitted shape touches the box on its limiting axis and stays
+        // inside on the other.
+        assert!(min_x >= -1e-3 && max_x <= 100.0 + 1e-3);
+        assert!(min_y >= -1e-3 && max_y <= 100.0 + 1e-3);
+        assert!(
+            (max_x - min_x - 100.0).abs() < 1e-2 || (max_y - min_y - 100.0).abs() < 1e-2,
+            "fitted shape should span the box on at least one axis"
+        );
+    }
+
+    #[test]
+    fn outline_points_rectangle_and_ellipse_span_the_box() {
+        let rect = outline_points(10, 8, &CropShape::Rectangle);
+        assert_eq!(rect.len(), 4);
+        approx_point(rect[0], 0.0, 0.0);
+        approx_point(rect[2], 10.0, 8.0);
+
+        // Ellipse starts at angle 0 — the rightmost point, vertically centred.
+        let ellipse = outline_points(10, 8, &CropShape::Ellipse);
+        assert_eq!(ellipse.len(), ELLIPSE_SEGMENTS);
+        approx_point(ellipse[0], 10.0, 4.0);
+        approx_point(ellipse[ELLIPSE_SEGMENTS / 4], 5.0, 8.0);
+        approx_point(ellipse[ELLIPSE_SEGMENTS / 2], 0.0, 4.0);
+    }
+
+    #[test]
+    fn outline_points_scales_corner_parameters_to_the_short_side() {
+        // 10x8 box: the corner parameter is a fraction of min(w, h) = 8, so
+        // 0.25 gives a radius/inset of 2. Note `sanitized()` caps these at 0.5,
+        // which means the `.clamp(.., min*0.5)` upper bound can never bind.
+        let rounded = outline_points(10, 8, &CropShape::RoundedRectangle { radius_pct: 0.25 });
+        assert_eq!(
+            rounded,
+            rounded_rect_points(10.0, 8.0, 2.0, ROUNDED_RECT_CORNER_SEGMENTS)
+        );
+
+        let chamfered = outline_points(10, 8, &CropShape::ChamferedRectangle { size_pct: 0.25 });
+        assert_eq!(chamfered, chamfered_rect_points(10.0, 8.0, 2.0));
+
+        // At the sanitizer's ceiling the parameter reaches exactly half the
+        // short side.
+        let max_round = outline_points(10, 8, &CropShape::RoundedRectangle { radius_pct: 0.5 });
+        assert_eq!(
+            max_round,
+            rounded_rect_points(10.0, 8.0, 4.0, ROUNDED_RECT_CORNER_SEGMENTS)
+        );
+    }
+
+    #[test]
+    fn polygon_points_scales_corner_styles_by_the_short_side() {
+        let sharp = polygon_points(20.0, 20.0, 4, 0.0, PolygonCornerStyle::Sharp);
+
+        // inset = min(w, h) * 0.1 = 2, well inside the circumradius of 10.
+        let chamfered = polygon_points(
+            20.0,
+            20.0,
+            4,
+            0.0,
+            PolygonCornerStyle::Chamfered { size_pct: 0.1 },
+        );
+        assert_eq!(chamfered, chamfer_polygon(&sharp, 2.0));
+
+        let rounded = polygon_points(
+            20.0,
+            20.0,
+            4,
+            0.0,
+            PolygonCornerStyle::Rounded { radius_pct: 0.1 },
+        );
+        assert_eq!(
+            rounded,
+            rounded_polygon(&sharp, 2.0, ROUNDED_POLYGON_CORNER_SEGMENTS)
+        );
+
+        let bezier = polygon_points(
+            20.0,
+            20.0,
+            4,
+            0.0,
+            PolygonCornerStyle::Bezier { tension: 0.5 },
+        );
+        assert_eq!(bezier, bezier_polygon(&sharp, 0.5, BEZIER_POLYGON_SEGMENTS));
+    }
+
+    #[test]
+    fn rounded_polygon_handles_corners_that_are_not_right_angles() {
+        // On a square every corner is 90 degrees, where half_angle is PI/4 and
+        // tan(PI/4) == 1 — so `radius / tan(half_angle)` and a sign flip on the
+        // incoming vector both vanish. A right isoceles triangle has a 45
+        // degree corner at (10, 0), where neither cancels out.
+        let tri = vec![
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(0.0, 10.0),
+        ];
+        let pts = rounded_polygon(&tri, 1.0, 8);
+        assert_eq!(pts.len(), 27);
+
+        // Corner 1 is the vertex at (10, 0): half_angle = PI/8, so the tangent
+        // points sit 1/tan(PI/8) = 1 + sqrt(2) back along each edge.
+        let offset = 1.0 + std::f32::consts::SQRT_2;
+        approx_point(pts[9], 10.0 - offset, 0.0);
+        let diag = offset * std::f32::consts::FRAC_1_SQRT_2;
+        approx_point(pts[17], 10.0 - diag, diag);
+    }
+
+    #[test]
+    fn rounded_polygon_clamps_the_arc_to_half_each_edge() {
+        // A radius far larger than the shape: without the `edge_len * 0.5`
+        // clamp the arc swings outside the polygon entirely.
+        let pts = rounded_polygon(&square(), 20.0, 8);
+        for p in &pts {
+            assert!(
+                p.x >= -0.01 && p.x <= 10.01 && p.y >= -0.01 && p.y <= 10.01,
+                "arc point ({}, {}) escaped the polygon bounds",
+                p.x,
+                p.y
+            );
+        }
+    }
+
+    #[test]
+    fn bezier_polygon_curves_between_the_vertices() {
+        // The vertex-only assertions elsewhere are all at t = 0, which returns
+        // p0 regardless of the control points. These probe mid-segment, where
+        // the tangent and control-point indexing actually matter.
+        //
+        // Segment 0 runs (0,0) -> (10,0) with control points (2.5,-2.5) and
+        // (7.5,-2.5); at t = 0.5 the weights are 1/8, 3/8, 3/8, 1/8.
+        let pts = bezier_polygon(&square(), 0.5, 16);
+        approx_point(pts[8], 5.0, -1.875);
+        // Segment 1 runs (10,0) -> (10,10) via (12.5,2.5) and (12.5,7.5).
+        approx_point(pts[24], 11.875, 5.0);
+    }
+
+    #[test]
+    fn fit_points_to_bounds_ignores_a_single_collapsed_axis() {
+        // A vertical line has zero width. The guard has to trip when *either*
+        // axis is degenerate — requiring both would divide by a zero bbox.
+        let mut line = vec![Point::new(4.0, 0.0), Point::new(4.0, 10.0)];
+        fit_points_to_bounds(&mut line, 10.0, 10.0);
+        approx_point(line[0], 4.0, 0.0);
+        approx_point(line[1], 4.0, 10.0);
+    }
+
+    #[test]
+    fn outline_points_treats_zero_dimensions_as_one_pixel() {
+        // width.max(1) guards against a zero-area box.
+        let pts = outline_points(0, 0, &CropShape::Rectangle);
+        assert_eq!(pts.len(), 4);
+        approx_point(pts[2], 1.0, 1.0);
+    }
 }

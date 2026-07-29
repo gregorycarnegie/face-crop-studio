@@ -1,0 +1,23 @@
+# cargo-mutants configuration.
+#
+# Exclusions keep the reported score meaningful: mutating code that no test
+# currently reaches only inflates the missed count and buries the gaps that are
+# actually worth closing.
+
+exclude_globs = [
+    # egui immediate-mode UI: painting, layout, and widget state only exist
+    # inside a live frame, so plain unit tests cannot reach them. 1608 mutants,
+    # 8 caught, against 2 tests in the whole crate.
+    #
+    # PROVISIONAL. This one is coverable — `egui_kittest` builds a test harness
+    # that drives a real egui app (simulated input, frame stepping, snapshot
+    # assertions): https://github.com/emilk/egui/tree/main/crates/egui_kittest
+    # Once a harness exists, drop this line and re-measure rather than assuming
+    # the crate is untestable.
+    "fcs-gui/**",
+
+    # These two genuinely need hardware in the loop: an enumerable camera and a
+    # wgpu adapter. Every mutant survives because the code never runs in CI.
+    "fcs-cli/src/webcam.rs",
+    "fcs-cli/src/gpu.rs",
+]

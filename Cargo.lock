@@ -2140,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-cli"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-core"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-gui"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-utils"
-version = "1.4.4"
+version = "1.4.5"
 dependencies = [
  "anyhow",
  "base64",

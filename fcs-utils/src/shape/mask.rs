@@ -372,6 +372,492 @@ pub fn apply_shape_mask_dynamic(
 mod tests {
     use super::*;
 
+    /// Signed distances are exact small rationals for the probes below, but
+    /// the diagonal and elliptical cases involve a sqrt, so compare with a
+    /// tolerance far tighter than any operator swap could survive.
+    #[track_caller]
+    fn approx(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Golden values.
+    //
+    // The sign-only assertions further down establish that a point is inside
+    // or outside, which any scaling or offset error preserves. These pin the
+    // distances themselves.
+
+    #[test]
+    fn analytical_signed_distance_rectangle_exact_values() {
+        // 20x10 rectangle: cx = 10, cy = 5, half extents 10 and 5.
+        let params = precompute_analytical_mask_params(&CropShape::Rectangle, 20, 10, 0.0);
+        let d = |x, y| analytical_signed_distance(&CropShape::Rectangle, x, y, &params);
+
+        // Centre: both deltas negative, so the result is the *larger* of them
+        // (the nearest edge), i.e. -5 from the top/bottom edge, not -10.
+        approx(d(10.0, 5.0), -5.0);
+        // Directly right of the box: 15 - 10 = 5 across, still inside vertically.
+        approx(d(25.0, 5.0), 5.0);
+        // Diagonally outside both edges: hypot(5, 2) = sqrt(29).
+        approx(d(25.0, 12.0), 29f32.sqrt());
+    }
+
+    #[test]
+    fn analytical_signed_distance_ellipse_exact_values() {
+        // 20x12 ellipse: rx = 10, ry = 6, scaled by min(w,h)*0.5 = 6.
+        let params = precompute_analytical_mask_params(&CropShape::Ellipse, 20, 12, 0.0);
+        let d = |x, y| analytical_signed_distance(&CropShape::Ellipse, x, y, &params);
+
+        // Centre: (0 - 1) * 6 = -6.
+        approx(d(10.0, 6.0), -6.0);
+        // x = 21 -> normalized 11/10, sqrt(1.21) = 1.1, (1.1 - 1) * 6 = 0.6.
+        approx(d(21.0, 6.0), 0.6);
+    }
+
+    #[test]
+    fn analytical_signed_distance_rounded_rect_exact_values() {
+        // radius = min(20,12) * 0.2 = 2.4, so the inner box is 7.6 x 3.6.
+        let shape = CropShape::RoundedRectangle { radius_pct: 0.2 };
+        let params = precompute_analytical_mask_params(&shape, 20, 12, 0.0);
+        let d = |x, y| analytical_signed_distance(&shape, x, y, &params);
+
+        // Centre: -3.6 from the inner box, minus the 2.4 radius.
+        approx(d(10.0, 6.0), -6.0);
+        // x = 21: 11 - 7.6 = 3.4 outside the inner box, minus the radius.
+        approx(d(21.0, 6.0), 1.0);
+    }
+
+    #[test]
+    fn analytical_signed_distance_chamfered_rect_exact_values() {
+        // chamfer = 2.4, so the diagonal cut sits at x + y = 10 + 6 - 2.4 = 13.6.
+        let shape = CropShape::ChamferedRectangle { size_pct: 0.2 };
+        let params = precompute_analytical_mask_params(&shape, 20, 12, 0.0);
+        let d = |x, y| analytical_signed_distance(&shape, x, y, &params);
+
+        approx(d(10.0, 6.0), -6.0);
+        // Straight out the side: the box term wins over the diagonal.
+        approx(d(21.0, 6.0), 1.0);
+        // Near the cut corner the *diagonal* term wins: still inside the box
+        // (-1.0) but outside the chamfer, (9 + 5 - 13.6)/sqrt(2) = 0.2828.
+        approx(d(19.0, 11.0), 0.4 * FRAC_1_SQRT_2);
+    }
+
+    #[test]
+    fn analytical_shape_param_scales_and_clamps() {
+        // min(20,12) = 12, limit = 6.
+        approx(
+            analytical_shape_param(&CropShape::RoundedRectangle { radius_pct: 0.2 }, 20.0, 12.0),
+            2.4,
+        );
+        approx(
+            analytical_shape_param(&CropShape::ChamferedRectangle { size_pct: 0.1 }, 20.0, 12.0),
+            1.2,
+        );
+        // 12 * 0.9 = 10.8 exceeds the half-extent limit and clamps to 6.
+        approx(
+            analytical_shape_param(&CropShape::RoundedRectangle { radius_pct: 0.9 }, 20.0, 12.0),
+            6.0,
+        );
+        // Shapes without a corner parameter contribute nothing.
+        approx(
+            analytical_shape_param(&CropShape::Rectangle, 20.0, 12.0),
+            0.0,
+        );
+        approx(analytical_shape_param(&CropShape::Ellipse, 20.0, 12.0), 0.0);
+    }
+
+    #[test]
+    fn precompute_analytical_mask_params_derives_centre_and_softness() {
+        let p = precompute_analytical_mask_params(&CropShape::Rectangle, 20, 12, 0.5);
+        approx(p.width, 20.0);
+        approx(p.height, 12.0);
+        approx(p.cx, 10.0);
+        approx(p.cy, 6.0);
+        // min(20,12) * 0.5 * 0.5 = 3.
+        approx(p.softness_px, 3.0);
+
+        // Zero softness stays zero rather than falling through the .max(1.0).
+        let hard = precompute_analytical_mask_params(&CropShape::Rectangle, 20, 12, 0.0);
+        approx(hard.softness_px, 0.0);
+
+        // Tiny images floor at one pixel: 2 * 0.5 * 0.1 = 0.1 -> 1.0.
+        let tiny = precompute_analytical_mask_params(&CropShape::Rectangle, 2, 2, 0.1);
+        approx(tiny.softness_px, 1.0);
+    }
+
+    #[test]
+    fn mask_alpha_from_distance_on_the_boundary_is_opaque() {
+        // Exactly on the edge with a hard mask. Treating softness_px >= 0 as
+        // "soft" divides 0 by 0 here and yields NaN instead of 1.0.
+        assert_eq!(mask_alpha_from_distance(0.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn sample_mask_alpha_bilinear_interpolates_interior() {
+        // 2x2 alphas: 10 20 / 30 40.
+        let mask = RgbaImage::from_raw(
+            2,
+            2,
+            vec![
+                0, 0, 0, 10, 0, 0, 0, 20, //
+                0, 0, 0, 30, 0, 0, 0, 40,
+            ],
+        )
+        .expect("valid test mask");
+        let raw = mask.as_raw();
+
+        // Dead centre averages all four: (10+20+30+40)/4 = 25.
+        approx(
+            sample_mask_alpha_bilinear(raw, 2, 2, 0.5, 0.5),
+            25.0 / 255.0,
+        );
+        // wx = 0.25, wy = 0.75 -> top 12.5, bottom 32.5 -> 27.5.
+        approx(
+            sample_mask_alpha_bilinear(raw, 2, 2, 0.25, 0.75),
+            27.5 / 255.0,
+        );
+        // Asymmetric weights catch an x/y swap: wx = 0.75, wy = 0.25 -> 22.5.
+        approx(
+            sample_mask_alpha_bilinear(raw, 2, 2, 0.75, 0.25),
+            22.5 / 255.0,
+        );
+    }
+
+    #[test]
+    fn process_pixel_mixes_vignette_and_scales_alpha() {
+        // Distinct channels and a distinct vignette colour so a channel mix-up
+        // shows up. mix_factor = inv_mask * intensity = 0.5 * 1.0 = 0.5.
+        //   R: 100 + 0.5*(10 - 100)  =  55
+        //   G: 150 + 0.5*(20 - 150)  =  85
+        //   B: 200 + 0.5*(30 - 200)  = 115
+        //   A: 255 * 0.5 = 127.5, rounded = 128
+        let colour = RgbaColor {
+            red: 10,
+            green: 20,
+            blue: 30,
+            alpha: 255,
+        };
+        let mut px = [100u8, 150, 200, 255];
+        process_pixel(&mut px, 0.5, 1.0, &colour);
+        assert_eq!(px, [55, 85, 115, 128]);
+    }
+
+    #[test]
+    fn process_pixel_scales_the_mix_by_intensity() {
+        // The case above uses intensity 1.0, where `inv_mask * intensity` and
+        // `inv_mask / intensity` agree. A partial intensity separates them:
+        // mix_factor = 0.5 * 0.5 = 0.25, not 1.0.
+        //   R: 100 + 0.25*(10 - 100)  =  77.5 -> 77
+        //   G: 150 + 0.25*(20 - 150)  = 117.5 -> 117
+        //   B: 200 + 0.25*(30 - 200)  = 157.5 -> 157
+        let colour = RgbaColor {
+            red: 10,
+            green: 20,
+            blue: 30,
+            alpha: 255,
+        };
+        let mut px = [100u8, 150, 200, 255];
+        process_pixel(&mut px, 0.5, 0.5, &colour);
+        assert_eq!(px, [77, 117, 157, 128]);
+    }
+
+    #[test]
+    fn dynamic_rectangle_with_softness_still_gets_a_vignette() {
+        // `apply_shape_mask_dynamic` carries its own copy of the rectangle
+        // short-circuit, so it needs its own coverage of the softness case.
+        let mut img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([200u8, 100, 50, 255]),
+        ));
+        apply_shape_mask_dynamic(
+            &mut img,
+            &CropShape::Rectangle,
+            0.5,
+            0.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+        let buf = img.to_rgba8();
+        assert_eq!(buf.get_pixel(0, 0)[3], 159);
+        assert_eq!(buf.get_pixel(4, 4)[3], 255);
+    }
+
+    #[test]
+    fn dynamic_rectangle_without_softness_is_untouched() {
+        let source = RgbaImage::from_pixel(4, 4, image::Rgba([200u8, 100, 50, 255]));
+        let mut img = DynamicImage::ImageRgba8(source.clone());
+        apply_shape_mask_dynamic(
+            &mut img,
+            &CropShape::Rectangle,
+            0.0,
+            1.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+        assert_eq!(img.to_rgba8(), source);
+    }
+
+    #[test]
+    fn process_pixel_leaves_colour_alone_when_fully_inside_or_unvignetted() {
+        let colour = RgbaColor {
+            red: 10,
+            green: 20,
+            blue: 30,
+            alpha: 255,
+        };
+
+        // mask_alpha 1.0 -> inv_mask 0.0 -> no vignette contribution at all.
+        let mut inside = [100u8, 150, 200, 200];
+        process_pixel(&mut inside, 1.0, 1.0, &colour);
+        assert_eq!(inside, [100, 150, 200, 200]);
+
+        // Zero intensity -> colours untouched, but alpha still gets masked.
+        let mut unvignetted = [100u8, 150, 200, 200];
+        process_pixel(&mut unvignetted, 0.25, 0.0, &colour);
+        assert_eq!(unvignetted, [100, 150, 200, 50]);
+    }
+
+    #[test]
+    fn build_raster_soft_mask_passthrough_and_solid_mask() {
+        let hard = RgbaImage::from_pixel(4, 4, image::Rgba([255u8, 255, 255, 128]));
+
+        // Non-positive softness returns the input untouched.
+        let same = build_raster_soft_mask(hard.clone(), 0.0);
+        assert_eq!(same, hard);
+
+        // A fully opaque mask blurs to itself, so hard_a * soft_a stays 1.0
+        // and the alpha survives the round trip at 255.
+        let solid = RgbaImage::from_pixel(8, 8, image::Rgba([255u8, 255, 255, 255]));
+        let softened = build_raster_soft_mask(solid, 0.5);
+        assert_eq!(softened.get_pixel(4, 4)[3], 255);
+    }
+
+    #[test]
+    fn analytical_signed_distance_ellipse_off_the_horizontal_axis() {
+        // The probes above all sit on y = cy, which zeroes the whole vertical
+        // term and hides anything wrong with ry.
+        let params = precompute_analytical_mask_params(&CropShape::Ellipse, 20, 12, 0.0);
+        // p_abs_y = 9, ry = 6 -> 81/36 = 2.25, sqrt = 1.5, (1.5 - 1) * 6 = 3.
+        approx(
+            analytical_signed_distance(&CropShape::Ellipse, 10.0, 15.0, &params),
+            3.0,
+        );
+    }
+
+    #[test]
+    fn analytical_shape_param_clamps_the_chamfer_too() {
+        // The rounded case exercises the clamp above; the chamfered branch has
+        // its own copy of the limit and needs its own oversized input.
+        approx(
+            analytical_shape_param(&CropShape::ChamferedRectangle { size_pct: 0.9 }, 20.0, 12.0),
+            6.0,
+        );
+    }
+
+    #[test]
+    fn mask_alpha_from_distance_ramps_linearly_across_the_falloff() {
+        // Only partial values distinguish `dist / softness` from `dist *
+        // softness` — at the extremes both saturate to the same 0 or 1.
+        approx(mask_alpha_from_distance(5.0, 10.0), 0.25);
+        approx(mask_alpha_from_distance(-5.0, 10.0), 0.75);
+        approx(mask_alpha_from_distance(2.5, 10.0), 0.375);
+    }
+
+    #[test]
+    fn build_raster_soft_mask_multiplies_hard_and_soft_alpha() {
+        // A solid mask blurs to itself, so the alpha is squared in normalized
+        // space: (128/255)^2 * 255 + 0.5 = 64.75 -> 64. A fully opaque fixture
+        // would square to 1.0 and hide the division entirely.
+        let half = RgbaImage::from_pixel(8, 8, image::Rgba([255u8, 255, 255, 128]));
+        let softened = build_raster_soft_mask(half, 0.5);
+        assert_eq!(softened.get_pixel(4, 4)[3], 64);
+    }
+
+    #[test]
+    fn analytical_mask_samples_at_pixel_centres() {
+        // 4x4 ellipse, hard edge. Pixel centres are at 0.5..3.5 about (2, 2),
+        // so the four corners fall outside the unit ellipse and everything
+        // else falls inside. Dropping the half-pixel offset shifts the whole
+        // pattern by one pixel and lights up the wrong corners.
+        let mut img = RgbaImage::from_pixel(4, 4, image::Rgba([200u8, 100, 50, 255]));
+        apply_shape_mask(
+            &mut img,
+            &CropShape::Ellipse,
+            0.0,
+            0.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let corner = (x == 0 || x == 3) && (y == 0 || y == 3);
+                let want = if corner { 0 } else { 255 };
+                assert_eq!(
+                    img.get_pixel(x, y)[3],
+                    want,
+                    "alpha at ({x}, {y}) should be {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rectangle_with_softness_still_gets_a_vignette() {
+        // A rectangle short-circuits only when softness is zero. With softness
+        // the analytical path must run and feather the border.
+        let mut img = RgbaImage::from_pixel(8, 8, image::Rgba([200u8, 100, 50, 255]));
+        apply_shape_mask(
+            &mut img,
+            &CropShape::Rectangle,
+            0.5,
+            0.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+
+        // softness_px = 8 * 0.5 * 0.5 = 2. The corner pixel centre sits 0.5
+        // inside the edge: alpha = 0.5 + 0.5*(0.5/2) = 0.625 -> 159.
+        assert_eq!(img.get_pixel(0, 0)[3], 159);
+        // The centre is 3.5 in, well past the falloff, so it stays opaque.
+        assert_eq!(img.get_pixel(4, 4)[3], 255);
+    }
+
+    #[test]
+    fn rectangle_without_softness_is_untouched() {
+        let mut img = RgbaImage::from_pixel(4, 4, image::Rgba([200u8, 100, 50, 255]));
+        let before = img.clone();
+        apply_shape_mask(
+            &mut img,
+            &CropShape::Rectangle,
+            0.0,
+            1.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+        assert_eq!(img, before);
+    }
+
+    #[test]
+    fn zero_sized_images_are_left_alone_on_both_paths() {
+        // Row chunking uses `4 * width`, which rejects a zero chunk size, so
+        // the guard has to fire before the parallel loop.
+        let mut analytical = RgbaImage::new(0, 4);
+        apply_shape_mask(
+            &mut analytical,
+            &CropShape::Ellipse,
+            0.0,
+            0.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+        assert_eq!(analytical.dimensions(), (0, 4));
+
+        let mut raster = RgbaImage::new(0, 4);
+        apply_shape_mask(
+            &mut raster,
+            &CropShape::Star {
+                points: 5,
+                inner_radius_pct: 0.5,
+                rotation_deg: 0.0,
+            },
+            0.0,
+            0.0,
+            RgbaColor::opaque(0, 0, 0),
+        );
+        assert_eq!(raster.dimensions(), (0, 4));
+    }
+
+    /// Sequential re-derivation of the raster masking loop.
+    ///
+    /// The mask itself comes from tiny-skia, whose antialiased coverage is not
+    /// something to hand-predict — and it is not perfectly mirror-symmetric
+    /// either, so a symmetry assertion cannot stand in for it. What this pins
+    /// instead is everything the loop does *around* the rasterizer: deriving
+    /// the mask size from the scale, mapping pixel centres to mask
+    /// coordinates, and indexing rows. The shared helpers it calls are covered
+    /// by their own golden tests above.
+    fn reference_raster_mask(
+        image: &RgbaImage,
+        shape: &CropShape,
+        vignette_softness: f32,
+        vignette_intensity: f32,
+        vignette_color: RgbaColor,
+    ) -> RgbaImage {
+        let (width, height) = image.dimensions();
+        let scale = raster_mask_scale(width, height);
+        let mask_w = (width as f32 * scale).ceil() as u32;
+        let mask_h = (height as f32 * scale).ceil() as u32;
+
+        let hard = build_raster_hard_mask(mask_w, mask_h, shape).expect("mask builds");
+        let mask = build_raster_soft_mask(hard, vignette_softness);
+        let raw = mask.as_raw();
+
+        let mut out = image.clone();
+        for y in 0..height {
+            for x in 0..width {
+                let u = (x as f32 + 0.5) * scale;
+                let v = (y as f32 + 0.5) * scale;
+                let alpha = sample_mask_alpha_bilinear(
+                    raw,
+                    mask_w as usize,
+                    mask_h as usize,
+                    u - 0.5,
+                    v - 0.5,
+                );
+                let px = out.get_pixel_mut(x, y);
+                process_pixel(&mut px.0[..], alpha, vignette_intensity, &vignette_color);
+            }
+        }
+        out
+    }
+
+    fn star() -> CropShape {
+        CropShape::Star {
+            points: 4,
+            inner_radius_pct: 0.5,
+            rotation_deg: 0.0,
+        }
+    }
+
+    #[test]
+    fn raster_mask_matches_the_reference_loop() {
+        let source = RgbaImage::from_pixel(16, 16, image::Rgba([200u8, 100, 50, 255]));
+        let colour = RgbaColor::opaque(10, 20, 30);
+
+        for (softness, intensity) in [(0.0, 0.0), (0.0, 0.8), (0.4, 0.6)] {
+            let mut got = source.clone();
+            apply_shape_mask(&mut got, &star(), softness, intensity, colour);
+            let want = reference_raster_mask(&source, &star(), softness, intensity, colour);
+            assert_eq!(
+                got, want,
+                "mismatch at softness {softness}, intensity {intensity}"
+            );
+        }
+
+        // Sanity: the star must actually carve something out, otherwise the
+        // comparison above would hold on an untouched image.
+        let mut carved = source.clone();
+        apply_shape_mask(&mut carved, &star(), 0.0, 0.0, colour);
+        assert!(carved.pixels().any(|p| p[3] == 0));
+        assert!(carved.pixels().any(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn raster_mask_downscales_above_the_resolution_cap() {
+        // Wider than MAX_MASK_RESOLUTION, so scale = 0.5 and the mask is built
+        // at half size. That makes `* scale` and `/ scale` diverge, which they
+        // cannot at the scale of 1.0 every other test uses.
+        let source = RgbaImage::from_pixel(4096, 8, image::Rgba([200u8, 100, 50, 255]));
+        assert_eq!(raster_mask_scale(4096, 8), 0.5);
+
+        let mut got = source.clone();
+        apply_shape_mask(&mut got, &star(), 0.0, 0.0, RgbaColor::opaque(0, 0, 0));
+        let want = reference_raster_mask(&source, &star(), 0.0, 0.0, RgbaColor::opaque(0, 0, 0));
+
+        assert_eq!(got.dimensions(), (4096, 8));
+        assert_eq!(got, want);
+        assert!(got.pixels().any(|p| p[3] == 0));
+    }
+
     #[test]
     fn analytical_signed_distance_marks_center_inside_and_outside_positive() {
         let params = precompute_analytical_mask_params(&CropShape::Rectangle, 20, 10, 0.0);

@@ -17,29 +17,21 @@ fn histogram_equalization_stretches_levels() {
     }
     let out = apply_histogram_equalization(&DynamicImage::ImageRgba8(img));
     let buf = out.to_rgba8();
-    let mut mins = [u8::MAX; 3];
-    let mut maxs = [0u8; 3];
-    for pixel in buf.pixels() {
-        for c in 0..3 {
-            mins[c] = mins[c].min(pixel[c]);
-            maxs[c] = maxs[c].max(pixel[c]);
-        }
-    }
-    for c in 0..3 {
-        assert!(
-            maxs[c] > mins[c],
-            "expected channel {} max {} > min {}",
-            c,
-            maxs[c],
-            mins[c]
-        );
-        assert!(
-            (maxs[c] as i16 - mins[c] as i16) >= 100,
-            "expected channel {} spread >=100, got {}",
-            c,
-            maxs[c] as i16 - mins[c] as i16
-        );
-    }
+
+    // Each channel holds two levels, two pixels each: cdf_min = 2, total = 4,
+    // so denom = 2 and the pair maps to the extremes of the range. Note the
+    // blue channel is descending (120 then 100), so its output flips order.
+    //   R: 40 -> 0,   200 -> 255
+    //   G: 80 -> 0,   160 -> 255
+    //   B: 120 -> 255, 100 -> 0
+    //
+    // Pinning the values matters: a spread-only check (`max - min >= 100`) is
+    // already satisfied by the *un*equalized input, so it passes even when the
+    // histogram is never accumulated and the LUT comes back as the identity.
+    assert_eq!(*buf.get_pixel(0, 0), image::Rgba([0, 0, 255, 255]));
+    assert_eq!(*buf.get_pixel(1, 0), image::Rgba([0, 0, 255, 255]));
+    assert_eq!(*buf.get_pixel(2, 0), image::Rgba([255, 255, 0, 255]));
+    assert_eq!(*buf.get_pixel(3, 0), image::Rgba([255, 255, 0, 255]));
 }
 
 #[test]
@@ -85,9 +77,11 @@ fn saturation_zero_grays_image() {
     let img = solid([200, 100, 50, 255]);
     let out = apply_saturation(&img, 0.0);
     let buf = out.to_rgba8();
-    let px = buf.get_pixel(0, 0);
-    assert_eq!(px[0], px[1]);
-    assert_eq!(px[1], px[2]);
+    // At saturation 0 every channel collapses to the Rec.601 luma:
+    // 0.299*200 + 0.587*100 + 0.114*50 = 124.2, +0.5 and truncated = 124.
+    // Pinning the value (not just channel equality) is what catches a mangled
+    // luma coefficient — all-equal-but-wrong passes an equality-only check.
+    assert_eq!(*buf.get_pixel(0, 0), image::Rgba([124, 124, 124, 255]));
 }
 
 #[test]
@@ -555,6 +549,181 @@ fn saturation_scalar_tail_is_exercised_by_odd_pixel_count() {
             px[1], px[2],
             "pixel {x}: G and B must be equal at zero saturation"
         );
+    }
+}
+
+// -----------------------------------------------------------------------
+// Golden-value tests.
+//
+// The tests above mostly assert that an operation ran (dimensions preserved,
+// value moved in the right direction). That style survives an operator swap:
+// `0.299 * r` mutated to `0.299 + r` still yields an image of the right size
+// with plausible-looking pixels. These pin exact outputs for hand-computed
+// inputs instead, so any change to the arithmetic shows up as a diff.
+
+#[test]
+fn saturation_boost_hits_exact_values() {
+    // gray = 0.299*200 + 0.587*100 + 0.114*50 = 124.2
+    // out  = gray + 1.5*(channel - gray) + 0.5, truncated
+    //   R: 124.2 + 1.5*( 75.8) + 0.5 = 238.4 -> 238
+    //   G: 124.2 + 1.5*(-24.2) + 0.5 =  88.4 ->  88
+    //   B: 124.2 + 1.5*(-74.2) + 0.5 =  13.4 ->  13
+    let mut buf = RgbaImage::from_pixel(2, 1, image::Rgba([200, 100, 50, 128]));
+    saturation_in_place(&mut buf, 1.5);
+    assert_eq!(*buf.get_pixel(0, 0), image::Rgba([238, 88, 13, 128]));
+    assert_eq!(*buf.get_pixel(1, 0), image::Rgba([238, 88, 13, 128]));
+}
+
+#[test]
+fn tone_lut_composes_stages_in_pipeline_order() {
+    // A 256-wide gradient probes every entry of the folded LUT at once.
+    let mut img = RgbaImage::new(256, 1);
+    for x in 0..256u32 {
+        let v = x as u8;
+        img.put_pixel(x, 0, image::Rgba([v, v, v, 255]));
+    }
+    let source = DynamicImage::ImageRgba8(img);
+
+    let settings = EnhancementSettings {
+        exposure_stops: 1.0,
+        brightness: 10,
+        contrast: 1.5,
+        ..EnhancementSettings::default()
+    };
+
+    let lut = tone_lut(&settings).expect("all three tone stages are active");
+    let mut folded = source.to_rgba8();
+    apply_lut_in_place(&mut folded, &lut);
+
+    // Same three stages applied one image pass at a time.
+    let staged =
+        apply_contrast(&apply_brightness(&apply_exposure(&source, 1.0), 10), 1.5).to_rgba8();
+
+    assert_eq!(
+        folded, staged,
+        "folded LUT must equal exposure -> brightness -> contrast applied in sequence"
+    );
+    assert_ne!(folded, source.to_rgba8(), "tone stages must change pixels");
+
+    // Spot-check one entry end to end so a LUT that is merely self-consistent
+    // (both paths broken the same way) still fails:
+    //   50 -> exposure x2 -> 100 -> +10 -> 110 -> contrast 1.5 -> 101
+    assert_eq!(lut[50], 101);
+}
+
+#[test]
+fn tone_lut_is_none_when_every_stage_is_a_noop() {
+    assert!(tone_lut(&EnhancementSettings::default()).is_none());
+}
+
+#[test]
+fn equalization_lut_maps_known_histogram() {
+    // 9 pixels: 3 at level 0, 2 at level 128, 4 at level 255.
+    // cdf_min = 3, denom = 9 - 3 = 6.
+    //   lut[0]   = 0                      (cdf 3 is not > cdf_min)
+    //   lut[128] = (5-3)/6 * 255 =  85
+    //   lut[255] = (9-3)/6 * 255 = 255
+    let mut hist = [0u32; 256];
+    hist[0] = 3;
+    hist[128] = 2;
+    hist[255] = 4;
+
+    let lut = build_equalization_lut(&hist, 9);
+
+    assert_eq!(lut[0], 0);
+    assert_eq!(
+        lut[127], 0,
+        "levels below the first populated bin stay at 0"
+    );
+    assert_eq!(lut[128], 85);
+    assert_eq!(lut[254], 85, "levels plateau until the next populated bin");
+    assert_eq!(lut[255], 255);
+}
+
+#[test]
+fn background_blur_mask_blends_by_exact_radius() {
+    // Flat sharp and flat blurred inputs turn the output pixel into a direct
+    // readout of the blend factor: out = 40 + blend*(200-40) + 0.5.
+    let sharp = RgbaImage::from_pixel(16, 16, image::Rgba([40u8, 40, 40, 255]));
+    let blurred = RgbaImage::from_pixel(16, 16, image::Rgba([200u8, 200, 200, 255]));
+    let out = background_blur_from_rgba(&sharp, &blurred, 1.0);
+
+    // cx = cy = 8, rx = ry = 8, so dist_sq = (dx^2 + dy^2) / 64.
+
+    // Centre: dist_sq 0 -> inside the 0.81 threshold -> fully sharp.
+    assert_eq!(*out.get_pixel(8, 8), image::Rgba([40, 40, 40, 255]));
+
+    // Corner: dist_sq 2.0 -> past the 1.21 threshold -> fully blurred.
+    assert_eq!(*out.get_pixel(0, 0), image::Rgba([200, 200, 200, 255]));
+
+    // Edge midpoint: dist_sq = 64/64 = 1.0, dist = 1.0,
+    // blend = (1.0 - 0.9)*5 = 0.5 -> 40 + 0.5*160 + 0.5 = 120.5 -> 120.
+    assert_eq!(*out.get_pixel(0, 8), image::Rgba([120, 120, 120, 255]));
+
+    // One row up, so dy != 0 exercises the vertical half of the distance term:
+    // dist_sq = (64 + 1)/64 = 1.015625, dist = 1.0077822,
+    // blend = 0.5389 -> 40 + 0.5389*160 + 0.5 = 126.7 -> 126.
+    // The alpha assertion also pins the per-channel write offset.
+    assert_eq!(*out.get_pixel(0, 7), image::Rgba([126, 126, 126, 255]));
+}
+
+#[test]
+fn background_blur_mask_size_scales_the_radius() {
+    // Same flat-readout trick as above, but at mask_size 0.5 so the radius is
+    // genuinely scaled: rx = ry = (16*0.5)*0.5 = 4, dist_sq = (dx^2+dy^2)/16.
+    // At mask_size 1.0 a mangled `* mask_size` is invisible — multiplying and
+    // dividing by 1.0 agree — so the radius needs a second, non-unit probe.
+    let sharp = RgbaImage::from_pixel(16, 16, image::Rgba([40u8, 40, 40, 255]));
+    let blurred = RgbaImage::from_pixel(16, 16, image::Rgba([200u8, 200, 200, 255]));
+    let out = background_blur_from_rgba(&sharp, &blurred, 0.5);
+
+    assert_eq!(*out.get_pixel(8, 8), image::Rgba([40, 40, 40, 255]));
+    // dist_sq = 16/16 = 1.0 -> blend 0.5, probed on both axes.
+    assert_eq!(*out.get_pixel(4, 8), image::Rgba([120, 120, 120, 255]));
+    assert_eq!(*out.get_pixel(8, 4), image::Rgba([120, 120, 120, 255]));
+    // dist_sq = 64/16 = 4.0 -> fully blurred.
+    assert_eq!(*out.get_pixel(0, 8), image::Rgba([200, 200, 200, 255]));
+}
+
+#[test]
+fn background_blur_reads_the_matching_blur_row() {
+    // Give every row of the blurred input its own value. A solid blur fixture
+    // hides a row-index slip, because reading the wrong row looks identical.
+    let sharp = RgbaImage::from_pixel(16, 16, image::Rgba([40u8, 40, 40, 255]));
+    let mut blurred = RgbaImage::new(16, 16);
+    for y in 0..16u32 {
+        let v = (100 + y * 5) as u8;
+        for x in 0..16u32 {
+            blurred.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+        }
+    }
+    let out = background_blur_from_rgba(&sharp, &blurred, 1.0);
+
+    // Both corners sit past the 1.21 threshold, so each copies its own blurred
+    // row verbatim: row 0 -> 100, row 15 -> 175.
+    assert_eq!(*out.get_pixel(0, 0), image::Rgba([100, 100, 100, 255]));
+    assert_eq!(*out.get_pixel(0, 15), image::Rgba([175, 175, 175, 255]));
+}
+
+#[test]
+fn background_blur_zero_width_returns_sharp_without_panicking() {
+    // A zero-width image has a zero row stride; the guard must bail out before
+    // the parallel chunking, which rejects a chunk size of 0.
+    let sharp = RgbaImage::new(0, 4);
+    let blurred = RgbaImage::new(0, 4);
+    let out = background_blur_from_rgba(&sharp, &blurred, 0.6);
+    assert_eq!(out.dimensions(), (0, 4));
+}
+
+#[test]
+fn unsharp_with_preblur_hits_exact_values() {
+    // out = src + amount*(src - blurred) + 0.5 = 100 + 1.0*40 + 0.5 = 140.5 -> 140.
+    // Alpha is copied from the source, not computed.
+    let src = RgbaImage::from_pixel(2, 2, image::Rgba([100u8, 100, 100, 200]));
+    let blurred = RgbaImage::from_pixel(2, 2, image::Rgba([60u8, 60, 60, 255]));
+    let out = unsharp_with_preblur_rgba(&src, &blurred, 1.0);
+    for px in out.pixels() {
+        assert_eq!(*px, image::Rgba([140, 140, 140, 200]));
     }
 }
 

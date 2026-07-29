@@ -25,14 +25,15 @@ pub use settings::EnhancementSettings;
 use {
     detail::{
         apply_background_blur, apply_background_blur_with_preblur, apply_unsharp_mask,
-        apply_unsharp_with_preblur, background_blur_from_rgba,
+        apply_unsharp_with_preblur, background_blur_from_rgba, unsharp_with_preblur_rgba,
     },
     image::DynamicImage,
     red_eye::apply_red_eye_removal,
     skin::{apply_skin_smoothing, skin_kernel},
     tone::{
         apply_brightness, apply_contrast, apply_exposure, apply_histogram_equalization,
-        apply_saturation, build_equalization_lut,
+        apply_lut_in_place, apply_saturation, build_equalization_lut, saturation_in_place,
+        tone_lut,
     },
 };
 
