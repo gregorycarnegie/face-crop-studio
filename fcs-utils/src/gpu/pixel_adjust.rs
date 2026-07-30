@@ -221,3 +221,147 @@ impl GpuPixelAdjust {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Which adjustments are live, and the bitmask handed to the shader,
+    // decide whether the GPU path runs at all and which branches it takes.
+    // Both are plain CPU logic and neither had any coverage.
+
+    fn none_active() -> AdjustmentActivity {
+        AdjustmentActivity {
+            exposure: false,
+            brightness: false,
+            contrast: false,
+            saturation: false,
+        }
+    }
+
+    #[test]
+    fn flags_pack_each_adjustment_into_its_own_bit() {
+        assert_eq!(none_active().flags(), 0);
+
+        let cases = [
+            (
+                AdjustmentActivity {
+                    exposure: true,
+                    ..none_active()
+                },
+                1,
+            ),
+            (
+                AdjustmentActivity {
+                    brightness: true,
+                    ..none_active()
+                },
+                2,
+            ),
+            (
+                AdjustmentActivity {
+                    contrast: true,
+                    ..none_active()
+                },
+                4,
+            ),
+            (
+                AdjustmentActivity {
+                    saturation: true,
+                    ..none_active()
+                },
+                8,
+            ),
+        ];
+        for (activity, expected) in cases {
+            assert_eq!(activity.flags(), expected);
+        }
+
+        // All four combine rather than overwrite one another.
+        let all = AdjustmentActivity {
+            exposure: true,
+            brightness: true,
+            contrast: true,
+            saturation: true,
+        };
+        assert_eq!(all.flags(), 0b1111);
+    }
+
+    #[test]
+    fn has_any_is_true_for_each_adjustment_alone() {
+        assert!(!none_active().has_any());
+        for setter in [
+            |a: &mut AdjustmentActivity| a.exposure = true,
+            |a: &mut AdjustmentActivity| a.brightness = true,
+            |a: &mut AdjustmentActivity| a.contrast = true,
+            |a: &mut AdjustmentActivity| a.saturation = true,
+        ] {
+            let mut activity = none_active();
+            setter(&mut activity);
+            assert!(activity.has_any(), "one live adjustment is enough");
+        }
+    }
+
+    #[test]
+    fn activity_treats_neutral_settings_as_inactive() {
+        // Defaults are the identity transform: no exposure shift, no
+        // brightness offset, and unit contrast and saturation.
+        let activity = GpuPixelAdjust::activity(&EnhancementSettings::default());
+        assert!(!activity.has_any());
+        assert_eq!(activity.flags(), 0);
+    }
+
+    #[test]
+    fn activity_detects_each_adjustment_independently() {
+        // Contrast and saturation are measured as a distance from 1.0, not
+        // from zero, so a setting of 1.0 must read as inactive while 0.0 is a
+        // real change.
+        let exposure = EnhancementSettings {
+            exposure_stops: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(GpuPixelAdjust::activity(&exposure).flags(), 1);
+
+        let brightness = EnhancementSettings {
+            brightness: -10,
+            ..Default::default()
+        };
+        assert_eq!(GpuPixelAdjust::activity(&brightness).flags(), 2);
+
+        let contrast = EnhancementSettings {
+            contrast: 0.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            GpuPixelAdjust::activity(&contrast).flags(),
+            4,
+            "zero contrast is a change from the 1.0 default"
+        );
+
+        let saturation = EnhancementSettings {
+            saturation: 1.4,
+            ..Default::default()
+        };
+        assert_eq!(GpuPixelAdjust::activity(&saturation).flags(), 8);
+    }
+
+    #[test]
+    fn activity_ignores_negligible_differences() {
+        // Below EPSILON the adjustment is not worth a GPU pass.
+        let settings = EnhancementSettings {
+            exposure_stops: EPSILON * 0.5,
+            contrast: 1.0 + EPSILON * 0.5,
+            saturation: 1.0 - EPSILON * 0.5,
+            ..Default::default()
+        };
+        assert!(!GpuPixelAdjust::activity(&settings).has_any());
+
+        // A negative exposure of real size still counts: the test is on the
+        // absolute value.
+        let negative = EnhancementSettings {
+            exposure_stops: -0.5,
+            ..Default::default()
+        };
+        assert!(GpuPixelAdjust::activity(&negative).has_any());
+    }
+}

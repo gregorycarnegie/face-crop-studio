@@ -152,6 +152,244 @@ mod tests {
         assert_eq!(out.height(), 300);
     }
 
+    /// Landmarks that are all zero, which switches the eye-line branch off.
+    fn no_landmarks() -> [crate::postprocess::Landmark; 5] {
+        [crate::postprocess::Landmark { x: 0.0, y: 0.0 }; 5]
+    }
+
+    fn detection_at(bbox: BoundingBox) -> Detection {
+        Detection {
+            bbox,
+            landmarks: no_landmarks(),
+            score: 0.9,
+        }
+    }
+
+    /// Source pixels carrying their own coordinates, so a misplaced copy is
+    /// visible rather than just "some colour".
+    fn coded_source(w: u32, h: u32) -> DynamicImage {
+        DynamicImage::ImageRgba8(RgbaImage::from_fn(w, h, |x, y| {
+            Rgba([(x * 10 + 1) as u8, (y * 10 + 1) as u8, 7, 255])
+        }))
+    }
+
+    #[test]
+    fn zero_output_dimensions_return_the_unresized_canvas() {
+        // The early return hands back the padded crop at its natural size
+        // instead of resizing it to nothing.
+        let img = coded_source(8, 8);
+        let detection = detection_at(BoundingBox {
+            x: 2.0,
+            y: 2.0,
+            width: 4.0,
+            height: 4.0,
+        });
+        let settings = CropSettings {
+            output_width: 0,
+            output_height: 0,
+            face_height_pct: 100.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(1, 2, 3),
+            eye_line_align: false,
+        };
+
+        let region = calculate_crop_region(8, 8, detection.bbox, &settings);
+        let out = crop_face_from_image(&img, &detection, &settings);
+        assert_eq!(out.width(), region.width.max(1));
+        assert_eq!(out.height(), region.height.max(1));
+
+        // A single zero dimension is enough to take the same path.
+        let half = CropSettings {
+            output_width: 16,
+            output_height: 0,
+            ..settings.clone()
+        };
+        let out = crop_face_from_image(&img, &detection, &half);
+        assert_eq!(out.width(), region.width.max(1));
+    }
+
+    #[test]
+    fn source_pixels_land_at_the_padding_offset() {
+        // A bbox hanging off the top-left forces padding on those two sides.
+        // With resizing disabled the canvas is the raw crop, so the copied
+        // block has to start exactly at (pad_left, pad_top) and carry the
+        // source pixel values from the in-bounds rectangle.
+        let img = coded_source(8, 8);
+        let detection = detection_at(BoundingBox {
+            x: -3.0,
+            y: -3.0,
+            width: 6.0,
+            height: 6.0,
+        });
+        let settings = CropSettings {
+            output_width: 0,
+            output_height: 0,
+            face_height_pct: 100.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(9, 9, 9),
+            eye_line_align: false,
+        };
+
+        let region = calculate_crop_region(8, 8, detection.bbox, &settings);
+        let (src_x, src_y, src_w, src_h) = region
+            .in_bounds_rect(8, 8)
+            .expect("part of the region overlaps the image");
+        assert!(
+            region.pad_left > 0 || region.pad_top > 0,
+            "expected padding"
+        );
+
+        let out = crop_face_from_image(&img, &detection, &settings).to_rgba8();
+        let source = img.to_rgba8();
+
+        // Every copied pixel keeps its source value at the shifted position.
+        for y in 0..src_h {
+            for x in 0..src_w {
+                let dest_x = region.pad_left + x;
+                let dest_y = region.pad_top + y;
+                if dest_x < out.width() && dest_y < out.height() {
+                    assert_eq!(
+                        out.get_pixel(dest_x, dest_y),
+                        source.get_pixel(src_x + x, src_y + y),
+                        "pixel ({x}, {y}) of the crop landed wrong"
+                    );
+                }
+            }
+        }
+
+        // And the padded corner is still fill, not a stray source pixel.
+        if region.pad_left > 0 && region.pad_top > 0 {
+            assert_eq!(*out.get_pixel(0, 0), Rgba([9, 9, 9, 255]));
+        }
+    }
+
+    #[test]
+    fn regions_entirely_outside_the_image_are_all_fill() {
+        // `in_bounds_rect` returns None, so nothing is copied and the canvas
+        // stays uniformly the fill colour.
+        let img = coded_source(8, 8);
+        let detection = detection_at(BoundingBox {
+            x: 500.0,
+            y: 500.0,
+            width: 10.0,
+            height: 10.0,
+        });
+        let settings = CropSettings {
+            output_width: 0,
+            output_height: 0,
+            face_height_pct: 100.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(70, 80, 90),
+            eye_line_align: false,
+        };
+
+        let out = crop_face_from_image(&img, &detection, &settings).to_rgba8();
+        assert!(out.width() > 0 && out.height() > 0);
+        for px in out.pixels() {
+            assert_eq!(*px, Rgba([70, 80, 90, 255]));
+        }
+    }
+
+    #[test]
+    fn eye_line_alignment_rotates_only_when_landmarks_are_present() {
+        // Both existing tests set `eye_line_align: false`, so the whole
+        // rotation branch — including the all-zero landmark guard — never ran.
+        let img = coded_source(32, 32);
+        let bbox = BoundingBox {
+            x: 8.0,
+            y: 8.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let base = CropSettings {
+            output_width: 24,
+            output_height: 24,
+            face_height_pct: 80.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: true,
+        };
+
+        // All-zero landmarks mean "no landmarks", so no rotation happens and
+        // the result matches the unaligned path exactly.
+        let zeroed = detection_at(bbox);
+        let unaligned = CropSettings {
+            eye_line_align: false,
+            ..base.clone()
+        };
+        assert_eq!(
+            crop_face_from_image(&img, &zeroed, &base).to_rgba8(),
+            crop_face_from_image(&img, &zeroed, &unaligned).to_rgba8(),
+            "zeroed landmarks must skip the rotation"
+        );
+
+        // Level eyes give an angle of zero, so alignment is still a no-op.
+        let mut level = detection_at(bbox);
+        level.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 14.0 };
+        level.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 14.0 };
+        assert_eq!(
+            crop_face_from_image(&img, &level, &base).to_rgba8(),
+            crop_face_from_image(&img, &level, &unaligned).to_rgba8(),
+            "a horizontal eye line needs no rotation"
+        );
+
+        // Tilted eyes must actually change the output.
+        let mut tilted = detection_at(bbox);
+        tilted.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 10.0 };
+        tilted.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 18.0 };
+        assert_ne!(
+            crop_face_from_image(&img, &tilted, &base).to_rgba8(),
+            crop_face_from_image(&img, &tilted, &unaligned).to_rgba8(),
+            "a tilted eye line must rotate the crop"
+        );
+    }
+
+    #[test]
+    fn eye_line_rotation_direction_depends_on_the_tilt() {
+        // Mirrored tilts must rotate opposite ways. A dropped sign on the
+        // angle, or swapping which landmark is subtracted, makes these two
+        // identical.
+        let img = coded_source(32, 32);
+        let bbox = BoundingBox {
+            x: 8.0,
+            y: 8.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let settings = CropSettings {
+            output_width: 24,
+            output_height: 24,
+            face_height_pct: 80.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: true,
+        };
+
+        let mut down = detection_at(bbox);
+        down.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 10.0 };
+        down.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 18.0 };
+
+        let mut up = detection_at(bbox);
+        up.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 18.0 };
+        up.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 10.0 };
+
+        assert_ne!(
+            crop_face_from_image(&img, &down, &settings).to_rgba8(),
+            crop_face_from_image(&img, &up, &settings).to_rgba8(),
+            "opposite tilts must not produce the same rotation"
+        );
+    }
+
     #[test]
     fn pads_with_fill_color_when_region_extends() {
         let img = RgbaImage::from_pixel(32, 32, Rgba([40, 50, 60, 255]));

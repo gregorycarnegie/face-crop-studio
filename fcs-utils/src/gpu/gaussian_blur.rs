@@ -273,6 +273,79 @@ mod tests {
         }
     }
 
+    #[track_caller]
+    fn close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-5,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn gaussian_matches_the_reference_curve() {
+        // exp(-d^2 / 2*sigma^2). Normalisation happens later, so these are the
+        // raw weights and any change to the exponent shows up directly.
+        close(gaussian(0.0, 1.0), 1.0);
+        close(gaussian(1.0, 1.0), (-0.5f32).exp());
+        close(gaussian(2.0, 1.0), (-2.0f32).exp());
+        // Widening sigma flattens the curve.
+        close(gaussian(1.0, 2.0), (-0.125f32).exp());
+        // Symmetric about zero.
+        close(gaussian(-1.5, 1.0), gaussian(1.5, 1.0));
+    }
+
+    #[test]
+    fn build_kernel_has_the_expected_shape() {
+        // Summing to one holds for *any* normalised kernel, so it cannot see a
+        // mangled exponent or a wrong sigma. These pin the actual weights.
+        //
+        // radius 1 -> sigma 1.0, three taps of exp(-0.5), 1, exp(-0.5)
+        // normalised by their sum of 2.2130613.
+        let w = build_kernel(1);
+        close(w[0], 0.27406862);
+        close(w[1], 0.45186275);
+        close(w[2], 0.27406862);
+        assert_eq!(w[3], 0.0, "entries past the kernel stay zero");
+    }
+
+    #[test]
+    fn build_kernel_ties_sigma_to_the_radius() {
+        // sigma = radius * 0.5 + 0.5, so radius 3 gives sigma 2.0. The ratio
+        // between adjacent taps survives normalisation, which makes it a clean
+        // probe: one step out at sigma 2 is exp(-1/8).
+        let w = build_kernel(3);
+        close(w[2] / w[3], (-0.125f32).exp());
+        close(w[1] / w[3], (-0.5f32).exp());
+
+        // radius 1 has sigma 1.0 instead, a visibly tighter curve.
+        let narrow = build_kernel(1);
+        close(narrow[0] / narrow[1], (-0.5f32).exp());
+    }
+
+    #[test]
+    fn build_kernel_spans_two_radius_plus_one_taps() {
+        // radius 3 fills seven slots; `radius + 2` would fill only five.
+        let w = build_kernel(3);
+        assert!(w[6] > 0.0, "the seventh tap must be populated");
+        assert_eq!(w[7], 0.0, "and the eighth must not be");
+
+        // Symmetry about the centre tap.
+        for i in 0..3 {
+            close(w[i], w[6 - i]);
+        }
+        // The centre is the largest weight.
+        assert!(w[3] > w[2] && w[2] > w[1] && w[1] > w[0]);
+    }
+
+    #[test]
+    fn build_kernel_floors_the_radius_at_one() {
+        // A zero radius still produces a single valid tap rather than an
+        // all-zero kernel or a division by zero.
+        let w = build_kernel(0);
+        close(w[0], 1.0);
+        assert_eq!(w[1], 0.0);
+    }
+
     #[test]
     fn build_kernel_sums_to_one() {
         for radius in [1u32, 3, 5, 12] {

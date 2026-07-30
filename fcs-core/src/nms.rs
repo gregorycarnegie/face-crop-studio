@@ -280,6 +280,216 @@ mod tests {
         }
     }
 
+    fn bbox(x: f32, y: f32, width: f32, height: f32) -> BoundingBox {
+        BoundingBox {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Grid geometry.
+    //
+    // The property test below compares the grid path against the naive one,
+    // which is a strong check — but it cannot see an error the two paths
+    // share, and under 200 detections both *are* the naive path. These pin
+    // the grid helpers directly.
+
+    #[test]
+    fn scene_bounds_span_is_max_minus_min() {
+        let bounds = SceneBounds {
+            min_x: 2.0,
+            min_y: 5.0,
+            max_x: 10.0,
+            max_y: 25.0,
+        };
+        // Deliberately unequal so a width/height swap shows up.
+        assert_eq!(bounds.width(), 8.0);
+        assert_eq!(bounds.height(), 20.0);
+    }
+
+    #[test]
+    fn compute_scene_bounds_rejects_either_axis_collapsing() {
+        // A row of zero-width boxes still spans vertically, so the guard has
+        // to fire on either axis rather than needing both to collapse.
+        let flat_x = vec![
+            detection_with_score(0.9, bbox(4.0, 0.0, 0.0, 10.0)),
+            detection_with_score(0.8, bbox(4.0, 20.0, 0.0, 10.0)),
+        ];
+        assert!(compute_scene_bounds(&flat_x).is_none(), "zero width");
+
+        let flat_y = vec![
+            detection_with_score(0.9, bbox(0.0, 4.0, 10.0, 0.0)),
+            detection_with_score(0.8, bbox(20.0, 4.0, 10.0, 0.0)),
+        ];
+        assert!(compute_scene_bounds(&flat_y).is_none(), "zero height");
+
+        // A real span is accepted.
+        let ok = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 10.0, 10.0)),
+            detection_with_score(0.8, bbox(20.0, 20.0, 10.0, 10.0)),
+        ];
+        assert!(compute_scene_bounds(&ok).is_some());
+    }
+
+    #[test]
+    fn grid_cell_index_maps_offsets_to_cells() {
+        // Ordinary case: 15 units into 10-unit cells is cell 1.
+        assert_eq!(grid_cell_index(15.0, 10.0, 10), 1);
+        assert_eq!(grid_cell_index(0.0, 10.0, 10), 0);
+        // Past the last cell it clamps rather than indexing out of range.
+        assert_eq!(grid_cell_index(1000.0, 10.0, 10), 9);
+        // Negative offsets clamp to the first cell.
+        assert_eq!(grid_cell_index(-5.0, 10.0, 10), 0);
+        // A degenerate cell size short-circuits instead of dividing by zero,
+        // which would otherwise clamp infinity to the last cell.
+        assert_eq!(grid_cell_index(50.0, 0.0, 10), 0);
+    }
+
+    #[test]
+    fn cell_range_covers_every_cell_the_bbox_touches() {
+        // Origin deliberately away from zero so subtracting it matters.
+        let bounds = SceneBounds {
+            min_x: 5.0,
+            min_y: 10.0,
+            max_x: 105.0,
+            max_y: 110.0,
+        };
+        // 100 units across 10 cells means 10 units per cell.
+        //   x: 20..40 relative to 5 is 15..35  -> cols 1..3
+        //   y: 35..65 relative to 10 is 25..55 -> rows 2..5
+        let range = bounds.cell_range_for_bbox(&bbox(20.0, 35.0, 20.0, 30.0), 10);
+        assert_eq!(
+            range,
+            CellRange {
+                min_col: 1,
+                max_col: 3,
+                min_row: 2,
+                max_row: 5,
+            }
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Suppression thresholds.
+
+    #[test]
+    fn apply_nms_naive_suppresses_only_above_the_threshold() {
+        // Identical boxes have an IoU of exactly 1.0. At a threshold of 1.0
+        // the comparison is strictly greater, so nothing is suppressed.
+        let mut same = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 10.0, 10.0)),
+            detection_with_score(0.8, bbox(0.0, 0.0, 10.0, 10.0)),
+        ];
+        apply_nms_naive(&mut same, 1.0);
+        assert_eq!(same.len(), 2, "IoU equal to the threshold is kept");
+
+        // Just below the threshold and the duplicate goes.
+        let mut same = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 10.0, 10.0)),
+            detection_with_score(0.8, bbox(0.0, 0.0, 10.0, 10.0)),
+        ];
+        apply_nms_naive(&mut same, 0.99);
+        assert_eq!(same.len(), 1);
+        assert_eq!(same[0].score, 0.9, "the higher-scoring box survives");
+    }
+
+    #[test]
+    fn apply_nms_naive_keeps_disjoint_boxes_and_preserves_order() {
+        // Three boxes: two overlapping, one far away. Comparing each kept box
+        // against the ones *after* it is what makes this work; starting the
+        // inner scan at the box itself would suppress everything.
+        let mut dets = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 10.0, 10.0)),
+            detection_with_score(0.8, bbox(1.0, 1.0, 10.0, 10.0)),
+            detection_with_score(0.7, bbox(100.0, 100.0, 10.0, 10.0)),
+        ];
+        apply_nms_naive(&mut dets, 0.5);
+        assert_eq!(dets.len(), 2);
+        assert_eq!(dets[0].score, 0.9);
+        assert_eq!(dets[1].score, 0.7, "the distant box is untouched");
+    }
+
+    #[test]
+    fn grid_suppression_uses_the_same_strict_threshold() {
+        // Over 200 detections takes the spatial-grid path, which has its own
+        // copy of the IoU comparison. Identical boxes at a threshold of 1.0
+        // must all survive there too.
+        let mut dets: Vec<_> = (0..250)
+            .map(|i| detection_with_score(1.0 - i as f32 * 0.001, bbox(0.0, 0.0, 10.0, 10.0)))
+            .collect();
+        apply_nms_in_place(&mut dets, 1.0);
+        assert_eq!(dets.len(), 250, "IoU equal to the threshold is kept");
+    }
+
+    // ------------------------------------------------------------------
+    // Centre-distance dedup.
+
+    #[test]
+    fn dedup_close_centers_keeps_boxes_exactly_at_the_threshold() {
+        // Centres are 6 apart, so dist_sq is 36. The scale is the longest
+        // edge, 12, and 12 * 0.5 gives a threshold of exactly 6 — all
+        // representable in binary, so the comparison sits precisely on the
+        // boundary. The test is strictly-less-than, so both are kept.
+        let mut dets = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 12.0, 12.0)),
+            detection_with_score(0.8, bbox(6.0, 0.0, 12.0, 12.0)),
+        ];
+        dedup_close_centers(&mut dets, 0.5, 6.0);
+        assert_eq!(dets.len(), 2);
+    }
+
+    #[test]
+    fn dedup_close_centers_merges_inside_the_relative_threshold() {
+        // Same geometry, wider relative threshold: 12 * 0.6 = 7.2, and
+        // 36 < 51.84, so the lower-scoring box is dropped.
+        let mut dets = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 12.0, 12.0)),
+            detection_with_score(0.8, bbox(6.0, 0.0, 12.0, 12.0)),
+        ];
+        dedup_close_centers(&mut dets, 0.6, 0.0);
+        assert_eq!(dets.len(), 1);
+        assert_eq!(dets[0].score, 0.9);
+    }
+
+    #[test]
+    fn dedup_close_centers_merges_inside_the_absolute_threshold() {
+        // Relative distance disabled, so only the absolute floor can merge:
+        // 7 px squared is 49, and 36 < 49.
+        let mut dets = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 12.0, 12.0)),
+            detection_with_score(0.8, bbox(6.0, 0.0, 12.0, 12.0)),
+        ];
+        dedup_close_centers(&mut dets, 0.0, 7.0);
+        assert_eq!(dets.len(), 1);
+
+        // A 5 px floor squares to 25, which 36 clears, so both stay.
+        let mut dets = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 12.0, 12.0)),
+            detection_with_score(0.8, bbox(6.0, 0.0, 12.0, 12.0)),
+        ];
+        dedup_close_centers(&mut dets, 0.0, 5.0);
+        assert_eq!(dets.len(), 2);
+    }
+
+    #[test]
+    fn dedup_close_centers_scales_by_the_larger_box() {
+        // A small box beside a large one: the threshold follows the larger
+        // edge (30), not the smaller (4), so these merge.
+        let mut dets = vec![
+            detection_with_score(0.9, bbox(0.0, 0.0, 30.0, 30.0)),
+            detection_with_score(0.8, bbox(13.0, 13.0, 4.0, 4.0)),
+        ];
+        dedup_close_centers(&mut dets, 0.5, 0.0);
+        assert_eq!(
+            dets.len(),
+            1,
+            "scaled by the larger box, these are one face"
+        );
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(32))]
 
