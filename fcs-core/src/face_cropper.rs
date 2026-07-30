@@ -353,6 +353,124 @@ mod tests {
     }
 
     #[test]
+    fn eye_line_rotation_matches_an_explicit_rotation() {
+        // Asserting only that a tilt "changes something" leaves the angle
+        // itself unpinned: a swapped subtraction or a dropped negation still
+        // produces a different-but-wrong image. This rebuilds the expected
+        // result from the same canvas, rotating by the angle the eye line
+        // implies, so the arithmetic has to be exactly right.
+        let img = coded_source(32, 32);
+        let bbox = BoundingBox {
+            x: 8.0,
+            y: 8.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let (right_eye, left_eye) = ((12.0f32, 10.0f32), (20.0f32, 18.0f32));
+
+        let mut detection = detection_at(bbox);
+        detection.landmarks[0] = crate::postprocess::Landmark {
+            x: right_eye.0,
+            y: right_eye.1,
+        };
+        detection.landmarks[1] = crate::postprocess::Landmark {
+            x: left_eye.0,
+            y: left_eye.1,
+        };
+
+        let fill = FillColor::opaque(3, 5, 7);
+        let aligned = CropSettings {
+            output_width: 24,
+            output_height: 24,
+            face_height_pct: 80.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: fill,
+            eye_line_align: true,
+        };
+        let got = crop_face_from_image(&img, &detection, &aligned).to_rgba8();
+
+        // The unrotated canvas: same crop, no alignment, no resize.
+        let raw = CropSettings {
+            output_width: 0,
+            output_height: 0,
+            eye_line_align: false,
+            ..aligned.clone()
+        };
+        let canvas = crop_face_from_image(&img, &detection, &raw).to_rgba8();
+
+        // dx and dy are left-minus-right, and the canvas is turned by the
+        // negation of that angle to level the eyes.
+        let dx = left_eye.0 - right_eye.0;
+        let dy = left_eye.1 - right_eye.1;
+        let angle = dy.atan2(dx);
+        let rotated = rotate_about_center(
+            &canvas,
+            -angle,
+            Interpolation::Bilinear,
+            Border::Constant(Rgba([fill.red, fill.green, fill.blue, fill.alpha])),
+        );
+        let want = image::imageops::resize(
+            &DynamicImage::ImageRgba8(rotated),
+            24,
+            24,
+            FilterType::Lanczos3,
+        );
+
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn eye_line_needs_all_four_landmark_values_zero_to_skip() {
+        // The guard is "no landmarks at all", so a single non-zero coordinate
+        // means the eyes are real and the rotation must happen. Treating it as
+        // "any coordinate is zero" would skip alignment for an eye that
+        // genuinely sits on x = 0 or y = 0.
+        let img = coded_source(32, 32);
+        let bbox = BoundingBox {
+            x: 8.0,
+            y: 8.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let settings = CropSettings {
+            output_width: 24,
+            output_height: 24,
+            face_height_pct: 80.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: true,
+        };
+        let unaligned = CropSettings {
+            eye_line_align: false,
+            ..settings.clone()
+        };
+
+        // Right eye at the origin, left eye offset diagonally: not "no
+        // landmarks", so this must rotate.
+        let mut partial = detection_at(bbox);
+        partial.landmarks[0] = crate::postprocess::Landmark { x: 0.0, y: 0.0 };
+        partial.landmarks[1] = crate::postprocess::Landmark { x: 5.0, y: 5.0 };
+        assert_ne!(
+            crop_face_from_image(&img, &partial, &settings).to_rgba8(),
+            crop_face_from_image(&img, &partial, &unaligned).to_rgba8(),
+            "one populated landmark is enough to align"
+        );
+
+        // A single zero component elsewhere behaves the same way.
+        let mut one_axis = detection_at(bbox);
+        one_axis.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 0.0 };
+        one_axis.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 8.0 };
+        assert_ne!(
+            crop_face_from_image(&img, &one_axis, &settings).to_rgba8(),
+            crop_face_from_image(&img, &one_axis, &unaligned).to_rgba8(),
+        );
+    }
+
+    #[test]
     fn eye_line_rotation_direction_depends_on_the_tilt() {
         // Mirrored tilts must rotate opposite ways. A dropped sign on the
         // angle, or swapping which landmark is subtracted, makes these two
