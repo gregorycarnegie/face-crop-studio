@@ -357,3 +357,47 @@ impl GpuHistogramEqualizer {
         Ok(DynamicImage::ImageRgba8(result))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The buffer usage flags decide what wgpu will let the histogram buffers
+    // do. Getting one wrong surfaces as a validation error deep inside a
+    // dispatch, so pin them here where the failure is legible.
+
+    #[test]
+    fn pixel_buffers_are_storage_and_copyable_both_ways() {
+        let usage = hist_pixel_usage();
+        assert!(usage.contains(wgpu::BufferUsages::STORAGE), "shader access");
+        assert!(
+            usage.contains(wgpu::BufferUsages::COPY_SRC),
+            "readback source"
+        );
+        assert!(
+            usage.contains(wgpu::BufferUsages::COPY_DST),
+            "upload target"
+        );
+        // Exactly those three: combining with `&` or `^` instead of `|` would
+        // silently drop or cancel flags rather than accumulate them.
+        assert_eq!(
+            usage,
+            wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST
+        );
+    }
+
+    #[test]
+    fn readback_buffers_are_mappable_copy_targets() {
+        let usage = hist_readback_usage();
+        assert!(usage.contains(wgpu::BufferUsages::MAP_READ));
+        assert!(usage.contains(wgpu::BufferUsages::COPY_DST));
+        assert_eq!(
+            usage,
+            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST
+        );
+        // Readback buffers must not be storage-bound.
+        assert!(!usage.contains(wgpu::BufferUsages::STORAGE));
+    }
+}
