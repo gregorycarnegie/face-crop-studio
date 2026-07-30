@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updated `base64` to 0.23 and `calamine` to 0.36.1. The `base64` bump is a
+  breaking release under Cargo's 0.x rules but needed no code changes; the
+  `Engine` trait and `general_purpose::STANDARD` API are unchanged. Note that
+  `base64` 0.22 still appears in the tree via `parquet` and `usvg`.
 - `cargo mutants` now runs with `all_features = true`. The `mapping`, `webcam`,
   `raw` and `heic` modules are all `#[cfg(feature = ...)]` and none of those
   features is on by default, so mutants there landed in code the build skipped:

@@ -97,8 +97,8 @@ windows = { version = "0.62.2", features = [
 winresource = "0.1.31"
 
 # Data formats and storage
-base64 = "0.22.1"
-calamine = "0.36.0"
+base64 = "0.23.0"
+calamine = "0.36.1"
 crc32fast = "1.5.0"
 csv = "1.4.0"
 parquet = { version = "59.1.0", default-features = false, features = [
