@@ -745,6 +745,159 @@ mod tests {
         assert!(data.iter().all(|v| *v >= 0.0 && *v <= 255.0));
     }
 
+    /// Read a plain `f32` tensor back out as a slice.
+    fn tensor_data(output: &PreprocessOutput) -> Vec<f32> {
+        output
+            .tensor
+            .try_as_plain()
+            .and_then(|view| view.as_slice::<f32>())
+            .expect("tensor should be plain f32")
+            .to_vec()
+    }
+
+    #[test]
+    fn preprocess_lays_out_planar_bgr_not_rgb() {
+        // Input size matches the image, so no resampling stands between the
+        // source pixels and the tensor and the expected values are exact.
+        //
+        // YuNet wants `[1, 3, H, W]` with the channels in B, G, R order — the
+        // layout OpenCV's blobFromImage produces. `preprocess_generates_bgr_tensor`
+        // only checks every value is in 0..=255, which holds just as well for
+        // RGB order, an interleaved layout, or transposed rows.
+        let mut img = ImageBuffer::<Rgb<u8>, _>::new(2, 2);
+        img.put_pixel(0, 0, Rgb([10, 20, 30]));
+        img.put_pixel(1, 0, Rgb([40, 50, 60]));
+        img.put_pixel(0, 1, Rgb([70, 80, 90]));
+        img.put_pixel(1, 1, Rgb([100, 110, 120]));
+
+        let config = PreprocessConfig {
+            input_size: InputSize::new(2, 2),
+            ..Default::default()
+        };
+        let out = preprocess_dynamic_image(&DynamicImage::ImageRgb8(img), &config)
+            .expect("preprocess should succeed");
+
+        assert_eq!(out.tensor.shape(), &[1, 3, 2, 2]);
+        assert_eq!(
+            tensor_data(&out),
+            vec![
+                30.0, 60.0, 90.0, 120.0, // blue plane, row-major
+                20.0, 50.0, 80.0, 110.0, // green plane
+                10.0, 40.0, 70.0, 100.0, // red plane
+            ]
+        );
+    }
+
+    #[test]
+    fn preprocess_converts_non_rgb_sources_without_reordering() {
+        // A luma source has to be widened to RGB first. Every channel ends up
+        // equal, so this pins the conversion rather than the channel order:
+        // a dropped conversion would panic or produce the wrong length.
+        let img = DynamicImage::ImageLuma8(ImageBuffer::from_fn(2, 1, |x, _| {
+            image::Luma([if x == 0 { 64u8 } else { 192 }])
+        }));
+        let config = PreprocessConfig {
+            input_size: InputSize::new(2, 1),
+            ..Default::default()
+        };
+        let out = preprocess_dynamic_image(&img, &config).expect("luma should preprocess");
+
+        assert_eq!(out.tensor.shape(), &[1, 3, 1, 2]);
+        assert_eq!(
+            tensor_data(&out),
+            vec![64.0, 192.0, 64.0, 192.0, 64.0, 192.0]
+        );
+    }
+
+    #[test]
+    fn preprocess_scales_report_the_source_to_input_ratio() {
+        // Non-square and non-integer ratios in one go: 30x8 -> 4x16 means
+        // scale_x = 30/4 = 7.5 and scale_y = 8/16 = 0.5. A swapped axis or an
+        // inverted ratio is indistinguishable when both factors are 2.0, which
+        // is all the existing tests use.
+        let img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(30, 8, |_, _| Rgb([1u8, 2, 3])));
+        let config = PreprocessConfig {
+            input_size: InputSize::new(4, 16),
+            ..Default::default()
+        };
+        let out = preprocess_dynamic_image(&img, &config).expect("preprocess should succeed");
+
+        assert_eq!(out.original_size, (30, 8));
+        assert_eq!(out.scale_x, 7.5);
+        assert_eq!(out.scale_y, 0.5);
+        assert_eq!(out.tensor.shape(), &[1, 3, 16, 4]);
+    }
+
+    #[test]
+    fn cpu_preprocess_resizes_when_only_one_dimension_already_matches() {
+        // The skip-resize fast path needs *both* dimensions to match. With
+        // only the width matching, treating the condition as an `or` would
+        // pass a 4x8 image off as a 4x16 tensor and the shape would not fit.
+        let img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(4, 8, |x, _| {
+            Rgb([(x * 60) as u8, 10, 20])
+        }));
+        let config = PreprocessConfig {
+            input_size: InputSize::new(4, 16),
+            ..Default::default()
+        };
+        let out = preprocess_dynamic_image(&img, &config).expect("should resize the height");
+        assert_eq!(out.tensor.shape(), &[1, 3, 16, 4]);
+        assert_eq!(tensor_data(&out).len(), 3 * 16 * 4);
+    }
+
+    #[test]
+    fn cpu_preprocess_errors_for_zero_source_dimension() {
+        // The zero-input-dimension guard is covered below; this is the other
+        // arm, where the *image* is degenerate.
+        let img = DynamicImage::ImageRgb8(ImageBuffer::new(0, 4));
+        let config = PreprocessConfig {
+            input_size: InputSize::new(8, 8),
+            ..Default::default()
+        };
+        assert!(preprocess_dynamic_image(&img, &config).is_err());
+    }
+
+    #[test]
+    fn cpu_preprocess_errors_for_zero_input_height() {
+        // `input_w > 0 && input_h > 0` needs both arms exercised; the existing
+        // test only zeroes the width.
+        let img = DynamicImage::ImageRgb8(ImageBuffer::from_fn(4, 4, |_, _| Rgb([1u8, 2, 3])));
+        let config = PreprocessConfig {
+            input_size: InputSize::new(32, 0),
+            ..Default::default()
+        };
+        assert!(preprocess_dynamic_image(&img, &config).is_err());
+    }
+
+    #[test]
+    fn align_to_leaves_small_alignments_alone() {
+        // The existing coverage is all 256-byte alignment, where `& !(a - 1)`
+        // and a plain round-up agree on every probe used.
+        assert_eq!(align_to(5, 4), 8);
+        assert_eq!(align_to(8, 4), 8);
+        assert_eq!(align_to(9, 8), 16);
+        assert_eq!(align_to(3, 1), 3);
+        assert_eq!(align_to(1, 2), 2);
+    }
+
+    #[test]
+    fn chw_tensor_from_vec_rejects_a_mismatched_buffer() {
+        // 3 * 2 * 2 = 12 elements are required.
+        assert!(chw_tensor_from_vec(vec![0.0; 11], 2, 2).is_err());
+        assert!(chw_tensor_from_vec(vec![0.0; 13], 2, 2).is_err());
+        assert!(chw_tensor_from_vec(vec![0.0; 12], 2, 2).is_ok());
+    }
+
+    #[test]
+    fn input_size_default_is_the_yunet_resolution() {
+        assert_eq!(InputSize::default(), InputSize::new(640, 640));
+        // PreprocessConfig::default has to inherit it rather than zero it.
+        assert_eq!(
+            PreprocessConfig::default().input_size,
+            InputSize::new(640, 640)
+        );
+    }
+
     #[test]
     fn converts_dimensions_into_configs() {
         let dims = InputDimensions {

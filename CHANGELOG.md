@@ -37,8 +37,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong place and fails the assertion. These cover segment selection, toggle
   state, panel-header clicks, and the slider's five value-format arms.
 
+- Golden-value and boundary tests across the remaining pure-logic modules:
+  colour-space conversions, Laplacian variance, red-eye correction, the
+  enhancement presets, PNG/JPEG metadata builders and parsers, and SQL query
+  validation. Together these took 226 surviving mutants down to 61. As before
+  the recurring gap was inputs that make different code paths agree: every
+  colour case used saturated primaries, where lightness is exactly 0.5 and the
+  saturation denominator is always 1; every CMYK case had k at 0 or 1, so the
+  general path never ran; and `laplacian_variance` was asserted only as
+  `v >= 0.0`.
+- `EnhancementSettings` gained a test module. The `natural`, `vivid` and
+  `professional` preset values are a product decision that nothing asserted,
+  so any of them could have been changed silently.
+
 ### Changed
 
+- `cargo mutants` now runs with `all_features = true`. The `mapping`, `webcam`,
+  `raw` and `heic` modules are all `#[cfg(feature = ...)]` and none of those
+  features is on by default, so mutants there landed in code the build skipped:
+  the suite passed and they were recorded as missed regardless of how well
+  tested they were. Measured on `mapping/sqlite.rs` with identical tests, 31
+  mutants: 0 caught with default features, 27 caught (2 missed, 1 timeout, 1
+  unviable) with all of them. This had been misreporting roughly 94 mutants
+  across `mapping` (70), `webcam` (17) and the HEIC/RAW loaders.
 - `cargo mutants` now reads `.cargo/mutants.toml`, which excludes `fcs-gui`
   along with `fcs-cli/src/webcam.rs` and `fcs-cli/src/gpu.rs`. When the config
   was added no test reached any of them — `fcs-gui` had 2 tests against 1608

@@ -243,6 +243,129 @@ mod tests {
         assert_eq!(laplacian_variance(&img), 0.0);
     }
 
+    // ------------------------------------------------------------------
+    // Golden variances.
+    //
+    // The tests above only check that the variance is non-negative or merely
+    // greater than zero, which holds for almost any arithmetic. These pin the
+    // exact value for hand-computed inputs, so the kernel weights, the
+    // neighbour offsets, the inner-pixel count and the variance formula each
+    // have to be right.
+
+    /// Build a greyscale image row by row; `rows` is indexed `[y][x]`.
+    fn luma(rows: &[&[u8]]) -> DynamicImage {
+        let h = rows.len() as u32;
+        let w = rows[0].len() as u32;
+        let mut img = GrayImage::new(w, h);
+        for (y, row) in rows.iter().enumerate() {
+            for (x, v) in row.iter().enumerate() {
+                img.put_pixel(x as u32, y as u32, image::Luma([*v]));
+            }
+        }
+        DynamicImage::ImageLuma8(img)
+    }
+
+    #[test]
+    fn laplacian_variance_of_a_single_impulse() {
+        // 4x4 with one bright pixel at (1, 1). Four inner pixels:
+        //   (1,1): 0+0+0+0 - 4*100 = -400
+        //   (2,1): left neighbour is the impulse            =  100
+        //   (1,2): upper neighbour is the impulse           =  100
+        //   (2,2): no neighbour touches it                  =    0
+        // sum = -200, sum_sq = 180000, count = 4
+        // variance = 180000/4 - (-50)^2 = 45000 - 2500 = 42500
+        let img = luma(&[&[0, 0, 0, 0], &[0, 100, 0, 0], &[0, 0, 0, 0], &[0, 0, 0, 0]]);
+        assert_eq!(laplacian_variance(&img), 42500.0);
+    }
+
+    #[test]
+    fn laplacian_variance_of_a_linear_ramp_is_zero() {
+        // The kernel sums to zero, so any planar gradient must cancel exactly.
+        // Changing a single weight or neighbour offset breaks the cancellation
+        // and leaves a non-zero variance.
+        let img = luma(&[
+            &[10, 20, 30, 40, 50],
+            &[60, 70, 80, 90, 100],
+            &[110, 120, 130, 140, 150],
+        ]);
+        assert_eq!(laplacian_variance(&img), 0.0);
+    }
+
+    #[test]
+    fn laplacian_variance_counts_only_interior_pixels() {
+        // 5x4, so the interior is 3x2 = 6 pixels rather than the full 20.
+        // Using the whole image as the divisor would give 37900 instead.
+        //   sum = -200, sum_sq = 760000, count = 6
+        //   variance = 760000/6 - (200/6)^2
+        let img = luma(&[
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 200, 0, 0],
+            &[0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0],
+        ]);
+        let expected = 760000.0 / 6.0 - (200.0f64 / 6.0).powi(2);
+        assert!(
+            (laplacian_variance(&img) - expected).abs() < 1e-9,
+            "expected {expected}, got {}",
+            laplacian_variance(&img)
+        );
+    }
+
+    #[test]
+    fn laplacian_variance_needs_three_rows_and_columns() {
+        // Either dimension being too small has to bail out. A two-row image
+        // otherwise yields an empty interior and divides by zero.
+        assert_eq!(
+            laplacian_variance(&luma(&[&[1, 2, 3, 4], &[5, 6, 7, 8]])),
+            0.0
+        );
+        assert_eq!(
+            laplacian_variance(&luma(&[&[1, 2], &[3, 4], &[5, 6], &[7, 8]])),
+            0.0
+        );
+    }
+
+    #[test]
+    fn laplacian_variance_accepts_an_image_exactly_three_wide() {
+        // Three is the minimum, not below it. A 3x5 image has a one-pixel-wide
+        // interior three rows tall, which is enough for a real variance:
+        //   laps = -240, 60, 0 -> sum -180, sum_sq 61200, count 3
+        //   variance = 20400 - 3600 = 16800
+        let img = luma(&[&[0, 0, 0], &[0, 60, 0], &[0, 0, 0], &[0, 0, 0], &[0, 0, 0]]);
+        assert_eq!(laplacian_variance(&img), 16800.0);
+    }
+
+    #[test]
+    fn laplacian_variance_reads_only_within_each_row() {
+        // Six wide so `width - 2` and `width / 2` disagree on the interior
+        // count, and the bright pixel sits in the last column so walking one
+        // column too far would wrap into the next row and change the result.
+        //   only (4,1) sees it: lap 90, count 4
+        //   variance = 8100/4 - 22.5^2 = 1518.75
+        let img = luma(&[
+            &[0, 0, 0, 0, 0, 0],
+            &[0, 0, 0, 0, 0, 90],
+            &[0, 0, 0, 0, 0, 0],
+        ]);
+        assert_eq!(laplacian_variance(&img), 1518.75);
+    }
+
+    #[test]
+    fn laplacian_variance_downscales_oversized_images() {
+        // Wider than QUALITY_MAX_DIM but not taller, so the guard has to
+        // trigger on either dimension rather than both. Measuring the
+        // already-downscaled image directly must give the same answer.
+        let mut img = GrayImage::new(1024, 512);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = image::Luma([(((x / 3) + (y / 5)) % 256) as u8]);
+        }
+        let big = DynamicImage::ImageLuma8(img);
+        let pre_scaled = big.resize(512, 512, image::imageops::FilterType::Triangle);
+
+        assert_eq!(pre_scaled.dimensions(), (512, 256));
+        assert_eq!(laplacian_variance(&big), laplacian_variance(&pre_scaled));
+    }
+
     #[test]
     fn quality_filter_respects_min_quality() {
         let filter = QualityFilter::new(Some(Quality::Medium));

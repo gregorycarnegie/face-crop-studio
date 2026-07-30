@@ -4,6 +4,19 @@
 # currently reaches only inflates the missed count and buries the gaps that are
 # actually worth closing.
 
+# Without this, cargo-mutants builds with default features, and `mapping`,
+# `webcam`, `raw` and `heic` are all opt-in. Their modules are `#[cfg(feature
+# = ...)]`, so the mutant lands in a file the build skips, the suite passes,
+# and it is recorded as missed no matter how well tested the code is.
+#
+# Measured on `mapping/sqlite.rs`, 31 mutants, identical tests either way:
+#   default features   0 caught, 31 missed
+#   --all-features    27 caught,  2 missed, 1 timeout, 1 unviable
+#
+# That silently misreported roughly 94 mutants across mapping (70), webcam
+# (17) and the heic/raw loaders in image_utils.
+all_features = true
+
 exclude_globs = [
     # egui immediate-mode UI: painting, layout, and widget state only exist
     # inside a live frame. 1608 mutants, 8 caught at the time this was written.

@@ -1102,3 +1102,140 @@ fn sqlite_mapping_rejects_non_select_queries_and_semicolons() {
         );
     }
 }
+
+/// Run a query through the sqlite reader and report whether it was accepted.
+fn query_is_accepted(path: &Path, query: &str) -> Result<(), String> {
+    load_mapping_preview(
+        path,
+        &MappingReadOptions {
+            format: Some(MappingFormat::Sqlite),
+            sql_query: Some(query.to_string()),
+            ..Default::default()
+        },
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+#[test]
+fn sqlite_preview_truncates_rows_but_counts_them_all() {
+    // The CSV reader has this covered; the SQLite reader has its own copy of
+    // the row-limit and total-count logic and had neither pinned.
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(
+        dir.path(),
+        "rows.db",
+        r#"
+            CREATE TABLE photos (source TEXT, output TEXT);
+            INSERT INTO photos VALUES ('a.jpg', 'out-a');
+            INSERT INTO photos VALUES ('b.jpg', 'out-b');
+            INSERT INTO photos VALUES ('c.jpg', 'out-c');
+            "#,
+    );
+
+    let preview = load_mapping_preview(
+        &path,
+        &MappingReadOptions {
+            format: Some(MappingFormat::Sqlite),
+            preview_rows: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // The limit is exclusive: exactly two rows are kept, not three.
+    assert_eq!(preview.rows.len(), 2);
+    assert_eq!(preview.rows[0], vec!["a.jpg", "out-a"]);
+    assert_eq!(preview.rows[1], vec!["b.jpg", "out-b"]);
+    // But every row is still counted, including the ones dropped.
+    assert_eq!(preview.total_rows, 3);
+    assert!(preview.truncated);
+}
+
+#[test]
+fn validate_sql_query_matches_forbidden_keywords_on_word_boundaries() {
+    // The guard scans for DDL/DML keywords but must only reject them as whole
+    // words, otherwise ordinary table names get caught. The existing coverage
+    // checks one substring case; these pin both sides of the boundary test
+    // and the scan-advance that lets a later match still be found.
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(
+        dir.path(),
+        "boundaries.db",
+        r#"
+            CREATE TABLE undrop (source TEXT, output TEXT);
+            CREATE TABLE droplet (source TEXT, output TEXT);
+            INSERT INTO undrop VALUES ('a.jpg', 'out-a');
+            INSERT INTO droplet VALUES ('b.jpg', 'out-b');
+            "#,
+    );
+
+    // Preceded by an alphanumeric: "unDROP" is not the DROP keyword.
+    assert!(
+        query_is_accepted(&path, "SELECT source, output FROM undrop").is_ok(),
+        "a keyword at the end of a longer word must be allowed"
+    );
+    // Followed by an alphanumeric: "DROPlet" is not the DROP keyword either.
+    assert!(
+        query_is_accepted(&path, "SELECT source, output FROM droplet").is_ok(),
+        "a keyword at the start of a longer word must be allowed"
+    );
+
+    // A non-matching occurrence must not stop the scan: the first DROP here
+    // is inside "undrop", the second is a real keyword at the very end.
+    let err = query_is_accepted(
+        &path,
+        "SELECT source FROM undrop WHERE source = source OR DROP",
+    )
+    .expect_err("the trailing DROP is a whole word");
+    assert!(err.contains("DROP keyword"), "unexpected error: {err}");
+}
+
+#[test]
+fn validate_sql_query_is_case_insensitive_and_trims() {
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(
+        dir.path(),
+        "case.db",
+        r#"
+            CREATE TABLE photos (source TEXT, output TEXT);
+            INSERT INTO photos VALUES ('a.jpg', 'out-a');
+            "#,
+    );
+
+    // Leading whitespace and lower case still count as beginning with SELECT.
+    assert!(query_is_accepted(&path, "   select source, output from photos").is_ok());
+
+    // And a lower-case DDL keyword is still caught.
+    let err = query_is_accepted(
+        &path,
+        "select source from photos where source = source or drop",
+    )
+    .expect_err("lower-case keywords are normalised before matching");
+    assert!(err.contains("DROP keyword"), "unexpected error: {err}");
+}
+
+#[test]
+fn validate_sql_query_rejects_each_forbidden_keyword() {
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(
+        dir.path(),
+        "forbidden.db",
+        "CREATE TABLE photos (source TEXT, output TEXT);",
+    );
+
+    for keyword in [
+        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "REPLACE", "ATTACH", "DETACH",
+        "PRAGMA", "REINDEX", "VACUUM",
+    ] {
+        let query = format!("SELECT source FROM photos WHERE source = source OR {keyword}");
+        let err = match query_is_accepted(&path, &query) {
+            Ok(()) => panic!("{keyword} should have been rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains(&format!("{keyword} keyword")),
+            "wrong error for {keyword}: {err}"
+        );
+    }
+}

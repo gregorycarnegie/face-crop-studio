@@ -110,3 +110,105 @@ impl EnhancementSettings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The preset values are the product decision this module exists to hold;
+    /// nothing else in the codebase asserts them, so any one of them could be
+    /// changed silently. Each preset pins both the fields it sets and a
+    /// representative field it inherits from `Default`.
+
+    #[test]
+    fn default_settings_are_neutral() {
+        let d = EnhancementSettings::default();
+        assert!(!d.auto_color);
+        assert_eq!(d.exposure_stops, 0.0);
+        assert_eq!(d.brightness, 0);
+        assert_eq!(d.contrast, 1.0);
+        assert_eq!(d.saturation, 1.0);
+        assert_eq!(d.unsharp_amount, 0.6);
+        assert_eq!(d.unsharp_radius, 1.0);
+        assert_eq!(d.sharpness, 0.0);
+        assert_eq!(d.skin_smooth_amount, 0.0);
+        assert_eq!(d.skin_smooth_sigma_space, 3.0);
+        assert_eq!(d.skin_smooth_sigma_color, 25.0);
+        assert!(!d.red_eye_removal);
+        assert_eq!(d.red_eye_threshold, 1.5);
+        assert!(!d.background_blur);
+        assert_eq!(d.background_blur_radius, 15.0);
+        assert_eq!(d.background_blur_mask_size, 0.6);
+    }
+
+    #[test]
+    fn natural_preset_is_a_gentle_lift() {
+        let s = EnhancementSettings::natural();
+        assert!(s.auto_color);
+        assert_eq!(s.exposure_stops, 0.1);
+        assert_eq!(s.contrast, 1.1);
+        assert_eq!(s.saturation, 1.05);
+        assert_eq!(s.sharpness, 0.2);
+        // Inherited, not set by the preset.
+        assert_eq!(s.brightness, 0);
+        assert_eq!(s.unsharp_amount, 0.6);
+        assert_eq!(s.unsharp_radius, 1.0);
+        assert!(!s.red_eye_removal);
+    }
+
+    #[test]
+    fn vivid_preset_pushes_tone_and_detail() {
+        let s = EnhancementSettings::vivid();
+        assert_eq!(s.exposure_stops, 0.3);
+        assert_eq!(s.brightness, 10);
+        assert_eq!(s.contrast, 1.25);
+        assert_eq!(s.saturation, 1.3);
+        assert_eq!(s.unsharp_amount, 0.9);
+        assert_eq!(s.unsharp_radius, 1.2);
+        assert_eq!(s.sharpness, 0.5);
+        // Vivid is the one preset that leaves auto-colour off.
+        assert!(!s.auto_color);
+        assert_eq!(s.skin_smooth_amount, 0.0);
+    }
+
+    #[test]
+    fn professional_preset_favours_detail_over_saturation() {
+        let s = EnhancementSettings::professional();
+        assert!(s.auto_color);
+        assert_eq!(s.exposure_stops, 0.2);
+        assert_eq!(s.contrast, 1.15);
+        assert_eq!(s.saturation, 1.05);
+        assert_eq!(s.unsharp_amount, 1.2);
+        assert_eq!(s.sharpness, 0.8);
+        // Inherited: the radius is not widened, unlike vivid.
+        assert_eq!(s.unsharp_radius, 1.0);
+        assert_eq!(s.brightness, 0);
+    }
+
+    #[test]
+    fn preset_by_name_resolves_each_preset() {
+        // Compare a field that is unique to each preset so the arms cannot be
+        // swapped without failing.
+        assert_eq!(
+            EnhancementSettings::preset_by_name("natural").map(|s| s.exposure_stops),
+            Some(0.1)
+        );
+        assert_eq!(
+            EnhancementSettings::preset_by_name("vivid").map(|s| s.exposure_stops),
+            Some(0.3)
+        );
+        assert_eq!(
+            EnhancementSettings::preset_by_name("professional").map(|s| s.exposure_stops),
+            Some(0.2)
+        );
+    }
+
+    #[test]
+    fn preset_by_name_rejects_unknown_and_miscased_names() {
+        assert!(EnhancementSettings::preset_by_name("").is_none());
+        assert!(EnhancementSettings::preset_by_name("custom").is_none());
+        // Documented as case-sensitive lowercase.
+        assert!(EnhancementSettings::preset_by_name("Natural").is_none());
+        assert!(EnhancementSettings::preset_by_name("VIVID").is_none());
+    }
+}

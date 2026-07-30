@@ -269,6 +269,184 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // Golden values.
+    //
+    // The round-trip tests below cover only saturated primaries, secondaries
+    // and greys. For every one of those, lightness is exactly 0.5 (or the
+    // colour is achromatic) and k is exactly 0 or 1 — so the `1 - |2L - 1|`
+    // denominator is always 1, the `x` interpolation term is always 0 or c,
+    // and the general CMYK path never runs. Converting a value and converting
+    // it back also hides any error the inverse repeats. These pin intermediate
+    // hues, off-centre lightness, and mid-range k against reference values.
+
+    #[track_caller]
+    fn close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-3,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn rgb_to_hsv_intermediate_hues() {
+        // Orange: red is max, green sits partway, so hue lands mid-sextant.
+        let (h, s, v) = rgb_to_hsv(255, 128, 0);
+        close(h, 30.117647);
+        close(s, 1.0);
+        close(v, 1.0);
+
+        // Green max — the second branch, +2 sextants.
+        let (h, s, v) = rgb_to_hsv(0, 255, 128);
+        close(h, 150.11765);
+        close(s, 1.0);
+        close(v, 1.0);
+
+        // Blue max — the third branch, +4 sextants, with s and v both partial.
+        let (h, s, v) = rgb_to_hsv(64, 128, 192);
+        close(h, 210.0);
+        close(s, 2.0 / 3.0);
+        close(v, 0.7529412);
+    }
+
+    #[test]
+    fn rgb_to_hsv_green_max_with_a_partial_delta() {
+        // The green-max probe above uses a saturated colour where delta is
+        // exactly 1.0, and dividing by one is indistinguishable from
+        // multiplying by it or taking a remainder. (32, 200, 100) gives
+        // delta = 168/255, so the division actually has to happen:
+        // hue = 60 * (68/168 + 2) = 144.286.
+        let (h, s, v) = rgb_to_hsv(32, 200, 100);
+        close(h, 144.28572);
+        close(s, 168.0 / 200.0);
+        close(v, 200.0 / 255.0);
+    }
+
+    #[test]
+    fn rgb_to_hsl_green_max_with_a_partial_delta() {
+        // Same input through the HSL path, which has its own copy of the
+        // sextant arithmetic. L = 0.4549 also keeps the saturation
+        // denominator away from 1.
+        let (h, s, l) = rgb_to_hsl(32, 200, 100);
+        close(h, 144.28572);
+        close(s, 168.0 / 232.0);
+        close(l, 232.0 / 510.0);
+    }
+
+    #[test]
+    fn hsv_to_rgb_covers_every_sextant() {
+        // The probes above land on 30, 210 and 330, which leaves three match
+        // guards never decided in the affirmative. A hue inside each
+        // remaining sextant pins which arm runs.
+        assert_eq!(hsv_to_rgb(90.0, 1.0, 1.0), (127, 255, 0), "second sextant");
+        assert_eq!(hsv_to_rgb(150.0, 1.0, 1.0), (0, 255, 127), "third sextant");
+        assert_eq!(hsv_to_rgb(270.0, 1.0, 1.0), (127, 0, 255), "fifth sextant");
+    }
+
+    #[test]
+    fn hsl_to_rgb_covers_every_sextant() {
+        // At L = 0.5 and S = 1 the chroma is 1 and m is 0, so each sextant
+        // maps to a clean primary/partial pair.
+        assert_eq!(hsl_to_rgb(90.0, 1.0, 0.5), (127, 255, 0), "second sextant");
+        assert_eq!(hsl_to_rgb(150.0, 1.0, 0.5), (0, 255, 127), "third sextant");
+        assert_eq!(hsl_to_rgb(270.0, 1.0, 0.5), (127, 0, 255), "fifth sextant");
+        // Past 300 the final arm swaps which channel takes the partial value.
+        assert_eq!(hsl_to_rgb(330.0, 1.0, 0.5), (255, 0, 127), "sixth sextant");
+    }
+
+    #[test]
+    fn rgb_to_hsv_wraps_negative_hue_to_the_top_of_the_circle() {
+        // gf < bf with red max makes the raw hue negative (-30.1), so the
+        // +360 correction has to fire. The existing test only asserts the
+        // result is non-negative, which any wrap value satisfies.
+        let (h, s, v) = rgb_to_hsv(255, 0, 128);
+        close(h, 329.88235);
+        close(s, 1.0);
+        close(v, 1.0);
+    }
+
+    #[test]
+    fn rgb_to_hsv_achromatic_inputs() {
+        assert_eq!(rgb_to_hsv(0, 0, 0), (0.0, 0.0, 0.0));
+        let (h, s, v) = rgb_to_hsv(128, 128, 128);
+        close(h, 0.0);
+        close(s, 0.0);
+        close(v, 0.5019608);
+    }
+
+    #[test]
+    fn hsv_to_rgb_partial_sextant_values() {
+        // Halfway through the first sextant: x = c/2, so the green channel is
+        // half of red. With a primary hue x is 0 or c and this term vanishes.
+        assert_eq!(hsv_to_rgb(30.0, 1.0, 1.0), (255, 127, 0));
+        // Fourth sextant with partial saturation and value: c = 0.4, x = 0.2,
+        // m = 0.4 gives (0.4, 0.6, 0.8) -> #6699CC.
+        assert_eq!(hsv_to_rgb(210.0, 0.5, 0.8), (102, 153, 204));
+        // Sixth sextant, reached by wrapping a negative hue.
+        assert_eq!(hsv_to_rgb(-30.0, 1.0, 1.0), (255, 0, 127));
+        // A full turn is the same as none.
+        assert_eq!(hsv_to_rgb(360.0, 1.0, 1.0), (255, 0, 0));
+    }
+
+    #[test]
+    fn hsv_to_rgb_degenerate_inputs() {
+        // Zero saturation short-circuits to grey without touching the sextants.
+        assert_eq!(hsv_to_rgb(123.0, 0.0, 0.5), (127, 127, 127));
+        // NaN hue is treated as zero rather than propagating.
+        assert_eq!(hsv_to_rgb(f32::NAN, 1.0, 1.0), (255, 0, 0));
+    }
+
+    #[test]
+    fn rgb_to_hsl_off_centre_lightness() {
+        // Dark: L = 0.251, so the saturation denominator is 0.502 rather than
+        // the 1.0 every primary-colour case produces.
+        let (h, s, l) = rgb_to_hsl(32, 64, 96);
+        close(h, 210.0);
+        close(s, 0.5);
+        close(l, 0.2509804);
+
+        // Light: L = 0.876, denominator 0.247, which happens to equal delta
+        // so saturation returns to 1.
+        let (h, s, l) = rgb_to_hsl(192, 224, 255);
+        close(h, 209.52382);
+        close(s, 1.0);
+        close(l, 0.8764706);
+    }
+
+    #[test]
+    fn hsl_to_rgb_off_centre_lightness() {
+        // L = 0.25 makes c = 0.25 rather than s, and m = 0.125 rather than 0.
+        assert_eq!(hsl_to_rgb(210.0, 0.5, 0.25), (31, 63, 95));
+        // Zero saturation collapses to a grey at the given lightness.
+        assert_eq!(hsl_to_rgb(210.0, 0.0, 0.25), (63, 63, 63));
+    }
+
+    #[test]
+    fn rgb_to_cmyk_general_path_with_mid_range_key() {
+        // Every existing case has k = 0 or k = 1, so `(1 - v - k) / (1 - k)`
+        // either divides by one or is skipped by the early return.
+        let (c, m, y, k) = rgb_to_cmyk(128, 64, 192);
+        close(c, 1.0 / 3.0);
+        close(m, 2.0 / 3.0);
+        close(y, 0.0);
+        close(k, 0.2470588);
+    }
+
+    #[test]
+    fn cmyk_to_rgb_scales_by_both_ink_and_key() {
+        // k = 0: only the per-channel ink applies.
+        assert_eq!(cmyk_to_rgb(0.5, 0.0, 0.25, 0.0), (127, 255, 191));
+        // k = 0.5 halves everything on top of the ink.
+        assert_eq!(cmyk_to_rgb(0.0, 0.5, 1.0, 0.5), (127, 63, 0));
+    }
+
+    #[test]
+    fn replicate_nibble_duplicates_the_digit() {
+        // 0xA -> 0xAA, not 0x0A or 0xA0.
+        let c = parse_hex_color("#ABC").unwrap();
+        assert_eq!((c.red, c.green, c.blue), (0xAA, 0xBB, 0xCC));
+    }
+
     #[test]
     fn test_rgb_to_hsl_and_back() {
         let cases = [
