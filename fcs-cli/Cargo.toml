@@ -1,9 +1,13 @@
 [package]
 name = "fcs-cli"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Face Crop Studio CLI — batch face detection and cropping."
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true
@@ -26,5 +30,7 @@ predicates.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 
-[build-dependencies]
+# Only the cfg(windows) branch of build.rs touches this, so it should not be
+# compiled on the macOS and Linux release legs.
+[target.'cfg(windows)'.build-dependencies]
 winresource.workspace = true

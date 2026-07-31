@@ -44,6 +44,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Manifest hygiene across the workspace:
+  - `rust-version = "1.96"` in `[workspace.package]`, inherited by all five
+    members, matching the toolchain both workflows pin. An older toolchain now
+    reports the MSRV instead of failing with a confusing edition-2024 error.
+  - `resolver = "3"`, which makes dependency resolution MSRV-aware now that
+    `rust-version` exists. (The previous `resolver = "2"` was not a mistake:
+    virtual manifests default to resolver 1 regardless of edition.)
+  - `[workspace.lints]` with `clippy::all` and `unsafe_op_in_unsafe_fn`, opted
+    into by each member via `lints.workspace = true`. Lint policy previously
+    lived only in `clippy -- -D warnings` in CI, so a local `cargo clippy`
+    disagreed with the pipeline. `missing_docs` was considered and left off: it
+    reports 610 items, which under `-D warnings` is a hard failure.
+  - `winresource` moved to `[target.'cfg(windows)'.build-dependencies]` in
+    `fcs-cli` and `fcs-gui`. Both build scripts only call it behind a Windows
+    guard, but it was being compiled on the macOS and Linux release legs.
+  - Dropped the redundant `[lib] path = "src/lib.rs"` from four manifests and
+    the redundant `[[bin]]` from `fcs-gui`; both are cargo's autodetected
+    defaults.
 - **The tabular mapping subsystem is now its own crate, `fcs-mapping`.** CSV,
   Excel, Parquet, and SQLite ingestion lived in `fcs-utils` behind a `mapping`
   feature, which meant every consumer of `fcs-utils` carried `calamine`,

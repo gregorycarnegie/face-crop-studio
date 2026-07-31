@@ -16,13 +16,30 @@ opt-level = 3
 
 [workspace]
 members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-cli", "fcs-gui"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 edition = "2024"
+# Matches the toolchain pinned in ci.yml and release.yml. With resolver 3 this
+# also makes dependency resolution MSRV-aware, so `cargo update` will not pull
+# in a version that needs a newer rustc than the workflows install.
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 version = "1.4.5"
 description = "Face Crop Studio — pure Rust face detection and cropping."
+
+# Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
+# local `cargo clippy` sees exactly what the pipeline sees. Members opt in with
+# `lints.workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+# `missing_docs` is deliberately off: it reports 610 items across the workspace,
+# which under CI's `-D warnings` is a hard failure and otherwise just buries real
+# diagnostics. Worth revisiting per-crate once a crate is actually fully documented.
+
+[workspace.lints.clippy]
+# priority -1 so individual lint overrides added later win over the group.
+all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 # Workspace crates

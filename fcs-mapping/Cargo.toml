@@ -1,12 +1,13 @@
 [package]
 name = "fcs-mapping"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Tabular mapping ingestion (CSV/Excel/Parquet/SQLite) for Face Crop Studio."
 
-[lib]
-path = "src/lib.rs"
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true

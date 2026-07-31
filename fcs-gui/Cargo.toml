@@ -1,16 +1,13 @@
 [package]
 name = "fcs-gui"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Face Crop Studio — redesigned egui desktop application."
 
-[lib]
-path = "src/lib.rs"
-
-[[bin]]
-name = "fcs-gui"
-path = "src/main.rs"
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true
@@ -37,7 +34,9 @@ sha2.workspace = true
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true
 
-[build-dependencies]
+# Only the cfg(windows) branch of build.rs touches this, so it should not be
+# compiled on the macOS and Linux release legs.
+[target.'cfg(windows)'.build-dependencies]
 winresource.workspace = true
 
 # `cargo-deb` packaging metadata. Asset paths are resolved relative to this
