@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `fcs-gui/build.rs` tripped `clippy::needless_return` on macOS and Linux. Its
+  early `return;` was followed by a `#[cfg(windows)]` block, so on a Windows host
+  the return is not trailing and the lint stays silent — but everywhere else the
+  `cfg` strips the block and the return becomes the last statement. Both build
+  scripts are now a single guarded `if` with no `return`. Caught by the macOS and
+  Linux clippy legs added in 1.5.0, on their first run.
+- `fcs-cli/build.rs` guarded only on `cfg(windows)` (the host) and not on
+  `CARGO_CFG_TARGET_OS`, so a Windows host cross-compiling to Linux would have
+  tried to embed Windows resources. It now matches `fcs-gui/build.rs`.
+
 ## [1.5.0] - 2026-07-31
 
 ### Added

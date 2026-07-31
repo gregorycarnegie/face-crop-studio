@@ -191,7 +191,30 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 - `cargo run -p fcs-cli -- --input fixtures/ --no-gpu` – Run with CPU-only mode.
 - `cargo run -p fcs-gui` – Launch the GUI with default settings (auto-detects GPU).
 - `cargo bench -p fcs-core crop_enhance` – Measure the crop + enhancement micro-benchmark.
-- `cargo fmt --all && cargo clippy --workspace -- -D warnings` – Formatting and linting hygiene.
+- `cargo fmt --all && cargo clippy --workspace -- -D warnings` – Formatting and linting hygiene. Note this only lints the platform you are on: code behind `#[cfg(target_os = ...)]` is invisible to the compiler everywhere else, which is why CI runs clippy on all three legs rather than just one. See [Cross-platform linting](#cross-platform-linting).
+
+### Cross-platform linting
+
+A local `cargo clippy` only sees the `cfg` blocks that your own platform
+compiles. To lint another platform's branches without waiting for CI:
+
+```sh
+rustup target add x86_64-unknown-linux-gnu
+cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings
+```
+
+**Build scripts are the exception** — `build.rs` always compiles for the *host*,
+so `--target` does not change which `cfg(windows)` branch it sees. A build script
+can only be linted for another platform by invoking the driver on it directly:
+
+```sh
+clippy-driver --edition 2024 --target x86_64-unknown-linux-gnu \
+    --crate-type bin --emit=metadata -o /tmp/probe.rmeta \
+    -D warnings fcs-gui/build.rs
+```
+
+That will not resolve `winresource`, so it is only useful for the non-Windows
+branches — which are exactly the ones a Windows developer cannot otherwise see.
 
 ### Test tooling
 
