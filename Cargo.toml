@@ -25,7 +25,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
-version = "1.4.5"
+version = "1.5.0"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-31
+
 ### Added
 
 - macOS and Linux legs in CI. Previously only Windows was built and tested on
@@ -460,7 +462,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.5...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.5...v1.5.0
 [1.4.5]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.2...v1.4.3
