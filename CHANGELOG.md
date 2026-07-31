@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `avif` was missing from `SUPPORTED_IMAGE_EXTENSIONS`. AVIF *output* was fully
+  wired (`ImageFormatHint::Avif`, `encode_avif` via ravif), the `image`
+  dependency has had `avif`/`avif-native` enabled throughout, and dav1d is
+  installed on all three CI and release platforms specifically for it — but the
+  extension list drives both the GUI file-dialog filter and CLI/GUI folder
+  scanning, so the app could write an `.avif` it then refused to reopen, and
+  README's claim of AVIF input was not true in practice. A round-trip test now
+  covers save-then-load, which also serves as the check that dav1d is actually
+  linked for decode rather than being dead weight.
 - The `process_ram_mb` test was gated on `cfg(any(macos, windows))` to match the
   function, but the function has no macOS implementation and always returns
   `None` there, so `.expect()` would have failed on the newly added macOS CI

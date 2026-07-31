@@ -27,6 +27,10 @@ pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "bmp",
     "tif",
     "tiff",
+    // Unconditional, unlike raw/heic below: the `avif` and `avif-native` features
+    // of the `image` dependency are always on, and dav1d is installed on all
+    // three CI/release platforms for exactly this.
+    "avif",
     #[cfg(feature = "raw")]
     "dng",
     #[cfg(feature = "raw")]
@@ -417,6 +421,49 @@ mod tests {
         let dynamic = DynamicImage::ImageRgb8(image);
         let result = super::resize_image(&dynamic, 2, 2, FilterType::Triangle);
         assert_eq!(result.dimensions(), (2, 2));
+    }
+
+    #[test]
+    fn avif_extension_is_supported_case_insensitively() {
+        // Unconditional, unlike the raw/heic cases below — no feature gate.
+        assert!(is_supported_image_path(Path::new("portrait.avif")));
+        assert!(is_supported_image_path(Path::new("PORTRAIT.AVIF")));
+    }
+
+    #[test]
+    fn avif_round_trips_through_save_and_load() {
+        // AVIF output was already wired up while the extension was missing from
+        // SUPPORTED_IMAGE_EXTENSIONS, so the app could write a file it then
+        // refused to open. This asserts both halves work, and doubles as the
+        // check that dav1d is actually linked for decode — without it the
+        // `avif-native` feature is dead weight on all three platforms.
+        use crate::output::{
+            ImageFormatHint, MetadataContext, OutputOptions, PngCompression, save_dynamic_image,
+        };
+        use image::GenericImageView as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crop.avif");
+
+        let mut src = image::RgbImage::new(16, 16);
+        for (x, y, px) in src.enumerate_pixels_mut() {
+            *px = image::Rgb([(x * 16) as u8, (y * 16) as u8, 128]);
+        }
+        let src = DynamicImage::ImageRgb8(src);
+
+        let options = OutputOptions {
+            format: Some(ImageFormatHint::Avif),
+            auto_detect: true,
+            jpeg_quality: 90,
+            png_compression: PngCompression::Default,
+            webp_quality: 90,
+            metadata: Default::default(),
+        };
+        save_dynamic_image(&src, &path, &options, &MetadataContext::default())
+            .expect("AVIF encode");
+
+        let loaded = super::load_image(&path).expect("AVIF decode");
+        assert_eq!(loaded.dimensions(), (16, 16));
     }
 
     #[cfg(feature = "raw")]
