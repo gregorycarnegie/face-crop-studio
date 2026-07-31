@@ -23,21 +23,25 @@ graph TD
     cli["fcs-cli<br/><i>batch automation, CLI flags</i>"]
     gui["fcs-gui<br/><i>eframe/egui desktop app</i>"]
     core["fcs-core<br/><i>YuNet detection, crop geometry,<br/>GPU inference graph</i>"]
-    utils["fcs-utils<br/><i>config, quality scoring, enhancement,<br/>mapping (CSV/XLSX/Parquet/SQLite), export</i>"]
+    utils["fcs-utils<br/><i>config, quality scoring,<br/>enhancement, export</i>"]
+    mapping["fcs-mapping<br/><i>CSV/XLSX/Parquet/SQLite ingestion</i>"]
 
     cli --> core
-    cli -->|features: mapping, webcam| utils
+    cli --> mapping
+    cli -->|features: webcam| utils
     gui --> core
-    gui -->|features: mapping, webcam| utils
+    gui --> mapping
+    gui -->|features: webcam| utils
     core --> utils
 ```
 
 | Crate | Depends on | Role |
 |-------|------------|------|
-| `fcs-utils` | — | Foundation: config structs, Laplacian quality scoring, CPU+GPU enhancement, mapping ingestion, and output encoders. |
+| `fcs-utils` | — | Foundation: config structs, Laplacian quality scoring, CPU+GPU enhancement, and output encoders. |
+| `fcs-mapping` | — | Tabular ingestion: reads CSV, Excel, Parquet, and SQLite tables into source/output path pairs. Depends on nothing else in the workspace. |
 | `fcs-core` | `fcs-utils` | Detection and geometry: YuNet ONNX loading, preprocessing/postprocessing, `calculate_crop_region`, and the custom WGSL inference graph. |
-| `fcs-cli` | `fcs-core`, `fcs-utils` | Synchronous batch front-end with GPU auto-detection and context pooling. |
-| `fcs-gui` | `fcs-core`, `fcs-utils` | Desktop front-end; pushes detection/enhancement onto background Rayon tasks and shares wgpu context with eframe. |
+| `fcs-cli` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Synchronous batch front-end with GPU auto-detection and context pooling. |
+| `fcs-gui` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Desktop front-end; pushes detection/enhancement onto background Rayon tasks and shares wgpu context with eframe. |
 
 This document focuses on the crop calculation pipeline introduced in Phase 4 and extended through Phase 9.
 

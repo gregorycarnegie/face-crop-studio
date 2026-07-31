@@ -368,3 +368,61 @@ fn menu_item(
         add_contents(ui);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::test_support::{click_at, harness};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn every_metadata_mode_has_its_own_label() {
+        // This string is what the user reads back as their export setting, so a
+        // swapped arm here means the menu confidently reports the wrong mode.
+        let modes = [
+            (MetadataMode::Preserve, "Preserve"),
+            (MetadataMode::Strip, "Strip"),
+            (MetadataMode::Custom, "Custom"),
+        ];
+        for (mode, expected) in &modes {
+            assert_eq!(metadata_mode_label(mode), *expected);
+        }
+        let labels: Vec<&str> = modes.iter().map(|(_, l)| *l).collect();
+        assert_eq!(
+            labels.len(),
+            labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            "two modes share a label",
+        );
+    }
+
+    #[derive(Default)]
+    struct Probe {
+        origin: egui::Pos2,
+        popup_opened: bool,
+    }
+
+    #[test]
+    fn menu_item_opens_its_popup_on_click() {
+        // `add_contents` only runs while the popup is open, so it doubles as the
+        // assertion: every entry in the menu bar is unreachable if this routing
+        // breaks, and nothing else in the app exercises it.
+        let opened = Rc::new(Cell::new(false));
+        let flag = Rc::clone(&opened);
+        let mut h = harness(Probe::default(), move |ui, probe| {
+            probe.origin = ui.cursor().min;
+            menu_item(ui, "File", 180.0, |_| flag.set(true));
+            probe.popup_opened = flag.get();
+        });
+        h.run();
+        assert!(!h.state().popup_opened, "starts closed");
+
+        // The item is `label width + 20` wide and 32 tall.
+        let origin = h.state().origin;
+        click_at(&mut h, origin + egui::vec2(10.0, 16.0));
+        assert!(h.state().popup_opened, "clicking the item opens its popup");
+    }
+}

@@ -2,14 +2,14 @@
 
 use egui::TextureHandle;
 use fcs_core::{BoundingBox, Detection};
+use fcs_mapping::{
+    ColumnSelector, MappingCatalog, MappingEntry, MappingFormat, MappingPreview,
+    MappingReadOptions, inspect_mapping_sources, load_mapping_entries, load_mapping_preview,
+};
 use fcs_utils::{
     CropShape, PolygonCornerStyle,
     config::{AppSettings, CropSettings as ConfigCropSettings, ResizeQuality},
     gpu::{GpuContext, GpuStatusIndicator},
-    mapping::{
-        ColumnSelector, MappingCatalog, MappingEntry, MappingFormat, MappingPreview,
-        MappingReadOptions, inspect_mapping_sources, load_mapping_entries, load_mapping_preview,
-    },
     quality::Quality,
 };
 use image::DynamicImage;
@@ -322,7 +322,7 @@ pub struct ActiveBoxDrag {
     pub drag_start_screen: egui::Pos2,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DragHandle {
     Move,
     NorthWest,
@@ -477,7 +477,7 @@ impl MappingUiState {
         }
     }
     pub fn set_file(&mut self, path: PathBuf) {
-        use fcs_utils::mapping::detect_format;
+        use fcs_mapping::detect_format;
         self.file_path = Some(path);
         self.base_dir = self
             .file_path

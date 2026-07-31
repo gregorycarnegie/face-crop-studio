@@ -3,7 +3,8 @@
 Thanks for helping improve Face Crop Studio. This repository is a Rust workspace with four main crates:
 
 - `fcs-core`: face detection, YuNet model loading, crop math, and GPU inference pieces.
-- `fcs-utils`: shared configuration, mapping import, image enhancement, export helpers, and webcam support.
+- `fcs-utils`: shared configuration, image enhancement, export helpers, and webcam support.
+- `fcs-mapping`: CSV/Excel/Parquet/SQLite ingestion for the batch mapping workflow.
 - `fcs-cli`: command-line workflows for batch processing and automation.
 - `fcs-gui`: the egui/eframe desktop application.
 

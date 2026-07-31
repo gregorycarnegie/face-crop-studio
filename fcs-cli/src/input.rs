@@ -3,14 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use fcs_utils::{
-    SUPPORTED_IMAGE_EXTENSIONS,
-    mapping::{
-        ColumnSelector, MappingFormat, MappingReadOptions, detect_format as detect_mapping_format,
-        load_mapping_entries,
-    },
-    normalize_path,
+use fcs_mapping::{
+    ColumnSelector, MappingFormat, MappingReadOptions, detect_format as detect_mapping_format,
+    load_mapping_entries,
 };
+use fcs_utils::{SUPPORTED_IMAGE_EXTENSIONS, normalize_path};
 use log::{debug, info, warn};
 use walkdir::WalkDir;
 

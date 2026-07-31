@@ -16,7 +16,8 @@ Face Crop Studio is a Rust workspace that wraps the YuNet face detector with det
 ## Crates
 
 - **`fcs-core`** – Loads the YuNet ONNX model with `tract-onnx`, handles preprocessing/postprocessing, and implements the crop calculation logic. Includes GPU-accelerated preprocessing and custom GPU YuNet inference via WGSL compute shaders (see `ARCHITECTURE.md` for details).
-- **`fcs-utils`** – Shared helpers: configuration structs, Laplacian-variance quality scoring, enhancement pipeline (CPU and GPU paths with 7 WGSL compute shaders), mapping system for CSV/Excel/Parquet/SQLite, and output encoders with metadata support.
+- **`fcs-utils`** – Shared helpers: configuration structs, Laplacian-variance quality scoring, enhancement pipeline (CPU and GPU paths with 7 WGSL compute shaders), and output encoders with metadata support.
+- **`fcs-mapping`** – Tabular ingestion for the batch mapping workflow: reads CSV, Excel, Parquet, and SQLite tables into source-image/output-name pairs. Standalone — it depends on no other workspace crate.
 - **`fcs-cli`** – Command-line frontend aimed at batch processing and automation with optional GPU acceleration (auto-detected, with fallback to CPU). Features GPU context pooling for efficient batch operations. Example invocations are documented in `docs/cli_recipes.md`.
 - **`fcs-gui`** – eframe/egui desktop experience with live preview, crop adjustments, enhancements, history/undo, and batch export. Shares GPU context with eframe's wgpu backend for efficient rendering and compute. A user guide lives in `docs/gui_crop_guide.md`.
 

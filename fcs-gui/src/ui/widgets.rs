@@ -346,6 +346,7 @@ pub fn ctl_pill(ui: &mut Ui, key: &str, val: &str, accent: Option<Color32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::test_support::click_at;
     use egui_kittest::{Harness, kittest::Queryable};
 
     /// Captured layout inputs plus whatever the widget under test mutates.
@@ -366,22 +367,8 @@ mod tests {
         clicked: bool,
     }
 
-    /// A fixed viewport keeps the width-derived geometry deterministic.
     fn harness<'a>(app: impl FnMut(&mut Ui, &mut Probe) + 'a) -> Harness<'a, Probe> {
-        Harness::builder()
-            .with_size(egui::vec2(240.0, 120.0))
-            .build_ui_state(app, Probe::default())
-    }
-
-    /// egui needs the pointer over the target on the frame the press lands, so
-    /// hover, press, and release each get their own frame.
-    fn click_at(h: &mut Harness<'_, Probe>, pos: egui::Pos2) {
-        h.hover_at(pos);
-        h.run();
-        h.drag_at(pos);
-        h.run();
-        h.drop_at(pos);
-        h.run();
+        crate::ui::test_support::harness(Probe::default(), app)
     }
 
     #[test]

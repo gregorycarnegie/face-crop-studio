@@ -18,165 +18,237 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.96.0"
   # Keep these checksums in sync with release.yml.
   YUNET_ORIGINAL_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
   YUNET_640_SHA256: d2c5a887db77802389261b13d2b9f5e1171b9d5787cb315d0add225812ff4d96
 
 jobs:
+  # Generate and verify the models once, then hand them to every platform leg as
+  # an artifact. onnxsim is slow and the Windows/macOS runners are the expensive
+  # ones, so they should not each be re-running it.
+  models:
+    name: Prepare Models
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install onnxsim
+        run: pip install onnxsim==0.4.36
+
+      - name: Download and Process Model
+        shell: bash
+        run: |
+          mkdir -p models
+          curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+          onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
+            || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
+            || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
+
+      - name: Verify model checksums
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+          import sys
+
+          expected = {
+              "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
+              "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
+          }
+
+          def sha256(path: pathlib.Path) -> str:
+              h = hashlib.sha256()
+              with path.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          failed = False
+          for rel_path, expected_hash in expected.items():
+              path = pathlib.Path(rel_path)
+              if not path.exists():
+                  print(f"Missing model file: {rel_path}", file=sys.stderr)
+                  failed = True
+                  continue
+              actual_hash = sha256(path)
+              if actual_hash != expected_hash:
+                  print(
+                      f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
+                      file=sys.stderr,
+                  )
+                  failed = True
+              else:
+                  print(f"Verified {rel_path}: {actual_hash}")
+
+          if failed:
+              sys.exit(1)
+          PY
+
+      - name: Upload models
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-models
+          path: models
+          retention-days: 1
+
   build:
-    name: Build and Test (Windows)
-    runs-on: windows-latest
-    env:
-      PKG_CONFIG_ALL_STATIC: "1"
+    name: Build and Test (${{ matrix.name }})
+    needs: models
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every platform's result, not just the first to break.
+      fail-fast: false
+      matrix:
+        include:
+          # Windows carries the coverage gate: it is the only leg with a usable
+          # GPU adapter, so it is the only one that reaches the wgpu code paths.
+          - name: Windows
+            os: windows-latest
+            coverage: true
+          - name: macOS
+            os: macos-latest
+          # 22.04 matches the release job's glibc baseline, so a link error here
+          # is the same link error the release build would hit.
+          - name: Linux
+            os: ubuntu-22.04
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.11"
+      - name: Download models
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-models
+          path: models
 
-    - name: Install onnxsim
-      run: pip install onnxsim==0.4.36
+      # ── Native dependencies ──────────────────────────────────────────────
+      - name: Install pkg-config (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install pkgconfiglite --no-progress -y
+          echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-    - name: Download and Process Model
-      shell: bash
-      run: |
-        mkdir -p models
-        curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-        onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
-          || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
-          || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
+      - name: Cache vcpkg (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-dav1d-libheif-x64-windows-static-${{ runner.os }}
 
-    - name: Verify model checksums
-      shell: bash
-      run: |
-        python - <<'PY'
-        import hashlib
-        import os
-        import pathlib
-        import sys
+      - name: Install dav1d + libheif (Windows, vcpkg)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            git clone https://github.com/microsoft/vcpkg C:\vcpkg
+            & C:\vcpkg\bootstrap-vcpkg.bat
+          }
+          & C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static libheif:x64-windows-static
 
-        expected = {
-            "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
-            "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
-        }
+      - name: Export build environment (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Write to GITHUB_ENV so this persists for all subsequent steps,
+          # overriding any PATH entries added by Python toolcache setup.
+          # dav1d is found via pkg-config; libheif-sys uses the `vcpkg` crate, which
+          # needs VCPKG_ROOT and only picks the x64-windows-static triplet under crt-static.
+          @(
+            "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static\lib\pkgconfig"
+            "PKG_CONFIG_ALL_STATIC=1"
+            "VCPKG_ROOT=C:\vcpkg"
+            "RUSTFLAGS=-C target-feature=+crt-static"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-        def sha256(path: pathlib.Path) -> str:
-            h = hashlib.sha256()
-            with path.open("rb") as f:
-                for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                    h.update(chunk)
-            return h.hexdigest()
+      - name: Install dav1d + libheif (macOS, Homebrew)
+        if: runner.os == 'macOS'
+        run: |
+          # brew ships versions new enough for both crates, so unlike Linux there
+          # is nothing to build from source here.
+          brew install dav1d libheif pkg-config
 
-        failed = False
-        for rel_path, expected_hash in expected.items():
-            path = pathlib.Path(rel_path)
-            if not path.exists():
-                print(f"Missing model file: {rel_path}", file=sys.stderr)
-                failed = True
-                continue
-            actual_hash = sha256(path)
-            if actual_hash != expected_hash:
-                print(
-                    f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
-                    file=sys.stderr,
-                )
-                failed = True
-            else:
-                print(f"Verified {rel_path}: {actual_hash}")
+      - name: Install native dependencies (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-build-deps
 
-        if failed:
-            sys.exit(1)
-        PY
+      # ── Toolchain ────────────────────────────────────────────────────────
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy, rustfmt, llvm-tools-preview
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: 1.96.0
-        components: clippy, rustfmt, llvm-tools-preview
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
 
-    - name: Rust Cache
-      uses: swatinem/rust-cache@v2
+      - name: Install cargo-nextest and cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-llvm-cov
 
-    - name: Install cargo-nextest and cargo-llvm-cov
-      uses: taiki-e/install-action@v2
-      with:
-        tool: nextest,cargo-llvm-cov
+      # ── Checks ───────────────────────────────────────────────────────────
+      - name: Check
+        run: cargo check --workspace
 
-    - name: Install pkg-config
-      shell: pwsh
-      run: |
-        choco install pkgconfiglite --no-progress -y
-        echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      # FCS_STRICT_TESTS turns "model/fixture missing, skipping" into a failure:
+      # the models arrive via artifact and fixtures are in-tree, so a skip here
+      # means a broken path, not an unavailable asset. GPU-dependent tests still
+      # self-skip when no adapter is present — the hosted macOS and Linux runners
+      # have no usable GPU, so those legs cover the CPU paths only.
+      - name: Test with coverage
+        if: matrix.coverage
+        # One instrumented run, not a second pass: `cargo llvm-cov nextest` wraps the same
+        # nextest invocation. The nextest profile has to travel via NEXTEST_PROFILE because
+        # `--profile` on the command line belongs to cargo-llvm-cov (build profile).
+        #
+        # The 65% floor sits a few points under the current 68.9% line coverage: ordinary
+        # refactors should not turn the pipeline red, but deleting a test module or landing
+        # a large untested file will. Raise it as coverage climbs, don't lower it.
+        #
+        # `|| status=$?` rather than letting the pipeline fail outright, so the job summary
+        # still records the number on the very run that tripped the gate.
+        shell: bash
+        env:
+          FCS_STRICT_TESTS: "1"
+          NEXTEST_PROFILE: ci
+        run: |
+          status=0
+          cargo llvm-cov nextest --workspace --all-features \
+            --summary-only --fail-under-lines 65 | tee coverage.txt || status=$?
+          {
+            echo '### Coverage'
+            echo '```'
+            grep -E '^(Filename|TOTAL)' coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
-    - name: Cache vcpkg
-      uses: actions/cache@v4
-      with:
-        path: C:\vcpkg\installed
-        key: vcpkg-dav1d-libheif-x64-windows-static-${{ runner.os }}
+      - name: Test
+        if: '!matrix.coverage'
+        shell: bash
+        env:
+          FCS_STRICT_TESTS: "1"
+          NEXTEST_PROFILE: ci
+        run: cargo nextest run --workspace --all-features
 
-    - name: Install dav1d + libheif (vcpkg)
-      shell: pwsh
-      run: |
-        if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
-          git clone https://github.com/microsoft/vcpkg C:\vcpkg
-          & C:\vcpkg\bootstrap-vcpkg.bat
-        }
-        & C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static libheif:x64-windows-static
+      - name: Test docs
+        run: cargo test --workspace --all-features --doc
 
-    - name: Set PKG_CONFIG_PATH for dav1d + vcpkg for libheif
-      shell: pwsh
-      run: |
-        # Write to GITHUB_ENV so this persists for all subsequent steps,
-        # overriding any PATH entries added by Python toolcache setup.
-        # dav1d is found via pkg-config; libheif-sys uses the `vcpkg` crate, which
-        # needs VCPKG_ROOT and only picks the x64-windows-static triplet under crt-static.
-        @(
-          "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows-static\lib\pkgconfig"
-          "VCPKG_ROOT=C:\vcpkg"
-          "RUSTFLAGS=-C target-feature=+crt-static"
-        ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      # Formatting is platform-independent, so one leg is enough.
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
 
-    - name: Check
-      run: cargo check --workspace
-
-    - name: Test with coverage
-      # One instrumented run, not a second pass: `cargo llvm-cov nextest` wraps the same
-      # nextest invocation. The nextest profile has to travel via NEXTEST_PROFILE because
-      # `--profile` on the command line belongs to cargo-llvm-cov (build profile).
-      #
-      # FCS_STRICT_TESTS turns "model/fixture missing, skipping" into a failure: both are
-      # downloaded above, so a skip here means a broken path, not an unavailable asset.
-      #
-      # The 60% floor sits a couple of points under the current 62.2% line coverage:
-      # ordinary refactors should not turn the pipeline red, but deleting a test module or
-      # landing a large untested file will. Raise it as coverage climbs, don't lower it.
-      #
-      # `|| status=$?` rather than letting the pipeline fail outright, so the job summary
-      # still records the number on the very run that tripped the gate.
-      shell: bash
-      env:
-        FCS_STRICT_TESTS: "1"
-        NEXTEST_PROFILE: ci
-      run: |
-        status=0
-        cargo llvm-cov nextest --workspace --all-features \
-          --summary-only --fail-under-lines 60 | tee coverage.txt || status=$?
-        {
-          echo '### Coverage'
-          echo '```'
-          grep -E '^(Filename|TOTAL)' coverage.txt
-          echo '```'
-        } >> "$GITHUB_STEP_SUMMARY"
-        exit "$status"
-
-    - name: Test docs
-      run: cargo test --workspace --all-features --doc
-
-    - name: Format
-      run: cargo fmt --all -- --check
-
-    - name: Clippy
-      run: cargo clippy --workspace -- -D warnings
+      # Clippy runs everywhere: the cfg(target_os) blocks in fcs-utils and
+      # fcs-gui are only linted on the platform that compiles them.
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings

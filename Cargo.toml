@@ -15,7 +15,7 @@ incremental = true
 opt-level = 3
 
 [workspace]
-members = ["fcs-core", "fcs-utils", "fcs-cli", "fcs-gui"]
+members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-cli", "fcs-gui"]
 resolver = "2"
 
 [workspace.package]
@@ -27,6 +27,7 @@ description = "Face Crop Studio — pure Rust face detection and cropping."
 [workspace.dependencies]
 # Workspace crates
 fcs-core = { path = "fcs-core" }
+fcs-mapping = { path = "fcs-mapping" }
 fcs-utils = { path = "fcs-utils" }
 
 # Error handling and logging

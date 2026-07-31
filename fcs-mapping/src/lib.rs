@@ -1,4 +1,8 @@
-//! Mapping file ingestion for batch crop source/output pairs.
+//! Tabular mapping ingestion for batch crop source/output pairs.
+//!
+//! Reads CSV, Excel, Parquet, and SQLite tables into `MappingEntry` pairs of
+//! source image path and desired output name, plus the previews and catalogs
+//! the GUI needs to let a user pick which columns to use.
 
 use anyhow::{Context, Result};
 use calamine::{Reader as _, open_workbook_auto};

@@ -2165,6 +2165,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fcs-core",
+ "fcs-mapping",
  "fcs-utils",
  "image 0.25.10",
  "imageproc",
@@ -2212,6 +2213,7 @@ dependencies = [
  "egui_extras",
  "egui_kittest",
  "fcs-core",
+ "fcs-mapping",
  "fcs-utils",
  "image 0.25.10",
  "imageproc",
@@ -2227,15 +2229,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "fcs-mapping"
+version = "1.4.5"
+dependencies = [
+ "anyhow",
+ "base64 0.23.0",
+ "calamine",
+ "csv",
+ "parquet",
+ "rusqlite",
+ "tempfile",
+ "zip",
+]
+
+[[package]]
 name = "fcs-utils"
 version = "1.4.5"
 dependencies = [
  "anyhow",
  "base64 0.23.0",
  "bytemuck",
- "calamine",
  "crc32fast",
- "csv",
  "env_logger",
  "fast_image_resize",
  "image 0.25.10",
@@ -2246,12 +2260,10 @@ dependencies = [
  "metal 0.33.0",
  "naga",
  "nokhwa",
- "parquet",
  "pollster 1.0.1",
  "ravif",
  "rayon",
  "rgb",
- "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -2259,7 +2271,6 @@ dependencies = [
  "tiny-skia 0.12.0",
  "wgpu",
  "windows",
- "zip",
 ]
 
 [[package]]

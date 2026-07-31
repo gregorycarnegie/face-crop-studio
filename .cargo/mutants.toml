@@ -4,17 +4,19 @@
 # currently reaches only inflates the missed count and buries the gaps that are
 # actually worth closing.
 
-# Without this, cargo-mutants builds with default features, and `mapping`,
-# `webcam`, `raw` and `heic` are all opt-in. Their modules are `#[cfg(feature
-# = ...)]`, so the mutant lands in a file the build skips, the suite passes,
-# and it is recorded as missed no matter how well tested the code is.
+# Without this, cargo-mutants builds with default features, and `webcam`, `raw`
+# and `heic` are all opt-in. Their modules are `#[cfg(feature = ...)]`, so the
+# mutant lands in a file the build skips, the suite passes, and it is recorded
+# as missed no matter how well tested the code is.
 #
-# Measured on `mapping/sqlite.rs`, 31 mutants, identical tests either way:
+# Measured on what is now `fcs-mapping/src/sqlite.rs` (then behind the `mapping`
+# feature), 31 mutants, identical tests either way:
 #   default features   0 caught, 31 missed
 #   --all-features    27 caught,  2 missed, 1 timeout, 1 unviable
 #
-# That silently misreported roughly 94 mutants across mapping (70), webcam
-# (17) and the heic/raw loaders in image_utils.
+# That silently misreported roughly 94 mutants across mapping (70, since split
+# out into `fcs-mapping` and no longer feature-gated), webcam (17) and the
+# heic/raw loaders in image_utils.
 all_features = true
 
 exclude_globs = [
@@ -22,9 +24,10 @@ exclude_globs = [
     # inside a live frame. 1608 mutants, 8 caught at the time this was written.
     #
     # `egui_kittest` (https://github.com/emilk/egui/tree/main/crates/egui_kittest)
-    # does let tests drive a real egui app, and `ui/widgets.rs` now has 8 such
-    # tests. Measured result on that file: 23 of 116 viable mutants caught, 20%.
-    # The split is sharp and worth knowing before repeating the experiment:
+    # does let tests drive a real egui app; `ui/widgets.rs`, `ui/toolbar.rs` and
+    # `ui/menubar.rs` now drive one through `ui/test_support.rs`. Measured result
+    # on widgets.rs: 23 of 116 viable mutants caught, 20%. The split is sharp and
+    # worth knowing before repeating the experiment:
     #
     #   caught  — return values, click routing, state mutation, format strings
     #   missed  — every paint parameter: colours, corner radii, stroke widths,
@@ -33,10 +36,18 @@ exclude_globs = [
     #             "replace <fn> with ()" survives.
     #
     # Killing paint mutants needs kittest's `snapshot`/`wgpu` features and
-    # committed baseline images. Until that call is made, the crate stays
-    # excluded so the reported score is not dominated by pixels no assertion
-    # looks at. Run with `--no-config` to measure it anyway.
-    "fcs-gui/**",
+    # committed baseline images. Until that call is made, the painting modules
+    # stay excluded so the reported score is not dominated by pixels no assertion
+    # looks at. Run with `--no-config` to measure them anyway.
+    #
+    # `fcs-gui/src/interaction/` is deliberately NOT excluded: it is pure hit
+    # testing and clamping arithmetic with no egui frame involved, it sits at
+    # 100% line coverage, and its mutants are exactly the kind worth reporting.
+    "fcs-gui/src/ui/**",
+    "fcs-gui/src/core/**",
+    "fcs-gui/src/rendering/**",
+    # app.rs, types.rs, theme.rs, lib.rs, main.rs — the crate-root modules.
+    "fcs-gui/src/*.rs",
 
     # These two genuinely need hardware in the loop: an enumerable camera and a
     # wgpu adapter. Every mutant survives because the code never runs in CI.

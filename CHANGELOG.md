@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- macOS and Linux legs in CI. Previously only Windows was built and tested on
+  push, while `release.yml` built all three — so a macOS or Linux break was not
+  discovered until a tag was cut. `ci.yml` is now a matrix over
+  `windows-latest`, `macos-latest`, and `ubuntu-22.04` (matching the release
+  job's glibc baseline). Clippy runs on every leg, because the `cfg(target_os)`
+  blocks in `fcs-utils` and `fcs-gui` are only linted on the platform that
+  compiles them; `fmt` and the coverage gate run once. Model generation moved
+  into its own `models` job that publishes an artifact, so `onnxsim` runs once
+  per workflow instead of once per platform.
+- `.github/actions/linux-build-deps`, a composite action holding the
+  from-source dav1d/libde265/libheif build that `ci.yml` and `release.yml` both
+  need. It was ~60 lines inline in `release.yml`; adding a second caller would
+  have duplicated it. Results are now cached under `/usr/local`, keyed on the
+  three pinned library versions.
+- Tests for `fcs-gui/src/interaction/bbox_drag.rs`, which had none: handle hit
+  testing (including corner-over-move precedence and the handle's reach past
+  the rect edge) and every `apply_drag` branch, covering the minimum-extent
+  clamp that stops a corner inverting the box and the image-bounds clamp. The
+  file went from 0% to 100% line coverage, and `cargo mutants` on it now reports
+  42 caught, 0 missed, 2 unviable.
+- More `egui_kittest` coverage, via a shared `ui/test_support.rs` harness
+  extracted from the existing `widgets.rs` tests: the five toolbar button
+  helpers (notably that a disabled `icon_btn` runs neither its click nor its
+  action, and that `danger_btn` fires its action exactly once per click) and
+  `menubar`'s `menu_item` popup routing.
+- Non-kittest tests for the GUI's pure helpers: the `shape_variant` /
+  `default_for_variant` round trip across all eleven crop-shape variants, the
+  agreement between `variant_label` and the dropdown's `ALL_VARIANTS` list,
+  the polygon corner/chamfer limits, `metadata_mode_label`, `local_time_str`,
+  and `process_ram_mb`.
+- Workspace line coverage rose from 62.2% to 68.9%; the CI floor moved from 60
+  to 65.
+
+### Changed
+
+- **The tabular mapping subsystem is now its own crate, `fcs-mapping`.** CSV,
+  Excel, Parquet, and SQLite ingestion lived in `fcs-utils` behind a `mapping`
+  feature, which meant every consumer of `fcs-utils` carried `calamine`,
+  `parquet`, `rusqlite` and `csv` in its dependency graph resolution. The code
+  had no `crate::` references outside its own module tree, so the move was
+  mechanical. `fcs-cli` and `fcs-gui` now depend on `fcs-mapping` directly and
+  the `mapping` feature is gone; the 43 mapping tests moved with it.
+- `cargo-mutants` no longer excludes all of `fcs-gui`. The exclusion now names
+  the painting modules (`ui/`, `core/`, `rendering/`, and the crate-root
+  files); `fcs-gui/src/interaction/` is pure geometry with no egui frame
+  involved and is worth mutating.
+
+### Fixed
+
+- Removed a dead `let _hs = HANDLE_SIZE / 2.0;` from `hit_test_handle`. It was
+  the only line in `interaction/` no test could reach — mutating it survived
+  because nothing consumed the value.
+- Noted that `toolbar::lighten` assumes an opaque input: `Color32` stores
+  premultiplied channels, so a translucent colour gets premultiplied a second
+  time by `from_rgba_unmultiplied` and darkens instead of lightening. Every
+  caller passes an opaque constant, so this is a documented constraint rather
+  than a behaviour change.
+
 ## [1.4.5] - 2026-07-29
 
 ### Added

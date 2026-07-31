@@ -283,3 +283,37 @@ fn gpu_vram_mb() -> Option<u64> {
     #[allow(unreachable_code)]
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_time_str_is_a_valid_wall_clock() {
+        // Two implementations sit behind this (GetLocalTime on Windows, a UTC
+        // fallback elsewhere) and both hand-format the string. The check is
+        // cheap and is the only thing asserting the fallback's `% 24` / `% 60`
+        // arithmetic on the platforms where it is the one that runs.
+        let s = local_time_str();
+        let parts: Vec<&str> = s.split(':').collect();
+        assert_eq!(parts.len(), 3, "expected HH:MM:SS, got {s:?}");
+
+        let bounds = [24, 60, 60];
+        for (part, max) in parts.iter().zip(bounds) {
+            assert_eq!(part.len(), 2, "{part:?} in {s:?} is not zero-padded");
+            let value: u32 = part.parse().unwrap_or_else(|_| panic!("{s:?}"));
+            assert!(value < max, "{part:?} out of range in {s:?}");
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn process_ram_is_reported_and_plausible() {
+        // The Windows path fills a `Pmc` struct through a raw FFI call, so a
+        // wrong `cb` or a byte/MiB mix-up shows up here as a zero or an absurd
+        // figure rather than as a quietly wrong status bar.
+        let mb = process_ram_mb().expect("this process has a working set");
+        assert!(mb > 0, "working set reported as 0 MiB");
+        assert!(mb < 64 * 1024, "{mb} MiB is not a plausible test process");
+    }
+}

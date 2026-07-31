@@ -331,3 +331,92 @@ const ALL_VARIANTS: &[(&str, ShapeVariant)] = &[
     ("Koch polygon", ShapeVariant::KochPolygon),
     ("Koch rectangle", ShapeVariant::KochRectangle),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every variant must survive `variant -> default shape -> variant`.
+    ///
+    /// The dropdown writes `default_for_variant` into the settings and then
+    /// re-reads the selection with `shape_variant`. If those two disagree for
+    /// any entry, picking that shape silently snaps the dropdown back to
+    /// whatever `shape_variant` thinks it is — the classic symptom of a match
+    /// arm added to one function but not the other.
+    #[test]
+    fn every_variant_round_trips_through_its_default_shape() {
+        for (_, variant) in ALL_VARIANTS {
+            assert_eq!(
+                shape_variant(&default_for_variant(*variant)),
+                *variant,
+                "{variant:?} did not round-trip",
+            );
+        }
+    }
+
+    #[test]
+    fn the_dropdown_list_and_the_label_function_agree() {
+        // Two hand-maintained lists of the same eleven names; they drift the
+        // moment a variant is renamed in one and not the other.
+        for (label, variant) in ALL_VARIANTS {
+            assert_eq!(variant_label(*variant), *label);
+        }
+    }
+
+    #[test]
+    fn the_dropdown_lists_each_variant_exactly_once() {
+        let mut seen: Vec<ShapeVariant> = Vec::new();
+        for (_, variant) in ALL_VARIANTS {
+            assert!(!seen.contains(variant), "{variant:?} listed twice");
+            seen.push(*variant);
+        }
+        assert_eq!(
+            seen.len(),
+            11,
+            "a variant was added without a dropdown entry"
+        );
+    }
+
+    #[test]
+    fn polygon_defaults_start_inside_their_slider_range() {
+        // Both sliders cap at a value derived from the side count. A default
+        // above its own cap would open the panel showing a value the user
+        // cannot get back to after touching the slider.
+        let sides = 6;
+        match default_for_variant(ShapeVariant::PolygonRounded) {
+            CropShape::Polygon {
+                corner_style: PolygonCornerStyle::Rounded { radius_pct },
+                ..
+            } => assert!(radius_pct <= polygon_corner_radius_max(sides)),
+            other => panic!("expected a rounded polygon, got {other:?}"),
+        }
+        match default_for_variant(ShapeVariant::PolygonChamfered) {
+            CropShape::Polygon {
+                corner_style: PolygonCornerStyle::Chamfered { size_pct },
+                ..
+            } => assert!(size_pct <= polygon_chamfer_size_max(sides)),
+            other => panic!("expected a chamfered polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corner_limits_stay_in_range_and_grow_with_side_count() {
+        // Both are half the apothem/half-edge of a unit polygon, so they must
+        // stay within (0, 0.5] and move monotonically as the polygon rounds out.
+        let mut prev_radius = 0.0;
+        let mut prev_chamfer = f32::INFINITY;
+        for sides in 3..=32u32 {
+            let radius = polygon_corner_radius_max(sides);
+            let chamfer = polygon_chamfer_size_max(sides);
+            assert!(radius > 0.0 && radius <= 0.5, "radius at {sides} sides");
+            assert!(chamfer > 0.0 && chamfer <= 0.5, "chamfer at {sides} sides");
+            assert!(radius > prev_radius, "radius must grow with side count");
+            assert!(
+                chamfer < prev_chamfer,
+                "chamfer must shrink with side count"
+            );
+            prev_radius = radius;
+            prev_chamfer = chamfer;
+        }
+    }
+}

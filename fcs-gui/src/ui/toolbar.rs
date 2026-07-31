@@ -281,6 +281,10 @@ fn danger_btn(ui: &mut egui::Ui, label: &str, action: impl FnOnce()) -> bool {
     }
 }
 
+// ponytail: assumes an opaque input. `Color32` stores premultiplied channels, so
+// feeding this a translucent colour premultiplies a second time and darkens
+// instead of lightening. Every caller passes `bg_from_*`/`P::` opaque constants;
+// switch to `Color32::from_rgba_premultiplied` if that ever stops being true.
 fn lighten(c: Color32, amt: f32) -> Color32 {
     let f = |v: u8| ((v as f32 + amt * 255.0).min(255.0)) as u8;
     Color32::from_rgba_unmultiplied(f(c.r()), f(c.g()), f(c.b()), c.a())
@@ -299,4 +303,172 @@ fn bg_from_peach() -> Color32 {
         (0xb8_u8 as f32 * 0.35) as u8,
         (0x9a_u8 as f32 * 0.30) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::test_support::{click_at, harness};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Layout inputs the test needs plus what the button under test reported.
+    ///
+    /// `origin` is the cursor the button allocates from; click positions are
+    /// derived from it and the button's own fixed 34px height, not from the
+    /// response rect — reading the rect back would track any geometry error
+    /// instead of catching it.
+    #[derive(Default)]
+    struct Probe {
+        origin: egui::Pos2,
+        clicks: usize,
+    }
+
+    /// Every text button is `label width + 26` wide and 34 tall, so a point 14px
+    /// in and 17px down is inside any of them.
+    const INSIDE: egui::Vec2 = egui::vec2(14.0, 17.0);
+    /// Well past the 34px row, so it belongs to whatever is laid out next.
+    const BELOW: egui::Vec2 = egui::vec2(14.0, 60.0);
+
+    #[test]
+    fn primary_btn_reports_clicks_on_its_row_only() {
+        let mut h = harness(Probe::default(), |ui, probe| {
+            probe.origin = ui.cursor().min;
+            if primary_btn(ui, "EXPORT", P::INK, P::CYAN) {
+                probe.clicks += 1;
+            }
+        });
+        h.run();
+        let origin = h.state().origin;
+
+        click_at(&mut h, origin + INSIDE);
+        assert_eq!(h.state().clicks, 1);
+
+        click_at(&mut h, origin + BELOW);
+        assert_eq!(h.state().clicks, 1, "a click below the row is not a press");
+    }
+
+    #[test]
+    fn ghost_btn_reports_clicks_on_its_row_only() {
+        let mut h = harness(Probe::default(), |ui, probe| {
+            probe.origin = ui.cursor().min;
+            if ghost_btn(ui, "CANCEL") {
+                probe.clicks += 1;
+            }
+        });
+        h.run();
+        let origin = h.state().origin;
+
+        click_at(&mut h, origin + INSIDE);
+        assert_eq!(h.state().clicks, 1);
+
+        click_at(&mut h, origin + BELOW);
+        assert_eq!(h.state().clicks, 1);
+    }
+
+    #[test]
+    fn toggle_btn_reports_clicks_in_both_states() {
+        // `active` only changes how the button paints; it must not gate the
+        // click, or a toggle could be switched on but never off.
+        for active in [false, true] {
+            let mut h = harness(Probe::default(), move |ui, probe| {
+                probe.origin = ui.cursor().min;
+                if toggle_btn(ui, "GRID", active) {
+                    probe.clicks += 1;
+                }
+            });
+            h.run();
+            let origin = h.state().origin;
+
+            click_at(&mut h, origin + INSIDE);
+            assert_eq!(h.state().clicks, 1, "active = {active}");
+        }
+    }
+
+    #[test]
+    fn danger_btn_runs_its_action_once_per_click() {
+        let fired = Rc::new(Cell::new(0usize));
+        let counter = Rc::clone(&fired);
+        let mut h = harness(Probe::default(), move |ui, probe| {
+            probe.origin = ui.cursor().min;
+            if danger_btn(ui, "CLEAR", || counter.set(counter.get() + 1)) {
+                probe.clicks += 1;
+            }
+        });
+        h.run();
+        let origin = h.state().origin;
+
+        assert_eq!(fired.get(), 0, "merely painting must not fire the action");
+
+        click_at(&mut h, origin + INSIDE);
+        assert_eq!(h.state().clicks, 1);
+        assert_eq!(fired.get(), 1);
+
+        click_at(&mut h, origin + INSIDE);
+        assert_eq!(fired.get(), 2, "a second click fires again");
+    }
+
+    #[test]
+    fn icon_btn_when_disabled_swallows_the_click_and_the_action() {
+        // The disabled path is the one that matters: `show` wires undo/redo and
+        // the destructive queue actions through it, so a disabled button that
+        // still ran its action would fire an operation the app has said is
+        // unavailable.
+        let fired = Rc::new(Cell::new(0usize));
+
+        for (enabled, expected) in [(false, 0), (true, 1)] {
+            let counter = Rc::clone(&fired);
+            counter.set(0);
+            let mut h = harness(Probe::default(), move |ui, probe| {
+                probe.origin = ui.cursor().min;
+                if icon_btn(ui, "↶", "Undo", enabled, || {
+                    counter.set(counter.get() + 1)
+                }) {
+                    probe.clicks += 1;
+                }
+            });
+            h.run();
+            let origin = h.state().origin;
+
+            // icon_btn is a fixed 34x34 square.
+            click_at(&mut h, origin + egui::vec2(17.0, 17.0));
+            assert_eq!(h.state().clicks, expected, "enabled = {enabled}");
+            assert_eq!(fired.get(), expected, "action, enabled = {enabled}");
+        }
+    }
+
+    #[test]
+    fn lighten_brightens_darkens_and_saturates_without_wrapping() {
+        // Opaque, matching every real caller — see the note on `lighten`.
+        let c = Color32::from_rgb(100, 150, 200);
+
+        let up = lighten(c, 0.1);
+        assert!(up.r() > c.r() && up.g() > c.g() && up.b() > c.b());
+
+        // The two hover/press states in `primary_btn` are a +0.08 and a -0.04,
+        // so the negative direction is not hypothetical.
+        let down = lighten(c, -0.1);
+        assert!(down.r() < c.r() && down.g() < c.g() && down.b() < c.b());
+
+        // Both ends saturate. The `as u8` cast on a negative float is the only
+        // thing standing between -25.5 and a wrapped-around bright colour.
+        assert_eq!(lighten(c, 10.0), Color32::from_rgb(255, 255, 255));
+        assert_eq!(lighten(c, -10.0), Color32::from_rgb(0, 0, 0));
+
+        assert_eq!(lighten(c, 0.1).a(), 255, "alpha is preserved");
+    }
+
+    #[test]
+    fn the_two_primary_button_backgrounds_are_distinct_and_dark() {
+        // They tint the two primary actions apart; identical values would make
+        // the toolbar's colour coding meaningless.
+        let (cyan, peach) = (bg_from_cyan(), bg_from_peach());
+        assert_ne!(cyan, peach);
+        for c in [cyan, peach] {
+            assert!(
+                c.r() < 128 && c.g() < 128 && c.b() < 128,
+                "{c:?} must stay dark enough for P::INK text to read on it",
+            );
+        }
+    }
 }

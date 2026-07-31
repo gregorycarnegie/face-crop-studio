@@ -28,22 +28,6 @@ thiserror.workspace = true
 tiny-skia.workspace = true
 wgpu.workspace = true
 
-[dependencies.csv]
-workspace = true
-optional = true
-
-[dependencies.calamine]
-workspace = true
-optional = true
-
-[dependencies.parquet]
-workspace = true
-optional = true
-
-[dependencies.rusqlite]
-workspace = true
-optional = true
-
 [dependencies.nokhwa]
 workspace = true
 optional = true
@@ -59,7 +43,6 @@ optional = true
 [features]
 # Test fixture helpers; enabled by dev-dependencies only so they stay out of release builds.
 fixtures = []
-mapping = ["dep:csv", "dep:calamine", "dep:parquet", "dep:rusqlite"]
 webcam = ["dep:nokhwa"]
 raw = ["dep:imagepipe"]
 heic = ["dep:libheif-rs"]
@@ -67,7 +50,6 @@ heic = ["dep:libheif-rs"]
 [dev-dependencies]
 tempfile.workspace = true
 naga.workspace = true
-zip.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

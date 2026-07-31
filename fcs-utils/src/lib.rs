@@ -17,9 +17,6 @@ pub mod image_utils;
 #[macro_use]
 pub mod macros;
 
-/// Data-driven mapping utilities (CSV/Excel/Parquet/SQLite ingestion).
-#[cfg(feature = "mapping")]
-pub mod mapping;
 /// Image output helpers (encoding, metadata preservation).
 pub mod output;
 /// 2D point geometry primitives.
@@ -56,12 +53,6 @@ pub use image_utils::{
     load_image, load_image_raw, resize_image, rgb_to_bgr_chw,
 };
 use log::LevelFilter;
-#[cfg(feature = "mapping")]
-pub use mapping::{
-    ColumnSelector, MappingCatalog, MappingEntry, MappingFormat, MappingPreview,
-    MappingReadOptions, detect_format as detect_mapping_format, inspect_mapping_sources,
-    list_sqlite_tables, load_mapping_entries, load_mapping_preview,
-};
 pub use output::{
     ImageFormatHint, MetadataContext, OutputOptions, PngCompression, append_suffix_to_filename,
     save_dynamic_image,

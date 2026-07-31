@@ -1,0 +1,120 @@
+name: Linux build dependencies
+description: >
+  Installs the native libraries fcs-cli/fcs-gui link against on Linux and exports
+  the pkg-config / system-deps environment the build needs. dav1d (AVIF) and
+  libheif+libde265 (HEIC) are built from source because apt's versions are older
+  than the crates require, so the results are cached under /usr/local.
+
+inputs:
+  dav1d-version:
+    description: dav1d release to build from source (AVIF decode).
+    default: "1.5.1"
+  de265-version:
+    description: libde265 release to build from source (HEVC decode for libheif).
+    default: "1.0.15"
+  libheif-version:
+    description: libheif release to build from source. apt ships 1.12 on 22.04, libheif-rs needs 1.21+.
+    default: "1.23.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install apt packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          meson \
+          ninja-build \
+          nasm \
+          pkg-config \
+          libdav1d-dev \
+          librsvg2-bin \
+          libgtk-3-dev \
+          libxkbcommon-dev \
+          libwayland-dev \
+          libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-render0-dev \
+          libegl-dev \
+          libgl-dev
+
+    # Keyed on the three pinned versions, so bumping any of them rebuilds.
+    - name: Cache source-built native libraries
+      id: cache-native
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/local/lib
+          /usr/local/include
+        key: linux-native-deps-${{ runner.os }}-dav1d${{ inputs.dav1d-version }}-de265${{ inputs.de265-version }}-heif${{ inputs.libheif-version }}
+
+    - name: Build dav1d from source
+      if: steps.cache-native.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        DAV1D_VERSION: ${{ inputs.dav1d-version }}
+      run: |
+        curl -fsSL -o /tmp/dav1d.tar.xz \
+          "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz"
+        tar -xf /tmp/dav1d.tar.xz -C /tmp
+        meson setup "/tmp/dav1d-${DAV1D_VERSION}/build" "/tmp/dav1d-${DAV1D_VERSION}" \
+          --prefix=/usr/local \
+          --libdir=lib \
+          --buildtype=release \
+          --default-library=static \
+          -Denable_tools=false \
+          -Denable_tests=false
+        ninja -C "/tmp/dav1d-${DAV1D_VERSION}/build"
+        sudo ninja -C "/tmp/dav1d-${DAV1D_VERSION}/build" install
+
+    - name: Build libde265 and libheif from source
+      if: steps.cache-native.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        DE265_VERSION: ${{ inputs.de265-version }}
+        LIBHEIF_VERSION: ${{ inputs.libheif-version }}
+      run: |
+        curl -fsSL -o /tmp/libde265.tar.gz \
+          "https://github.com/strukturag/libde265/releases/download/v${DE265_VERSION}/libde265-${DE265_VERSION}.tar.gz"
+        tar -xf /tmp/libde265.tar.gz -C /tmp
+        cmake -S "/tmp/libde265-${DE265_VERSION}" -B "/tmp/libde265-${DE265_VERSION}/build" \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DENABLE_DECODER=ON \
+          -DENABLE_ENCODER=OFF \
+          -DENABLE_SDL=OFF
+        cmake --build "/tmp/libde265-${DE265_VERSION}/build" --parallel
+        sudo cmake --install "/tmp/libde265-${DE265_VERSION}/build"
+        curl -fsSL -o /tmp/libheif.tar.gz \
+          "https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz"
+        tar -xf /tmp/libheif.tar.gz -C /tmp
+        cmake -S "/tmp/libheif-${LIBHEIF_VERSION}" -B "/tmp/libheif-${LIBHEIF_VERSION}/build" \
+          -DCMAKE_INSTALL_PREFIX=/usr/local \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_SHARED_LIBS=OFF \
+          -DWITH_EXAMPLES=OFF \
+          -DWITH_LIBDE265=ON \
+          -DWITH_X265=OFF \
+          -DWITH_AOM_ENCODER=OFF \
+          -DWITH_AOM_DECODER=OFF \
+          -DENABLE_PLUGIN_LOADING=OFF
+        cmake --build "/tmp/libheif-${LIBHEIF_VERSION}/build" --parallel
+        sudo cmake --install "/tmp/libheif-${LIBHEIF_VERSION}/build"
+
+    # Runs on cache hits too: the exports have to be present either way, and the
+    # pkg-config queries double as a check that a restored cache is actually usable.
+    - name: Export build environment
+      shell: bash
+      run: |
+        sudo ldconfig
+        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+        echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_ALL_STATIC=1" >> "$GITHUB_ENV"
+        pkg-config --modversion dav1d
+        pkg-config --modversion libheif
+        pkg-config --libs --static libheif
+        echo "SYSTEM_DEPS_LIBHEIF_LINK=static" >> "$GITHUB_ENV"
+        echo "SYSTEM_DEPS_LIBHEIF_SEARCH_NATIVE=/usr/local/lib" >> "$GITHUB_ENV"
+        echo "SYSTEM_DEPS_LIBHEIF_LIB=heif de265" >> "$GITHUB_ENV"
+        echo "SYSTEM_DEPS_LIBHEIF_INCLUDE=/usr/local/include" >> "$GITHUB_ENV"
+        echo "RUSTFLAGS=-l dylib=stdc++" >> "$GITHUB_ENV"
