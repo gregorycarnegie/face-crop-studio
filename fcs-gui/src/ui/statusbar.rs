@@ -175,32 +175,10 @@ fn status_cell_dot(ui: &mut egui::Ui, text: &str, dot_color: egui::Color32, _ani
 fn local_time_str() -> String {
     #[cfg(target_os = "windows")]
     {
-        #[repr(C)]
-        struct SystemTime {
-            year: u16,
-            month: u16,
-            dow: u16,
-            day: u16,
-            hour: u16,
-            minute: u16,
-            second: u16,
-            ms: u16,
-        }
-        unsafe extern "system" {
-            fn GetLocalTime(lp: *mut SystemTime);
-        }
-        let mut t = SystemTime {
-            year: 0,
-            month: 0,
-            dow: 0,
-            day: 0,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            ms: 0,
-        };
-        unsafe { GetLocalTime(&mut t) }
-        return format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second);
+        use windows::Win32::{Foundation::SYSTEMTIME, System::SystemInformation::GetLocalTime};
+
+        let t: SYSTEMTIME = unsafe { GetLocalTime() };
+        return format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond);
     }
     #[allow(unreachable_code)]
     {
@@ -225,28 +203,19 @@ fn local_time_str() -> String {
 fn process_ram_mb() -> Option<u64> {
     #[cfg(target_os = "windows")]
     {
-        #[repr(C)]
-        struct Pmc {
-            cb: u32,
-            page_faults: u32,
-            peak_ws: usize,
-            working_set: usize,
-            qpeak_paged: usize,
-            qpaged: usize,
-            qpeak_nonpaged: usize,
-            qnonpaged: usize,
-            pagefile: usize,
-            peak_pagefile: usize,
-        }
-        unsafe extern "system" {
-            fn GetCurrentProcess() -> *mut std::ffi::c_void;
-            fn K32GetProcessMemoryInfo(proc: *mut std::ffi::c_void, pmc: *mut Pmc, cb: u32) -> i32;
-        }
-        let mut pmc: Pmc = unsafe { std::mem::zeroed() };
-        pmc.cb = std::mem::size_of::<Pmc>() as u32;
-        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) };
-        if ok != 0 {
-            return Some(pmc.working_set as u64 >> 20); // bytes to MiB
+        use windows::Win32::System::{
+            ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+            Threading::GetCurrentProcess,
+        };
+
+        let mut pmc = PROCESS_MEMORY_COUNTERS {
+            cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            ..Default::default()
+        };
+        let ok =
+            unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) }.as_bool();
+        if ok {
+            return Some(pmc.WorkingSetSize as u64 >> 20); // bytes to MiB
         }
         return None;
     }

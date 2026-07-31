@@ -102,15 +102,18 @@ wgpu = "29.0.3"
 
 # Camera and platform integration
 nokhwa = { version = "0.10.11", features = ["input-native"] }
+# One feature per module actually imported from. They are hierarchical — e.g.
+# `Win32_System_ProcessStatus` pulls in `Win32_System_Threading` — so several
+# could be dropped and still compile; they are listed explicitly because the code
+# names them directly, and an implicit parent is not a promise.
 windows = { version = "0.62.2", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_System_ProcessStatus",
-    "Win32_System_Threading",
-    "Win32_System_Time",
+    "Win32_Foundation",                 # SYSTEMTIME, HGLOBAL
+    "Win32_Graphics_Dxgi",              # IDXGIFactory4/IDXGIAdapter3 VRAM query
+    "Win32_System_DataExchange",        # PNG clipboard format
+    "Win32_System_Memory",              # GlobalLock/GlobalSize for clipboard data
+    "Win32_System_ProcessStatus",       # K32GetProcessMemoryInfo
+    "Win32_System_SystemInformation",   # GetLocalTime
+    "Win32_System_Threading",           # GetCurrentProcess
 ] }
 winresource = "0.1.31"
 

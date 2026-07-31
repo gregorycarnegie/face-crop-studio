@@ -62,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Dropped the redundant `[lib] path = "src/lib.rs"` from four manifests and
     the redundant `[[bin]]` from `fcs-gui`; both are cargo's autodetected
     defaults.
+- `statusbar.rs` now uses the `windows` crate's typed bindings instead of
+  hand-declaring `GetLocalTime`, `GetCurrentProcess`, `K32GetProcessMemoryInfo`
+  and a `#[repr(C)] struct Pmc`. The crate was already a dependency, so the FFI
+  was reimplementing bindings that were being paid for and not used — and the
+  hand-rolled `PROCESS_MEMORY_COUNTERS` clone had to stay byte-compatible with
+  the Windows SDK by hand. Net 37 lines removed. `Win32_System_Time` was wrong
+  (`GetLocalTime` lives in `Win32_System_SystemInformation`) and
+  `Win32_Graphics_Dxgi_Common` was unused; the feature list is now one entry per
+  module actually imported from, each commented with what it provides.
 - **The tabular mapping subsystem is now its own crate, `fcs-mapping`.** CSV,
   Excel, Parquet, and SQLite ingestion lived in `fcs-utils` behind a `mapping`
   feature, which meant every consumer of `fcs-utils` carried `calamine`,
