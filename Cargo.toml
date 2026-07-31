@@ -76,7 +76,11 @@ image = { version = "0.25.10", default-features = false, features = [
     "avif-native",
     "rayon",
 ] }
-imageproc = "0.27.0"
+# default-features = false matters more than it looks: imageproc's own `default`
+# feature contains "image/default", which turns every image codec back on and
+# silently defeats the curated feature list above. Only `geometric_transformations`
+# and `rect` are used, so `text` (ab_glyph) and `fft` (rustdct) go too.
+imageproc = { version = "0.27.0", default-features = false, features = ["rayon"] }
 imgref = "1.12.2"
 # Pure-Rust camera RAW decode (demosaic + sRGB); pulls its own image 0.24 internally.
 imagepipe = "0.5.0"

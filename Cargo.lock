@@ -2567,16 +2567,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gif"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5df2ba84018d80c213569363bdcd0c64e6933c67fe4c1d60ecf822971a3c35e"
-dependencies = [
- "color_quant",
- "weezl",
-]
-
-[[package]]
 name = "gl_generator"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3019,7 +3009,7 @@ dependencies = [
  "byteorder",
  "color_quant",
  "exr",
- "gif 0.13.3",
+ "gif",
  "jpeg-decoder",
  "num-traits",
  "png 0.17.16",
@@ -3035,16 +3025,13 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
- "color_quant",
  "dav1d",
  "exr",
- "gif 0.14.1",
  "image-webp",
  "moxcms",
  "mp4parse",
  "num-traits",
  "png 0.18.0",
- "qoi",
  "ravif",
  "rayon",
  "rgb",
@@ -3089,7 +3076,6 @@ version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7b27bc0867dc40df08deb53d6e96342db6e0702e7ae33ed09a4eba33e594b05"
 dependencies = [
- "ab_glyph",
  "approx",
  "getrandom 0.4.2",
  "image 0.25.10",
@@ -3099,7 +3085,6 @@ dependencies = [
  "rand 0.10.1",
  "rand_distr",
  "rayon",
- "rustdct",
 ]
 
 [[package]]
@@ -5405,15 +5390,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rustdct"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b61555105d6a9bf98797c063c362a1d24ed8ab0431655e38f1cf51e52089551"
-dependencies = [
- "rustfft",
 ]
 
 [[package]]

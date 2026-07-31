@@ -275,12 +275,15 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    // Windows only, not `any(macos, windows)` like the function itself:
+    // `process_ram_mb` is compiled on macOS but has no implementation there and
+    // always returns None, so asserting Some() would fail on the macOS CI leg.
+    #[cfg(target_os = "windows")]
     #[test]
     fn process_ram_is_reported_and_plausible() {
-        // The Windows path fills a `Pmc` struct through a raw FFI call, so a
-        // wrong `cb` or a byte/MiB mix-up shows up here as a zero or an absurd
-        // figure rather than as a quietly wrong status bar.
+        // The query fills a PROCESS_MEMORY_COUNTERS through FFI, so a wrong `cb`
+        // or a byte/MiB mix-up shows up here as a zero or an absurd figure
+        // rather than as a quietly wrong status bar.
         let mb = process_ram_mb().expect("this process has a working set");
         assert!(mb > 0, "working set reported as 0 MiB");
         assert!(mb < 64 * 1024, "{mb} MiB is not a plausible test process");

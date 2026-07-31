@@ -62,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Dropped the redundant `[lib] path = "src/lib.rs"` from four manifests and
     the redundant `[[bin]]` from `fcs-gui`; both are cargo's autodetected
     defaults.
+- `imageproc` is now `default-features = false, features = ["rayon"]`. Its own
+  `default` feature contains `"image/default"`, which was silently re-enabling
+  every image codec and defeating the curated `image` feature list in
+  `[workspace.dependencies]` — `image` was resolving with `dds`, `exr`, `ff`,
+  `gif`, `hdr`, `pnm`, `qoi` and `tga` on top of the nine wanted ones. None of
+  those formats appear in `SUPPORTED_IMAGE_EXTENSIONS`. Only
+  `geometric_transformations` and `rect` are used from `imageproc`, so `text`
+  (ab_glyph) and `fft` (rustdct) went as well. 513 -> 507 crates in the
+  workspace tree.
 - `statusbar.rs` now uses the `windows` crate's typed bindings instead of
   hand-declaring `GetLocalTime`, `GetCurrentProcess`, `K32GetProcessMemoryInfo`
   and a `#[repr(C)] struct Pmc`. The crate was already a dependency, so the FFI
@@ -85,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `process_ram_mb` test was gated on `cfg(any(macos, windows))` to match the
+  function, but the function has no macOS implementation and always returns
+  `None` there, so `.expect()` would have failed on the newly added macOS CI
+  leg. Narrowed to `cfg(target_os = "windows")`.
 - Removed a dead `let _hs = HANDLE_SIZE / 2.0;` from `hit_test_handle`. It was
   the only line in `interaction/` no test could reach — mutating it survived
   because nothing consumed the value.
