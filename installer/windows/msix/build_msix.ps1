@@ -46,11 +46,12 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-# PLACEHOLDER — replace with the values from Partner Center > Product identity.
-# Identity/Publisher must match byte-for-byte or the Store rejects the upload.
-if (-not $IdentityName)         { $IdentityName = "REPLACE.WithPartnerCenterIdentityName" }
-if (-not $Publisher)            { $Publisher = "CN=REPLACE-WITH-PARTNER-CENTER-PUBLISHER-GUID" }
-if (-not $PublisherDisplayName) { $PublisherDisplayName = "REPLACE With Publisher Display Name" }
+# From Partner Center > Product identity. These must match byte-for-byte or the
+# Store rejects the upload, so treat them as constants rather than something to
+# tidy up: Publisher is a certificate subject, not a name to prettify.
+if (-not $IdentityName)         { $IdentityName = "GregoryCarnegie.FaceCropStudio" }
+if (-not $Publisher)            { $Publisher = "CN=7E777239-6352-4C1A-821A-DF7BF40D04FA" }
+if (-not $PublisherDisplayName) { $PublisherDisplayName = "Gregory Carnegie" }
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw "Version must be three-part (x.y.z), got '$Version'"
