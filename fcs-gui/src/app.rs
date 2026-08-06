@@ -619,16 +619,15 @@ impl App2 {
         let mut unsupported = 0usize;
 
         for file in dropped {
-            let Some(path) = file.path else {
-                unsupported += 1;
-                continue;
-            };
+            // egui 0.36 made DroppedFile a trait; on native `path()` is always a real
+            // absolute path, so the previous "dropped file with no path" case is gone.
+            let path = file.path();
             let is_mapping = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
                 let lower = e.to_ascii_lowercase();
                 MAPPING_EXTS.contains(&lower.as_str())
             });
             if is_mapping {
-                self.mapping.set_file(path.clone());
+                self.mapping.set_file(path.to_path_buf());
                 let _ = self.mapping.reload_preview();
                 self.sidebar_tab = SidebarTab::Mapping;
                 self.show_success(format!(
@@ -637,7 +636,7 @@ impl App2 {
                 ));
                 mapping_loaded = true;
             } else {
-                match expand_input_path(&path) {
+                match expand_input_path(path) {
                     Ok(mut images) => paths.append(&mut images),
                     Err(err) => {
                         unsupported += 1;

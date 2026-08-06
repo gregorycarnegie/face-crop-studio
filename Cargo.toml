@@ -25,7 +25,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
-version = "1.5.0"
+version = "1.5.1"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
@@ -55,12 +55,12 @@ thiserror = "2.0.19"
 
 # CLI and desktop UI
 arboard = "3.6.1"
-clap = { version = "4.6.4", features = ["derive"] }
-eframe = { version = "0.35.0", features = ["wgpu"] }
-egui = "0.35.0"
-egui_extras = "0.35.0"
+clap = { version = "4.6.5", features = ["derive"] }
+eframe = { version = "0.36.0", features = ["wgpu"] }
+egui = "0.36.0"
+egui_extras = "0.36.0"
 # Test-only harness that drives a real egui app. Kept in lockstep with egui.
-egui_kittest = "0.35.0"
+egui_kittest = "0.36.0"
 rfd = "0.17.2"
 
 # Image processing and graphics
@@ -100,9 +100,9 @@ tract-onnx = "0.23.4"
 
 # GPU and shader support
 metal = "0.33.0"
-naga = { version = "29.0.3", features = ["wgsl-in"] }
+naga = { version = "30.0.0", features = ["wgsl-in"] }
 pollster = "1.0.1"
-wgpu = "29.0.3"
+wgpu = "30.0.0"
 
 # Camera and platform integration
 nokhwa = { version = "0.10.11", features = ["input-native"] }
@@ -122,7 +122,7 @@ windows = { version = "0.62.2", features = [
 winresource = "0.1.31"
 
 # Data formats and storage
-base64 = "0.23.0"
+base64 = "0.23.1"
 calamine = "0.36.1"
 crc32fast = "1.5.0"
 csv = "1.4.0"
@@ -140,7 +140,7 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 
 # Concurrency and utilities
-lru = "0.18.1"
+lru = "0.18.2"
 rayon = "1.12.0"
 walkdir = "2.5.0"
 

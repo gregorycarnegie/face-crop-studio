@@ -660,7 +660,9 @@ fn gpu_preprocess(
         .recv()
         .map_err(|_| anyhow::anyhow!("GPU map callback was dropped"))?
         .map_err(|e| anyhow::anyhow!("failed to map GPU preprocessing buffer: {e}"))?;
-    let data = buffer_slice.get_mapped_range();
+    let data = buffer_slice
+        .get_mapped_range()
+        .map_err(|e| anyhow::anyhow!("failed to read mapped GPU preprocessing buffer: {e}"))?;
     let floats: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
     drop(data);
     readback_buffer.unmap();

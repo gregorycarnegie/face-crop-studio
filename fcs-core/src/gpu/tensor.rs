@@ -361,7 +361,9 @@ fn read_buffer(
         .with_context(|| format!("{label} callback dropped"))?
         .map_err(|e| anyhow!("failed to map {label}: {e}"))?;
 
-    let data = slice.get_mapped_range();
+    let data = slice
+        .get_mapped_range()
+        .map_err(|e| anyhow!("failed to read mapped range for {label}: {e}"))?;
     let floats: Vec<f32> = cast_slice(&data).to_vec();
     drop(data);
     buffer.unmap();

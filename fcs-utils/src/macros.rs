@@ -175,7 +175,9 @@ macro_rules! gpu_readback {
             .map_err(|_| anyhow::anyhow!("GPU {} map callback dropped", $operation))?
             .map_err(|err| anyhow::anyhow!("GPU {} map error: {err}", $operation))?;
 
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|err| anyhow::anyhow!("GPU {} mapped range failed: {err}", $operation))?;
         let result_u32: Vec<u32> = cast_slice(&mapped).to_vec();
         drop(mapped);
         $readback.unmap();

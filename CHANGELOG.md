@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-06
+
+### Changed
+
+- Dependency bumps: `clap` 4.6.4 → 4.6.5, `eframe`/`egui`/`egui_extras`/
+  `egui_kittest` 0.35 → 0.36, `wgpu`/`naga` 29.0.3 → 30.0.0 (the version
+  `egui-wgpu` 0.36 requires), `base64` 0.23.0 → 0.23.1, `lru` 0.18.1 → 0.18.2,
+  plus the transitive updates `cargo update` pulled with them.
+- Three breaking changes came with those bumps, all mechanical:
+  - `BufferSlice::get_mapped_range` now returns `Result`. The four call sites
+    (the `gpu_readback!` macro plus `preprocess.rs`, `gpu/runtime.rs`,
+    `gpu/tensor.rs` in `fcs-core`) propagate the error rather than unwrapping,
+    so a failed map surfaces as a normal GPU error instead of a panic.
+  - `RequestAdapterOptions` gained `apply_limit_buckets`. Left at its `false`
+    default: bucketing rounds adapter limits down to anti-fingerprinting
+    presets, which only matters when wgpu is exposed to untrusted content.
+  - egui 0.36 turned `DroppedFile` into a trait whose `path()` returns `&Path`
+    rather than `Option<PathBuf>`. Drag-and-drop in `fcs-gui` no longer needs
+    the "dropped file without a path" branch, which was unreachable on native
+    anyway.
+
 ### Fixed
 
 - `fcs-gui/build.rs` tripped `clippy::needless_return` on macOS and Linux. Its
@@ -474,7 +495,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.5...v1.5.0
 [1.4.5]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.3...v1.4.4

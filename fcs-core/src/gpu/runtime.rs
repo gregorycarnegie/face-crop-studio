@@ -312,7 +312,10 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
 
         let elements = tensors[i].shape().elements();
         let size_bytes = tensors[i].size_bytes();
-        let mapped = buf.slice(0..size_bytes).get_mapped_range();
+        let mapped = buf
+            .slice(0..size_bytes)
+            .get_mapped_range()
+            .map_err(|e| anyhow!("batch readback mapped range failed for tensor {i}: {e}"))?;
         let floats: Vec<f32> = cast_slice(&mapped).to_vec();
         drop(mapped);
         buf.unmap();

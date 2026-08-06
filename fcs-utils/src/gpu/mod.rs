@@ -371,6 +371,10 @@ impl GpuContext {
             power_preference: options.power_preference,
             force_fallback_adapter: options.force_fallback_adapter,
             compatible_surface: None,
+            // apply_limit_buckets defaults to false: bucketing rounds adapter limits
+            // down to anti-fingerprinting presets, which only matters when wgpu is
+            // exposed to untrusted content. A desktop app wants the real limits.
+            ..Default::default()
         }))
         .map_err(|source| GpuInitError::Adapter { backends, source })?;
 
