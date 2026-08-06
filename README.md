@@ -78,11 +78,17 @@ Official release binaries are built for:
 
 | Platform | Architecture | Artifacts |
 |----------|--------------|-----------|
-| Windows | x86_64 | MSI, EXE installer, portable ZIP |
+| Windows | x86_64 | MSI, EXE installer, portable ZIP, Microsoft Store |
+| Windows | arm64 | MSI, portable ZIP, Microsoft Store |
 | macOS | aarch64 (Apple Silicon) | DMG (`.app` bundle, GUI only) |
 | Linux | x86_64 | AppImage, `.deb` |
+| Linux | arm64 | AppImage, `.deb` |
 
-All x86_64 binaries are compiled for the `x86-64-v3` microarchitecture level (AVX2/FMA — Intel Haswell 2013+ or AMD Excavator 2015+). Older CPUs need a local build with `-C target-cpu=x86-64` (edit `.cargo/config.toml`). Intel Macs (x86_64) are not shipped as binaries but build from source.
+Every architecture is built natively — there is no cross-compilation in the release pipeline.
+
+All x86_64 binaries are compiled for the `x86-64-v3` microarchitecture level (AVX2/FMA — Intel Haswell 2013+ or AMD Excavator 2015+). Older CPUs need a local build with `-C target-cpu=x86-64` (edit `.cargo/config.toml`). arm64 binaries use the base AArch64 target, which already includes NEON and FMA. Intel Macs (x86_64) are not shipped as binaries but build from source.
+
+Windows arm64 gets no NSIS `-setup.exe`: NSIS only produces an x86 installer stub, which would run under emulation, so the native arm64 MSI and the Store package cover that platform instead.
 
 ## Prerequisites
 
@@ -90,27 +96,36 @@ All x86_64 binaries are compiled for the `x86-64-v3` microarchitecture level (AV
 
 ## Installation (Windows)
 
-1. Download either:
-   - `face-crop-studio-windows-x86_64.msi` (enterprise installer), or
-   - `face-crop-studio-windows-x86_64-setup.exe` (installer), or
-   - `face-crop-studio-windows-x86_64.zip` (portable package),
-   plus `SHA256SUMS.txt` from the GitHub Release page.
-2. Verify checksum in PowerShell:
+The easiest option is the [Microsoft Store](#microsoft-store) listing, which installs the right architecture automatically and keeps itself updated. To install manually instead:
+
+1. Pick the architecture matching your PC — `x86_64` for Intel/AMD, `arm64` for Snapdragon and other Windows-on-Arm devices. `$env:PROCESSOR_ARCHITECTURE` reports `AMD64` or `ARM64`.
+2. Download either:
+   - `face-crop-studio-windows-<arch>.msi` (enterprise installer), or
+   - `face-crop-studio-windows-x86_64-setup.exe` (installer, x86_64 only), or
+   - `face-crop-studio-windows-<arch>.zip` (portable package),
+   plus `SHA256SUMS-windows-<arch>.txt` from the GitHub Release page.
+3. Verify checksum in PowerShell:
 
    ```powershell
    Get-FileHash .\face-crop-studio-windows-x86_64.msi -Algorithm SHA256
    Get-FileHash .\face-crop-studio-windows-x86_64.zip -Algorithm SHA256
    ```
 
-3. Confirm it matches the hash in `SHA256SUMS.txt`.
-4. If you downloaded the MSI, install with `msiexec /i face-crop-studio-windows-x86_64.msi`.
-5. If you downloaded the EXE installer, run `face-crop-studio-windows-x86_64-setup.exe`.
-6. If you downloaded the zip, extract it to a folder of your choice.
-7. Run:
+4. Confirm it matches the hash in `SHA256SUMS-windows-<arch>.txt`.
+5. If you downloaded the MSI, install with `msiexec /i face-crop-studio-windows-<arch>.msi`.
+6. If you downloaded the EXE installer, run `face-crop-studio-windows-x86_64-setup.exe`.
+7. If you downloaded the zip, extract it to a folder of your choice.
+8. Run:
    - `fcs-gui.exe` for the desktop app
    - `fcs-cli.exe --help` for CLI usage
 
 The release package includes `models/face_detection_yunet_2023mar_640.onnx` by default, so detection works out-of-the-box without manually selecting a model path.
+
+### Microsoft Store
+
+The Store listing ships a single `.msixbundle` containing both the x86_64 and arm64 builds; Windows installs whichever matches the machine. It carries the same two binaries as the other packages — the GUI plus `fcs-cli`, which the package registers as an execution alias so it works from any terminal without a PATH edit.
+
+Store builds are packaged as full-trust desktop apps, so file access behaves exactly like the MSI and ZIP installs: batch mode can walk any directory you point it at, with no MSIX container restrictions.
 
 ## Screenshots
 

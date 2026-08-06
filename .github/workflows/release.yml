@@ -60,46 +60,10 @@ jobs:
             || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --input-shape "1,3,640,640"
 
       - name: Verify model checksums
-        shell: bash
-        run: |
-          python - <<'PY'
-          import hashlib
-          import os
-          import pathlib
-          import sys
-
-          expected = {
-              "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
-              "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
-          }
-
-          def sha256(path: pathlib.Path) -> str:
-              h = hashlib.sha256()
-              with path.open("rb") as f:
-                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                      h.update(chunk)
-              return h.hexdigest()
-
-          failed = False
-          for rel_path, expected_hash in expected.items():
-              path = pathlib.Path(rel_path)
-              if not path.exists():
-                  print(f"Missing model file: {rel_path}", file=sys.stderr)
-                  failed = True
-                  continue
-              actual_hash = sha256(path)
-              if actual_hash != expected_hash:
-                  print(
-                      f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
-                      file=sys.stderr,
-                  )
-                  failed = True
-              else:
-                  print(f"Verified {rel_path}: {actual_hash}")
-
-          if failed:
-              sys.exit(1)
-          PY
+        uses: ./.github/actions/verify-models
+        with:
+          original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
+          simplified-sha256: ${{ env.YUNET_640_SHA256 }}
 
       - name: Upload prepared models
         uses: actions/upload-artifact@v4
@@ -112,23 +76,42 @@ jobs:
           retention-days: 1
 
   windows-release:
-    name: Windows Release Artifacts
+    name: Windows Release Artifacts (${{ matrix.arch }})
     needs: [shader-validation, prepare-models]
-    runs-on: windows-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    strategy:
+      # Independent artifacts: an arm64 failure should not throw away a good
+      # x86_64 build (or vice versa) on a tag that is already public.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            vcpkg-triplet: x64-windows-static
+            wix-arch: x64
+            # Repeated from .cargo/config.toml on purpose: setting RUSTFLAGS in
+            # the environment makes cargo ignore [target.*.rustflags] entirely,
+            # so target-cpu has to be restated here or the shipped binaries
+            # quietly lose x86-64-v3.
+            rustflags: -C target-feature=+crt-static -C target-cpu=x86-64-v3
+          - arch: arm64
+            # Free for public repositories. Native build — no cross-compilation,
+            # so vcpkg builds arm64 dav1d/libheif with the host toolchain.
+            runner: windows-11-arm
+            vcpkg-triplet: arm64-windows-static
+            wix-arch: arm64
+            # No target-cpu: the aarch64 baseline already has NEON and FMA.
+            rustflags: -C target-feature=+crt-static
     env:
       # Evaluated once at job start; used by signing steps to skip gracefully
       # when the certificate secret is not configured.
       HAS_CODE_SIGN: ${{ secrets.CODE_SIGN_PFX != '' }}
+      DIST_NAME: face-crop-studio-windows-${{ matrix.arch }}
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
       - name: Download prepared models
         uses: actions/download-artifact@v4
@@ -137,46 +120,10 @@ jobs:
           path: models
 
       - name: Verify model checksums
-        shell: bash
-        run: |
-          python - <<'PY'
-          import hashlib
-          import os
-          import pathlib
-          import sys
-
-          expected = {
-              "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
-              "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
-          }
-
-          def sha256(path: pathlib.Path) -> str:
-              h = hashlib.sha256()
-              with path.open("rb") as f:
-                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                      h.update(chunk)
-              return h.hexdigest()
-
-          failed = False
-          for rel_path, expected_hash in expected.items():
-              path = pathlib.Path(rel_path)
-              if not path.exists():
-                  print(f"Missing model file: {rel_path}", file=sys.stderr)
-                  failed = True
-                  continue
-              actual_hash = sha256(path)
-              if actual_hash != expected_hash:
-                  print(
-                      f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
-                      file=sys.stderr,
-                  )
-                  failed = True
-              else:
-                  print(f"Verified {rel_path}: {actual_hash}")
-
-          if failed:
-              sys.exit(1)
-          PY
+        uses: ./.github/actions/verify-models
+        with:
+          original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
+          simplified-sha256: ${{ env.YUNET_640_SHA256 }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -187,6 +134,10 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Install NSIS
+        # x86_64 only: NSIS ships an x86 makensis and produces an x86 installer
+        # stub, which on ARM64 would run under emulation. The native arm64 MSI
+        # and the Store MSIX cover that platform instead.
+        if: matrix.arch == 'x86_64'
         shell: pwsh
         run: |
           choco install nsis --no-progress -y
@@ -206,7 +157,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-dav1d-libheif-x64-windows-static-${{ runner.os }}
+          # Triplet is in the key: both runners report runner.os == "Windows",
+          # so without it the arm64 job restores x64 static libs.
+          key: vcpkg-dav1d-libheif-${{ matrix.vcpkg-triplet }}
 
       - name: Install dav1d + libheif (vcpkg)
         shell: pwsh
@@ -215,12 +168,14 @@ jobs:
             git clone https://github.com/microsoft/vcpkg C:\vcpkg
             & C:\vcpkg\bootstrap-vcpkg.bat
           }
-          & C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static libheif:x64-windows-static
+          & C:\vcpkg\vcpkg.exe install `
+            "dav1d:${{ matrix.vcpkg-triplet }}" `
+            "libheif:${{ matrix.vcpkg-triplet }}"
 
       - name: Build release binaries
         env:
-          RUSTFLAGS: -C target-feature=+crt-static
-          PKG_CONFIG_PATH: C:\vcpkg\installed\x64-windows-static\lib\pkgconfig
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          PKG_CONFIG_PATH: C:\vcpkg\installed\${{ matrix.vcpkg-triplet }}\lib\pkgconfig
           PKG_CONFIG_ALL_STATIC: "1"
           # libheif-sys finds libheif through the `vcpkg` crate, not pkg-config.
           VCPKG_ROOT: C:\vcpkg
@@ -254,7 +209,7 @@ jobs:
       - name: Package artifacts
         shell: pwsh
         run: |
-          $DistName = "face-crop-studio-windows-x86_64"
+          $DistName = $env:DIST_NAME
           $DistDir = "dist/$DistName"
           New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
           New-Item -ItemType Directory -Force -Path "$DistDir/models" | Out-Null
@@ -284,22 +239,21 @@ jobs:
       - name: Verify packaged model path
         shell: pwsh
         run: |
-          $DistName = "face-crop-studio-windows-x86_64"
-          $ModelPath = "dist/$DistName/models/face_detection_yunet_2023mar_640.onnx"
+          $ModelPath = "dist/$env:DIST_NAME/models/face_detection_yunet_2023mar_640.onnx"
           if (-not (Test-Path $ModelPath)) {
             Write-Error "Expected packaged model missing at $ModelPath"
             exit 1
           }
 
       - name: Build NSIS installer
+        if: matrix.arch == 'x86_64'
         shell: pwsh
         run: |
-          $DistName = "face-crop-studio-windows-x86_64"
           $Version = "${{ github.ref_name }}"
           if ($Version.StartsWith("v")) { $Version = $Version.Substring(1) }
 
-          $DistDir = Join-Path $PWD "dist\$DistName"
-          $OutFile = Join-Path $PWD "dist\face-crop-studio-windows-x86_64-setup.exe"
+          $DistDir = Join-Path $PWD "dist\$env:DIST_NAME"
+          $OutFile = Join-Path $PWD "dist\$env:DIST_NAME-setup.exe"
           $Script = Join-Path $PWD "installer\windows\face-crop-studio.nsi"
           $env:Path = "C:\ProgramData\chocolatey\bin;$env:Path"
 
@@ -333,7 +287,6 @@ jobs:
       - name: Build MSI installer
         shell: pwsh
         run: |
-          $DistName = "face-crop-studio-windows-x86_64"
           $RawVersion = "${{ github.ref_name }}"
           if ($RawVersion.StartsWith("v")) { $RawVersion = $RawVersion.Substring(1) }
           $MsiVersion = $RawVersion.Split("-")[0]
@@ -341,16 +294,17 @@ jobs:
             throw "Invalid MSI version '$MsiVersion' derived from tag '${{ github.ref_name }}'"
           }
 
-          $DistDir = Join-Path $PWD "dist\$DistName"
-          $MsiOut = Join-Path $PWD "dist\face-crop-studio-windows-x86_64.msi"
+          $DistDir = Join-Path $PWD "dist\$env:DIST_NAME"
+          $MsiOut = Join-Path $PWD "dist\$env:DIST_NAME.msi"
           Write-Host "Using MSI version: $MsiVersion"
 
           # WiX v7: single 'wix build' replaces heat + candle + light.
-          # -arch x64 marks all harvested components as 64-bit (no XML patching needed).
+          # -arch marks all harvested components for the target platform (no XML
+          # patching needed); ProgramFiles64Folder resolves correctly for arm64.
           # <Files> in Product.wxs harvests SourceDir instead of the old heat.exe step.
           wix build `
             -acceptEula wix7 `
-            -arch x64 `
+            -arch ${{ matrix.wix-arch }} `
             -d SourceDir="$DistDir" `
             -d MsiVersion="$MsiVersion" `
             -ext WixToolset.UI.wixext `
@@ -361,30 +315,141 @@ jobs:
 
       - name: Generate checksums
         shell: bash
+        # One checksum file per platform+arch. A single shared SHA256SUMS.txt
+        # would be overwritten by whichever release job uploaded last, leaving
+        # most assets unverifiable.
         run: |
+          set -euo pipefail
           cd dist
-          sha256sum face-crop-studio-windows-x86_64.zip > SHA256SUMS.txt
-          sha256sum face-crop-studio-windows-x86_64-setup.exe >> SHA256SUMS.txt
-          sha256sum face-crop-studio-windows-x86_64.msi >> SHA256SUMS.txt
+          # setup.exe only exists on the x86_64 leg, so build the list from what
+          # is actually present rather than failing on the missing NSIS output.
+          files=("$DIST_NAME.zip" "$DIST_NAME.msi")
+          [ -f "$DIST_NAME-setup.exe" ] && files+=("$DIST_NAME-setup.exe")
+          sha256sum "${files[@]}" > "SHA256SUMS-windows-${{ matrix.arch }}.txt"
+          cat "SHA256SUMS-windows-${{ matrix.arch }}.txt"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-artifacts
+          name: windows-release-artifacts-${{ matrix.arch }}
+          # Globs rather than literal names so the arm64 leg, which has no NSIS
+          # setup.exe, does not report a missing file on every run.
           path: |
-            dist/face-crop-studio-windows-x86_64.zip
-            dist/face-crop-studio-windows-x86_64-setup.exe
-            dist/face-crop-studio-windows-x86_64.msi
-            dist/SHA256SUMS.txt
+            dist/*.zip
+            dist/*-setup.exe
+            dist/*.msi
+            dist/SHA256SUMS-windows-${{ matrix.arch }}.txt
+
+      - name: Upload MSIX payload
+        # The unpacked dist directory, consumed by the msix-package job. Kept
+        # separate from the release artifacts above because it is an
+        # intermediate, not something a user downloads.
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msix-payload-${{ matrix.arch }}
+          path: dist/${{ env.DIST_NAME }}
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/face-crop-studio-windows-x86_64.zip
-            dist/face-crop-studio-windows-x86_64-setup.exe
-            dist/face-crop-studio-windows-x86_64.msi
-            dist/SHA256SUMS.txt
+            dist/*.zip
+            dist/*-setup.exe
+            dist/*.msi
+            dist/SHA256SUMS-windows-${{ matrix.arch }}.txt
+
+  msix-package:
+    name: MSIX Store Package
+    needs: [windows-release]
+    # Packaging only — makeappx bundles an arm64 payload from an x64 host fine,
+    # so this does not need its own matrix.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download x86_64 payload
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-msix-payload-x86_64
+          path: dist/windows/x86_64
+
+      - name: Download arm64 payload
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-msix-payload-arm64
+          path: dist/windows/arm64
+
+      - name: Build MSIX bundle
+        shell: pwsh
+        env:
+          # Repository variables, so the Partner Center identity can be rotated
+          # without a code change. build_msix.ps1 falls back to the committed
+          # defaults when they are unset.
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $RawVersion = "${{ github.ref_name }}"
+          if ($RawVersion.StartsWith("v")) { $RawVersion = $RawVersion.Substring(1) }
+          $Version = $RawVersion.Split("-")[0]
+          if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Invalid MSIX version '$Version' derived from tag '${{ github.ref_name }}'"
+          }
+          ./installer/windows/msix/build_msix.ps1 `
+            -Version $Version `
+            -PayloadRoot dist/windows `
+            -OutDir dist/msix
+
+      - name: Upload MSIX artifacts
+        # Workflow artifact only, not a GitHub release asset: the bundle is
+        # deliberately unsigned (the Store signs it), so it is not installable
+        # by end users and would only confuse the releases page.
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix-store-package
+          path: dist/msix/*
+          if-no-files-found: error
+
+  store-submit:
+    name: Submit to Microsoft Store
+    needs: [msix-package]
+    runs-on: windows-latest
+    # Skipped entirely until MSSTORE_PRODUCT_ID is set as a repository variable.
+    # Tag-only: a workflow_dispatch run has no release version to submit.
+    if: startsWith(github.ref, 'refs/tags/v') && vars.MSSTORE_PRODUCT_ID != ''
+
+    steps:
+      - name: Download MSIX package
+        uses: actions/download-artifact@v4
+        with:
+          name: msix-store-package
+          path: dist/msix
+
+      - name: Set up Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Configure Store credentials
+        shell: pwsh
+        run: |
+          msstore reconfigure `
+            --tenantId ${{ secrets.AZURE_AD_TENANT_ID }} `
+            --sellerId ${{ secrets.SELLER_ID }} `
+            --clientId ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }} `
+            --clientSecret ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+
+      - name: Publish to Microsoft Store
+        shell: pwsh
+        run: |
+          $Upload = Get-ChildItem dist/msix/*.msixupload | Select-Object -First 1
+          if (-not $Upload) { throw "No .msixupload found in dist/msix" }
+          Write-Host "Publishing $($Upload.Name) to product ${{ vars.MSSTORE_PRODUCT_ID }}"
+          # Package path as the positional argument, matching Microsoft's own
+          # GitHub Actions example. If the CLI rejects it, the equivalent
+          # explicit form is: msstore publish -i "<path>" -id "<productId>".
+          msstore publish "$($Upload.FullName)" -id ${{ vars.MSSTORE_PRODUCT_ID }}
 
   macos-release:
     name: macOS Release Artifacts (Apple Silicon)
@@ -400,11 +465,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Download prepared models
         uses: actions/download-artifact@v4
         with:
@@ -412,46 +472,10 @@ jobs:
           path: models
 
       - name: Verify model checksums
-        shell: bash
-        run: |
-          python - <<'PY'
-          import hashlib
-          import os
-          import pathlib
-          import sys
-
-          expected = {
-              "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
-              "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
-          }
-
-          def sha256(path: pathlib.Path) -> str:
-              h = hashlib.sha256()
-              with path.open("rb") as f:
-                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                      h.update(chunk)
-              return h.hexdigest()
-
-          failed = False
-          for rel_path, expected_hash in expected.items():
-              path = pathlib.Path(rel_path)
-              if not path.exists():
-                  print(f"Missing model file: {rel_path}", file=sys.stderr)
-                  failed = True
-                  continue
-              actual_hash = sha256(path)
-              if actual_hash != expected_hash:
-                  print(
-                      f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
-                      file=sys.stderr,
-                  )
-                  failed = True
-              else:
-                  print(f"Verified {rel_path}: {actual_hash}")
-
-          if failed:
-              sys.exit(1)
-          PY
+        uses: ./.github/actions/verify-models
+        with:
+          original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
+          simplified-sha256: ${{ env.YUNET_640_SHA256 }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -512,8 +536,8 @@ jobs:
         shell: bash
         run: |
           cd dist/macos
-          shasum -a 256 *.dmg > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          shasum -a 256 *.dmg > SHA256SUMS-macos-arm64.txt
+          cat SHA256SUMS-macos-arm64.txt
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -521,31 +545,37 @@ jobs:
           name: macos-release-artifacts
           path: |
             dist/macos/*.dmg
-            dist/macos/SHA256SUMS.txt
+            dist/macos/SHA256SUMS-macos-arm64.txt
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/macos/*.dmg
-            dist/macos/SHA256SUMS.txt
+            dist/macos/SHA256SUMS-macos-arm64.txt
 
   linux-release:
-    name: Linux Release Artifacts (x86_64)
+    name: Linux Release Artifacts (${{ matrix.arch }})
     needs: [shader-validation, prepare-models]
-    # Build on 22.04 for broad glibc compatibility (binaries link against
-    # glibc 2.35 and run on Ubuntu 22.04+ and other modern distros).
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Build on 22.04 for broad glibc compatibility (binaries link against
+          # glibc 2.35 and run on Ubuntu 22.04+ and other modern distros).
+          - arch: x86_64
+            runner: ubuntu-22.04
+            appimagetool-arch: x86_64
+          - arch: arm64
+            # Free for public repositories, same glibc baseline as the x64 leg.
+            runner: ubuntu-22.04-arm
+            appimagetool-arch: aarch64
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
 
       - name: Download prepared models
         uses: actions/download-artifact@v4
@@ -554,46 +584,10 @@ jobs:
           path: models
 
       - name: Verify model checksums
-        shell: bash
-        run: |
-          python - <<'PY'
-          import hashlib
-          import os
-          import pathlib
-          import sys
-
-          expected = {
-              "models/face_detection_yunet_2023mar.onnx": os.environ["YUNET_ORIGINAL_SHA256"],
-              "models/face_detection_yunet_2023mar_640.onnx": os.environ["YUNET_640_SHA256"],
-          }
-
-          def sha256(path: pathlib.Path) -> str:
-              h = hashlib.sha256()
-              with path.open("rb") as f:
-                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                      h.update(chunk)
-              return h.hexdigest()
-
-          failed = False
-          for rel_path, expected_hash in expected.items():
-              path = pathlib.Path(rel_path)
-              if not path.exists():
-                  print(f"Missing model file: {rel_path}", file=sys.stderr)
-                  failed = True
-                  continue
-              actual_hash = sha256(path)
-              if actual_hash != expected_hash:
-                  print(
-                      f"Checksum mismatch for {rel_path}: expected {expected_hash}, got {actual_hash}",
-                      file=sys.stderr,
-                  )
-                  failed = True
-              else:
-                  print(f"Verified {rel_path}: {actual_hash}")
-
-          if failed:
-              sys.exit(1)
-          PY
+        uses: ./.github/actions/verify-models
+        with:
+          original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
+          simplified-sha256: ${{ env.YUNET_640_SHA256 }}
 
       - name: Install build dependencies
         uses: ./.github/actions/linux-build-deps
@@ -613,9 +607,11 @@ jobs:
 
       - name: Install appimagetool
         # Extract instead of running directly so we don't need FUSE on the runner.
+        env:
+          APPIMAGETOOL_ARCH: ${{ matrix.appimagetool-arch }}
         run: |
           curl -fsSL -o /tmp/appimagetool.AppImage \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-${APPIMAGETOOL_ARCH}.AppImage"
           chmod +x /tmp/appimagetool.AppImage
           (cd /tmp && ./appimagetool.AppImage --appimage-extract >/dev/null)
           sudo mv /tmp/squashfs-root /opt/appimagetool
@@ -625,6 +621,8 @@ jobs:
         run: cargo build --release -p fcs-gui
 
       - name: Build AppImage and .deb
+        # build_linux.sh derives the arch slug from uname -m, so both legs use
+        # the same invocation.
         run: |
           RawVersion="${{ github.ref_name }}"
           Version="${RawVersion#v}"
@@ -635,17 +633,17 @@ jobs:
         shell: bash
         run: |
           cd dist/linux
-          sha256sum *.AppImage *.deb > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          sha256sum *.AppImage *.deb > "SHA256SUMS-linux-${{ matrix.arch }}.txt"
+          cat "SHA256SUMS-linux-${{ matrix.arch }}.txt"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-release-artifacts
+          name: linux-release-artifacts-${{ matrix.arch }}
           path: |
             dist/linux/*.AppImage
             dist/linux/*.deb
-            dist/linux/SHA256SUMS.txt
+            dist/linux/SHA256SUMS-linux-${{ matrix.arch }}.txt
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
@@ -653,4 +651,4 @@ jobs:
           files: |
             dist/linux/*.AppImage
             dist/linux/*.deb
-            dist/linux/SHA256SUMS.txt
+            dist/linux/SHA256SUMS-linux-${{ matrix.arch }}.txt

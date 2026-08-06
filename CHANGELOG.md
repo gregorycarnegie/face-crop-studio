@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Windows arm64 and Linux arm64 release artifacts. Both build natively on
+  GitHub's `windows-11-arm` and `ubuntu-22.04-arm` runners (free for public
+  repositories), so there is no cross-compilation anywhere in the pipeline —
+  vcpkg builds arm64 dav1d/libheif with the host toolchain, and the Linux leg
+  reuses the existing from-source dav1d/libde265/libheif action unchanged.
+  `windows-release` and `linux-release` became arch matrices with
+  `fail-fast: false`, so one architecture failing does not discard a good build
+  for the other on a tag that is already public.
+- Matching `Windows ARM64` and `Linux ARM64` legs in `ci.yml`. Release-only
+  coverage would repeat the gap that the macOS and Linux CI legs closed in
+  1.5.0: an arm64 break would not surface until a tag was cut.
+- Microsoft Store packaging. `installer/windows/msix/` holds an `AppxManifest`
+  template, the tile assets, and `build_msix.ps1`, which wraps each
+  architecture's dist directory in a `.msix`, bundles the two into a
+  `.msixbundle`, and zips that into the `.msixupload` that `msstore publish`
+  accepts. Packaged as a full-trust desktop app, so file access is unchanged
+  from the MSI/ZIP builds and batch mode does not need the
+  `broadFileSystemAccess` restricted capability. The manifest declares the
+  `webcam` device capability, without which the packaged build would enumerate
+  zero cameras instead of failing visibly.
+- Automated Store submission in a `store-submit` job, via
+  `microsoft/microsoft-store-apppublisher`. It stays skipped until the
+  `MSSTORE_PRODUCT_ID` repository variable is set, so nothing changes for
+  anyone who has not done the Partner Center setup. The prerequisites — the
+  first submission must be made by hand, free products only — are written up in
+  `docs/release_runbook.md`.
+- `.github/actions/verify-models`, replacing five copies of the same 40-line
+  Python checksum block across the two workflows. Rewritten in
+  `sha256sum --check`, because the new arm64 runners are not guaranteed a
+  Python the old block could rely on.
+
+### Fixed
+
+- Release jobs all uploaded a checksum file named `SHA256SUMS.txt` to the same
+  GitHub release, so whichever job finished last silently overwrote the others
+  and most assets shipped unverifiable. They are now
+  `SHA256SUMS-<platform>-<arch>.txt`.
+- The shipped x86_64 binaries were not actually built with `x86-64-v3`, despite
+  the README saying so. Setting `RUSTFLAGS` in the environment makes cargo
+  ignore `[target.*.rustflags]` in `.cargo/config.toml` entirely — the two are
+  mutually exclusive — and both the Windows release job and the Linux
+  `linux-build-deps` action set it, for `+crt-static` and `-l dylib=stdc++`
+  respectively. `target-cpu` is now restated wherever `RUSTFLAGS` is set, and
+  the Linux action picks it per-architecture from `uname -m`.
+- The vcpkg and native-library caches were keyed on `runner.os`, which is
+  `Windows`/`Linux` for both architectures. An arm64 job would have restored
+  x86_64 static libraries and failed at link time; the keys now include the
+  vcpkg triplet and `runner.arch`.
+
 ## [1.5.1] - 2026-08-06
 
 ### Changed

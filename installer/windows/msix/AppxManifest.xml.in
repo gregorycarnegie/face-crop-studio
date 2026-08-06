@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Template for the Microsoft Store MSIX package. build_msix.ps1 substitutes the
+  @TOKEN@ placeholders once per architecture and writes the result as
+  AppxManifest.xml into the package payload.
+
+  This is a "desktop bridge" package: the payload is the same unmodified Win32
+  fcs-gui.exe / fcs-cli.exe that ship in the zip and MSI, declared with
+  EntryPoint="Windows.FullTrustApplication" and the runFullTrust capability.
+  That means normal user-level filesystem access — no MSIX container sandbox and
+  no need for the broadFileSystemAccess restricted capability, which matters
+  because batch mode walks user-chosen directories.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 rescap">
+
+  <!--
+    Name, Publisher and PublisherDisplayName must match the values Partner
+    Center assigns to the reserved app exactly, or the Store rejects the upload.
+    Publisher is the full certificate subject, e.g. "CN=A1B2C3D4-...".
+    Version is 4-part and the revision must be 0 for Store submissions.
+  -->
+  <Identity
+    Name="@IDENTITY_NAME@"
+    Publisher="@PUBLISHER@"
+    Version="@VERSION@"
+    ProcessorArchitecture="@ARCH@" />
+
+  <Properties>
+    <DisplayName>Face Crop Studio</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_DISPLAY_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Pure Rust face detection and cropping.</Description>
+  </Properties>
+
+  <Dependencies>
+    <!--
+      1809 is the floor for MSIX on desktop. MaxVersionTested only affects which
+      OS feature set the package opts into; it does not block newer builds.
+    -->
+    <TargetDeviceFamily
+      Name="Windows.Desktop"
+      MinVersion="10.0.17763.0"
+      MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="FaceCropStudio"
+      Executable="fcs-gui.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Face Crop Studio"
+        Description="Pure Rust face detection and cropping."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+
+    <!--
+      The CLI ships in the same package. AppListEntry="none" keeps it out of the
+      Start menu (it has no window), and the execution alias puts `fcs-cli` on
+      PATH for Store installs, which is what the MSI's PATH feature does for the
+      other installers.
+    -->
+    <Application
+      Id="FaceCropStudioCli"
+      Executable="fcs-cli.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        AppListEntry="none"
+        DisplayName="Face Crop Studio CLI"
+        Description="Face Crop Studio command line interface."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <uap5:Extension
+          Category="windows.appExecutionAlias"
+          Executable="fcs-cli.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="fcs-cli.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Desktop bridge: full trust, same privileges as the unpackaged build. -->
+    <rescap:Capability Name="runFullTrust" />
+    <!--
+      Required for the nokhwa camera capture path. Without it the packaged build
+      enumerates zero cameras instead of failing visibly, so it must stay in
+      lockstep with the GUI's webcam feature.
+    -->
+    <DeviceCapability Name="webcam" />
+  </Capabilities>
+</Package>

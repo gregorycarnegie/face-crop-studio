@@ -45,7 +45,10 @@ runs:
         path: |
           /usr/local/lib
           /usr/local/include
-        key: linux-native-deps-${{ runner.os }}-dav1d${{ inputs.dav1d-version }}-de265${{ inputs.de265-version }}-heif${{ inputs.libheif-version }}
+        # runner.arch is part of the key because x64 and arm64 runners share the
+        # same runner.os ("Linux"); without it an arm64 job restores x86_64 .so
+        # files and fails at link time.
+        key: linux-native-deps-${{ runner.os }}-${{ runner.arch }}-dav1d${{ inputs.dav1d-version }}-de265${{ inputs.de265-version }}-heif${{ inputs.libheif-version }}
 
     - name: Build dav1d from source
       if: steps.cache-native.outputs.cache-hit != 'true'
@@ -117,4 +120,13 @@ runs:
         echo "SYSTEM_DEPS_LIBHEIF_SEARCH_NATIVE=/usr/local/lib" >> "$GITHUB_ENV"
         echo "SYSTEM_DEPS_LIBHEIF_LIB=heif de265" >> "$GITHUB_ENV"
         echo "SYSTEM_DEPS_LIBHEIF_INCLUDE=/usr/local/include" >> "$GITHUB_ENV"
-        echo "RUSTFLAGS=-l dylib=stdc++" >> "$GITHUB_ENV"
+        # Setting RUSTFLAGS in the environment makes cargo ignore
+        # [target.*.rustflags] in .cargo/config.toml entirely — the two are
+        # mutually exclusive, first match wins. So target-cpu has to be repeated
+        # here or the shipped x86_64 binaries quietly lose x86-64-v3. aarch64
+        # gets no target-cpu: its baseline already has NEON and FMA.
+        extra_rustflags=""
+        if [ "$(uname -m)" = "x86_64" ]; then
+          extra_rustflags=" -C target-cpu=x86-64-v3"
+        fi
+        echo "RUSTFLAGS=-l dylib=stdc++${extra_rustflags}" >> "$GITHUB_ENV"

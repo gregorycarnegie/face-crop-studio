@@ -1,0 +1,39 @@
+name: Verify model checksums
+description: >
+  Checks the YuNet ONNX models against their pinned SHA-256 digests. The same
+  check runs in prepare-models (right after generation) and again in every
+  release job (after the artifact download), so a corrupted or swapped artifact
+  cannot reach a shipped package. Written in bash + sha256sum rather than Python
+  because the windows-11-arm runner has no guaranteed Python, and this needs to
+  work identically on all five release jobs.
+
+inputs:
+  models-dir:
+    description: Directory holding the downloaded/generated models.
+    default: models
+  original-sha256:
+    description: Expected digest of face_detection_yunet_2023mar.onnx.
+    required: true
+  simplified-sha256:
+    description: Expected digest of face_detection_yunet_2023mar_640.onnx.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify model checksums
+      shell: bash
+      env:
+        MODELS_DIR: ${{ inputs.models-dir }}
+        ORIGINAL_SHA256: ${{ inputs.original-sha256 }}
+        SIMPLIFIED_SHA256: ${{ inputs.simplified-sha256 }}
+      run: |
+        set -euo pipefail
+        # sha256sum --check needs "<digest>  <path>" lines; build them from the
+        # pinned inputs so the digests stay declared in one place (release.yml).
+        sums_file="$(mktemp)"
+        {
+          echo "${ORIGINAL_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar.onnx"
+          echo "${SIMPLIFIED_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar_640.onnx"
+        } > "$sums_file"
+        sha256sum --check --strict "$sums_file"

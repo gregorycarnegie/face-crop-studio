@@ -9,7 +9,14 @@
 set -euo pipefail
 
 VERSION="${1:?usage: build_linux.sh <version>}"
-ARCH="x86_64"
+# ARCH is the slug in the artifact filenames, kept uniform with the Windows
+# release assets (x86_64 / arm64). APPIMAGE_ARCH is what appimagetool insists on
+# in its ARCH env var, where aarch64 is the only spelling it recognises.
+case "$(uname -m)" in
+    x86_64)  ARCH="x86_64"; APPIMAGE_ARCH="x86_64" ;;
+    aarch64) ARCH="arm64";  APPIMAGE_ARCH="aarch64" ;;
+    *) echo "error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+esac
 APP_NAME="face-crop-studio"
 BINARY_NAME="fcs-gui"
 SVG_SOURCE="fcs-gui/assets/app_logo.svg"
@@ -64,7 +71,7 @@ ln -sf "usr/bin/$BINARY_NAME" "$APPDIR/AppRun"
 
 # --- AppImage: package -------------------------------------------------------
 echo "Building AppImage at $APPIMAGE_PATH"
-ARCH="$ARCH" appimagetool --no-appstream "$APPDIR" "$APPIMAGE_PATH"
+ARCH="$APPIMAGE_ARCH" appimagetool --no-appstream "$APPDIR" "$APPIMAGE_PATH"
 
 # --- .deb: cargo-deb reads metadata from fcs-gui/Cargo.toml -----------------
 echo "Building .deb"
