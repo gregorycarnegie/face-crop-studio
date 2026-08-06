@@ -419,7 +419,16 @@ jobs:
     runs-on: windows-latest
     # Skipped entirely until MSSTORE_PRODUCT_ID is set as a repository variable.
     # Tag-only: a workflow_dispatch run has no release version to submit.
-    if: startsWith(github.ref, 'refs/tags/v') && vars.MSSTORE_PRODUCT_ID != ''
+    #
+    # Prerelease tags are excluded on purpose. MSIX versions drop the suffix
+    # (v1.5.1-rc1 and v1.5.1 both become 1.5.1.0), and the Store permanently
+    # refuses a version it has already accepted — so submitting an RC would burn
+    # the version number the real release needs. RC tags still build the package;
+    # they just stop short of publishing it.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      && !contains(github.ref_name, '-')
+      && vars.MSSTORE_PRODUCT_ID != ''
 
     steps:
       - name: Download MSIX package

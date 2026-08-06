@@ -98,8 +98,14 @@ setup still produces every other artifact normally.
 
 ### Per-release
 
-Nothing. Pushing a `v*` tag builds the bundle and submits it. Certification
-still runs on Microsoft's side afterwards — check Partner Center for the result.
+Nothing. Pushing a final `v*` tag builds the bundle and submits it.
+Certification still runs on Microsoft's side afterwards — check Partner Center
+for the result.
+
+Release-candidate tags (`v1.5.1-rc1`) build the package but deliberately do not
+submit it, so an RC is the right way to get a `.msixupload` for a manual
+Partner Center upload. See the versioning note below for why RCs must not
+submit.
 
 ### Versioning
 
@@ -107,3 +113,8 @@ MSIX versions are four-part with a forced `.0` revision (`1.5.1` → `1.5.1.0`);
 the Store requires the revision to be 0. The Store also rejects a re-upload of a
 version it has already seen, so a failed certification needs a new patch tag,
 not a re-run of the same one.
+
+The prerelease suffix is stripped, so `v1.5.1-rc1` and `v1.5.1` both produce
+`1.5.1.0`. That is why `store-submit` skips prerelease tags: submitting an RC
+would consume the version number the final release needs, and it could not be
+reused.
