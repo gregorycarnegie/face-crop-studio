@@ -53,6 +53,25 @@
   </Resources>
 
   <Applications>
+    <!--
+      Exactly one Application on purpose. The CLI used to be a second
+      Application whose visual elements suppressed its app-list entry, so it
+      would stay out of the Start menu. Partner Center rejects that as a
+      "headless app" needing the HeadlessAppBypass waiver:
+
+      (The attribute is deliberately not spelled out anywhere in this file, so
+      that a text scan of the manifest cannot mistake an explanation for a
+      declaration.)
+
+        Package acceptance validation error: [...] specifies a headless app.
+        You don't have permission to create a headless app.
+
+      An execution alias does not have to point at its Application's own
+      Executable, so the CLI alias is declared here instead. fcs-cli.exe still
+      ships in the payload and is still on PATH for Store installs — the same
+      thing the MSI's PATH feature does — with no second Start menu entry and
+      no waiver.
+    -->
     <Application
       Id="FaceCropStudio"
       Executable="fcs-gui.exe"
@@ -60,25 +79,6 @@
       <uap:VisualElements
         DisplayName="Face Crop Studio"
         Description="Pure Rust face detection and cropping."
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png" />
-    </Application>
-
-    <!--
-      The CLI ships in the same package. AppListEntry="none" keeps it out of the
-      Start menu (it has no window), and the execution alias puts `fcs-cli` on
-      PATH for Store installs, which is what the MSI's PATH feature does for the
-      other installers.
-    -->
-    <Application
-      Id="FaceCropStudioCli"
-      Executable="fcs-cli.exe"
-      EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements
-        AppListEntry="none"
-        DisplayName="Face Crop Studio CLI"
-        Description="Face Crop Studio command line interface."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png" />
