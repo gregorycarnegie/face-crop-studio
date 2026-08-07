@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-08-07
+
+### Changed
+
+- `parquet` 59.1.0 → 59.2.0.
+
 ### Added
 
 - Linux arm64 release artifacts (AppImage and `.deb`), built natively on
@@ -51,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Partner Center rejected the first Store package: shipping the CLI as a second
+  `<Application>` with its app-list entry suppressed — intended to keep a
+  console tool out of the Start menu — is classified as a "headless app" and
+  needs the `HeadlessAppBypass` waiver. An execution alias does not have to
+  point at its own application's executable, so the alias now sits inside the
+  GUI application and targets `fcs-cli.exe`: one Start menu entry, no waiver,
+  and `fcs-cli` still on PATH for Store installs.
 - The Windows build could not link from a clean vcpkg tree. `vcpkg install
   libheif` takes the port's default features, whose only member is `hevc` —
   HEVC *encoding* via x265 — and x265's `threadpool.cpp` calls Win32 registry
@@ -566,7 +579,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.5...v1.5.0
 [1.4.5]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.4.4...v1.4.5
