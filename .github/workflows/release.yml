@@ -362,6 +362,11 @@ jobs:
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
+          # Any tag with a suffix (v1.5.1-rc1) is a release candidate.
+          # Without this every RC publishes as a full release and becomes
+          # the repo's "Latest", which is what users and the
+          # releases/latest API endpoint see.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/*.zip
             dist/*-setup.exe
@@ -582,6 +587,11 @@ jobs:
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
+          # Any tag with a suffix (v1.5.1-rc1) is a release candidate.
+          # Without this every RC publishes as a full release and becomes
+          # the repo's "Latest", which is what users and the
+          # releases/latest API endpoint see.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/macos/*.dmg
             dist/macos/SHA256SUMS-macos-arm64.txt
@@ -680,6 +690,11 @@ jobs:
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
+          # Any tag with a suffix (v1.5.1-rc1) is a release candidate.
+          # Without this every RC publishes as a full release and becomes
+          # the repo's "Latest", which is what users and the
+          # releases/latest API endpoint see.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/linux/*.AppImage
             dist/linux/*.deb
