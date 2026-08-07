@@ -15,6 +15,10 @@ on:
       - "screenshots/**"
       - "docs/**"
       - "tag-release.bat"
+  # Manual re-run, matching release.yml. Pushes made while Actions is degraded
+  # are not retriggered once it recovers, and without this the only way to
+  # re-run CI on an unchanged tree is an empty commit.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
