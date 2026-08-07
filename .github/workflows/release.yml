@@ -166,8 +166,11 @@ jobs:
         with:
           path: C:\vcpkg\installed
           # Triplet is in the key: both runners report runner.os == "Windows",
-          # so without it the arm64 job restores x64 static libs.
-          key: vcpkg-dav1d-libheif-${{ matrix.vcpkg-triplet }}
+          # so without it the arm64 job restores x64 static libs. "nohevc"
+          # marks the package set below — the cache service prefix-matches keys,
+          # so a key must not be able to match a cache built from a different
+          # package set.
+          key: vcpkg-dav1d-libheif-nohevc-${{ matrix.vcpkg-triplet }}
 
       - name: Install dav1d + libheif (vcpkg)
         shell: pwsh
@@ -176,9 +179,18 @@ jobs:
             git clone https://github.com/microsoft/vcpkg C:\vcpkg
             & C:\vcpkg\bootstrap-vcpkg.bat
           }
+          # libheif[core] means "no default features". The only default is
+          # `hevc`, which is HEVC *encoding* via x265 — the app only ever
+          # decodes HEIC (fcs-utils load_heic_image), and the HEVC decoder
+          # libde265 is a base dependency of the port, so decoding is
+          # unaffected. Pulling x265 in also breaks the link outright:
+          # x265's threadpool.cpp calls Win32 registry APIs and nothing in the
+          # graph links Advapi32, giving LNK2019 on __imp_RegQueryValueExA.
+          # This matches installer-side Linux, which already builds with
+          # -DWITH_LIBDE265=ON -DWITH_X265=OFF.
           & C:\vcpkg\vcpkg.exe install `
             "dav1d:${{ matrix.vcpkg-triplet }}" `
-            "libheif:${{ matrix.vcpkg-triplet }}"
+            "libheif[core]:${{ matrix.vcpkg-triplet }}"
 
       - name: Build release binaries
         env:

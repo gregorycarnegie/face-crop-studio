@@ -51,6 +51,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Windows build could not link from a clean vcpkg tree. `vcpkg install
+  libheif` takes the port's default features, whose only member is `hevc` —
+  HEVC *encoding* via x265 — and x265's `threadpool.cpp` calls Win32 registry
+  APIs while nothing in the graph links `Advapi32`, so the link died with
+  `LNK2019: unresolved external symbol __imp_RegQueryValueExA`. It is now
+  `libheif[core]`, which takes no default features. HEIC decoding is unaffected:
+  the decoder, libde265, is a base dependency of the port, and the app only ever
+  decodes HEIC. This matches the Linux build, which already used
+  `-DWITH_LIBDE265=ON -DWITH_X265=OFF`. The failure was latent rather than new —
+  CI had been restoring a vcpkg cache that predated the port gaining x265, so it
+  would have appeared on the next cache miss whenever that came.
 - Release jobs all uploaded a checksum file named `SHA256SUMS.txt` to the same
   GitHub release, so whichever job finished last silently overwrote the others
   and most assets shipped unverifiable. They are now

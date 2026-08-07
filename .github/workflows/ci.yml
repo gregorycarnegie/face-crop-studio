@@ -123,9 +123,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          # Triplet, not runner.os: both Windows legs report "Windows", so an
-          # arch-blind key hands the arm64 leg x64 static libs.
-          key: vcpkg-dav1d-libheif-${{ matrix.vcpkg-triplet }}
+          # Triplet, not runner.os, so an arch-blind key cannot hand an arm64
+          # leg x64 static libs. "nohevc" marks the package set below; the cache
+          # service prefix-matches keys, so a key must not be able to match a
+          # cache built from a different package set.
+          key: vcpkg-dav1d-libheif-nohevc-${{ matrix.vcpkg-triplet }}
 
       - name: Install dav1d + libheif (Windows, vcpkg)
         if: runner.os == 'Windows'
@@ -135,9 +137,14 @@ jobs:
             git clone https://github.com/microsoft/vcpkg C:\vcpkg
             & C:\vcpkg\bootstrap-vcpkg.bat
           }
+          # libheif[core] drops the `hevc` default feature (x265, an *encoder*
+          # the app never uses) which otherwise fails the link with LNK2019 on
+          # __imp_RegQueryValueExA. See release.yml for the full reasoning; the
+          # two must stay in step or CI validates a different library set than
+          # the one that ships.
           & C:\vcpkg\vcpkg.exe install `
             "dav1d:${{ matrix.vcpkg-triplet }}" `
-            "libheif:${{ matrix.vcpkg-triplet }}"
+            "libheif[core]:${{ matrix.vcpkg-triplet }}"
 
       - name: Export build environment (Windows)
         if: runner.os == 'Windows'
