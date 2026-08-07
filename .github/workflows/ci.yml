@@ -88,10 +88,10 @@ jobs:
             # Must match release.yml or CI validates different codegen than
             # the shipped binaries.
             rustflags: -C target-feature=+crt-static -C target-cpu=x86-64-v3
-          - name: Windows ARM64
-            os: windows-11-arm
-            vcpkg-triplet: arm64-windows-static
-            rustflags: -C target-feature=+crt-static
+          # No Windows ARM64 leg: tract-linalg cannot build for
+          # aarch64-pc-windows-msvc (its GNU-syntax .S kernels are handed to
+          # cl.exe, which ignores them). release.yml carries the full
+          # explanation. Linux ARM64 below is unaffected and builds natively.
           - name: macOS
             os: macos-latest
           # 22.04 matches the release job's glibc baseline, so a link error here

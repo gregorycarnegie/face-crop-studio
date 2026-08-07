@@ -82,9 +82,25 @@ jobs:
     permissions:
       contents: write
     strategy:
-      # Independent artifacts: an arm64 failure should not throw away a good
-      # x86_64 build (or vice versa) on a tag that is already public.
       fail-fast: false
+      # A matrix of one, kept deliberately: Windows arm64 is blocked upstream,
+      # not abandoned, and re-adding it is a matter of restoring the entry below
+      # rather than re-parameterising the whole job.
+      #
+      # tract-linalg (0.23.4, latest as of 2026-08) does not support
+      # aarch64-pc-windows-msvc. Its build script special-cases x86_64+Windows
+      # to assemble with ml64.exe, but the aarch64 branch calls cc::Build
+      # unconditionally, which resolves to cl.exe — and cl.exe silently ignores
+      # the GNU-syntax .S kernels (warning D9024/D9027), so lib.exe then fails
+      # with LNK1181 on the .o files that were never produced. There is no
+      # feature or env var to skip the assembly. Windows-on-Arm runs the x86_64
+      # build under emulation until this is fixed upstream.
+      #
+      #   - arch: arm64
+      #     runner: windows-11-arm
+      #     vcpkg-triplet: arm64-windows-static
+      #     wix-arch: arm64
+      #     rustflags: -C target-feature=+crt-static
       matrix:
         include:
           - arch: x86_64
@@ -96,14 +112,6 @@ jobs:
             # so target-cpu has to be restated here or the shipped binaries
             # quietly lose x86-64-v3.
             rustflags: -C target-feature=+crt-static -C target-cpu=x86-64-v3
-          - arch: arm64
-            # Free for public repositories. Native build — no cross-compilation,
-            # so vcpkg builds arm64 dav1d/libheif with the host toolchain.
-            runner: windows-11-arm
-            vcpkg-triplet: arm64-windows-static
-            wix-arch: arm64
-            # No target-cpu: the aarch64 baseline already has NEON and FMA.
-            rustflags: -C target-feature=+crt-static
     env:
       # Evaluated once at job start; used by signing steps to skip gracefully
       # when the certificate secret is not configured.
@@ -134,9 +142,9 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Install NSIS
-        # x86_64 only: NSIS ships an x86 makensis and produces an x86 installer
-        # stub, which on ARM64 would run under emulation. The native arm64 MSI
-        # and the Store MSIX cover that platform instead.
+        # Guard kept for when arm64 returns: NSIS ships an x86 makensis and
+        # produces an x86 installer stub, so an arm64 leg would ship an emulated
+        # installer. The MSI and the Store package cover that platform instead.
         if: matrix.arch == 'x86_64'
         shell: pwsh
         run: |
@@ -363,24 +371,39 @@ jobs:
   msix-package:
     name: MSIX Store Package
     needs: [windows-release]
-    # Packaging only — makeappx bundles an arm64 payload from an x64 host fine,
-    # so this does not need its own matrix.
+    # Packaging only — makeappx can bundle any architecture's payload from an
+    # x64 host, so this does not need its own matrix. Currently that means an
+    # x86_64-only bundle; see the windows-release matrix for why. Windows still
+    # installs it on Arm devices and runs it under emulation.
     runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download x86_64 payload
+      # Downloads every payload the windows-release matrix produced. Written as
+      # a pattern rather than one step per architecture so that adding an arch
+      # back to the matrix needs no change here — and so a single missing arch
+      # cannot skip the whole Store package, which is what happened when this
+      # job hard-required both x86_64 and arm64.
+      - name: Download Windows payloads
         uses: actions/download-artifact@v4
         with:
-          name: windows-msix-payload-x86_64
-          path: dist/windows/x86_64
+          pattern: windows-msix-payload-*
+          path: dist/windows
 
-      - name: Download arm64 payload
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-msix-payload-arm64
-          path: dist/windows/arm64
+      - name: Normalise payload directory names
+        # download-artifact names each directory after the artifact, so
+        # "windows-msix-payload-x86_64" has to become the "x86_64" arch slug
+        # that build_msix.ps1 looks for.
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/windows -Directory |
+            Where-Object { $_.Name -like 'windows-msix-payload-*' } |
+            ForEach-Object {
+              $arch = $_.Name -replace '^windows-msix-payload-', ''
+              Rename-Item $_.FullName -NewName $arch
+              Write-Host "payload: $arch"
+            }
 
       - name: Build MSIX bundle
         shell: pwsh

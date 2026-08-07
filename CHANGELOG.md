@@ -9,22 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Windows arm64 and Linux arm64 release artifacts. Both build natively on
-  GitHub's `windows-11-arm` and `ubuntu-22.04-arm` runners (free for public
-  repositories), so there is no cross-compilation anywhere in the pipeline —
-  vcpkg builds arm64 dav1d/libheif with the host toolchain, and the Linux leg
-  reuses the existing from-source dav1d/libde265/libheif action unchanged.
-  `windows-release` and `linux-release` became arch matrices with
-  `fail-fast: false`, so one architecture failing does not discard a good build
-  for the other on a tag that is already public.
-- Matching `Windows ARM64` and `Linux ARM64` legs in `ci.yml`. Release-only
-  coverage would repeat the gap that the macOS and Linux CI legs closed in
-  1.5.0: an arm64 break would not surface until a tag was cut.
+- Linux arm64 release artifacts (AppImage and `.deb`), built natively on
+  GitHub's `ubuntu-22.04-arm` runner (free for public repositories) — no
+  cross-compilation, and the existing from-source dav1d/libde265/libheif action
+  is reused unchanged. `windows-release` and `linux-release` became arch
+  matrices with `fail-fast: false`, so one architecture failing does not discard
+  a good build for the other on a tag that is already public.
+- A matching `Linux ARM64` leg in `ci.yml`. Release-only coverage would repeat
+  the gap that the macOS and Linux CI legs closed in 1.5.0: an arm64 break would
+  not surface until a tag was cut.
+- Windows arm64 was implemented and then withdrawn before release: it builds
+  everything up to `cargo check` and then fails in `tract-linalg` 0.23.4, the
+  current release, which has no `aarch64-pc-windows-msvc` support. Its build
+  script special-cases x86_64+Windows to assemble with `ml64.exe`, but the
+  aarch64 branch calls `cc::Build` unconditionally, so the GNU-syntax `.S`
+  kernels reach `cl.exe`, which ignores them (`D9024`/`D9027`) and leaves
+  `lib.exe` to fail with `LNK1181`. No feature or env var disables the assembly.
+  The matrix entry is kept commented in `release.yml` so restoring it is a
+  matter of uncommenting once upstream lands support. Windows-on-Arm runs the
+  x86_64 build under emulation meanwhile.
 - Microsoft Store packaging. `installer/windows/msix/` holds an `AppxManifest`
   template, the tile assets, and `build_msix.ps1`, which wraps each
-  architecture's dist directory in a `.msix`, bundles the two into a
+  architecture's dist directory in a `.msix`, bundles them into a
   `.msixbundle`, and zips that into the `.msixupload` that `msstore publish`
-  accepts. Packaged as a full-trust desktop app, so file access is unchanged
+  accepts. It packages whichever architectures the release matrix produced, so
+  the bundle gains arm64 automatically if that leg is ever restored. Packaged as a full-trust desktop app, so file access is unchanged
   from the MSI/ZIP builds and batch mode does not need the
   `broadFileSystemAccess` restricted capability. The manifest declares the
   `webcam` device capability, without which the packaged build would enumerate

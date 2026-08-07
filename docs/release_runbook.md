@@ -23,10 +23,11 @@ This triggers the tag-based release workflow and publishes Windows assets for va
 
 From GitHub Release assets:
 
-- `face-crop-studio-windows-x86_64.msi` / `face-crop-studio-windows-arm64.msi`
-- `face-crop-studio-windows-x86_64-setup.exe` (x86_64 only — see `README.md`)
-- `face-crop-studio-windows-x86_64.zip` / `face-crop-studio-windows-arm64.zip`
-- `SHA256SUMS-windows-x86_64.txt` / `SHA256SUMS-windows-arm64.txt`
+- `face-crop-studio-windows-x86_64.msi`
+- `face-crop-studio-windows-x86_64-setup.exe`
+- `face-crop-studio-windows-x86_64.zip`
+- `SHA256SUMS-windows-x86_64.txt`
+- `face-crop-studio-<version>-arm64.AppImage` / `.deb` (Linux arm64)
 
 There is one checksum file per platform and architecture. They are deliberately
 not a single `SHA256SUMS.txt`: every release job uploads to the same release, so
@@ -63,8 +64,12 @@ Then publish/edit release notes using `docs/releases/v1.0.0.md`.
 
 ## Microsoft Store
 
-The `msix-package` job builds a two-architecture `.msixbundle` (x86_64 + arm64)
-and wraps it as a `.msixupload`, the format `msstore publish` accepts. It is
+The `msix-package` job bundles every architecture the `windows-release` matrix
+produced into a `.msixbundle` and wraps it as a `.msixupload`, the format
+`msstore publish` accepts. Today that is x86_64 only — Windows arm64 is blocked
+upstream in `tract-linalg`, see the matrix comment in `release.yml`. The job
+picks up architectures by artifact pattern rather than by name, so restoring the
+arm64 leg needs no change here. It is
 uploaded as a *workflow artifact only*, never a GitHub release asset: the bundle
 is intentionally unsigned, because the Store re-signs every package with the
 publisher certificate, and signing it here with a certificate whose subject does
