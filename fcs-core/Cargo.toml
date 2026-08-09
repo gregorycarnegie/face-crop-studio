@@ -25,6 +25,7 @@ wgpu.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+mimalloc.workspace = true
 fcs-utils = { workspace = true, features = ["fixtures"] }
 proptest.workspace = true
 serde_json.workspace = true

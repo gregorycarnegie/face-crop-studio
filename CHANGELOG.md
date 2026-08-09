@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Single-image detection got roughly 4x faster in Quality mode and 1.5x in
+  Speed mode: 305 ms → 74 ms and 106 ms → 69 ms respectively, on the
+  `inference_pipeline` benchmark (640x640 YuNet, x86-64-v3). Two independent
+  causes, both found by profiling with samply:
+  - `resize_image` took the `fast_image_resize` path only for
+    `FilterType::Nearest`, so `ResizeQuality::Quality` — which asks for
+    `Triangle` — fell through to `image::imageops::resize`. Its per-pixel
+    `GenericImageView` sampling was 62% of a quality detection, which is why
+    choosing Quality cost three times as much as Speed rather than a little
+    more. All five `image` filters now map onto the equivalent SIMD kernel
+    (`Triangle` → `Bilinear`, and so on); output is the same up to rounding.
+    Quality and Speed now differ by about 5 ms, which is what the filter choice
+    should have cost all along.
+  - `mimalloc` is the global allocator in `fcs-cli` and `fcs-gui`. tract
+    allocates and frees one intermediate tensor per graph node per inference,
+    and the Windows system heap decommits blocks that size on free — so every
+    run page-faults the same memory back in. 26% of a detection was kernel
+    time, split between the page-fault handler and `RtlFreeHeap`; it is now 3%.
+    Worth 35% on its own, and it should matter more in batch export, where
+    several detections contend for the heap at once.
+- What remains is 59% in tract's `depth_wise::inner_loop_generic`, and it is
+  not reachable from this side: tract only
+  unrolls depthwise zones with at most 4 taps, and YuNet's 3x3 kernels have 9,
+  so every zone takes the scalar fallback. tract-linalg's `multithread-mm`
+  feature would not help either — it covers matmul, now 9% of the run, and
+  would compete with the image-level rayon parallelism batch export already
+  uses.
+- Dependency bumps: `thiserror` 2.0.19 → 2.0.20, `rusqlite` 0.40.1 → 0.40.2.
+
 ## [1.5.2] - 2026-08-07
 
 ### Changed

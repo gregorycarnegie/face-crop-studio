@@ -247,15 +247,33 @@ pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
 /// * `height` - The target height.
 /// * `filter` - The sampling filter to use for resizing.
 pub fn resize_image(image: &DynamicImage, width: u32, height: u32, filter: FilterType) -> RgbImage {
-    if filter == FilterType::Nearest
-        && let Some(fast) = resize_image_fast(image, width, height)
-    {
+    if let Some(fast) = resize_image_fast(image, width, height, fir_alg(filter)) {
         return fast;
     }
     image.resize_exact(width, height, filter).to_rgb8()
 }
 
-fn resize_image_fast(image: &DynamicImage, width: u32, height: u32) -> Option<RgbImage> {
+/// Map an `image` filter to the SIMD equivalent in `fast_image_resize`.
+///
+/// `image::imageops::resize` samples pixel-by-pixel through `GenericImageView`, which profiling
+/// showed to be ~60% of the whole `Quality` detection pipeline. The kernels below are the same
+/// filters, so output is equivalent up to rounding.
+fn fir_alg(filter: FilterType) -> fir::ResizeAlg {
+    match filter {
+        FilterType::Nearest => fir::ResizeAlg::Nearest,
+        FilterType::Triangle => fir::ResizeAlg::Convolution(fir::FilterType::Bilinear),
+        FilterType::CatmullRom => fir::ResizeAlg::Convolution(fir::FilterType::CatmullRom),
+        FilterType::Gaussian => fir::ResizeAlg::Convolution(fir::FilterType::Gaussian),
+        FilterType::Lanczos3 => fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3),
+    }
+}
+
+fn resize_image_fast(
+    image: &DynamicImage,
+    width: u32,
+    height: u32,
+    alg: fir::ResizeAlg,
+) -> Option<RgbImage> {
     let rgb: Cow<'_, RgbImage> = match image.as_rgb8() {
         Some(rgb) => Cow::Borrowed(rgb),
         None => Cow::Owned(image.to_rgb8()),
@@ -271,7 +289,7 @@ fn resize_image_fast(image: &DynamicImage, width: u32, height: u32) -> Option<Rg
 
     let mut dst = FirImage::new(width, height, fir::PixelType::U8x3);
     let mut resizer = fir::Resizer::new();
-    let options = fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Nearest);
+    let options = fir::ResizeOptions::new().resize_alg(alg);
     resizer.resize(&src, &mut dst, &options).ok()?;
 
     RgbImage::from_raw(width, height, dst.into_vec())
@@ -413,7 +431,7 @@ mod tests {
 
     #[test]
     fn resize_image_triangle_path() {
-        // Triangle filter bypasses the fast path — exercises the fallback branch
+        // Triangle now maps onto the fast (SIMD) bilinear path rather than image's sampler.
         let mut image = ImageBuffer::<Rgb<u8>, _>::new(4, 4);
         for (x, y, pixel) in image.enumerate_pixels_mut() {
             *pixel = Rgb([(x * 40) as u8, (y * 40) as u8, 128]);

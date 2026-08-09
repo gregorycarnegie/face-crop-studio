@@ -18,6 +18,7 @@ fcs-utils = { workspace = true, features = ["webcam", "raw", "heic"] }
 image.workspace = true
 imageproc.workspace = true
 log.workspace = true
+mimalloc.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true

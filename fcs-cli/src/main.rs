@@ -1,5 +1,11 @@
 //! Command-line interface for running YuNet face detection.
 
+/// See the `mimalloc` note in the workspace Cargo.toml: tract's per-node tensor churn is
+/// pathological on the Windows system heap, and swapping the allocator is worth ~35% of a
+/// single detection.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::{
     fs::{self, File},
     sync::Arc,

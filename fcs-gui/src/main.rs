@@ -3,6 +3,12 @@
     windows_subsystem = "windows"
 )]
 
+/// See the `mimalloc` note in the workspace Cargo.toml: tract's per-node tensor churn is
+/// pathological on the Windows system heap, and swapping the allocator is worth ~35% of a
+/// single detection.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use eframe::{NativeOptions, egui};
 use fcs_gui::App2;
 use fcs_utils::init_logging;

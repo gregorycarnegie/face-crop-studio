@@ -51,7 +51,7 @@ fcs-utils = { path = "fcs-utils" }
 anyhow = "1.0.104"
 env_logger = "0.11.11"
 log = "0.4.33"
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 
 # CLI and desktop UI
 arboard = "3.6.1"
@@ -134,13 +134,18 @@ parquet = { version = "59.2.0", default-features = false, features = [
     "snap",
     "zstd",
 ] }
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 
 # Concurrency and utilities
 lru = "0.18.2"
+# Global allocator for the shipped binaries. tract allocates and frees an intermediate
+# tensor per graph node per inference; on the Windows system heap those large blocks are
+# decommitted on free and re-fault on the next run, which profiling put at ~25% of a
+# detection. mimalloc keeps them cached and cuts single-image detection by a third.
+mimalloc = "0.1.52"
 rayon = "1.12.0"
 walkdir = "2.5.0"
 
