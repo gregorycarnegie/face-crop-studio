@@ -63,6 +63,33 @@ use wgpu::{
     Queue, RequestAdapterError, RequestAdapterOptions, RequestDeviceError, Trace,
 };
 
+/// Removes backends that are known to be unsafe to even enumerate on the
+/// current platform, leaving `base` untouched elsewhere.
+///
+/// On Windows that means Vulkan. Intel's Vulkan ICD (`igvk64.dll`, driver
+/// branch 30.0.101.x) dies with an access violation while wgpu is bringing up
+/// the adapter, which crashed the GUI at launch on two different Intel laptops
+/// during Microsoft Store certification:
+///
+/// ```text
+/// Faulting application name: fcs-gui.exe
+/// Faulting module name: igvk64.dll, version: 30.0.101.1960
+/// Exception code: 0xc0000005
+/// ```
+///
+/// The fault is inside the driver, so there is nothing to fix on this side
+/// beyond not walking into it. DX12 is the native Windows backend, is present
+/// on every machine this app targets, and is what the shipped GPU paths are
+/// tested against. Callers that respect the environment still honour
+/// `WGPU_BACKEND=vulkan`, so the backend stays reachable for debugging.
+pub fn platform_safe_backends(base: Backends) -> Backends {
+    if cfg!(target_os = "windows") {
+        base - Backends::VULKAN
+    } else {
+        base
+    }
+}
+
 /// High-level configuration for creating a [`GpuContext`].
 #[derive(Clone, Debug)]
 pub struct GpuContextOptions {
@@ -97,7 +124,7 @@ impl Default for GpuContextOptions {
         Self {
             enabled: true,
             respect_env: true,
-            backends: Backends::PRIMARY,
+            backends: platform_safe_backends(Backends::PRIMARY),
             flags: InstanceFlags::from_build_config(),
             power_preference: PowerPreference::HighPerformance,
             force_fallback_adapter: false,
@@ -607,6 +634,47 @@ mod tests {
         // Little-endian: R | G<<8 | B<<16 | A<<24
         let expected = 1u32 | (2 << 8) | (3 << 16) | (4 << 24);
         assert_eq!(packed[0], expected);
+    }
+
+    #[test]
+    fn windows_never_offers_vulkan_to_wgpu() {
+        // Regression guard for the Store certification crash: Intel's Vulkan ICD
+        // faults during adapter bring-up, so Windows builds must not enumerate
+        // Vulkan at all. Everything else in the base set has to survive, or the
+        // filter would be silently disabling working backends.
+        let filtered = platform_safe_backends(Backends::all());
+
+        if cfg!(target_os = "windows") {
+            assert!(
+                !filtered.contains(Backends::VULKAN),
+                "Windows must not enumerate Vulkan: {filtered:?}"
+            );
+            assert!(
+                filtered.contains(Backends::DX12),
+                "DX12 is the Windows backend and must remain: {filtered:?}"
+            );
+            assert_eq!(
+                filtered,
+                Backends::all() - Backends::VULKAN,
+                "only Vulkan should be removed"
+            );
+        } else {
+            assert_eq!(
+                filtered,
+                Backends::all(),
+                "non-Windows platforms must be untouched — Vulkan is the primary \
+                 backend on Linux"
+            );
+        }
+
+        // The shipped default is what actually reaches wgpu, so assert on it too
+        // rather than only on the helper.
+        assert_eq!(
+            GpuContextOptions::default()
+                .backends
+                .contains(Backends::VULKAN),
+            !cfg!(target_os = "windows")
+        );
     }
 
     #[test]

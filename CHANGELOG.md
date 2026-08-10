@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The GUI crashed at launch on Intel integrated graphics, which failed
+  Microsoft Store certification on two separate laptops. The crash is inside
+  Intel's Vulkan driver during wgpu's adapter bring-up, before any window
+  appears:
+
+  ```text
+  Faulting application name: fcs-gui.exe, version: 1.5.2.0
+  Faulting module name: igvk64.dll, version: 30.0.101.1960
+  Exception code: 0xc0000005
+  ```
+
+  eframe defaults to `Backends::PRIMARY | GL`, and `GpuContextOptions` defaulted
+  to `Backends::PRIMARY`; both include Vulkan, so wgpu was free to select the
+  Intel ICD. Windows builds now filter Vulkan out of the backend set via
+  `platform_safe_backends`, leaving DX12 (with GL as eframe's fallback). The
+  fault is in the driver, so avoiding the code path is the only fix available
+  from this side — an access violation in native driver code cannot be caught.
+
+  This was never Store-specific: the MSI and ZIP builds crash identically on the
+  same hardware, so it affected every Windows user with that driver, not only
+  Store installs. `WGPU_BACKEND=vulkan` still forces Vulkan for debugging, and
+  non-Windows platforms are untouched, since Vulkan is the correct backend on
+  Linux. `fcs-cli` shared the same default and is fixed by the same change.
+
 ### Changed
 
 - Single-image detection got roughly 4x faster in Quality mode and 1.5x in

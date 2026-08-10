@@ -46,7 +46,7 @@ pub use fixtures::{
 };
 pub use gpu::{
     BatchCropRequest, GpuAvailability, GpuBatchCropper, GpuContext, GpuContextOptions,
-    GpuInitError, RedEye,
+    GpuInitError, RedEye, platform_safe_backends,
 };
 pub use image_utils::{
     SUPPORTED_IMAGE_EXTENSIONS, compute_resize_scales, dynamic_to_bgr_chw, is_supported_image_path,

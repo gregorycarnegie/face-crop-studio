@@ -11,7 +11,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use eframe::{NativeOptions, egui};
 use fcs_gui::App2;
-use fcs_utils::init_logging;
+use fcs_utils::{init_logging, platform_safe_backends};
 use log::{LevelFilter, warn};
 use std::sync::Arc;
 
@@ -27,6 +27,16 @@ fn main() -> eframe::Result<()> {
 
     if let Some(icon) = load_app_icon() {
         options.viewport = options.viewport.with_icon(Arc::new(icon));
+    }
+
+    // eframe defaults to `Backends::PRIMARY | GL`, which includes Vulkan. On
+    // Windows that lets wgpu pick Intel's Vulkan driver, which faults during
+    // startup and takes the process with it before a window ever appears — see
+    // `platform_safe_backends`. Everything the renderer needs is available on
+    // DX12, and GL stays as the fallback eframe already relied on.
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.instance_descriptor.backends =
+            platform_safe_backends(setup.instance_descriptor.backends);
     }
 
     eframe::run_native(
