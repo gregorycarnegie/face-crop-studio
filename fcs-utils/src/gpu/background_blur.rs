@@ -236,4 +236,99 @@ mod tests {
         let blurred = DynamicImage::ImageRgba8(RgbaImage::new(8, 8));
         assert!(blurrer.blend(&sharp, &blurred, 0.5).is_err());
     }
+
+    // ------------------------------------------------------------------
+    // Until these existed the only `blend` coverage was the error path above,
+    // so the successful path — its buffer usages, uniforms and dispatch — never
+    // ran, and the whole operation could return a blank image unnoticed.
+    // ------------------------------------------------------------------
+
+    use crate::gpu::test_support::assert_plausible_output;
+
+    #[test]
+    fn blend_keeps_the_centre_sharp_and_the_edges_blurred() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping background_blur blend test: no GPU");
+            return;
+        };
+        let blurrer = GpuBackgroundBlur::new(ctx).expect("init");
+
+        // Two flat but very different images, so every output pixel must be a
+        // mix of two known values: the centre should favour `sharp`, the corner
+        // `blurred`. That pins the mask orientation without modelling the ellipse.
+        let sharp =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(33, 33, image::Rgba([255, 0, 0, 255])));
+        let blurred =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(33, 33, image::Rgba([0, 0, 255, 255])));
+
+        let result = blurrer.blend(&sharp, &blurred, 0.6).expect("blend");
+        assert_plausible_output(&result, &sharp, "blend");
+
+        let out = result.to_rgba8();
+        let centre = out.get_pixel(16, 16);
+        let corner = out.get_pixel(0, 0);
+        assert!(
+            centre[0] > centre[2],
+            "centre should favour the sharp image, got {centre:?}"
+        );
+        assert!(
+            corner[2] > corner[0],
+            "corner should favour the blurred image, got {corner:?}"
+        );
+    }
+
+    #[test]
+    fn blend_with_identical_inputs_returns_that_image() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping background_blur blend test: no GPU");
+            return;
+        };
+        let blurrer = GpuBackgroundBlur::new(ctx).expect("init");
+
+        // Blending an image with itself has one correct answer whatever the mask
+        // does, which exposes interpolation errors with no geometry to reason
+        // about. Odd size so a mis-rounded dispatch leaves a tail behind.
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            27,
+            13,
+            image::Rgba([90, 140, 60, 255]),
+        ));
+        let result = blurrer.blend(&image, &image, 0.5).expect("blend");
+        assert_plausible_output(&result, &image, "blend (identical inputs)");
+
+        for px in result.to_rgba8().pixels() {
+            for (ch, expected) in [90i16, 140, 60].iter().enumerate() {
+                assert!(
+                    (px[ch] as i16 - expected).abs() <= 1,
+                    "expected ~{expected}, got {}",
+                    px[ch]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn blend_clamps_the_mask_size_rather_than_failing() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping background_blur blend test: no GPU");
+            return;
+        };
+        let blurrer = GpuBackgroundBlur::new(ctx).expect("init");
+        let sharp = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            12,
+            12,
+            image::Rgba([200, 200, 200, 255]),
+        ));
+        let blurred = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            12,
+            12,
+            image::Rgba([20, 20, 20, 255]),
+        ));
+
+        // Out of range on both sides: mask_size clamps to 0.3 / 1.0.
+        for mask in [-5.0f32, 0.0, 1.0, 99.0] {
+            let result = blurrer.blend(&sharp, &blurred, mask).expect("blend");
+            assert_plausible_output(&result, &sharp, "blend (clamped mask)");
+        }
+    }
 }

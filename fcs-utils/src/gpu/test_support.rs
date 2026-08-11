@@ -25,7 +25,7 @@ use std::sync::Arc;
 /// Tests self-skip rather than fail so the suite still runs on hosted CI
 /// runners without a GPU. `FCS_STRICT_TESTS` does not apply here: absence of an
 /// adapter is a property of the machine, not a broken fixture.
-pub(super) fn test_context() -> Option<Arc<GpuContext>> {
+pub(crate) fn test_context() -> Option<Arc<GpuContext>> {
     match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
         GpuAvailability::Available(ctx) => Some(ctx),
         _ => None,
@@ -37,7 +37,7 @@ pub(super) fn test_context() -> Option<Arc<GpuContext>> {
 /// Deliberately not a flat fill: the per-pixel variation is what lets a test
 /// notice a shader that reads the wrong texel, a dispatch that covers the wrong
 /// area, or a stride computed with the wrong operator.
-pub(super) fn gradient_image(width: u32, height: u32) -> DynamicImage {
+pub(crate) fn gradient_image(width: u32, height: u32) -> DynamicImage {
     let mut img = RgbaImage::new(width, height);
     for (x, y, px) in img.enumerate_pixels_mut() {
         // Coprime multipliers so no two pixels collide within realistic sizes,
@@ -58,7 +58,7 @@ pub(super) fn gradient_image(width: u32, height: u32) -> DynamicImage {
 /// - the pixel buffer is the size those dimensions imply;
 /// - the content is not uniformly zero, which catches a dispatch that never
 ///   wrote anything as distinct from one that wrote the wrong thing.
-pub(super) fn assert_plausible_output(result: &DynamicImage, input: &DynamicImage, op: &str) {
+pub(crate) fn assert_plausible_output(result: &DynamicImage, input: &DynamicImage, op: &str) {
     assert_eq!(
         result.dimensions(),
         input.dimensions(),
@@ -84,7 +84,7 @@ pub(super) fn assert_plausible_output(result: &DynamicImage, input: &DynamicImag
 /// The counterpart to [`assert_plausible_output`]: for a filter that is supposed
 /// to have a visible effect, returning the input untouched is as wrong as
 /// returning a blank buffer, and a surprising number of mutants do exactly that.
-pub(super) fn assert_changed(result: &DynamicImage, input: &DynamicImage, op: &str) {
+pub(crate) fn assert_changed(result: &DynamicImage, input: &DynamicImage, op: &str) {
     assert_plausible_output(result, input, op);
     assert_ne!(
         result.to_rgba8().as_raw(),

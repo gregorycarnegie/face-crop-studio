@@ -279,3 +279,191 @@ impl GpuBatchCropper {
         Ok(outputs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::test_support::{assert_plausible_output, gradient_image, test_context};
+
+    fn request(x: u32, y: u32, w: u32, h: u32, out_w: u32, out_h: u32) -> BatchCropRequest {
+        BatchCropRequest {
+            source_x: x,
+            source_y: y,
+            source_width: w,
+            source_height: h,
+            output_width: out_w,
+            output_height: out_h,
+        }
+    }
+
+    // `validate` is the guard between a user-supplied rectangle and a GPU
+    // dispatch that would read outside the source buffer, so each rejection
+    // deserves its own case rather than one happy-path check.
+
+    #[test]
+    fn validate_accepts_a_rectangle_inside_the_image() {
+        assert!(request(0, 0, 10, 10, 5, 5).validate(10, 10).is_ok());
+        // Touching the far edge exactly is in bounds: end == dimension.
+        assert!(request(5, 5, 5, 5, 4, 4).validate(10, 10).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_sized_output() {
+        for (w, h) in [(0, 4), (4, 0), (0, 0)] {
+            assert!(
+                request(0, 0, 8, 8, w, h).validate(16, 16).is_err(),
+                "output {w}x{h} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_source_region() {
+        for (w, h) in [(0, 4), (4, 0), (0, 0)] {
+            assert!(
+                request(0, 0, w, h, 4, 4).validate(16, 16).is_err(),
+                "source {w}x{h} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_an_origin_outside_the_image() {
+        // Equal to the dimension is already past the last valid pixel.
+        assert!(request(16, 0, 1, 1, 4, 4).validate(16, 16).is_err());
+        assert!(request(0, 16, 1, 1, 4, 4).validate(16, 16).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_a_rectangle_that_runs_past_the_edge() {
+        assert!(request(8, 0, 9, 4, 4, 4).validate(16, 16).is_err());
+        assert!(request(0, 8, 4, 9, 4, 4).validate(16, 16).is_err());
+        // saturating_add means a huge width must not wrap into a valid range.
+        assert!(request(1, 1, u32::MAX, 1, 4, 4).validate(16, 16).is_err());
+    }
+
+    #[test]
+    fn crop_with_no_requests_returns_no_images() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping crop_batch GPU test: no adapter");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let source = gradient_image(16, 16);
+        assert!(cropper.crop(&source, &[]).expect("crop").is_empty());
+    }
+
+    #[test]
+    fn crop_returns_one_image_per_request_at_the_requested_size() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping crop_batch GPU test: no adapter");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let source = gradient_image(64, 48);
+
+        // Differing output sizes so a single shared stride cannot satisfy all
+        // three, and one non-power-of-two size to catch dispatch rounding.
+        let requests = [
+            request(0, 0, 32, 24, 16, 12),
+            request(32, 24, 32, 24, 8, 8),
+            request(10, 10, 20, 20, 13, 7),
+        ];
+
+        let outputs = cropper.crop(&source, &requests).expect("crop");
+        assert_eq!(outputs.len(), requests.len(), "one output per request");
+
+        for (out, req) in outputs.iter().zip(requests.iter()) {
+            assert_eq!(
+                (out.width(), out.height()),
+                (req.output_width, req.output_height),
+                "output must match the requested size"
+            );
+            let pixels = out.to_rgba8();
+            assert!(
+                pixels.as_raw().iter().any(|&b| b != 0),
+                "crop produced an all-zero image, so the dispatch wrote nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn crop_regions_differ_when_the_source_rectangles_differ() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping crop_batch GPU test: no adapter");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let source = gradient_image(64, 64);
+
+        // Same output size, different source corners. A shader that ignores the
+        // source offset returns identical tiles for both.
+        let outputs = cropper
+            .crop(
+                &source,
+                &[
+                    request(0, 0, 16, 16, 16, 16),
+                    request(48, 48, 16, 16, 16, 16),
+                ],
+            )
+            .expect("crop");
+
+        assert_ne!(
+            outputs[0].to_rgba8().as_raw(),
+            outputs[1].to_rgba8().as_raw(),
+            "crops from different source offsets must not be identical"
+        );
+    }
+
+    #[test]
+    fn crop_rejects_a_request_outside_the_source() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping crop_batch GPU test: no adapter");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let source = gradient_image(16, 16);
+
+        assert!(
+            cropper
+                .crop(&source, &[request(0, 0, 32, 32, 8, 8)])
+                .is_err(),
+            "a rectangle larger than the source must be rejected, not clamped"
+        );
+    }
+
+    #[test]
+    fn memory_usage_reports_pooled_buffers_until_cleared() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping crop_batch GPU test: no adapter");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let source = gradient_image(32, 32);
+
+        cropper
+            .crop(&source, &[request(0, 0, 16, 16, 8, 8)])
+            .expect("crop");
+        assert!(cropper.memory_usage() > 0, "buffers should be pooled");
+
+        cropper.clear_cache();
+        assert_eq!(cropper.memory_usage(), 0, "clear_cache must release them");
+    }
+
+    #[test]
+    fn crop_output_is_a_plausible_image_for_a_full_frame_request() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping crop_batch GPU test: no adapter");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let source = gradient_image(24, 24);
+
+        // Crop the whole frame at its own size: the result should be a faithful
+        // image of the same dimensions, which pins down the no-scaling path.
+        let outputs = cropper
+            .crop(&source, &[request(0, 0, 24, 24, 24, 24)])
+            .expect("crop");
+        assert_plausible_output(&outputs[0], &source, "crop (identity)");
+    }
+}

@@ -44,7 +44,7 @@ pub use buffer_pool::GpuBufferPool;
 pub mod memory;
 pub use memory::get_available_vram;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use std::sync::Arc;
 

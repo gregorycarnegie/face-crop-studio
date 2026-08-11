@@ -270,3 +270,220 @@ impl WgpuEnhancer {
         self.gaussian_blur.memory_usage() + self.background_blur.memory_usage()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::test_support::{gradient_image, test_context};
+
+    /// `apply` is a chain of `if setting is active { run stage }` guards, and it
+    /// had no tests at all. Every guard was therefore free to invert: a mutated
+    /// comparison would either skip a requested enhancement or run one nobody
+    /// asked for, and nothing noticed.
+    ///
+    /// Note that `EnhancementSettings::default()` is *not* neutral — it ships
+    /// `unsharp_amount: 0.6`, so sharpening is on. A genuine no-op baseline has
+    /// to zero that as well, which is itself worth pinning down.
+    fn neutral() -> EnhancementSettings {
+        EnhancementSettings {
+            unsharp_amount: 0.0,
+            sharpness: 0.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn default_settings_are_not_a_no_op() {
+        let d = EnhancementSettings::default();
+        assert!(
+            d.unsharp_amount > 0.0,
+            "defaults are expected to sharpen; neutral() exists because of it"
+        );
+    }
+
+    #[test]
+    fn neutral_settings_leave_the_image_untouched() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping WgpuEnhancer test: no adapter");
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(24, 18);
+
+        let out = enhancer.apply(&image, &neutral(), None).expect("apply");
+        assert_eq!(
+            out.to_rgba8().as_raw(),
+            image.to_rgba8().as_raw(),
+            "no active enhancement should mean no change; a guard that inverted \
+             would run a stage nobody asked for"
+        );
+    }
+
+    #[test]
+    fn each_enhancement_changes_the_image_when_its_setting_is_active() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping WgpuEnhancer test: no adapter");
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(32, 24);
+        let baseline = image.to_rgba8().into_raw();
+
+        // One stage at a time, each starting from the neutral baseline, so a
+        // failure names the stage whose guard broke rather than "something".
+        let cases: Vec<(&str, EnhancementSettings)> = vec![
+            (
+                "auto_color",
+                EnhancementSettings {
+                    auto_color: true,
+                    ..neutral()
+                },
+            ),
+            (
+                "exposure_stops",
+                EnhancementSettings {
+                    exposure_stops: 1.0,
+                    ..neutral()
+                },
+            ),
+            (
+                "brightness",
+                EnhancementSettings {
+                    brightness: 30,
+                    ..neutral()
+                },
+            ),
+            (
+                "contrast",
+                EnhancementSettings {
+                    contrast: 1.6,
+                    ..neutral()
+                },
+            ),
+            (
+                "saturation",
+                EnhancementSettings {
+                    saturation: 1.8,
+                    ..neutral()
+                },
+            ),
+            (
+                "skin_smooth_amount",
+                EnhancementSettings {
+                    skin_smooth_amount: 0.8,
+                    ..neutral()
+                },
+            ),
+            (
+                "unsharp_amount",
+                EnhancementSettings {
+                    unsharp_amount: 1.2,
+                    unsharp_radius: 2.0,
+                    ..neutral()
+                },
+            ),
+            (
+                "sharpness",
+                EnhancementSettings {
+                    sharpness: 1.0,
+                    unsharp_radius: 2.0,
+                    ..neutral()
+                },
+            ),
+            (
+                "background_blur",
+                EnhancementSettings {
+                    background_blur: true,
+                    ..neutral()
+                },
+            ),
+        ];
+
+        for (name, settings) in cases {
+            let out = enhancer
+                .apply(&image, &settings, None)
+                .unwrap_or_else(|e| panic!("apply failed for {name}: {e}"));
+            assert_eq!(
+                (out.width(), out.height()),
+                (image.width(), image.height()),
+                "{name} must preserve dimensions"
+            );
+            assert_ne!(
+                out.to_rgba8().as_raw(),
+                &baseline,
+                "{name} is active but changed nothing, so its guard did not fire"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_exposure_is_active_too() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping WgpuEnhancer test: no adapter");
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(16, 16);
+
+        // The guard tests an absolute value, so a sign-blind comparison would
+        // silently drop darkening while keeping brightening.
+        let settings = EnhancementSettings {
+            exposure_stops: -1.0,
+            ..neutral()
+        };
+        let out = enhancer.apply(&image, &settings, None).expect("apply");
+        assert_ne!(out.to_rgba8().as_raw(), image.to_rgba8().as_raw());
+    }
+
+    #[test]
+    fn unsharp_needs_both_an_amount_and_a_radius() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping WgpuEnhancer test: no adapter");
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(16, 16);
+
+        // The stage is gated on `combined > 0.0 && radius > 0.0`; with either
+        // half missing it must not run. An `||` there would sharpen with a zero
+        // radius, and a zero amount would sharpen by nothing.
+        for (amount, radius) in [(1.0f32, 0.0f32), (0.0, 2.0)] {
+            let settings = EnhancementSettings {
+                unsharp_amount: amount,
+                unsharp_radius: radius,
+                ..neutral()
+            };
+            let out = enhancer.apply(&image, &settings, None).expect("apply");
+            assert_eq!(
+                out.to_rgba8().as_raw(),
+                image.to_rgba8().as_raw(),
+                "unsharp with amount={amount} radius={radius} must be inert"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_usage_and_clear_caches_track_the_pools() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping WgpuEnhancer test: no adapter");
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(32, 32);
+
+        // background_blur exercises both the gaussian and background pools,
+        // which are the two that memory_usage sums.
+        let settings = EnhancementSettings {
+            background_blur: true,
+            ..neutral()
+        };
+        enhancer.apply(&image, &settings, None).expect("apply");
+        assert!(
+            enhancer.memory_usage() > 0,
+            "pools should hold buffers after a blur pass"
+        );
+
+        enhancer.clear_caches();
+        assert_eq!(enhancer.memory_usage(), 0, "clear_caches must empty them");
+    }
+}

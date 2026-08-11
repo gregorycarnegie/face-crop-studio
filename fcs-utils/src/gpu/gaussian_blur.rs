@@ -375,6 +375,79 @@ mod tests {
         assert_eq!(result.to_rgba8().as_raw(), image.to_rgba8().as_raw());
     }
 
+    /// The only test that ran `blur` used radius 0, which returns the input
+    /// unchanged before touching the GPU — so the two-pass separable blur, its
+    /// buffer usages and its dispatch arithmetic were entirely unexercised.
+    #[test]
+    fn blur_softens_a_hard_edge_in_both_directions() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping gaussian_blur test: no GPU");
+            return;
+        };
+        let blurrer = GpuGaussianBlur::new(ctx).expect("init");
+
+        // A single white pixel on black. After blurring, its energy must spread
+        // to both horizontal and vertical neighbours — a blur that only runs one
+        // of the two passes leaves one axis untouched.
+        let mut img = RgbaImage::from_pixel(15, 15, image::Rgba([0, 0, 0, 255]));
+        img.put_pixel(7, 7, image::Rgba([255, 255, 255, 255]));
+        let image = DynamicImage::ImageRgba8(img);
+
+        let result = blurrer.blur(&image, 2.0).expect("blur");
+        crate::gpu::test_support::assert_changed(&result, &image, "blur");
+
+        let out = result.to_rgba8();
+        let centre = out.get_pixel(7, 7)[0];
+        let left = out.get_pixel(6, 7)[0];
+        let right = out.get_pixel(8, 7)[0];
+        let above = out.get_pixel(7, 6)[0];
+        let below = out.get_pixel(7, 8)[0];
+
+        assert!(centre < 255, "the peak must be attenuated, got {centre}");
+        assert!(
+            left > 0 && right > 0,
+            "horizontal pass did not spread: {left}, {right}"
+        );
+        assert!(
+            above > 0 && below > 0,
+            "vertical pass did not spread: {above}, {below}"
+        );
+        // Separable Gaussian is symmetric, so opposite neighbours must match.
+        assert_eq!(left, right, "blur must be horizontally symmetric");
+        assert_eq!(above, below, "blur must be vertically symmetric");
+    }
+
+    #[test]
+    fn blur_preserves_a_uniform_image_and_covers_odd_dimensions() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping gaussian_blur test: no GPU");
+            return;
+        };
+        let blurrer = GpuGaussianBlur::new(ctx).expect("init");
+
+        // Blurring a flat field is the identity up to rounding, which pins the
+        // kernel normalisation: a kernel that does not sum to 1 shifts the level.
+        // Odd, non-workgroup-multiple size so a mis-rounded dispatch shows up.
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            37,
+            19,
+            image::Rgba([120, 120, 120, 255]),
+        ));
+        let result = blurrer.blur(&image, 3.0).expect("blur");
+        crate::gpu::test_support::assert_plausible_output(&result, &image, "blur (uniform)");
+
+        for px in result.to_rgba8().pixels() {
+            for ch in 0..3 {
+                let d = px[ch] as i16 - 120;
+                assert!(
+                    d.abs() <= 1,
+                    "uniform field must survive blurring, got {} vs 120",
+                    px[ch]
+                );
+            }
+        }
+    }
+
     #[test]
     fn clear_cache_and_memory_usage() {
         let Some(ctx) = test_context() else {
