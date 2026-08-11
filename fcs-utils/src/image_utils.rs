@@ -397,6 +397,66 @@ mod tests {
         assert_eq!(array[4 + 1], 128.0); // G at (1, 0)
     }
 
+    /// Every pixel of a multi-row image, not just the first row.
+    ///
+    /// The row offset is `y * row_stride`, which is 0 for y = 0 whatever the
+    /// operator — so assertions confined to the top row cannot tell a multiply
+    /// from a divide, and a mutant that made every row read row 0 survived.
+    #[test]
+    fn rgb_to_bgr_chw_reads_each_row_from_its_own_offset() {
+        let (w, h) = (3u32, 4u32);
+        let mut image = RgbImage::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                // Distinct per pixel and per channel, so a row mixup cannot
+                // coincidentally produce the expected value.
+                let base = (y * w + x) as u8;
+                image.put_pixel(x, y, image::Rgb([base, base + 50, base + 100]));
+            }
+        }
+
+        let array = rgb_to_bgr_chw(&image);
+        let channel_len = (w * h) as usize;
+        assert_eq!(array.len(), 3 * channel_len);
+
+        for y in 0..h {
+            for x in 0..w {
+                let base = (y * w + x) as f32;
+                let flat = (y * w + x) as usize;
+                assert_eq!(array[flat], base + 100.0, "B at ({x}, {y})");
+                assert_eq!(array[channel_len + flat], base + 50.0, "G at ({x}, {y})");
+                assert_eq!(array[2 * channel_len + flat], base, "R at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn is_supported_image_path_rejects_other_extensions_and_bare_names() {
+        // The function had only positive cases, so replacing it with `true`
+        // wholesale went unnoticed — which would make the app try to decode
+        // every file in a directory.
+        for name in [
+            "notes.txt",
+            "video.mp4",
+            "archive.zip",
+            "model.onnx",
+            "settings.json",
+        ] {
+            assert!(
+                !is_supported_image_path(Path::new(name)),
+                "{name} must not be treated as an image"
+            );
+        }
+
+        // No extension at all, and a dotfile whose name is not an extension.
+        assert!(!is_supported_image_path(Path::new("README")));
+        assert!(!is_supported_image_path(Path::new("archive.tar.gz")));
+
+        // A representative positive case, so the test fails if the list breaks
+        // rather than passing because everything returns false.
+        assert!(is_supported_image_path(Path::new("photo.png")));
+    }
+
     #[test]
     fn compute_resize_scales_returns_expected_values() {
         let (sx, sy) = compute_resize_scales((640, 480), (320, 240)).unwrap();

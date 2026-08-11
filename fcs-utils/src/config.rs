@@ -779,4 +779,193 @@ mod tests {
         telemetry.set_level(LevelFilter::Info);
         assert_eq!(telemetry.level, "info");
     }
+
+    // ------------------------------------------------------------------
+    // Settings resolution: each of these decides real behaviour (offsets,
+    // worker counts, log levels, whether the GPU is used at all) and each had
+    // survivors because nothing asserted the specific values.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn level_filter_maps_every_accepted_spelling() {
+        // Every arm is deleted individually by mutation, so each needs its own
+        // assertion — and the fallback is Debug, not Off, which means a deleted
+        // arm silently turns into "debug" rather than failing loudly.
+        let cases = [
+            ("off", LevelFilter::Off),
+            ("error", LevelFilter::Error),
+            ("warn", LevelFilter::Warn),
+            ("warning", LevelFilter::Warn),
+            ("info", LevelFilter::Info),
+            ("trace", LevelFilter::Trace),
+            ("debug", LevelFilter::Debug),
+        ];
+        for (text, expected) in cases {
+            let settings = TelemetrySettings {
+                level: text.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(settings.level_filter(), expected, "level {text:?}");
+        }
+
+        // Case and surrounding whitespace are normalised.
+        for text in ["  OFF  ", "Off", "oFF"] {
+            let settings = TelemetrySettings {
+                level: text.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(settings.level_filter(), LevelFilter::Off, "level {text:?}");
+        }
+
+        // Anything unrecognised falls back to Debug.
+        for text in ["", "verbose", "nonsense"] {
+            let settings = TelemetrySettings {
+                level: text.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(
+                settings.level_filter(),
+                LevelFilter::Debug,
+                "level {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_batch_parallelism_honours_an_override_and_never_returns_zero() {
+        let with_override = |n: Option<usize>| {
+            AppSettings {
+                batch_parallelism: n,
+                ..Default::default()
+            }
+            .resolved_batch_parallelism()
+        };
+
+        // An explicit override wins, but 0 would stall the batch entirely.
+        assert_eq!(with_override(Some(7)), 7);
+        assert_eq!(with_override(Some(1)), 1);
+        assert_eq!(with_override(Some(0)), 1, "0 workers must be raised to 1");
+
+        // Auto: min(4, max(1, cpus / 2)). The exact number depends on the host,
+        // so assert the contract rather than a value.
+        let auto = with_override(None);
+        assert!(
+            (1..=4).contains(&auto),
+            "auto parallelism must land in 1..=4, got {auto}"
+        );
+
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        assert_eq!(
+            auto,
+            (cpus / 2).clamp(1, 4),
+            "auto parallelism should be half the CPUs, clamped to 1..=4"
+        );
+    }
+
+    #[test]
+    fn sanitize_clamps_offsets_symmetrically_around_zero() {
+        let mut settings = CropSettings {
+            vertical_offset: -5.0,
+            horizontal_offset: -5.0,
+            ..Default::default()
+        };
+        settings.sanitize();
+        // The lower bound is -1.0, not 1.0: dropping the sign would clamp a
+        // negative offset up to +1.0 and flip the crop the wrong way.
+        assert_eq!(settings.vertical_offset, -1.0);
+        assert_eq!(settings.horizontal_offset, -1.0);
+
+        let mut high = CropSettings {
+            vertical_offset: 5.0,
+            horizontal_offset: 5.0,
+            ..Default::default()
+        };
+        high.sanitize();
+        assert_eq!(high.vertical_offset, 1.0);
+        assert_eq!(high.horizontal_offset, 1.0);
+
+        // In-range values are left alone.
+        let mut mid = CropSettings {
+            vertical_offset: -0.25,
+            horizontal_offset: 0.25,
+            ..Default::default()
+        };
+        mid.sanitize();
+        assert_eq!(mid.vertical_offset, -0.25);
+        assert_eq!(mid.horizontal_offset, 0.25);
+    }
+
+    #[test]
+    fn sanitize_replaces_a_zero_output_size_and_clamps_the_rest() {
+        let mut settings = CropSettings {
+            output_width: 0,
+            face_height_pct: 500.0,
+            vignette_softness: 5.0,
+            vignette_intensity: -5.0,
+            ..Default::default()
+        };
+        settings.sanitize();
+
+        assert_eq!(
+            settings.output_width, 512,
+            "a zero width would divide by zero"
+        );
+        assert_eq!(settings.face_height_pct, 100.0);
+        assert_eq!(settings.vignette_softness, 1.0);
+        assert_eq!(settings.vignette_intensity, 0.0);
+    }
+
+    #[test]
+    fn gpu_settings_convert_both_flags_into_context_options() {
+        // Both fields are copied through; a dropped field would silently fall
+        // back to the default and either disable the GPU or start honouring
+        // WGPU_* env vars against the user's choice.
+        for (enabled, respect_env) in [(true, true), (true, false), (false, true), (false, false)] {
+            let settings = GpuSettings {
+                enabled,
+                respect_env,
+                ..Default::default()
+            };
+            let options: crate::gpu::GpuContextOptions = (&settings).into();
+            assert_eq!(options.enabled, enabled, "enabled {enabled}");
+            assert_eq!(
+                options.respect_env, respect_env,
+                "respect_env {respect_env}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_enhancement_settings_carries_the_values_across() {
+        let enhance = EnhanceSettings {
+            auto_color: true,
+            exposure_stops: 1.25,
+            brightness: 17,
+            contrast: 1.4,
+            ..Default::default()
+        };
+        let mapped = enhance.to_enhancement_settings();
+
+        assert!(mapped.auto_color);
+        assert_eq!(mapped.exposure_stops, 1.25);
+        assert_eq!(mapped.brightness, 17);
+        assert_eq!(mapped.contrast, 1.4);
+    }
+
+    #[test]
+    fn default_settings_path_ends_with_the_configured_relative_path() {
+        let path = default_settings_path();
+        assert!(
+            path.ends_with(DEFAULT_SETTINGS_PATH),
+            "expected a path ending in {DEFAULT_SETTINGS_PATH}, got {}",
+            path.display()
+        );
+        assert!(
+            path.is_absolute() || path == Path::new(DEFAULT_SETTINGS_PATH),
+            "should be absolute unless the cwd was unavailable, got {}",
+            path.display()
+        );
+    }
 }

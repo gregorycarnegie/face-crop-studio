@@ -1286,6 +1286,60 @@ mod gpu_parity_tests {
         );
     }
 
+    /// A source wider than the adapter's `max_texture_dimension_2d` cannot be
+    /// uploaded as a texture, so `gpu_preprocess` falls back to the CPU instead
+    /// of triggering a fatal wgpu validation error. Nothing exercised that guard.
+    ///
+    /// Only the width is oversized: the check is an `||`, so requiring both
+    /// dimensions to exceed the limit would let this case through to the GPU and
+    /// fail. Height stays small to keep the allocation to a few hundred KB.
+    #[test]
+    fn an_oversized_source_falls_back_to_cpu_instead_of_failing() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess test: no adapter");
+            return;
+        };
+        let max_dim = gpu.context.device().limits().max_texture_dimension_2d;
+        let width = max_dim + 1;
+        let height = 8u32;
+
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            width,
+            height,
+            image::Rgba([90, 140, 60, 255]),
+        ));
+        let config = config_for(64, 64);
+
+        let out = gpu
+            .preprocess(&image, &config)
+            .expect("an oversized source must fall back to the CPU, not error");
+
+        assert_eq!(out.original_size, (width, height));
+        let floats = as_floats(&out);
+        assert_eq!(floats.len(), 3 * 64 * 64);
+        assert!(
+            floats.iter().any(|&v| v > 1.0),
+            "fallback produced an empty tensor"
+        );
+    }
+
+    #[test]
+    fn debug_impl_names_the_type_and_adapter() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess test: no adapter");
+            return;
+        };
+        let text = format!("{gpu:?}");
+        assert!(
+            text.contains("WgpuPreprocessor"),
+            "Debug output should name the type, got {text}"
+        );
+        assert!(
+            text.contains("adapter"),
+            "Debug output should include the adapter field, got {text}"
+        );
+    }
+
     #[test]
     fn gpu_preprocess_rejects_zero_input_dimensions() {
         let Some(gpu) = gpu_preprocessor() else {

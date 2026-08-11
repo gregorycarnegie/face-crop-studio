@@ -269,4 +269,96 @@ mod tests {
         // Comma path with < 3 parts falls through to the final unrecognized-format error
         assert!(parse_fill_color_spec("10, 20").is_err());
     }
+
+    // ------------------------------------------------------------------
+    // The three component parsers, exercised directly. They were only ever
+    // reached through `parse_fill_color_spec` with values that did not
+    // distinguish their branches, so the scaling arithmetic and the boundary
+    // between "fraction" and "0-255 / percentage" were untested.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn parse_alpha_value_treats_above_one_as_0_255_and_at_most_one_as_a_fraction() {
+        // The branch pivots on `value > 1.0`, so 1.0 itself must stay a fraction:
+        // as a 0-255 value it would collapse to 1/255 -> 0.
+        assert_eq!(parse_alpha_value("1").unwrap(), 255);
+        assert_eq!(parse_alpha_value("1.0").unwrap(), 255);
+        assert_eq!(parse_alpha_value("0").unwrap(), 0);
+        assert_eq!(parse_alpha_value("0.5").unwrap(), 128);
+
+        // Above 1.0 is a 0-255 byte value, divided by 255.
+        assert_eq!(parse_alpha_value("255").unwrap(), 255);
+        assert_eq!(parse_alpha_value("128").unwrap(), 128);
+        assert_eq!(parse_alpha_value("2").unwrap(), 2);
+
+        // Out of range clamps rather than wrapping.
+        assert_eq!(parse_alpha_value("999").unwrap(), 255);
+        assert_eq!(parse_alpha_value("-5").unwrap(), 0);
+    }
+
+    #[test]
+    fn parse_alpha_value_scales_percentages_by_one_hundredth() {
+        assert_eq!(parse_alpha_value("100%").unwrap(), 255);
+        assert_eq!(parse_alpha_value("50%").unwrap(), 128);
+        assert_eq!(parse_alpha_value("0%").unwrap(), 0);
+        // Whitespace inside the percentage form is tolerated.
+        assert_eq!(parse_alpha_value(" 25 % ").unwrap(), 64);
+        assert!(parse_alpha_value("abc%").is_err());
+        assert!(parse_alpha_value("nonsense").is_err());
+    }
+
+    #[test]
+    fn parse_hue_value_strips_units_and_wraps_into_zero_to_360() {
+        for (input, expected) in [
+            ("90", 90.0f32),
+            ("90deg", 90.0),
+            ("90DEG", 90.0),
+            ("90 deg", 90.0),
+            ("90°", 90.0),
+            ("90 °", 90.0),
+        ] {
+            let got = parse_hue_value(input).unwrap();
+            assert!(
+                (got - expected).abs() < 1e-3,
+                "hue {input}: got {got}, expected {expected}"
+            );
+        }
+
+        // rem_euclid, so negatives wrap up and multiples of 360 collapse to 0.
+        assert!((parse_hue_value("-90").unwrap() - 270.0).abs() < 1e-3);
+        assert!(parse_hue_value("360").unwrap().abs() < 1e-3);
+        assert!((parse_hue_value("450").unwrap() - 90.0).abs() < 1e-3);
+
+        // "deg" stripping is length-guarded: a bare unit is not a number.
+        assert!(parse_hue_value("deg").is_err());
+        assert!(parse_hue_value("").is_err());
+    }
+
+    #[test]
+    fn parse_percentage_value_distinguishes_fractions_from_percentages() {
+        // Explicit percent sign: scaled by 0.01.
+        for (input, expected) in [("100%", 1.0f32), ("50%", 0.5), ("0%", 0.0)] {
+            let got = parse_percentage_value(input).unwrap();
+            assert!(
+                (got - expected).abs() < 1e-4,
+                "{input}: got {got}, expected {expected}"
+            );
+        }
+
+        // No percent sign and <= 1.0: already a fraction, used as-is. 1.0 sits on
+        // the boundary and must not be rescaled to 0.01.
+        assert!((parse_percentage_value("1").unwrap() - 1.0).abs() < 1e-4);
+        assert!((parse_percentage_value("0.25").unwrap() - 0.25).abs() < 1e-4);
+
+        // No percent sign and > 1.0: read as a percentage, so 50 -> 0.5.
+        assert!((parse_percentage_value("50").unwrap() - 0.5).abs() < 1e-4);
+        assert!((parse_percentage_value("100").unwrap() - 1.0).abs() < 1e-4);
+
+        // Clamped at both ends.
+        assert!((parse_percentage_value("500").unwrap() - 1.0).abs() < 1e-4);
+        assert!(parse_percentage_value("-1").unwrap().abs() < 1e-4);
+
+        assert!(parse_percentage_value("x%").is_err());
+        assert!(parse_percentage_value("x").is_err());
+    }
 }

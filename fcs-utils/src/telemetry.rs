@@ -234,4 +234,132 @@ mod tests {
         let guard = timing_guard_if("op", Level::Debug, false);
         assert!(!guard.is_active());
     }
+
+    // ------------------------------------------------------------------
+    // The guard's own accessors, and the numeric level mapping, had no
+    // coverage: `elapsed`, `finish` and `Drop` could all be replaced with
+    // no-ops or defaults without any test noticing.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn elapsed_advances_and_finish_returns_a_real_duration() {
+        reset();
+        let guard = timing_guard_if("op", Level::Error, false);
+
+        // Busy-wait rather than sleep: this only needs the clock to move, and a
+        // sleep would make the test slow for no extra signal.
+        let spin_until_measurable = || {
+            let t = std::time::Instant::now();
+            while t.elapsed() == Duration::ZERO {
+                std::hint::spin_loop();
+            }
+        };
+        spin_until_measurable();
+
+        let first = guard.elapsed();
+        assert!(
+            first > Duration::ZERO,
+            "elapsed must reflect real time, got {first:?}"
+        );
+
+        spin_until_measurable();
+        assert!(
+            guard.elapsed() >= first,
+            "elapsed must be monotonic non-decreasing"
+        );
+
+        let finished = guard.finish();
+        assert!(
+            finished >= first,
+            "finish must report at least what elapsed already reported: {finished:?} vs {first:?}"
+        );
+    }
+
+    /// `timing_guard_if` can never yield an active guard under `cargo test`: its
+    /// third condition is `log_enabled!`, and no logger is installed, so that is
+    /// always false. This is why every other test here only checks inactive
+    /// cases. To reach the active path at all, build the guard with the private
+    /// constructor that `timing_guard_if` itself calls.
+    #[test]
+    fn finish_reports_a_duration_and_the_active_flag_round_trips() {
+        reset();
+
+        let guard = TimingGuard::new("op".into(), Level::Error, true);
+        assert!(
+            guard.is_active(),
+            "a guard constructed active must report itself active"
+        );
+        let elapsed = guard.finish();
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "finish should report this scope's own duration, got {elapsed:?}"
+        );
+
+        let inactive = TimingGuard::new("quiet".into(), Level::Error, false);
+        assert!(!inactive.is_active());
+
+        // Dropping an active guard is the logging path. With no logger installed
+        // it has no observable effect, so this only asserts it does not panic.
+        drop(TimingGuard::new("dropped".into(), Level::Error, true));
+
+        reset();
+    }
+
+    #[test]
+    fn timing_guard_if_requires_every_condition_to_hold() {
+        // `active` is `enabled && telemetry_allows(level) && log_enabled!(..)`.
+        // An `||` in place of either `&&` would activate the guard when only one
+        // condition held, so check the two failing combinations independently.
+        reset();
+
+        // Telemetry configured off: even an explicitly enabled guard is inert.
+        configure(false, LevelFilter::Off);
+        assert!(
+            !timing_guard_if("op", Level::Error, true).is_active(),
+            "telemetry disabled globally must win over enabled=true"
+        );
+
+        // Telemetry on, but the caller passed enabled=false.
+        configure(true, LevelFilter::Trace);
+        assert!(
+            !timing_guard_if("op", Level::Error, false).is_active(),
+            "enabled=false must win over telemetry being on"
+        );
+
+        // Telemetry on but the level is above the configured filter.
+        configure(true, LevelFilter::Error);
+        assert!(
+            !timing_guard_if("op", Level::Trace, true).is_active(),
+            "a level the filter excludes must not activate"
+        );
+
+        reset();
+    }
+
+    #[test]
+    fn filter_and_index_round_trip_for_every_level() {
+        // Each arm is deleted individually by mutation, so assert each mapping
+        // rather than only the endpoints.
+        let pairs = [
+            (1u8, LevelFilter::Error),
+            (2, LevelFilter::Warn),
+            (3, LevelFilter::Info),
+            (4, LevelFilter::Debug),
+            (5, LevelFilter::Trace),
+        ];
+        for (index, filter) in pairs {
+            assert_eq!(filter_from_index(index), filter, "index {index}");
+            assert_eq!(filter_index(filter), index, "filter {filter:?}");
+        }
+
+        // Everything outside 1..=5 is Off, including 0 and the far end of u8.
+        for index in [0u8, 6, 7, 100, u8::MAX] {
+            assert_eq!(
+                filter_from_index(index),
+                LevelFilter::Off,
+                "index {index} should be Off"
+            );
+        }
+        assert_eq!(filter_index(LevelFilter::Off), 0);
+    }
 }
