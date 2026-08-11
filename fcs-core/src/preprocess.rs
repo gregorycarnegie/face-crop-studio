@@ -645,7 +645,14 @@ fn gpu_preprocess(
     encoder.copy_buffer_to_buffer(&storage_buffer, 0, &readback_buffer, 0, output_size_bytes);
     queue.submit(std::iter::once(encoder.finish()));
 
-    let buffer_slice = readback_buffer.slice(..);
+    // Slice the region this dispatch actually wrote, not the whole buffer.
+    // `ensure_output_buffers` only ever grows the pooled buffers, so after a
+    // larger tensor has been processed the buffer stays larger — and mapping all
+    // of it made the readback length the pooled capacity rather than the
+    // requested size, failing the output-size check below for every subsequent
+    // smaller tensor. Reachable by lowering the detection input size while the
+    // preprocessor is reused. `gpu/runtime.rs` already sliced explicitly.
+    let buffer_slice = readback_buffer.slice(0..output_size_bytes);
     let (sender, receiver) = mpsc::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = sender.send(res);
@@ -1107,5 +1114,212 @@ mod tests {
             .and_then(|view| view.as_slice::<f32>())
             .unwrap();
         assert_eq!(trait_data, helper_data);
+    }
+}
+
+/// GPU preprocessing measured against the CPU implementation.
+///
+/// Every other test in this file exercises the CPU path, which is why the whole
+/// `gpu_preprocess` chain carried mutation survivors — no assertion reached it.
+/// The CPU path is well covered, so it makes a usable reference.
+///
+/// One caveat shapes these tests. The shader resamples with
+/// `textureSampleLevel(..., 0.0)`: four bilinear taps at mip 0, while the CPU
+/// `Triangle` filter averages every contributing source pixel. On minification
+/// the two diverge sharply — downscaling 100x40 to 64x64 differs by up to 51 of
+/// 255 per channel, against exactly 0 when no resize happens. So exact parity is
+/// asserted only where no resampling occurs, which is also where the row
+/// alignment padding can be isolated; the resampling paths get structural
+/// assertions instead.
+#[cfg(test)]
+mod gpu_parity_tests {
+    use super::*;
+    use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
+    use image::{DynamicImage, RgbaImage};
+
+    fn gpu_preprocessor() -> Option<WgpuPreprocessor> {
+        match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+            GpuAvailability::Available(ctx) => WgpuPreprocessor::new(ctx).ok(),
+            _ => None,
+        }
+    }
+
+    /// Distinct value per pixel and channel, so a transposed axis or a
+    /// mis-strided row cannot coincidentally match.
+    fn gradient(width: u32, height: u32) -> DynamicImage {
+        let mut img = RgbaImage::new(width, height);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            let r = ((x * 7 + y * 13) % 256) as u8;
+            let g = ((x * 29 + y * 3) % 256) as u8;
+            let b = ((x * 11 + y * 37) % 256) as u8;
+            *px = image::Rgba([r, g, b, 255]);
+        }
+        DynamicImage::ImageRgba8(img)
+    }
+
+    fn as_floats(out: &PreprocessOutput) -> Vec<f32> {
+        out.tensor
+            .to_plain_array_view::<f32>()
+            .expect("f32 tensor")
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    fn config_for(width: u32, height: u32) -> PreprocessConfig {
+        PreprocessConfig {
+            input_size: InputSize { width, height },
+            resize_quality: ResizeQuality::Quality,
+        }
+    }
+
+    /// With `input_size` equal to the image size no resampling happens, so the
+    /// two tensors must be identical — which makes this the test that pins down
+    /// the row padding in `prepare_upload`.
+    ///
+    /// wgpu requires each texture row to be a multiple of 256 bytes:
+    ///   -  64 px -> 256 bytes, already aligned, takes the early return
+    ///   -  65 px -> 260 bytes, pads to 512, one byte past the boundary
+    ///   - 100 px -> 400 bytes, pads to 512, takes the row-copy loop
+    ///   -  37 px -> 148 bytes, pads to 256
+    #[test]
+    fn gpu_matches_cpu_exactly_when_no_resampling_is_needed() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess parity test: no adapter");
+            return;
+        };
+
+        for (w, h) in [(64u32, 64u32), (65, 33), (100, 40), (37, 19), (128, 8)] {
+            let image = gradient(w, h);
+            let config = config_for(w, h);
+
+            let cpu = preprocess_dynamic_image(&image, &config).expect("cpu preprocess");
+            let out = gpu.preprocess(&image, &config).expect("gpu preprocess");
+
+            let g = as_floats(&out);
+            let c = as_floats(&cpu);
+            assert_eq!(g.len(), c.len(), "{w}x{h}: tensor length must agree");
+
+            let worst = g
+                .iter()
+                .zip(c.iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                worst <= 1.0,
+                "{w}x{h} needs no resampling, so the GPU tensor must match the CPU \
+                 one; worst channel difference was {worst}. A row stride computed \
+                 without the 256-byte alignment shows up here first."
+            );
+            assert!(
+                g.iter().any(|&v| v > 1.0),
+                "{w}x{h}: GPU tensor is empty, so nothing was written"
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_reports_the_same_geometry_as_cpu_when_resampling() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess parity test: no adapter");
+            return;
+        };
+        let config = config_for(64, 64);
+
+        // Values diverge on minification (see the module comment), but the
+        // metadata used to map detections back to source coordinates must not.
+        for (w, h) in [(100u32, 40u32), (200, 200), (37, 19)] {
+            let image = gradient(w, h);
+            let cpu = preprocess_dynamic_image(&image, &config).expect("cpu");
+            let out = gpu.preprocess(&image, &config).expect("gpu");
+
+            assert_eq!(out.original_size, (w, h), "{w}x{h}: original_size");
+            assert_eq!(out.original_size, cpu.original_size);
+            assert!(
+                (out.scale_x - cpu.scale_x).abs() < 1e-4
+                    && (out.scale_y - cpu.scale_y).abs() < 1e-4,
+                "{w}x{h}: scales must agree with the CPU path, gpu=({}, {}) cpu=({}, {})",
+                out.scale_x,
+                out.scale_y,
+                cpu.scale_x,
+                cpu.scale_y
+            );
+            assert_eq!(
+                as_floats(&out).len(),
+                as_floats(&cpu).len(),
+                "{w}x{h}: tensor length"
+            );
+        }
+    }
+
+    /// The GPU sampler is built with `FilterMode::Linear` unconditionally, so
+    /// `resize_quality` has no effect on the GPU path while it selects Nearest
+    /// vs Triangle on the CPU. Recorded as it stands: if the shader ever honours
+    /// the setting, update this test rather than let it fail obscurely.
+    #[test]
+    fn gpu_output_does_not_currently_vary_with_resize_quality() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess parity test: no adapter");
+            return;
+        };
+        let image = gradient(100, 40);
+        let speed = gpu
+            .preprocess(
+                &image,
+                &PreprocessConfig {
+                    input_size: InputSize {
+                        width: 64,
+                        height: 64,
+                    },
+                    resize_quality: ResizeQuality::Speed,
+                },
+            )
+            .expect("gpu speed");
+        let quality = gpu
+            .preprocess(&image, &config_for(64, 64))
+            .expect("gpu quality");
+
+        assert_eq!(
+            as_floats(&speed),
+            as_floats(&quality),
+            "the GPU sampler ignores resize_quality; update this test if that changes"
+        );
+    }
+
+    #[test]
+    fn gpu_preprocess_rejects_zero_input_dimensions() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess test: no adapter");
+            return;
+        };
+        let image = gradient(16, 16);
+        for (w, h) in [(0u32, 64u32), (64, 0)] {
+            assert!(
+                gpu.preprocess(&image, &config_for(w, h)).is_err(),
+                "input {w}x{h} must be rejected"
+            );
+        }
+    }
+
+    /// Buffers are pooled across calls, so a run at a different size is where a
+    /// stale capacity would surface: the third result must equal the first.
+    #[test]
+    fn gpu_preprocess_is_stable_when_pooled_buffers_are_reused() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU preprocess test: no adapter");
+            return;
+        };
+        let config = config_for(64, 64);
+        let big = gradient(96, 96);
+        let small = gradient(32, 32);
+
+        let first = as_floats(&gpu.preprocess(&big, &config).expect("first"));
+        let _ = gpu.preprocess(&small, &config).expect("second");
+        let third = as_floats(&gpu.preprocess(&big, &config).expect("third"));
+
+        assert_eq!(
+            first, third,
+            "reusing pooled buffers changed the result for identical input"
+        );
     }
 }
