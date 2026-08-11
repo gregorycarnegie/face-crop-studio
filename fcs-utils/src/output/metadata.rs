@@ -89,6 +89,13 @@ pub(super) fn load_jpeg_exif(source: Option<&Path>) -> Option<Vec<u8>> {
         }
 
         let length = u16::from_be_bytes([bytes[index], bytes[index + 1]]) as usize;
+        // A JPEG segment length counts its own two length bytes, so anything
+        // below 2 is malformed. Subtracting first underflowed: a crafted file
+        // with a zero length panicked in debug builds and wrapped to a huge
+        // offset in release ones. Bail instead of trusting the value.
+        if length < 2 {
+            break;
+        }
         let data_start = index + 2;
         let data_end = data_start.saturating_add(length - 2);
         if data_end > bytes.len() {

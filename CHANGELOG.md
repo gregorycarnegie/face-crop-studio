@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `load_jpeg_exif` underflowed on a malformed segment length. A JPEG segment's
+  length field counts its own two bytes, so `length - 2` wrapped for a crafted
+  file declaring 0 or 1 — a panic in debug builds and a bogus offset in release
+  ones. Found by `cargo mutants`: the surviving mutant pointed straight at an
+  unguarded subtraction on data read from an arbitrary user-supplied file.
+
+### Changed
+
+- Test coverage aimed at the gaps a full mutation run exposed (3579 mutants,
+  606 survivors, 81.8% caught):
+  - The GPU operation tests were smoke tests. They built inputs with
+    `RgbaImage::from_pixel` — a single flat colour — and asserted only that the
+    call did not error, so an operation could be replaced wholesale by
+    `Ok(Default::default())` and the suite stayed green. A flat image also hides
+    every indexing and dispatch bug. New `gpu/test_support.rs` supplies a
+    gradient fixture where each pixel differs, plus assertions on dimensions,
+    buffer length and non-blankness, and it replaces the eight copies of
+    `test_context()`. `pixel_adjust` and `hist_equalize` had no test that ran
+    their operation at all and now do, including odd image sizes that are not
+    workgroup multiples so a mis-rounded dispatch leaves a detectable tail.
+  - EXIF parser tests for truncated and malformed input: every prefix of a PNG
+    signature, partial chunk headers, undersized JPEG segment lengths, and a
+    chunk ending exactly at EOF. These parse user-selected files, so the bounds
+    logic is a trust boundary rather than a coverage statistic.
+  - `color.rs`: achromatic input must not divide by a zero delta (the mutant
+    turned grey pixels into a NaN hue), and the red-max hue branch must divide
+    by delta rather than scale by it.
+
+  Roughly 20 of the `color.rs` survivors turned out to be *equivalent* mutants
+  rather than gaps — at every 60-degree boundary `x` is exactly `0` or `c`, so
+  adjacent match arms return identical tuples, and `nib << 4` and `nib` occupy
+  disjoint bits, so `|` and `^` agree. No test can distinguish those, which is
+  worth knowing before treating a survivor count as a to-do list.
+
 ## [1.5.3] - 2026-08-10
 
 ### Fixed

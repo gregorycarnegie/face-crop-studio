@@ -400,4 +400,70 @@ mod tests {
         // Readback buffers must not be storage-bound.
         assert!(!usage.contains(wgpu::BufferUsages::STORAGE));
     }
+
+    // ------------------------------------------------------------------
+    // `equalize` itself had no test at all: the coverage above is entirely
+    // buffer-usage bookkeeping. That is why the whole operation could be
+    // replaced with `Ok(Default::default())` unnoticed.
+    // ------------------------------------------------------------------
+
+    use crate::gpu::test_support::{assert_plausible_output, gradient_image, test_context};
+
+    #[test]
+    fn equalize_expands_a_low_contrast_image() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping hist_equalize GPU test: no adapter");
+            return;
+        };
+        let eq = GpuHistogramEqualizer::new(ctx).expect("init");
+
+        // A narrow band of dark values: equalisation should spread these out,
+        // so the output range must be wider than the input's.
+        let mut img = image::RgbaImage::new(32, 32);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            let v = 100 + ((x + y) % 8) as u8; // range of 7
+            *px = image::Rgba([v, v, v, 255]);
+        }
+        let image = DynamicImage::ImageRgba8(img);
+
+        let result = eq.equalize(&image).expect("equalize");
+        assert_plausible_output(&result, &image, "equalize");
+
+        let span = |i: &DynamicImage| {
+            let rgba = i.to_rgba8();
+            let lums: Vec<u8> = rgba.pixels().map(|p| p[0]).collect();
+            let lo = *lums.iter().min().unwrap();
+            let hi = *lums.iter().max().unwrap();
+            hi - lo
+        };
+
+        let before = span(&image);
+        let after = span(&result);
+        assert!(
+            after > before,
+            "equalisation must widen the tonal range: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn equalize_covers_dimensions_that_are_not_workgroup_multiples() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping hist_equalize GPU test: no adapter");
+            return;
+        };
+        let eq = GpuHistogramEqualizer::new(ctx).expect("init");
+        // Odd size on purpose: a dispatch that rounds the wrong way leaves the
+        // trailing pixels untouched, which a flat test image would never reveal.
+        let image = gradient_image(41, 23);
+
+        let result = eq.equalize(&image).expect("equalize");
+        assert_plausible_output(&result, &image, "equalize (odd dimensions)");
+
+        let after = result.to_rgba8();
+        let last_row: Vec<_> = (0..41).map(|x| after.get_pixel(x, 22)[0]).collect();
+        assert!(
+            last_row.iter().any(|&v| v != last_row[0]),
+            "final row is uniform, so the dispatch missed the end of the image"
+        );
+    }
 }

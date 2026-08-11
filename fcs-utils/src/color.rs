@@ -586,4 +586,62 @@ mod tests {
             small_diff!(b, b2);
         }
     }
+
+    /// A grey pixel has `delta == 0`, which is the only thing standing between
+    /// the hue branch and a `0.0 / 0.0` division. The achromatic guard has to be
+    /// an inequality: comparing `delta` for equality against `f32::EPSILON`
+    /// instead lets grey fall through to `(gf - bf) / delta` and yields NaN.
+    ///
+    /// Asserting "hue is 0" is not enough on its own — `assert_eq!(hue, 0.0)`
+    /// fails for NaN, but so would a merely wrong number, so check finiteness
+    /// explicitly to say what actually went wrong.
+    #[test]
+    fn achromatic_input_has_zero_hue_and_never_divides_by_delta() {
+        for grey in [0u8, 1, 64, 128, 200, 254, 255] {
+            let (hue, sat, _) = rgb_to_hsl(grey, grey, grey);
+            assert!(
+                hue.is_finite(),
+                "hue for grey {grey} must be finite, got {hue}"
+            );
+            assert_eq!(hue, 0.0, "grey {grey} must have hue 0");
+            assert!(
+                sat.is_finite() && sat == 0.0,
+                "grey {grey} must have zero saturation, got {sat}"
+            );
+
+            let (hue_v, sat_v, _) = rgb_to_hsv(grey, grey, grey);
+            assert!(hue_v.is_finite() && hue_v == 0.0);
+            assert!(sat_v.is_finite() && sat_v == 0.0);
+        }
+    }
+
+    /// The red-max hue branch divides the green/blue spread by `delta`. A
+    /// `delta` of exactly 1.0 makes multiplication and division agree, so the
+    /// fixtures below deliberately avoid saturated colours: every case has
+    /// `0 < delta < 1` and `g != b`, which is what makes the operator visible.
+    #[test]
+    fn red_max_hue_divides_by_delta_rather_than_scaling() {
+        // (r, g, b) -> expected hue. Hand-computed: 60 * ((g - b) / delta).
+        let cases = [
+            // delta = (200-100)/255 = 0.392, (g-b)/delta = 0.5 -> 30 degrees
+            ((200u8, 150u8, 100u8), 30.0f32),
+            // delta = (180-60)/255 = 0.471, (g-b)/delta = 0.25 -> 15 degrees
+            ((180, 90, 60), 15.0),
+            // g < b puts the hue near the top of the circle: (g-b)/delta = -0.5
+            // -> -30, wrapped to 330.
+            ((200, 100, 150), 330.0),
+        ];
+
+        for ((r, g, b), expected) in cases {
+            for (name, hue) in [
+                ("hsl", rgb_to_hsl(r, g, b).0),
+                ("hsv", rgb_to_hsv(r, g, b).0),
+            ] {
+                assert!(
+                    (hue - expected).abs() < 0.5,
+                    "{name} hue for ({r},{g},{b}): got {hue}, expected {expected}"
+                );
+            }
+        }
+    }
 }

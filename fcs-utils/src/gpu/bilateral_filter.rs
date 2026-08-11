@@ -215,10 +215,16 @@ mod tests {
             4,
             image::Rgba([128, 128, 128, 255]),
         ));
-        // amount=2.0 clamps to 1.0 — should not error
-        filter
+        // amount=2.0 clamps to 1.0. "Does not error" was the whole assertion
+        // here, which let the entire operation be replaced by a blank image.
+        let result = filter
             .smooth(&image, 2.0, 3.0, 50.0)
             .expect("smooth with clamped amount");
+        crate::gpu::test_support::assert_plausible_output(
+            &result,
+            &image,
+            "smooth (clamped amount)",
+        );
     }
 
     #[test]
@@ -233,10 +239,22 @@ mod tests {
             4,
             image::Rgba([64, 128, 192, 255]),
         ));
-        // sigma_space=0.0 and sigma_color=0.0 are clamped to 0.1
-        filter
+        // sigma_space=0.0 and sigma_color=0.0 are clamped to 0.1. A flat input
+        // is preserved by a smoothing filter, so the exact output is knowable
+        // here rather than merely "no error".
+        let result = filter
             .smooth(&image, 0.5, 0.0, 0.0)
             .expect("smooth with clamped sigmas");
+        crate::gpu::test_support::assert_plausible_output(
+            &result,
+            &image,
+            "smooth (clamped sigmas)",
+        );
+        assert_eq!(
+            result.to_rgba8().as_raw(),
+            image.to_rgba8().as_raw(),
+            "smoothing a uniform image must leave it unchanged"
+        );
     }
 
     #[test]

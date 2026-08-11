@@ -215,6 +215,112 @@ fn load_png_exif_chunks_extracts_embedded_exif_chunks() {
     assert_eq!(load_png_exif_chunks(Some(&path)), vec![exif_chunk]);
 }
 
+/// Both loaders are fed whatever the user selected, so the header checks are a
+/// trust boundary: they run before any indexing and must reject a file too short
+/// to index into. Written as a table over every truncation length because the
+/// interesting failures are all off-by-one — losing the short-circuit in
+/// `len < 8 || &bytes[..8] != sig` turns each of these into a slice-out-of-bounds
+/// panic rather than an empty result.
+#[test]
+fn metadata_loaders_reject_truncated_headers_without_panicking() {
+    let dir = tempdir().unwrap();
+    let png_signature = b"\x89PNG\r\n\x1a\n";
+
+    // Every prefix of a PNG signature, including empty, plus one full signature
+    // with no chunks after it.
+    for len in 0..=png_signature.len() {
+        let path = write_bytes(&dir, &format!("trunc_{len}.png"), &png_signature[..len]);
+        assert!(
+            load_png_exif_chunks(Some(&path)).is_empty(),
+            "PNG truncated to {len} byte(s) must yield no chunks"
+        );
+    }
+
+    // A correct signature followed by a partial chunk header: the loop guard has
+    // to stop before reading a length field that isn't fully present.
+    for extra in 1..8 {
+        let mut bytes = png_signature.to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, extra));
+        let path = write_bytes(&dir, &format!("partial_chunk_{extra}.png"), &bytes);
+        assert!(load_png_exif_chunks(Some(&path)).is_empty());
+    }
+
+    for len in 0..=4 {
+        let bytes = vec![0xFFu8, 0xD8, 0xFF, 0xE1][..len].to_vec();
+        let path = write_bytes(&dir, &format!("trunc_{len}.jpg"), &bytes);
+        assert!(
+            load_jpeg_exif(Some(&path)).is_none(),
+            "JPEG truncated to {len} byte(s) must yield no EXIF"
+        );
+    }
+}
+
+/// A JPEG segment's length field counts its own two bytes, so a value below 2 is
+/// malformed. The subtraction used to happen before any check, which underflowed
+/// on a crafted file: a panic in debug builds and a wrapped offset in release.
+#[test]
+fn load_jpeg_exif_survives_undersized_segment_length() {
+    let dir = tempdir().unwrap();
+
+    for bad_length in [0u16, 1] {
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        bytes.extend_from_slice(&bad_length.to_be_bytes());
+        bytes.extend_from_slice(b"Exif\0\0trailing");
+        let path = write_bytes(&dir, &format!("len_{bad_length}.jpg"), &bytes);
+
+        assert!(
+            load_jpeg_exif(Some(&path)).is_none(),
+            "segment length {bad_length} is malformed and must be rejected"
+        );
+    }
+
+    // Length exactly 2 means an empty payload: valid arithmetic, still no EXIF.
+    let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x02];
+    bytes.extend_from_slice(&[0xFF, 0xD9]);
+    let path = write_bytes(&dir, "len_2.jpg", &bytes);
+    assert!(load_jpeg_exif(Some(&path)).is_none());
+}
+
+/// The PNG chunk walk breaks when `data_end + 4 > len`. A final chunk that ends
+/// exactly at EOF sits on that boundary, so a `>=` there would silently drop the
+/// last chunk in the file — which is precisely where an appended eXIf lands.
+#[test]
+fn load_png_exif_chunks_keeps_a_chunk_that_ends_exactly_at_eof() {
+    let dir = tempdir().unwrap();
+    let exif_chunk = make_png_chunk(b"eXIf", b"ends-at-eof");
+
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&make_png_chunk(b"IHDR", &[0u8; 13]));
+    bytes.extend_from_slice(&exif_chunk);
+    // Deliberately no IEND: the eXIf chunk is the final byte of the file.
+    let path = write_bytes(&dir, "exif_at_eof.png", &bytes);
+
+    assert_eq!(
+        load_png_exif_chunks(Some(&path)),
+        vec![exif_chunk],
+        "a chunk ending exactly at EOF must still be collected"
+    );
+}
+
+/// `load_png_exif_chunks` stops at IEND. A file with trailing bytes after IEND
+/// must not have them parsed as further chunks.
+#[test]
+fn load_png_exif_chunks_stops_at_iend_and_ignores_trailing_bytes() {
+    let dir = tempdir().unwrap();
+
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&make_png_chunk(b"IHDR", &[0u8; 13]));
+    bytes.extend_from_slice(&make_png_chunk(b"IEND", b""));
+    // An eXIf chunk hidden after IEND is not part of the image.
+    bytes.extend_from_slice(&make_png_chunk(b"eXIf", b"after-iend"));
+    let path = write_bytes(&dir, "trailing.png", &bytes);
+
+    assert!(
+        load_png_exif_chunks(Some(&path)).is_empty(),
+        "chunks after IEND must be ignored"
+    );
+}
+
 #[test]
 fn load_jpeg_exif_returns_none_for_non_jpeg_sources() {
     let dir = tempdir().unwrap();

@@ -364,4 +364,131 @@ mod tests {
         };
         assert!(GpuPixelAdjust::activity(&negative).has_any());
     }
+
+    // ------------------------------------------------------------------
+    // The GPU path itself. Everything above is CPU-side bookkeeping; until
+    // these existed, `apply` could be replaced by `Ok(Default::default())` and
+    // the suite still passed, because nothing ever executed the shader.
+    // ------------------------------------------------------------------
+
+    use crate::gpu::test_support::{
+        assert_changed, assert_plausible_output, gradient_image, test_context,
+    };
+
+    #[test]
+    fn apply_without_active_adjustments_returns_the_input_untouched() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping pixel_adjust GPU test: no adapter");
+            return;
+        };
+        let adjust = GpuPixelAdjust::new(ctx).expect("init");
+        let image = gradient_image(16, 12);
+
+        let result = adjust
+            .apply(&image, &EnhancementSettings::default())
+            .expect("apply");
+
+        assert_plausible_output(&result, &image, "apply (no-op)");
+        assert_eq!(
+            result.to_rgba8().as_raw(),
+            image.to_rgba8().as_raw(),
+            "neutral settings must short-circuit and clone the input"
+        );
+    }
+
+    #[test]
+    fn apply_brightens_every_pixel_when_exposure_is_raised() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping pixel_adjust GPU test: no adapter");
+            return;
+        };
+        let adjust = GpuPixelAdjust::new(ctx).expect("init");
+        // Mid-grey base so a positive exposure cannot be hidden by clamping at
+        // either end of the range.
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([100, 100, 100, 255]),
+        ));
+        let settings = EnhancementSettings {
+            exposure_stops: 1.0,
+            ..Default::default()
+        };
+
+        let result = adjust.apply(&image, &settings).expect("apply");
+        assert_changed(&result, &image, "apply (exposure)");
+
+        // +1 stop is a doubling, so every channel must rise. Asserting the
+        // direction rather than exact values keeps this robust across drivers
+        // while still failing if the uniform arithmetic is mutated.
+        let before = image.to_rgba8();
+        let after = result.to_rgba8();
+        for (b, a) in before.pixels().zip(after.pixels()) {
+            for ch in 0..3 {
+                assert!(
+                    a[ch] > b[ch],
+                    "exposure +1 stop must brighten channel {ch}: {} -> {}",
+                    b[ch],
+                    a[ch]
+                );
+            }
+            assert_eq!(a[3], b[3], "alpha must be preserved");
+        }
+    }
+
+    #[test]
+    fn apply_preserves_per_pixel_variation_across_the_whole_image() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping pixel_adjust GPU test: no adapter");
+            return;
+        };
+        let adjust = GpuPixelAdjust::new(ctx).expect("init");
+        // Deliberately not a multiple of the workgroup size, so a dispatch that
+        // rounds the wrong way leaves the tail of the image unwritten.
+        let image = gradient_image(37, 19);
+        let settings = EnhancementSettings {
+            saturation: 1.5,
+            ..Default::default()
+        };
+
+        let result = adjust.apply(&image, &settings).expect("apply");
+        assert_changed(&result, &image, "apply (saturation)");
+
+        // A partially-dispatched image shows up as a run of identical trailing
+        // pixels where the gradient should still be varying.
+        let after = result.to_rgba8();
+        let last_row: Vec<_> = (0..37).map(|x| after.get_pixel(x, 18)[0]).collect();
+        assert!(
+            last_row.iter().any(|&v| v != last_row[0]),
+            "final row is uniform, so the dispatch did not cover the whole image"
+        );
+    }
+
+    #[test]
+    fn memory_usage_grows_after_a_pass_and_resets_when_cleared() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping pixel_adjust GPU test: no adapter");
+            return;
+        };
+        let adjust = GpuPixelAdjust::new(ctx).expect("init");
+        let image = gradient_image(32, 32);
+        let settings = EnhancementSettings {
+            brightness: 20,
+            ..Default::default()
+        };
+
+        adjust.apply(&image, &settings).expect("apply");
+        let pooled = adjust.memory_usage();
+        assert!(
+            pooled > 0,
+            "buffers should be pooled after a pass, got {pooled}"
+        );
+
+        adjust.clear_cache();
+        assert_eq!(
+            adjust.memory_usage(),
+            0,
+            "clear_cache must release pooled buffers"
+        );
+    }
 }
