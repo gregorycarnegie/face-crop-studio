@@ -408,6 +408,26 @@ mod tests {
         assert_eq!(filter.suffix_for(Quality::Medium), Some("_medq"));
         assert_eq!(filter.suffix_for(Quality::Low), Some("_lowq"));
     }
+
+    #[test]
+    fn laplacian_variance_does_not_downscale_at_the_size_limit() {
+        // A checkerboard is the sharpest input there is: every interior pixel's
+        // Laplacian is +/- 4 * 255, so the variance is exactly 1020^2 as long as
+        // the image reaches the kernel unresampled. QUALITY_MAX_DIM is the
+        // largest size that must NOT be downscaled — resampling here would
+        // blur the checkerboard and drag the variance down.
+        let side = QUALITY_MAX_DIM;
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_fn(side, side, |x, y| {
+            let v = if (x + y) % 2 == 0 { 0 } else { 255 };
+            image::Rgba([v, v, v, 255])
+        }));
+
+        let variance = laplacian_variance(&img);
+        assert!(
+            (variance - 1_040_400.0).abs() < 1.0,
+            "a {side}x{side} checkerboard should reach the kernel intact, got {variance}"
+        );
+    }
 }
 
 #[cfg(test)]
