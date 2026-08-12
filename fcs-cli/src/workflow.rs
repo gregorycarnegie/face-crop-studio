@@ -1073,4 +1073,21 @@ mod tests {
                 .is_some_and(|p| p.ends_with("single.png"))
         );
     }
+
+    #[test]
+    fn face_index_selects_the_one_based_face() {
+        // `--face-index 2` is the second face, index 1 internally. Off by one
+        // in either direction picks the wrong crop, or none at all.
+        let filter = QualityFilter::new(None);
+        let args = parse_args(&["--input", "x.jpg", "--face-index", "2"]);
+        let exports = vec![
+            sample_processed_crop(0, Quality::High, 90.0),
+            sample_processed_crop(1, Quality::High, 80.0),
+            sample_processed_crop(2, Quality::High, 70.0),
+        ];
+
+        let filtered = filter_faces_for_export(exports, &args, &filter, Path::new("input.png"));
+        assert_eq!(filtered.len(), 1, "exactly one face is requested");
+        assert_eq!(filtered[0].index, 1, "the second face is index 1");
+    }
 }

@@ -233,4 +233,18 @@ mod tests {
         assert!(result.is_ok());
         assert!(out_dir.join("empty.png").exists());
     }
+
+    #[test]
+    fn annotate_rejects_an_image_with_either_dimension_zero() {
+        // Both dimensions have to be non-zero, not just one: drawing into a
+        // zero-width buffer has nowhere to put the boxes.
+        let dir = tempdir().expect("temp directory");
+        for (w, h) in [(0u32, 4u32), (4, 0), (0, 0)] {
+            let image = DynamicImage::ImageRgba8(RgbaImage::new(w, h));
+            assert!(
+                annotate_image(&image, Path::new("input.png"), &[], dir.path()).is_err(),
+                "{w}x{h} should be refused"
+            );
+        }
+    }
 }
