@@ -299,4 +299,164 @@ mod tests {
         // Cleanup
         pool.recycle(buf2, 600, wgpu::BufferUsages::STORAGE);
     }
+
+    // ------------------------------------------------------------------
+    // `take_best_fit` decides which idle buffer a request reuses. A wrong choice
+    // never shows up in output pixels — only as extra allocations, or a buffer
+    // too small for the request — so these assert on the pool's own accounting.
+    //
+    // `available()`, the count of idle buffers, is the observable that matters.
+    // `memory_usage()` cannot distinguish a pool hit from an allocation: it
+    // counts bytes ever created minus bytes cleared, and `recycle` leaves it
+    // untouched. The long comment in `clear()` wrestles with the same ambiguity.
+    // ------------------------------------------------------------------
+
+    const STORAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE;
+
+    #[test]
+    fn a_request_reuses_an_idle_buffer_rather_than_allocating() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, None);
+
+        let buf = pool.acquire(1024, STORAGE, Some("first")).expect("acquire");
+        pool.recycle(buf, 1024, STORAGE);
+        assert_eq!(pool.available(), 1, "recycled buffer should be pooled");
+
+        let reused = pool
+            .acquire(1024, STORAGE, Some("reused"))
+            .expect("acquire");
+        assert_eq!(
+            pool.available(),
+            0,
+            "an exact-size match must come from the pool, not a fresh allocation"
+        );
+        pool.recycle(reused, 1024, STORAGE);
+    }
+
+    #[test]
+    fn an_idle_buffer_smaller_than_the_request_is_not_reused() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, None);
+
+        let small = pool.acquire(256, STORAGE, Some("small")).expect("acquire");
+        pool.recycle(small, 256, STORAGE);
+
+        // Handing back the 256-byte buffer would under-run every write into it.
+        let big = pool.acquire(4096, STORAGE, Some("big")).expect("acquire");
+        assert_eq!(
+            pool.available(),
+            1,
+            "the too-small buffer must stay in the pool"
+        );
+        pool.recycle(big, 4096, STORAGE);
+    }
+
+    /// Which buffer was taken is not directly observable, so it is inferred from
+    /// a follow-up request: after asking for 1024 from {512, 2048, 8192}, a
+    /// request for 8192 can only be served from the pool if 2048 was consumed.
+    #[test]
+    fn the_smallest_sufficient_buffer_wins() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, None);
+
+        for size in [512u64, 2048, 8192] {
+            let b = pool.acquire(size, STORAGE, None).expect("acquire");
+            pool.recycle(b, size, STORAGE);
+        }
+        assert_eq!(pool.available(), 3);
+
+        // 512 is too small, so the best fit is 2048 — not 8192.
+        let got = pool.acquire(1024, STORAGE, None).expect("acquire");
+        assert_eq!(pool.available(), 2, "one buffer should have been consumed");
+
+        let big = pool.acquire(8192, STORAGE, None).expect("acquire");
+        assert_eq!(
+            pool.available(),
+            1,
+            "8192 should still have been pooled, proving 2048 was the best fit"
+        );
+
+        pool.recycle(got, 2048, STORAGE);
+        pool.recycle(big, 8192, STORAGE);
+    }
+
+    #[test]
+    fn buffers_are_only_reused_for_a_matching_usage() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, None);
+
+        let storage = pool.acquire(1024, STORAGE, None).expect("acquire");
+        pool.recycle(storage, 1024, STORAGE);
+
+        // A different usage cannot bind the same buffer.
+        let other = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let mapped = pool.acquire(1024, other, None).expect("acquire");
+        assert_eq!(
+            pool.available(),
+            1,
+            "a STORAGE buffer must not satisfy a MAP_READ request"
+        );
+        pool.recycle(mapped, 1024, other);
+    }
+
+    #[test]
+    fn an_empty_pool_allocates_and_clear_empties_it() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, None);
+
+        assert_eq!(pool.available(), 0);
+        let buf = pool.acquire(1024, STORAGE, None).expect("acquire");
+        assert_eq!(pool.available(), 0, "nothing was pooled to reuse");
+        assert_eq!(
+            pool.memory_usage(),
+            1024,
+            "creating a buffer should be accounted"
+        );
+
+        pool.recycle(buf, 1024, STORAGE);
+        assert_eq!(pool.available(), 1);
+        pool.clear();
+        assert_eq!(pool.available(), 0, "clear must drop pooled buffers");
+        assert_eq!(
+            pool.memory_usage(),
+            0,
+            "clear must also release their accounted bytes"
+        );
+    }
+
+    /// The limit check is `current + size > limit`, so a request landing exactly
+    /// on the limit is allowed and one byte over is refused.
+    #[test]
+    fn the_memory_limit_admits_an_exact_fit_and_rejects_an_overshoot() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, Some(2048));
+
+        let exact = pool
+            .acquire(2048, STORAGE, None)
+            .expect("an exact fit is allowed");
+        pool.recycle(exact, 2048, STORAGE);
+
+        assert!(
+            pool.acquire(4096, STORAGE, None).is_err(),
+            "a request larger than the whole limit must be refused"
+        );
+    }
 }
