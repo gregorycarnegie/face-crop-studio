@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-08-12
+
 ### Fixed
 
 - `load_jpeg_exif` underflowed on a malformed segment length. A JPEG segment's
@@ -14,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file declaring 0 or 1 — a panic in debug builds and a bogus offset in release
   ones. Found by `cargo mutants`: the surviving mutant pointed straight at an
   unguarded subtraction on data read from an arbitrary user-supplied file.
+
+- The GPU preprocessor mapped the whole pooled readback buffer instead of the
+  region the dispatch wrote. `ensure_output_buffers` only ever grows its pooled
+  buffers, so once a larger tensor had been processed every smaller one failed
+  with "unexpected GPU output size" reporting the pooled capacity rather than
+  the requested length. Reachable by lowering the detection input size while the
+  preprocessor is reused. `gpu/runtime.rs` already sliced explicitly; this brings
+  `preprocess.rs` in line.
 
 ### Changed
 
@@ -674,7 +684,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.0...v1.5.1
