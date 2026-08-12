@@ -547,4 +547,56 @@ mod tests {
         assert_eq!(top_left[1], 10);
         assert_eq!(top_left[2], 50);
     }
+
+    #[test]
+    fn eye_line_aligns_whenever_any_single_landmark_coordinate_is_set() {
+        // Each case leaves three of the four eye coordinates at zero, so every
+        // term of the "no landmarks at all" guard is exercised on its own. The
+        // tilts are chosen to be quarter or half turns, which are unmistakable
+        // in the output; an eye line that is merely horizontal would rotate by
+        // zero and look exactly like skipping the alignment.
+        let img = coded_source(32, 32);
+        let bbox = BoundingBox {
+            x: 8.0,
+            y: 8.0,
+            width: 16.0,
+            height: 16.0,
+        };
+        let settings = CropSettings {
+            output_width: 24,
+            output_height: 24,
+            face_height_pct: 80.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: true,
+        };
+        let unaligned = CropSettings {
+            eye_line_align: false,
+            ..settings.clone()
+        };
+        let baseline = crop_face_from_image(&img, &detection_at(bbox), &unaligned).to_rgba8();
+
+        for (label, right_eye, left_eye) in [
+            ("right eye x only", (7.0, 0.0), (0.0, 0.0)),
+            ("right eye y only", (0.0, 7.0), (0.0, 0.0)),
+            ("left eye y only", (0.0, 0.0), (0.0, 7.0)),
+        ] {
+            let mut detection = detection_at(bbox);
+            detection.landmarks[0] = crate::postprocess::Landmark {
+                x: right_eye.0,
+                y: right_eye.1,
+            };
+            detection.landmarks[1] = crate::postprocess::Landmark {
+                x: left_eye.0,
+                y: left_eye.1,
+            };
+            assert_ne!(
+                crop_face_from_image(&img, &detection, &settings).to_rgba8(),
+                baseline,
+                "{label}: a populated eye coordinate must still align"
+            );
+        }
+    }
 }

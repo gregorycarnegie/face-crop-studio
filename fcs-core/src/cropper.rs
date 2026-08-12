@@ -759,4 +759,91 @@ mod tests {
         assert_eq!(crop.width, 200);
         assert_eq!(crop.height, 200);
     }
+
+    fn bare_region() -> CropRegion {
+        CropRegion {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            pad_left: 0,
+            pad_top: 0,
+            pad_right: 0,
+            pad_bottom: 0,
+        }
+    }
+
+    #[test]
+    fn requires_padding_reports_each_side_on_its_own() {
+        let none = bare_region();
+        assert!(
+            !none.requires_padding(),
+            "a fully in-bounds region needs no padding"
+        );
+
+        for region in [
+            CropRegion {
+                pad_left: 3,
+                ..none
+            },
+            CropRegion { pad_top: 3, ..none },
+            CropRegion {
+                pad_right: 3,
+                ..none
+            },
+            CropRegion {
+                pad_bottom: 3,
+                ..none
+            },
+        ] {
+            assert!(
+                region.requires_padding(),
+                "padding on one side alone still needs padding: {region:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn in_bounds_rect_is_none_when_either_side_collapses() {
+        let base = bare_region();
+        assert_eq!(base.in_bounds_rect(100, 100), Some((0, 0, 10, 10)));
+
+        // Padding that eats the whole width leaves nothing to copy, even though
+        // the height is still there (and the other way round).
+        let no_width = CropRegion {
+            pad_left: 10,
+            ..base
+        };
+        assert_eq!(no_width.in_bounds_rect(100, 100), None);
+        let no_height = CropRegion {
+            pad_bottom: 10,
+            ..base
+        };
+        assert_eq!(no_height.in_bounds_rect(100, 100), None);
+    }
+
+    #[test]
+    fn crop_settings_carry_over_from_the_shared_config() {
+        let shared = fcs_utils::config::CropSettings {
+            output_width: 321,
+            output_height: 654,
+            face_height_pct: 42.5,
+            positioning_mode: PositioningMode::RuleOfThirds,
+            horizontal_offset: -0.25,
+            vertical_offset: 0.75,
+            fill_color: FillColor::opaque(1, 2, 3),
+            eye_line_align: true,
+            ..Default::default()
+        };
+
+        let converted = CropSettings::from(&shared);
+        assert_eq!(converted.output_width, 321);
+        assert_eq!(converted.output_height, 654);
+        assert_eq!(converted.face_height_pct, 42.5);
+        assert_eq!(converted.positioning_mode, PositioningMode::RuleOfThirds);
+        assert_eq!(converted.horizontal_offset, -0.25);
+        assert_eq!(converted.vertical_offset, 0.75);
+        assert_eq!(converted.fill_color, FillColor::opaque(1, 2, 3));
+        assert!(converted.eye_line_align);
+    }
 }

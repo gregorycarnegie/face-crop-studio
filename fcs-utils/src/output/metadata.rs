@@ -84,10 +84,9 @@ pub(super) fn load_jpeg_exif(source: Option<&Path>) -> Option<Vec<u8>> {
             break;
         }
 
-        if index + 2 > bytes.len() {
-            break;
-        }
-
+        // The loop condition guarantees `index + 4 < bytes.len()` on entry and
+        // the marker consumed two bytes, so the two length bytes below are
+        // always in range — a bounds check here can never fire.
         let length = u16::from_be_bytes([bytes[index], bytes[index + 1]]) as usize;
         // A JPEG segment length counts its own two length bytes, so anything
         // below 2 is malformed. Subtracting first underflowed: a crafted file

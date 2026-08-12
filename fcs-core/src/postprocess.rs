@@ -625,4 +625,82 @@ mod tests {
         };
         assert_eq!(a.iou(&b), 0.0);
     }
+
+    /// A detection row with only the bbox and score set; the landmarks stay at
+    /// the origin, which the NMS and threshold checks never look at.
+    fn scored_row(x: f32, y: f32, w: f32, h: f32, score: f32) -> [f32; DETECTION_OUTPUT_COLS] {
+        let mut row = [0.0f32; DETECTION_OUTPUT_COLS];
+        row[0] = x;
+        row[1] = y;
+        row[2] = w;
+        row[3] = h;
+        row[DETECTION_SCORE_INDEX] = score;
+        row
+    }
+
+    /// Two boxes overlapping by an IoU of ~0.29, with centres 55 px apart so
+    /// the post-NMS centroid dedup (50 px here) leaves them alone. Whether one
+    /// of them survives is then down to the NMS step alone.
+    fn overlapping_pair() -> Tensor {
+        tensor_from_rows(&[
+            scored_row(0.0, 0.0, 100.0, 100.0, 0.99),
+            scored_row(55.0, 0.0, 100.0, 100.0, 0.95),
+        ])
+    }
+
+    #[test]
+    fn a_score_exactly_on_the_threshold_is_kept() {
+        let tensor = tensor_from_rows(&[scored_row(0.0, 0.0, 10.0, 10.0, 0.5)]);
+
+        let detections = apply_postprocess(
+            &tensor,
+            1.0,
+            1.0,
+            &PostprocessConfig {
+                score_threshold: 0.5,
+                nms_threshold: 0.3,
+                top_k: 10,
+            },
+        )
+        .expect("postprocess should succeed");
+
+        assert_eq!(detections.len(), 1, "the threshold is a floor, not a cut");
+    }
+
+    #[test]
+    fn a_zero_nms_threshold_disables_suppression() {
+        // Zero means "off", not "suppress anything that touches": running NMS
+        // with a threshold of zero would drop every overlapping box.
+        let detections = apply_postprocess(
+            &overlapping_pair(),
+            1.0,
+            1.0,
+            &PostprocessConfig {
+                score_threshold: 0.3,
+                nms_threshold: 0.0,
+                top_k: 10,
+            },
+        )
+        .expect("postprocess should succeed");
+
+        assert_eq!(detections.len(), 2, "both overlapping boxes survive");
+    }
+
+    #[test]
+    fn a_positive_nms_threshold_suppresses_the_weaker_overlap() {
+        let detections = apply_postprocess(
+            &overlapping_pair(),
+            1.0,
+            1.0,
+            &PostprocessConfig {
+                score_threshold: 0.3,
+                nms_threshold: 0.2,
+                top_k: 10,
+            },
+        )
+        .expect("postprocess should succeed");
+
+        assert_eq!(detections.len(), 1, "the 0.29 IoU pair is merged");
+        assert_eq!(detections[0].score, 0.99);
+    }
 }

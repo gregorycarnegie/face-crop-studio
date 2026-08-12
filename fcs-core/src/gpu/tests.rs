@@ -1188,3 +1188,111 @@ fn benchmark_conv2d_performance() {
 
     println!("==========================================================\n");
 }
+
+/// Build a minimal ONNX model holding only float initializers, so the loader can be
+/// exercised without the real 640x640 model on disk.
+fn synthetic_onnx_model(tensors: &[(&str, Vec<i64>, Vec<f32>)]) -> Vec<u8> {
+    use prost::Message;
+    use tract_onnx::pb::{GraphProto, ModelProto, TensorProto, tensor_proto::DataType};
+
+    let initializer = tensors
+        .iter()
+        .map(|(name, dims, data)| TensorProto {
+            name: (*name).to_string(),
+            dims: dims.clone(),
+            data_type: DataType::Float as i32,
+            float_data: data.clone(),
+            ..Default::default()
+        })
+        .collect();
+
+    ModelProto {
+        graph: Some(GraphProto {
+            initializer,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+    .encode_to_vec()
+}
+
+fn write_synthetic_model(
+    dir: &tempfile::TempDir,
+    tensors: &[(&str, Vec<i64>, Vec<f32>)],
+) -> PathBuf {
+    let path = dir.path().join("synthetic.onnx");
+    std::fs::write(&path, synthetic_onnx_model(tensors)).expect("write synthetic model");
+    path
+}
+
+#[test]
+fn onnx_initializer_map_keeps_only_the_requested_float_initializers() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = write_synthetic_model(
+        &dir,
+        &[
+            ("w", vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]),
+            ("b", vec![2], vec![0.5, -0.5]),
+            ("unused", vec![1], vec![9.0]),
+        ],
+    );
+
+    let loader = OnnxInitializerMap::load(&path, &["w", "b"]).expect("load initializers");
+    assert_eq!(loader.len(), 2, "only the requested initializers are kept");
+    assert!(!loader.is_empty());
+    assert_eq!(loader.values().count(), 2);
+
+    let w = loader.tensor("w").expect("weight tensor");
+    assert_eq!(w.dims(), &[2, 2]);
+    assert_eq!(w.data(), &[1.0, 2.0, 3.0, 4.0]);
+    assert!(loader.tensor("unused").is_err());
+
+    let map = loader.into_map();
+    assert_eq!(map.len(), 2);
+    assert_eq!(map["b"].data(), &[0.5, -0.5]);
+}
+
+#[test]
+fn onnx_initializer_map_rejects_missing_names_and_bad_shapes() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = write_synthetic_model(&dir, &[("w", vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])]);
+
+    let err = OnnxInitializerMap::load(&path, &["w", "absent"])
+        .expect_err("a missing initializer must fail the load");
+    assert!(
+        err.to_string().contains("absent"),
+        "error should name the missing initializer: {err}"
+    );
+
+    let short = write_synthetic_model(&dir, &[("w", vec![2, 2], vec![1.0, 2.0])]);
+    let err = OnnxInitializerMap::load(&short, &["w"])
+        .expect_err("a data/shape mismatch must fail the load");
+    assert!(
+        err.to_string().contains("does not match shape"),
+        "error should report the shape mismatch: {err}"
+    );
+}
+
+#[test]
+fn tensor_shape_converts_into_its_dimensions() {
+    let shape = TensorShape::new([2usize, 3, 4]).expect("shape");
+    assert_eq!(shape.elements(), 24);
+    assert_eq!(shape.dims(), &[2, 3, 4]);
+
+    let dims: Vec<usize> = shape.into();
+    assert_eq!(dims, vec![2, 3, 4]);
+}
+
+#[test]
+fn div_ceil_uniform_rounds_up_and_keeps_zero_at_zero() {
+    use super::utils::div_ceil_uniform;
+
+    assert_eq!(
+        div_ceil_uniform(0, 8),
+        0,
+        "an empty dispatch needs no groups"
+    );
+    assert_eq!(div_ceil_uniform(1, 8), 1);
+    assert_eq!(div_ceil_uniform(9, 8), 2);
+    assert_eq!(div_ceil_uniform(16, 8), 2);
+}

@@ -486,4 +486,38 @@ mod tests {
         enhancer.clear_caches();
         assert_eq!(enhancer.memory_usage(), 0, "clear_caches must empty them");
     }
+
+    #[test]
+    fn shape_mask_delegates_to_the_gpu_mask() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping GPU shape-mask delegation test: no GPU");
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init enhancer");
+        let image = gradient_image(32, 32);
+
+        let masked = enhancer
+            .apply_shape_mask_gpu(
+                &image,
+                &CropShape::Ellipse,
+                0.0,
+                0.0,
+                crate::color::RgbaColor::opaque(0, 0, 0),
+            )
+            .expect("shape mask should not error")
+            .expect("a non-rectangular shape produces an image")
+            .to_rgba8();
+
+        assert_eq!(masked.dimensions(), (32, 32));
+        assert_eq!(
+            masked.get_pixel(0, 0)[3],
+            0,
+            "the corner falls outside the ellipse"
+        );
+        assert_eq!(
+            masked.get_pixel(16, 16)[3],
+            255,
+            "the centre is kept opaque"
+        );
+    }
 }

@@ -654,3 +654,24 @@ fn test_large_image_custom_shape_crop() {
         corner[3]
     );
 }
+
+#[test]
+fn raster_mask_handles_a_zero_sized_image() {
+    use crate::shape::{CropShape, apply_shape_mask};
+
+    // A polygon takes the rasterised path, which chunks the buffer by row
+    // stride: a zero dimension has to bail out before that arithmetic runs.
+    let mut empty = image::RgbaImage::new(0, 4);
+    apply_shape_mask(
+        &mut empty,
+        &CropShape::Polygon {
+            sides: 5,
+            rotation_deg: 0.0,
+            corner_style: crate::shape::PolygonCornerStyle::Sharp,
+        },
+        0.5,
+        0.8,
+        crate::color::RgbaColor::opaque(0, 0, 0),
+    );
+    assert_eq!(empty.dimensions(), (0, 4));
+}

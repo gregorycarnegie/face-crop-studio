@@ -293,4 +293,109 @@ mod tests {
         assert_eq!(output.width(), 64);
         assert_eq!(output.height(), 64);
     }
+
+    #[test]
+    fn vignette_colour_and_softness_reach_the_masked_edges() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping shape_mask vignette test: no GPU");
+            return;
+        };
+        let mask = GpuShapeMask::new(ctx).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            64,
+            64,
+            image::Rgba([255, 255, 255, 255]),
+        ));
+
+        // A colour with three different channels: a packing shift or a dropped
+        // OR in the RGBA -> u32 uniform shows up as the wrong channel value,
+        // where black (the other tests' colour) would look identical.
+        let out = mask
+            .apply(
+                &image,
+                &CropShape::Ellipse,
+                0.6,
+                1.0,
+                RgbaColor::opaque(255, 128, 32),
+            )
+            .expect("apply should not error")
+            .expect("Ellipse shape should produce a masked image")
+            .to_rgba8();
+
+        // Fully outside the ellipse: the pixel is entirely vignette colour.
+        let corner = out.get_pixel(0, 0).0;
+        assert_eq!(
+            [corner[0], corner[1], corner[2]],
+            [255, 128, 32],
+            "the corner should be painted the vignette colour"
+        );
+        assert_eq!(corner[3], 0, "the corner is still masked out");
+
+        // Deep inside, the shape is untouched by both mask and vignette.
+        let centre = out.get_pixel(32, 32).0;
+        assert_eq!(centre, [255, 255, 255, 255], "the centre stays as it was");
+
+        // Just inside the outline the softness fade is partway through, which
+        // is the only place a dropped softness parameter is visible.
+        let edge_alpha = out.get_pixel(32, 4).0[3];
+        assert!(
+            (1..=254).contains(&edge_alpha),
+            "the softness fade should partially mask the edge, got alpha {edge_alpha}"
+        );
+    }
+
+    #[test]
+    fn a_three_sided_polygon_is_still_masked() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping shape_mask triangle test: no GPU");
+            return;
+        };
+        let mask = GpuShapeMask::new(ctx).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            32,
+            32,
+            image::Rgba([180, 90, 40, 255]),
+        ));
+        let shape = CropShape::Polygon {
+            sides: 3,
+            rotation_deg: 0.0,
+            corner_style: crate::shape::PolygonCornerStyle::Sharp,
+        };
+
+        // Three points is the minimum a polygon can have, not one too few.
+        let out = mask
+            .apply(&image, &shape, 0.0, 0.0, RgbaColor::opaque(0, 0, 0))
+            .expect("apply should not error")
+            .expect("a triangle has enough points to mask");
+        assert_eq!(out.to_rgba8().get_pixel(0, 0)[3], 0, "corner masked out");
+    }
+
+    #[test]
+    fn clear_cache_releases_the_pooled_buffers() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping shape_mask cache test: no GPU");
+            return;
+        };
+        let mask = GpuShapeMask::new(ctx).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([10, 20, 30, 255]),
+        ));
+        mask.apply(
+            &image,
+            &CropShape::Ellipse,
+            0.0,
+            0.0,
+            RgbaColor::opaque(0, 0, 0),
+        )
+        .expect("apply should not error");
+
+        assert!(
+            mask.memory_usage() > 0,
+            "applying the mask allocates pooled buffers"
+        );
+        mask.clear_cache();
+        assert_eq!(mask.memory_usage(), 0, "clearing frees them again");
+    }
 }

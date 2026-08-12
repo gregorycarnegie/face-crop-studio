@@ -761,3 +761,106 @@ fn inject_webp_exif_returns_the_input_unchanged() {
         encoded
     );
 }
+
+#[test]
+fn lossless_encoders_round_trip_the_pixels() {
+    // Opaque only: BMP and WebP round trips are what is being checked here, not
+    // each codec's alpha handling.
+    let img = DynamicImage::ImageRgba8(RgbaImage::from_fn(3, 2, |x, y| {
+        Rgba([
+            (20 + x * 40) as u8,
+            (60 + y * 70) as u8,
+            200 - (x * 15) as u8,
+            255,
+        ])
+    }));
+
+    let encoded: [(&str, Vec<u8>); 4] = [
+        ("bmp", encode_bmp(&img).expect("encode bmp")),
+        ("tiff", encode_tiff(&img).expect("encode tiff")),
+        ("webp", encode_webp(&img).expect("encode webp")),
+        (
+            "png",
+            encode_png(&img, PngCompression::Default).expect("encode png"),
+        ),
+    ];
+
+    for (name, bytes) in encoded {
+        let decoded = image::load_from_memory(&bytes)
+            .unwrap_or_else(|err| panic!("{name} output should decode: {err}"));
+        assert_eq!(decoded.to_rgba8(), img.to_rgba8(), "{name} round trip");
+    }
+}
+
+#[test]
+fn load_jpeg_exif_needs_both_soi_bytes_to_match() {
+    let dir = tempdir().unwrap();
+    let mut payload = b"Exif\0\0".to_vec();
+    payload.extend_from_slice(b"tiff-ish");
+    let jpeg = make_jpeg(&[(0xE1, payload)]);
+
+    let good = write_bytes(&dir, "soi.jpg", &jpeg);
+    assert!(
+        load_jpeg_exif(Some(&good)).is_some(),
+        "the fixture itself carries EXIF"
+    );
+
+    // One correct SOI byte is not enough: 0xFF followed by anything other than
+    // 0xD8 is not a JPEG, and parsing it as one reads segments out of noise.
+    let mut half = jpeg.clone();
+    half[1] = 0x00;
+    let half_path = write_bytes(&dir, "half-soi.jpg", &half);
+    assert!(load_jpeg_exif(Some(&half_path)).is_none());
+
+    let mut other_half = jpeg;
+    other_half[0] = 0x00;
+    let other_path = write_bytes(&dir, "other-half-soi.jpg", &other_half);
+    assert!(load_jpeg_exif(Some(&other_path)).is_none());
+}
+
+#[test]
+fn load_png_exif_chunks_skips_a_chunk_whose_crc_is_missing() {
+    let dir = tempdir().unwrap();
+    // A chunk whose declared length runs past the end of the file once its
+    // four CRC bytes are accounted for: the scan must stop rather than slice
+    // past the buffer.
+    let chunk = make_png_chunk(b"eXIf", b"Exif\0\0payload");
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&chunk[..chunk.len() - 4]);
+    let path = write_bytes(&dir, "truncated-crc.png", &bytes);
+
+    assert!(load_png_exif_chunks(Some(&path)).is_empty());
+}
+
+#[test]
+fn load_jpeg_exif_steps_over_an_empty_segment() {
+    // A declared length of exactly 2 is a segment with no payload: legal, and
+    // the scan has to step past it to reach the EXIF segment behind it.
+    let dir = tempdir().unwrap();
+    let mut exif = b"Exif\0\0".to_vec();
+    exif.extend_from_slice(b"tiff-ish");
+    let jpeg = make_jpeg(&[(0xE0, Vec::new()), (0xE1, exif)]);
+    let path = write_bytes(&dir, "empty-segment.jpg", &jpeg);
+
+    assert!(load_jpeg_exif(Some(&path)).is_some());
+}
+
+#[test]
+fn load_jpeg_exif_takes_a_segment_ending_at_eof_but_not_one_past_it() {
+    let dir = tempdir().unwrap();
+    let payload = b"Exif\0\0tiff";
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    jpeg.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+    jpeg.extend_from_slice(payload);
+
+    // The segment's last byte is the file's last byte, which is in bounds.
+    let exact = write_bytes(&dir, "exif-at-eof.jpg", &jpeg);
+    assert!(load_jpeg_exif(Some(&exact)).is_some());
+
+    // Declaring four more bytes than the file holds must be refused rather
+    // than sliced out of the buffer.
+    let mut overrun = jpeg.clone();
+    overrun[4..6].copy_from_slice(&((payload.len() + 6) as u16).to_be_bytes());
+    let past = write_bytes(&dir, "exif-past-eof.jpg", &overrun);
+    assert!(load_jpeg_exif(Some(&past)).is_none());
+}

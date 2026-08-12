@@ -20,7 +20,7 @@ use {
         quality::Quality,
     },
     crc32fast::Hasher as Crc32,
-    encoders::{encode_jpeg, encode_png},
+    encoders::{encode_bmp, encode_jpeg, encode_png, encode_tiff, encode_webp},
     metadata::{
         build_custom_metadata_payload, inject_jpeg_metadata, inject_png_metadata, load_jpeg_exif,
         load_png_exif_chunks,

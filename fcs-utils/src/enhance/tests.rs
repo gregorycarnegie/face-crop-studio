@@ -750,3 +750,124 @@ fn saturation_simd_and_scalar_paths_agree() {
         );
     }
 }
+
+/// A small image with three clearly different channels, so a stage that turns
+/// into a no-op — or one that runs when it should not — is visible.
+fn colourful_rgb() -> DynamicImage {
+    DynamicImage::ImageRgb8(image::RgbImage::from_fn(4, 4, |x, y| {
+        image::Rgb([200 - (x * 20) as u8, 40 + (y * 30) as u8, 120])
+    }))
+}
+
+#[test]
+fn tone_stages_hand_back_the_source_when_they_are_no_ops() {
+    // A no-op stage returns the input as-is, keeping its pixel format; running
+    // an identity LUT instead would silently convert the image to RGBA.
+    let img = colourful_rgb();
+    assert!(
+        matches!(apply_exposure(&img, 0.0), DynamicImage::ImageRgb8(_)),
+        "zero stops is a no-op"
+    );
+    assert!(
+        matches!(apply_contrast(&img, 1.0), DynamicImage::ImageRgb8(_)),
+        "a contrast multiplier of one is a no-op"
+    );
+    assert!(
+        matches!(apply_saturation(&img, 1.0), DynamicImage::ImageRgb8(_)),
+        "a saturation multiplier of one is a no-op"
+    );
+
+    // At exactly the epsilon the stage is no longer a no-op and does run.
+    assert!(
+        matches!(apply_exposure(&img, EPSILON), DynamicImage::ImageRgba8(_)),
+        "epsilon is the smallest exposure that still applies"
+    );
+}
+
+#[test]
+fn unsharp_mask_needs_both_an_amount_and_a_radius() {
+    let img = colourful_rgb();
+    for (amount, radius) in [(0.0, 2.0), (1.0, 0.0), (0.0, 0.0)] {
+        assert!(
+            matches!(
+                apply_unsharp_mask(&img, amount, radius),
+                DynamicImage::ImageRgb8(_)
+            ),
+            "amount {amount} with radius {radius} must be a passthrough"
+        );
+    }
+}
+
+#[test]
+fn pipeline_saturation_is_measured_as_a_distance_from_one() {
+    // The stage runs whenever saturation differs from 1.0 in either direction,
+    // and the multiplier is clamped at zero, so both of these go grey.
+    let img = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        4,
+        4,
+        image::Rgba([200, 40, 120, 255]),
+    ));
+    let base = EnhancementSettings {
+        unsharp_amount: 0.0,
+        unsharp_radius: 0.0,
+        ..Default::default()
+    };
+
+    for saturation in [0.0f32, -1.0] {
+        let out = apply_enhancements(
+            &img,
+            &EnhancementSettings {
+                saturation,
+                ..base.clone()
+            },
+            None,
+        )
+        .to_rgba8();
+        let px = out.get_pixel(1, 1).0;
+        assert_eq!(
+            [px[0], px[1]],
+            [px[1], px[2]],
+            "saturation {saturation} should desaturate, got {px:?}"
+        );
+        assert_ne!(px[0], 200, "the pixel should not still be its own red");
+    }
+
+    let unchanged = apply_enhancements(&img, &base, None).to_rgba8();
+    assert_eq!(
+        unchanged.get_pixel(1, 1).0,
+        [200, 40, 120, 255],
+        "saturation 1.0 leaves the colours alone"
+    );
+}
+
+#[test]
+fn pipeline_skin_smoothing_runs_only_for_a_positive_amount() {
+    let mut noisy = RgbaImage::new(8, 8);
+    for y in 0..8 {
+        for x in 0..8 {
+            let val = if (x + y) % 2 == 0 { 100 } else { 140 };
+            noisy.put_pixel(x, y, image::Rgba([val, val, val, 255]));
+        }
+    }
+    let img = DynamicImage::ImageRgba8(noisy.clone());
+    let off = EnhancementSettings {
+        unsharp_amount: 0.0,
+        unsharp_radius: 0.0,
+        skin_smooth_amount: 0.0,
+        ..Default::default()
+    };
+
+    let untouched = apply_enhancements(&img, &off, None).to_rgba8();
+    assert_eq!(untouched, noisy, "every stage off leaves the image alone");
+
+    let smoothed = apply_enhancements(
+        &img,
+        &EnhancementSettings {
+            skin_smooth_amount: 0.8,
+            ..off.clone()
+        },
+        None,
+    )
+    .to_rgba8();
+    assert_ne!(smoothed, untouched, "a positive amount must smooth");
+}

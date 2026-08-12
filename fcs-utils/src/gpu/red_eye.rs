@@ -282,4 +282,26 @@ mod tests {
             center[0]
         );
     }
+
+    #[test]
+    fn clear_cache_releases_the_pooled_buffers() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping red-eye cache test: no GPU");
+            return;
+        };
+        let remover = GpuRedEyeRemoval::new(ctx).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            16,
+            16,
+            image::Rgba([220, 20, 20, 255]),
+        ));
+        remover.apply(&image, 1.5, None).expect("apply");
+
+        assert!(
+            remover.memory_usage() > 0,
+            "applying the filter allocates pooled buffers"
+        );
+        remover.clear_cache();
+        assert_eq!(remover.memory_usage(), 0, "clearing frees them again");
+    }
 }
