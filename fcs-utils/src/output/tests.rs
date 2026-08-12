@@ -864,3 +864,83 @@ fn load_jpeg_exif_takes_a_segment_ending_at_eof_but_not_one_past_it() {
     let past = write_bytes(&dir, "exif-past-eof.jpg", &overrun);
     assert!(load_jpeg_exif(Some(&past)).is_none());
 }
+
+/// Signature plus an IHDR chunk carrying the 13 bytes the format requires.
+fn minimal_png_header() -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&make_png_chunk(b"IHDR", &[0u8; 13]));
+    png
+}
+
+#[test]
+fn inject_png_metadata_needs_a_whole_ihdr_chunk_to_insert_after() {
+    let chunk = make_png_chunk(b"eXIf", b"Exif\0\0payload");
+    let chunks = [chunk.clone()];
+
+    // Signature only: there is no IHDR to insert behind, so nothing is added
+    // and nothing is read past the end either.
+    let signature = b"\x89PNG\r\n\x1a\n".to_vec();
+    assert_eq!(
+        inject_png_metadata(signature.clone(), &chunks, None),
+        signature
+    );
+
+    // An IHDR whose declared length runs past the end of the buffer.
+    let mut truncated = minimal_png_header();
+    truncated.truncate(20);
+    assert_eq!(
+        inject_png_metadata(truncated.clone(), &chunks, None),
+        truncated
+    );
+}
+
+#[test]
+fn inject_png_metadata_inserts_after_an_ihdr_that_ends_the_file() {
+    // The IHDR chunk finishes exactly at EOF: still a complete chunk, so the
+    // new chunks go straight after it.
+    let header = minimal_png_header();
+    let chunk = make_png_chunk(b"eXIf", b"Exif\0\0payload");
+
+    let injected = inject_png_metadata(header.clone(), std::slice::from_ref(&chunk), None);
+    assert_eq!(
+        injected.len(),
+        header.len() + chunk.len(),
+        "the chunk should have been added"
+    );
+    assert_eq!(&injected[..header.len()], &header[..]);
+    assert_eq!(&injected[header.len()..], &chunk[..]);
+}
+
+#[test]
+fn inject_jpeg_metadata_needs_both_soi_bytes_to_match() {
+    // 0xFF alone is not an SOI marker, so the file is left alone.
+    let mut half_soi = vec![0xFF, 0x00, 0x11, 0x22];
+    let untouched = inject_jpeg_metadata(half_soi.clone(), None, Some("{\"a\":1}"));
+    assert_eq!(untouched, half_soi);
+
+    half_soi[0] = 0x00;
+    half_soi[1] = 0xD8;
+    assert_eq!(
+        inject_jpeg_metadata(half_soi.clone(), None, Some("{\"a\":1}")),
+        half_soi
+    );
+
+    // A bare SOI is a valid, if empty, place to inject.
+    let bare = vec![0xFF, 0xD8];
+    let injected = inject_jpeg_metadata(bare.clone(), None, Some("{\"a\":1}"));
+    assert!(
+        injected.len() > bare.len(),
+        "metadata should be inserted after the SOI"
+    );
+    assert_eq!(&injected[..2], &[0xFF, 0xD8]);
+}
+
+#[test]
+fn xmp_segment_length_prefix_counts_its_own_two_bytes() {
+    let segment = xmp_segment_of(vec![0xFF, 0xD8], "{\"k\":\"v\"}").expect("segment");
+    let declared = u16::from_be_bytes(segment[2..4].try_into().unwrap()) as usize;
+
+    // marker (2) + length prefix (2) + payload, where the prefix counts itself.
+    assert_eq!(segment.len(), declared + 2);
+    assert_eq!(declared, segment.len() - 4 + 2);
+}
