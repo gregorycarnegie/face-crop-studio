@@ -33,10 +33,9 @@ pub fn crop_face_from_image(
     ]);
     let mut canvas = RgbaImage::from_pixel(canvas_width, canvas_height, fill);
 
-    if let Some((src_x, src_y, src_w, src_h)) = region
-        .in_bounds_rect(img_w, img_h)
-        .filter(|(_, _, w, h)| *w > 0 && *h > 0)
-    {
+    // `in_bounds_rect` returns `None` rather than a zero-sized rect, so there is
+    // nothing left to filter out here.
+    if let Some((src_x, src_y, src_w, src_h)) = region.in_bounds_rect(img_w, img_h) {
         let sub = image::imageops::crop_imm(img, src_x, src_y, src_w, src_h).to_image();
         let offset_x = region.pad_left.min(canvas_width.saturating_sub(1));
         let offset_y = region.pad_top.min(canvas_height.saturating_sub(1));

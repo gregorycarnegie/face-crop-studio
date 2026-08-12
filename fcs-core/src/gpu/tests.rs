@@ -1250,6 +1250,11 @@ fn onnx_initializer_map_keeps_only_the_requested_float_initializers() {
     let map = loader.into_map();
     assert_eq!(map.len(), 2);
     assert_eq!(map["b"].data(), &[0.5, -0.5]);
+
+    // Asking for nothing yields an empty map rather than the whole model.
+    let none = OnnxInitializerMap::load(&path, &[]).expect("load no initializers");
+    assert!(none.is_empty());
+    assert_eq!(none.len(), 0);
 }
 
 #[test]
