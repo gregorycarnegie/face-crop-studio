@@ -360,6 +360,31 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
+/// The heuristic requirement in bytes, before any hardware cap is applied.
+///
+/// Split out of [`estimate_inference_memory`] to make it observable. That
+/// function returns the hardware-derived limit whenever `get_available_vram`
+/// succeeds — which is on any machine with a working adapter — so this
+/// arithmetic never reaches its return value there and no test could pin it
+/// down. Taking the weight total as a plain `u64` also means the formula can be
+/// checked without constructing an ONNX initializer map.
+fn estimate_required_bytes(total_weight_bytes: u64, input_size: InputSize) -> u64 {
+    let InputSize {
+        width: w,
+        height: h,
+    } = input_size;
+    let input_pixels = (w as u64) * (h as u64);
+
+    // Assume worst case channel depth early on is 64 (standard ResNet is 64, YuNet is fewer but let's be safe)
+    // And we need ping-pong buffers, so say 8x capacity to be very safe against fragmentation or held buffers.
+    let activation_heuristic = input_pixels << 11; // pixels * channels(64) * copies(4) * f32(8)
+
+    // Add 256MB fixed overhead for driver/fragmentation/mips/etc
+    let fixed_overhead = 1 << 28; // 256 MB
+
+    total_weight_bytes + activation_heuristic + fixed_overhead
+}
+
 /// Estimate GPU memory requirements (in bytes) based on weights + input size.
 ///
 /// This provides a safe upper bound for the `GpuBufferPool` limit.
@@ -396,20 +421,7 @@ fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize
     // Let's us a generous factor:
     // Limit = Weights + (InputPixels * MaxChannels * sizeof(f32) * SafetyFactor)
 
-    let InputSize {
-        width: w,
-        height: h,
-    } = input_size;
-    let input_pixels = (w as u64) * (h as u64);
-
-    // Assume worst case channel depth early on is 64 (standard ResNet is 64, YuNet is fewer but let's be safe)
-    // And we need ping-pong buffers, so say 8x capacity to be very safe against fragmentation or held buffers.
-    let activation_heuristic = input_pixels << 11; // pixels * channels(64) * copies(4) * f32(8)
-
-    // Add 256MB fixed overhead for driver/fragmentation/mips/etc
-    let fixed_overhead = 1 << 28; // 256 MB
-
-    let required = total_weight_bytes + activation_heuristic + fixed_overhead;
+    let required = estimate_required_bytes(total_weight_bytes, input_size);
 
     // If we can query the actual VRAM budget, we use it to intelligently set the limit.
     if let Some(hardware_available) = fcs_utils::gpu::get_available_vram() {
@@ -489,5 +501,91 @@ mod tests {
         let data = vec![0.0f32];
         let out = reorder_hw_major(&data, 1, 1, 1, false);
         assert_eq!(out[0], 0.0);
+    }
+
+    // --- memory estimate ---
+
+    /// The pool limit derives from this, and getting it wrong either starves
+    /// inference or lets it over-allocate, so the formula is asserted exactly
+    /// rather than by inequality.
+    #[test]
+    fn required_bytes_is_weights_plus_activations_plus_fixed_overhead() {
+        let fixed = 1u64 << 28; // 256 MiB
+        let size = InputSize {
+            width: 640,
+            height: 640,
+        };
+        // 640 * 640 pixels, shifted left 11 (channels * copies * f32).
+        let activations = 640u64 * 640 * 2048;
+
+        assert_eq!(
+            estimate_required_bytes(0, size),
+            activations + fixed,
+            "with no weights the estimate is activations plus the fixed overhead"
+        );
+
+        // Weights are added, not scaled or ignored.
+        assert_eq!(
+            estimate_required_bytes(1_000_000, size),
+            1_000_000 + activations + fixed
+        );
+        assert_eq!(
+            estimate_required_bytes(1_000_000, size) - estimate_required_bytes(0, size),
+            1_000_000,
+            "weight bytes must pass through one-for-one"
+        );
+    }
+
+    #[test]
+    fn required_bytes_scales_with_pixel_count_not_with_a_single_dimension() {
+        let square = InputSize {
+            width: 640,
+            height: 640,
+        };
+        let double_width = InputSize {
+            width: 1280,
+            height: 640,
+        };
+        let fixed = 1u64 << 28;
+
+        let a = estimate_required_bytes(0, square) - fixed;
+        let b = estimate_required_bytes(0, double_width) - fixed;
+        assert_eq!(
+            b,
+            a * 2,
+            "doubling one dimension doubles the pixel count and so the activation estimate"
+        );
+
+        // A degenerate size still yields the overhead rather than zero, so the
+        // pool is never given a limit it cannot work with.
+        let zero = InputSize {
+            width: 0,
+            height: 0,
+        };
+        assert_eq!(estimate_required_bytes(0, zero), fixed);
+
+        // Non-square dimensions are symmetric: only the product matters.
+        let transposed = InputSize {
+            width: 640,
+            height: 1280,
+        };
+        assert_eq!(
+            estimate_required_bytes(0, double_width),
+            estimate_required_bytes(0, transposed)
+        );
+    }
+
+    #[test]
+    fn required_bytes_is_monotonic_in_both_inputs() {
+        let small = InputSize {
+            width: 320,
+            height: 320,
+        };
+        let large = InputSize {
+            width: 2048,
+            height: 2048,
+        };
+        assert!(estimate_required_bytes(0, large) > estimate_required_bytes(0, small));
+        assert!(estimate_required_bytes(10_000, small) > estimate_required_bytes(0, small));
     }
 }

@@ -729,4 +729,106 @@ mod tests {
         assert!(!err.is_available());
         assert!(err.context().is_none());
     }
+
+    // ------------------------------------------------------------------
+    // The context accessors and the Available arm of GpuAvailability. The
+    // existing coverage above only ever builds the Disabled/Unavailable
+    // variants, so `is_available` could return a constant `false` and
+    // `context()` a constant `None` without any test noticing — and every
+    // accessor on a live context was unreachable.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn available_variant_reports_itself_available_and_yields_the_context() {
+        let Some(ctx) = test_support::test_context() else {
+            eprintln!("Skipping GpuContext accessor test: no adapter");
+            return;
+        };
+        let availability = GpuAvailability::Available(ctx.clone());
+
+        assert!(
+            availability.is_available(),
+            "the Available variant must report itself available"
+        );
+        let returned = availability
+            .context()
+            .expect("the Available variant must hand back its context");
+        assert!(
+            Arc::ptr_eq(returned, &ctx),
+            "context() must return the very context it was given"
+        );
+    }
+
+    #[test]
+    fn context_accessors_describe_the_real_adapter() {
+        let Some(ctx) = test_support::test_context() else {
+            eprintln!("Skipping GpuContext accessor test: no adapter");
+            return;
+        };
+
+        // A default-constructed Limits would report the downlevel minimums, so
+        // requiring a real texture dimension distinguishes the accessor from a
+        // fabricated default.
+        let limits = ctx.limits();
+        assert!(
+            limits.max_texture_dimension_2d >= 2048,
+            "limits look defaulted rather than negotiated: {}",
+            limits.max_texture_dimension_2d
+        );
+        assert!(limits.max_buffer_size > 0);
+
+        // features() is allowed to be empty (nothing optional is requested), so
+        // assert it agrees with the adapter rather than that it is non-empty.
+        let adapter = ctx.adapter().expect("context should own its adapter");
+        assert!(
+            adapter.features().contains(ctx.features()),
+            "reported features must be a subset of what the adapter supports"
+        );
+
+        assert!(
+            ctx.instance().is_some(),
+            "a context built by initialize() owns its instance"
+        );
+
+        let info = ctx.adapter_info();
+        assert!(
+            !info.name.is_empty(),
+            "adapter_info should carry a real adapter name"
+        );
+
+        let report = ctx
+            .generate_report()
+            .expect("a context with an instance can report counters");
+        assert!(
+            !report.summary.is_empty(),
+            "generate_report must produce a non-empty summary"
+        );
+    }
+
+    #[test]
+    fn disabled_and_error_indicators_carry_distinct_summaries_and_the_reason() {
+        // Both constructors fill `summary` from a literal and `detail` from the
+        // caller. Dropping the summary field would leave them indistinguishable
+        // in the UI, since the mode alone is not rendered as text.
+        let disabled = GpuStatusIndicator::disabled("switched off in settings");
+        assert_eq!(disabled.mode, GpuStatusMode::Disabled);
+        assert_eq!(disabled.summary, "GPU disabled");
+        assert_eq!(disabled.detail.as_deref(), Some("switched off in settings"));
+
+        let error = GpuStatusIndicator::error("no adapter found");
+        assert_eq!(error.mode, GpuStatusMode::Error);
+        assert_eq!(error.summary, "GPU unavailable");
+        assert_eq!(error.detail.as_deref(), Some("no adapter found"));
+
+        assert_ne!(
+            disabled.summary, error.summary,
+            "disabled and error must not read the same"
+        );
+
+        // Neither claims an adapter it does not have.
+        for indicator in [&disabled, &error] {
+            assert!(indicator.adapter_name.is_none());
+            assert!(indicator.backend.is_none());
+        }
+    }
 }
