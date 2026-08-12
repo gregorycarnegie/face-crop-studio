@@ -398,4 +398,38 @@ mod tests {
         mask.clear_cache();
         assert_eq!(mask.memory_usage(), 0, "clearing frees them again");
     }
+
+    #[test]
+    fn the_mask_edge_is_supersampled() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping shape_mask supersampling test: no GPU");
+            return;
+        };
+        let mask = GpuShapeMask::new(ctx).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            64,
+            64,
+            image::Rgba([255, 255, 255, 255]),
+        ));
+
+        // No vignette at all, so partial alpha can only come from the shader's
+        // multi-sample coverage. One sample per pixel would leave every pixel
+        // fully in or fully out, and the outline visibly stepped.
+        let out = mask
+            .apply(
+                &image,
+                &CropShape::Ellipse,
+                0.0,
+                0.0,
+                RgbaColor::opaque(0, 0, 0),
+            )
+            .expect("apply should not error")
+            .expect("Ellipse shape should produce a masked image")
+            .to_rgba8();
+
+        assert!(
+            out.pixels().any(|px| (1..=254).contains(&px.0[3])),
+            "the ellipse edge should have partially covered pixels"
+        );
+    }
 }
