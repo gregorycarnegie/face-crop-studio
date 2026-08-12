@@ -333,6 +333,18 @@ mod tests {
             "a level the filter excludes must not activate"
         );
 
+        // Every telemetry-side condition satisfied — enabled, and the level well
+        // inside the filter — yet still inactive, because no logger is installed
+        // so `log_enabled!` is false. This is the case that separates the second
+        // `&&` from an `||`: with `||` the guard would read
+        // `enabled && (telemetry_allows || log_enabled)` and activate here.
+        configure(true, LevelFilter::Trace);
+        assert!(
+            !timing_guard_if("op", Level::Error, true).is_active(),
+            "log_enabled! is false without a logger, so the guard must stay \
+             inactive even with telemetry fully enabled"
+        );
+
         reset();
     }
 
