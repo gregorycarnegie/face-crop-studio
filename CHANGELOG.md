@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Dependency bumps: `tract-onnx` 0.23.4 → 0.23.5, `libheif-rs` 2.7.0 → 3.0.0,
+  `wgpu`/`naga` 30.0.0 → 30.0.1, `imagepipe` 0.5.0 → 0.5.1, `imgref` 1.12.2 →
+  1.12.3, `log` 0.4.33 → 0.4.34, `crc32fast` 1.5.0 → 1.5.1, `lru` 0.18.2 →
+  0.18.3. `libheif-rs` 3.0.0 is a major release but needed no code changes; the
+  `HeifContext`/`LibHeif`/`ColorSpace`/`RgbChroma` surface `load_heic` uses is
+  unchanged.
+- The `tract` bump does not move the detection hotspot, which was worth
+  confirming rather than assuming: `tract-core`'s `depth_wise.rs` is
+  byte-identical between 0.23.4 and 0.23.5, and profiling both binaries back to
+  back on `inference_pipeline/detect_image/speed` puts
+  `depth_wise::inner_loop_generic` at 60.8% and 61.8% of self time
+  respectively — the same scalar fallback described in 1.5.3, still with no
+  x86 SIMD variant upstream. What did change is matmul kernel selection:
+  0.23.4 ran everything through a single `avx512_mmm_f32_80x2`, while 0.23.5
+  picks among `32x6`, `48x4` and `16x12` from the new AVX/FMA kernel set. That
+  is a ~9% slice of the run either way.
+
+  Total CPU per run is too noisy on this machine to rank the two versions —
+  the same binary measured 15.7 s and 23.6 s over consecutive 25 s windows —
+  so only the distribution above is claimed here, not a speedup.
+
 ## [1.5.4] - 2026-08-12
 
 ### Fixed
