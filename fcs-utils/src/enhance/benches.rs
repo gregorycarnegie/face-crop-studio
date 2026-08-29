@@ -169,9 +169,11 @@ fn baseline_unsharp(src: &RgbaImage, blurred: &RgbaImage, amount: f32) -> RgbaIm
     let mut out: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(w, h);
     for ((dst, s), b) in out
         .as_mut()
-        .chunks_exact_mut(4)
-        .zip(src.as_raw().chunks_exact(4))
-        .zip(blurred.as_raw().chunks_exact(4))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(src.as_raw().as_chunks::<4>().0)
+        .zip(blurred.as_raw().as_chunks::<4>().0)
     {
         for c in 0..3usize {
             let src_val = s[c] as f32;

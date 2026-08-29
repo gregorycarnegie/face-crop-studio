@@ -23,7 +23,7 @@ edition = "2024"
 # Matches the toolchain pinned in ci.yml and release.yml. With resolver 3 this
 # also makes dependency resolution MSRV-aware, so `cargo update` will not pull
 # in a version that needs a newer rustc than the workflows install.
-rust-version = "1.96"
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 version = "1.5.4"
 description = "Face Crop Studio — pure Rust face detection and cropping."

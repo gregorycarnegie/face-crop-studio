@@ -21,7 +21,7 @@ fn build_lut(mut mapper: impl FnMut(u8) -> u8) -> [u8; 256] {
 }
 
 pub(super) fn apply_lut_in_place(buf: &mut RgbaImage, lut: &[u8; 256]) {
-    for pixel in buf.as_mut().chunks_exact_mut(4) {
+    for pixel in buf.as_mut().as_chunks_mut::<4>().0 {
         pixel[0] = lut[pixel[0] as usize];
         pixel[1] = lut[pixel[1] as usize];
         pixel[2] = lut[pixel[2] as usize];
@@ -151,7 +151,7 @@ pub(super) fn equalize_histogram_in_place(buf: &mut RgbaImage) {
     let lut_g = build_equalization_lut(&hist_g, total);
     let lut_b = build_equalization_lut(&hist_b, total);
 
-    for px in buf.as_mut().chunks_exact_mut(4) {
+    for px in buf.as_mut().as_chunks_mut::<4>().0 {
         px[0] = lut_r[px[0] as usize];
         px[1] = lut_g[px[1] as usize];
         px[2] = lut_b[px[2] as usize];
@@ -199,7 +199,7 @@ pub(super) fn saturation_in_place(buf: &mut RgbaImage, saturation: f32) {
     let multiplier = saturation.clamp(0.0, 2.5);
     // ponytail: plain ops + saturating float->u8 cast so LLVM autovectorizes;
     // mul_add/round are libm calls on the SSE2 baseline and benched 12-50x slower.
-    for pixel in buf.as_mut().chunks_exact_mut(4) {
+    for pixel in buf.as_mut().as_chunks_mut::<4>().0 {
         let r = pixel[0] as f32;
         let g = pixel[1] as f32;
         let b = pixel[2] as f32;

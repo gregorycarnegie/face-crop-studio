@@ -28,7 +28,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.96.0
+          toolchain: 1.98.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -136,7 +136,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.96.0
+          toolchain: 1.98.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -529,7 +529,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.96.0
+          toolchain: 1.98.0
           targets: aarch64-apple-darwin
 
       - name: Rust Cache
@@ -649,7 +649,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.96.0
+          toolchain: 1.98.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2

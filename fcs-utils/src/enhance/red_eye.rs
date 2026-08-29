@@ -34,7 +34,7 @@ pub(super) fn red_eye_in_place(out: &mut RgbaImage, threshold: f32, eyes: Option
             }
         }
         None => {
-            for px in out.as_mut().chunks_exact_mut(4) {
+            for px in out.as_mut().as_chunks_mut::<4>().0 {
                 correct_red_pixel(px, threshold);
             }
         }
