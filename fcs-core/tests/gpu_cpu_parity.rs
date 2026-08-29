@@ -2,7 +2,11 @@ use fcs_core::{
     DetectionOutput, PostprocessConfig, YuNetDetector,
     preprocess::{InputSize, PreprocessConfig, Preprocessor, WgpuPreprocessor},
 };
-use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
+use fcs_utils::{
+    fixture_path,
+    gpu::{GpuAvailability, GpuContext, GpuContextOptions},
+    model_path,
+};
 use std::{path::Path, sync::Arc};
 
 const MODEL_PATH: &str = "models/face_detection_yunet_2023mar_640.onnx";
@@ -14,27 +18,27 @@ struct FixtureSpec {
 
 const FIXTURES: &[FixtureSpec] = &[
     FixtureSpec {
-        path: "fixtures/images/001.jpg",
+        path: "images/001.jpg",
         label: "single-face portrait",
     },
     FixtureSpec {
-        path: "fixtures/images/006.jpg",
+        path: "images/006.jpg",
         label: "crowded street",
     },
     FixtureSpec {
-        path: "fixtures/images/068.jpg",
+        path: "images/068.jpg",
         label: "profile view",
     },
     FixtureSpec {
-        path: "fixtures/images/168_o.jpg",
+        path: "images/168_o.jpg",
         label: "partially occluded subject",
     },
     FixtureSpec {
-        path: "fixtures/images/190_g.jpg",
+        path: "images/190_g.jpg",
         label: "group shot",
     },
     FixtureSpec {
-        path: "fixtures/images/014_n.jpg",
+        path: "images/014_n.jpg",
         label: "no-face negative",
     },
 ];
@@ -57,11 +61,11 @@ struct Detectors {
 
 #[test]
 fn gpu_inference_matches_cpu_baseline() {
-    let model_path = Path::new(MODEL_PATH);
-    if !model_path.exists() {
+    let Some(model_path) = model_path(MODEL_PATH).expect("resolve YuNet model") else {
         eprintln!("skipping GPU parity test (model {MODEL_PATH} missing)");
         return;
-    }
+    };
+    let model_path = model_path.as_path();
 
     let preprocess = PreprocessConfig {
         input_size: InputSize {
@@ -78,14 +82,14 @@ fn gpu_inference_matches_cpu_baseline() {
 
     let mut stats = ParityStats::default();
     for fixture in FIXTURES {
-        let image_path = Path::new(fixture.path);
-        if !image_path.exists() {
+        let Ok(image_path) = fixture_path(fixture.path) else {
             eprintln!(
                 "skipping GPU parity test (fixture {} missing)",
                 fixture.path
             );
             return;
-        }
+        };
+        let image_path = image_path.as_path();
 
         let cpu = detectors
             .cpu

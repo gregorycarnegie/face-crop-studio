@@ -86,22 +86,7 @@ fn upload_onx_tensor(ops: &GpuInferenceOps, tensor: &OnnxTensor, label: &str) ->
 const MODEL_REL_PATH: &str = "models/face_detection_yunet_2023mar_640.onnx";
 
 fn model_file_path() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    candidates.push(PathBuf::from(MODEL_REL_PATH));
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(workspace_root) = manifest_dir.parent() {
-        candidates.push(workspace_root.join(MODEL_REL_PATH));
-    }
-
-    let found = candidates.into_iter().find(|path| path.exists());
-    // The GPU tests skip themselves when the model is missing, which is right on a fresh
-    // clone but hides a broken path in CI, where the model is always downloaded first.
-    assert!(
-        !(found.is_none() && std::env::var_os("FCS_STRICT_TESTS").is_some()),
-        "model {MODEL_REL_PATH} not found while FCS_STRICT_TESTS is set"
-    );
-    found
+    fcs_utils::model_path(MODEL_REL_PATH).expect("resolve YuNet model")
 }
 
 fn reference_tensor(model_path: &Path, node: &str, input: &[f32]) -> (Vec<f32>, Vec<usize>) {

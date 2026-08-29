@@ -7,6 +7,8 @@ use std::{
 };
 
 const FIXTURE_ENV: &str = "YUNET_FIXTURE_ROOT";
+const MODEL_ENV: &str = "YUNET_MODEL_PATH";
+const STRICT_ENV: &str = "FCS_STRICT_TESTS";
 
 /// Resolve the root directory that stores project fixtures.
 ///
@@ -33,6 +35,48 @@ pub fn fixtures_dir() -> Result<PathBuf> {
         "fixtures directory not found starting from {}",
         manifest_dir.display()
     );
+}
+
+/// Resolve a model file, for tests and benchmarks that need the real ONNX weights.
+///
+/// Searched in order:
+/// 1. The file named by the `YUNET_MODEL_PATH` environment variable.
+/// 2. `relative` joined onto each ancestor of the crate's manifest directory.
+///
+/// Resolving against the manifest rather than the current directory is the point: `cargo test
+/// -p fcs-core` runs with the crate directory as the cwd, so a bare relative path silently
+/// misses the workspace-root `models/` and the caller skips itself having tested nothing.
+///
+/// Returns `Ok(None)` when the model is absent, which is correct on a fresh clone — the models
+/// are gitignored. Under `FCS_STRICT_TESTS` that becomes an error instead, so CI, where the
+/// model is always downloaded first, fails loudly rather than skipping.
+///
+/// # Arguments
+///
+/// * `relative` - A workspace-relative path, e.g. `models/face_detection_yunet_2023mar_640.onnx`.
+pub fn model_path<P: AsRef<Path>>(relative: P) -> Result<Option<PathBuf>> {
+    if let Ok(value) = env::var(MODEL_ENV) {
+        let candidate = PathBuf::from(value);
+        if candidate.exists() {
+            return Ok(Some(candidate));
+        }
+    }
+
+    let relative = relative.as_ref();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let found = manifest_dir
+        .ancestors()
+        .map(|ancestor| ancestor.join(relative))
+        .find(|candidate| candidate.exists());
+
+    anyhow::ensure!(
+        found.is_some() || env::var_os(STRICT_ENV).is_none(),
+        "model {} not found under any ancestor of {} while {STRICT_ENV} is set",
+        relative.display(),
+        manifest_dir.display()
+    );
+
+    Ok(found)
 }
 
 /// Resolve a path inside the fixture folder.

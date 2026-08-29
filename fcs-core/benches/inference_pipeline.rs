@@ -1,38 +1,15 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::{
-    env,
-    hint::black_box,
-    path::{Path, PathBuf},
-};
+use std::{hint::black_box, path::Path};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use fcs_core::{InputSize, PostprocessConfig, PreprocessConfig, YuNetDetector};
-use fcs_utils::{config::ResizeQuality, load_fixture_image};
+use fcs_utils::{config::ResizeQuality, load_fixture_image, model_path};
 
 const MODEL_PATH: &str = "models/face_detection_yunet_2023mar_640.onnx";
 const FIXTURE_IMAGE: &str = "images/006.jpg";
 const INPUT_SIZE: InputSize = InputSize::new(640, 640);
-
-fn resolve_model_path() -> Option<PathBuf> {
-    if let Ok(value) = env::var("YUNET_MODEL_PATH") {
-        let candidate = PathBuf::from(value);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for ancestor in manifest_dir.ancestors() {
-        let candidate = ancestor.join(MODEL_PATH);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
 
 fn build_detectors(model_path: &Path) -> Vec<(&'static str, YuNetDetector)> {
     let mut detectors = Vec::new();
@@ -52,11 +29,24 @@ fn build_detectors(model_path: &Path) -> Vec<(&'static str, YuNetDetector)> {
             }
         }
     }
+
+    // GPU inference against the same CPU preprocessor and the same resize quality as the
+    // "speed" case above, so the pair isolates the inference backend and nothing else.
+    // Skipped rather than fatal: there is no GPU adapter in CI.
+    let gpu_preprocess = PreprocessConfig {
+        input_size: INPUT_SIZE,
+        resize_quality: ResizeQuality::Speed,
+    };
+    match YuNetDetector::new_gpu(model_path, gpu_preprocess, PostprocessConfig::default()) {
+        Ok(detector) => detectors.push(("gpu", detector)),
+        Err(err) => eprintln!("skipping the gpu inference benchmark; detector init failed: {err}"),
+    }
+
     detectors
 }
 
 fn inference_pipeline_benchmark(c: &mut Criterion) {
-    let model_path = match resolve_model_path() {
+    let model_path = match model_path(MODEL_PATH).expect("resolve YuNet model") {
         Some(path) => path,
         None => {
             eprintln!(

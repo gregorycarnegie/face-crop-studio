@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **GPU preprocessing aliased badly on any large downscale, which moved real
+  detections.** `preprocess.wgsl` resampled with a single
+  `textureSampleLevel(..., 0.0)` — four bilinear taps at mip 0, and the source
+  texture is created with `mip_level_count: 1`, so there was nothing else to
+  sample. The tap count did not depend on the scale ratio, so downscaling a
+  3840x5760 group shot to 640x640 read 4 source pixels out of every ~54. That
+  is not a precision difference; the network is handed a different, aliased
+  image. Measured against the CPU preprocessor on the same fixtures: a landmark
+  moved 23.1 px and a detection score changed by 0.0054, with the error scaling
+  exactly with the downscale factor (~54 source pixels per output pixel gave
+  23.1 px, ~25 gave 6.5 px, ~9 and ~2 were clean).
+
+  This was never limited to the opt-in GPU inference path. `fcs-cli` selects
+  `WgpuPreprocessor` whenever an adapter is available *even when inference stays
+  on tract*, so every user with a working GPU has been detecting against an
+  aliased image on large photos.
+
+  The shader now derives its tap count from the source/destination ratio and
+  averages the box, halving the count because each bilinear tap already spans
+  about two texels, and capping it at 16 per axis so the quadratic cost stays
+  bounded. At one tap the sample position reduces to `(id + 0.5) / dst_size`,
+  algebraically identical to the previous line, so magnification and the
+  no-resize case are unchanged — the exact-parity assertions in
+  `preprocess.rs` still hold. `gpu_cpu_parity` now passes on all six fixtures
+  with its tolerances untouched: score delta 0.0006 (limit 1e-3), landmark
+  1.87 px and bbox 4.36 px (limit 5.0). Cost is below this machine's run-to-run
+  noise; GPU preprocessing is dominated by upload and readback, not sampling.
+
+  The partial shape of this was already recorded in `preprocess.rs` as a
+  parity-test caveat ("differs by up to 51 of 255 per channel" on minification).
+  What was missing was the connection to detection output.
+
+- **`gpu_cpu_parity` had been silently skipping, so it validated nothing.** It
+  resolved the model with a bare `Path::new("models/...")`, relative to the
+  current directory — which under `cargo test -p fcs-core` is the crate
+  directory, not the workspace root. It printed a skip notice to stderr and
+  passed in 0.00 s. The fixture paths had the same defect. This is the same
+  class of bug 1.4.3 fixed for the OpenCV parity tests; this file was missed,
+  and it is why the aliasing above went unnoticed. Model resolution is now
+  `fcs_utils::model_path`, which searches `YUNET_MODEL_PATH` and then the
+  manifest's ancestors, and errors instead of skipping under
+  `FCS_STRICT_TESTS`. It replaces three separate hand-rolled copies of the
+  same search — in the benchmark, in `gpu/tests.rs`, and the broken one here.
+
 ### Changed
 
 - Dependency bumps: `tract-onnx` 0.23.4 → 0.23.5, `libheif-rs` 2.7.0 → 3.0.0,
@@ -15,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.18.3. `libheif-rs` 3.0.0 is a major release but needed no code changes; the
   `HeifContext`/`LibHeif`/`ColorSpace`/`RgbChroma` surface `load_heic` uses is
   unchanged.
+- The `inference_pipeline` benchmark gained a `gpu` case, running `new_gpu`
+  against the same `CpuPreprocessor` and resize quality as the existing `speed`
+  case so the pair isolates the inference backend. On this hardware the WGSL
+  graph runs a 640x640 detection in 8.9 ms against tract's 114 ms — and with
+  preprocessing held constant it now reproduces tract's detections exactly
+  (0.000000 score delta, 0.000 px landmark delta), having agreed to ~1e-6
+  relative on every head output at both 0..1 and 0..255 input magnitudes. It
+  skips when no adapter is present, as CI has none.
 - The `tract` bump does not move the detection hotspot, which was worth
   confirming rather than assuming: `tract-core`'s `depth_wise.rs` is
   byte-identical between 0.23.4 and 0.23.5, and profiling both binaries back to

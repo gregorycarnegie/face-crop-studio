@@ -43,6 +43,7 @@ pub use enhance::{EnhancementSettings, WgpuEnhancer, apply_enhancements};
 #[cfg(feature = "fixtures")]
 pub use fixtures::{
     fixture_path, fixtures_dir, load_fixture_bytes, load_fixture_image, load_fixture_json,
+    model_path,
 };
 pub use gpu::{
     BatchCropRequest, GpuAvailability, GpuBatchCropper, GpuContext, GpuContextOptions,
