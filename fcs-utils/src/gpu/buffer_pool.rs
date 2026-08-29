@@ -20,6 +20,23 @@ pub enum BufferPoolError {
 struct BufferEntry {
     buffer: wgpu::Buffer,
     size: u64,
+    /// Kept alongside the buffer so a parked entry can be filed back under the right
+    /// usage bucket when its execution scope ends.
+    usage: wgpu::BufferUsages,
+}
+
+/// A poisoned pool mutex only means some other thread panicked while holding it; the buffer
+/// lists themselves are still consistent, so recovering is better than propagating a panic
+/// into every later GPU call.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+thread_local! {
+    /// `(pool address, scope id)` for the execution scope active on this thread, if any.
+    /// The address disambiguates nested scopes belonging to different pools, since a scope
+    /// id is only meaningful to the pool that issued it.
+    static ACTIVE_SCOPE: std::cell::Cell<Option<(usize, u64)>> = const { std::cell::Cell::new(None) };
 }
 
 /// Best-fit pool for `wgpu::Buffer` allocations organized by usage flags.
@@ -28,6 +45,11 @@ struct BufferEntry {
 pub struct GpuBufferPool {
     context: Arc<GpuContext>,
     idle: Mutex<HashMap<wgpu::BufferUsages, Vec<BufferEntry>>>,
+    /// Buffers released inside an execution scope, keyed by scope id. They are held back from
+    /// `idle` until the scope ends, so a buffer whose GPU work is still in flight cannot be
+    /// handed to another thread. See [`GpuBufferPool::execution_scope`].
+    in_flight: Mutex<HashMap<u64, Vec<BufferEntry>>>,
+    next_scope: std::sync::atomic::AtomicU64,
     total_allocated_bytes: std::sync::atomic::AtomicU64,
     max_memory: Option<u64>,
 }
@@ -37,8 +59,62 @@ impl GpuBufferPool {
         Self {
             context,
             idle: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashMap::new()),
+            next_scope: std::sync::atomic::AtomicU64::new(0),
             total_allocated_bytes: std::sync::atomic::AtomicU64::new(0),
             max_memory,
+        }
+    }
+
+    /// Open an execution scope for the calling thread, covering one unit of GPU work from
+    /// encoding through to the readback that completes it.
+    ///
+    /// Buffers are recycled by `Drop` on the host, which happens while a command encoder is
+    /// still being built — before anything is submitted. Without a scope those buffers go
+    /// straight back to `idle`, and a second thread encoding its own pass can acquire a buffer
+    /// that the first thread's not-yet-submitted command buffer already references. Both
+    /// submissions then write the same memory, which corrupts detections nondeterministically.
+    ///
+    /// Inside a scope, released buffers are parked in `in_flight` and only rejoin `idle` when
+    /// the scope ends. Reuse *within* the scope is still allowed, and is still correct: the
+    /// release and the reuse are encoded into the same command buffer in program order, so the
+    /// GPU runs them in that order. Keeping that reuse is what stops peak memory growing by one
+    /// allocation per layer.
+    ///
+    /// The caller must not end the scope until the work is known to have completed. Inference
+    /// satisfies this by reading its outputs back before returning, which waits on the queue.
+    pub fn execution_scope(&self) -> ExecutionScope<'_> {
+        let id = self
+            .next_scope
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let key = (self as *const Self as usize, id);
+        let previous = ACTIVE_SCOPE.with(|slot| slot.replace(Some(key)));
+        ExecutionScope {
+            pool: self,
+            id,
+            previous,
+        }
+    }
+
+    /// The scope id active on this thread for *this* pool, if any.
+    fn active_scope(&self) -> Option<u64> {
+        let this = self as *const Self as usize;
+        ACTIVE_SCOPE.with(|slot| match slot.get() {
+            Some((pool, id)) if pool == this => Some(id),
+            _ => None,
+        })
+    }
+
+    /// Move a finished scope's buffers back into the shared idle pool.
+    fn end_scope(&self, id: u64) {
+        let parked = {
+            let mut in_flight = lock(&self.in_flight);
+            in_flight.remove(&id)
+        };
+        let Some(parked) = parked else { return };
+        let mut idle = lock(&self.idle);
+        for entry in parked {
+            idle.entry(entry.usage).or_default().push(entry);
         }
     }
 
@@ -90,19 +166,16 @@ impl GpuBufferPool {
     }
 
     pub fn recycle(&self, buffer: wgpu::Buffer, size: u64, usage: wgpu::BufferUsages) {
-        match self.idle.lock() {
-            Ok(mut idle) => {
-                idle.entry(usage)
-                    .or_default()
-                    .push(BufferEntry { buffer, size });
-            }
-            Err(poisoned) => {
-                poisoned
-                    .into_inner()
-                    .entry(usage)
-                    .or_default()
-                    .push(BufferEntry { buffer, size });
-            }
+        let entry = BufferEntry {
+            buffer,
+            size,
+            usage,
+        };
+        // Inside a scope the GPU may still be reading this buffer, so park it until the scope
+        // ends rather than offering it to other threads.
+        match self.active_scope() {
+            Some(scope) => lock(&self.in_flight).entry(scope).or_default().push(entry),
+            None => lock(&self.idle).entry(usage).or_default().push(entry),
         }
     }
 
@@ -177,31 +250,66 @@ impl GpuBufferPool {
     }
 
     fn take_best_fit(&self, size: u64, usage: wgpu::BufferUsages) -> Option<BufferEntry> {
-        let mut idle = match self.idle.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        // Prefer this scope's own parked buffers. They are the ones this thread just released,
+        // so reusing them is both safe (same command buffer, program order) and what keeps a
+        // single inference from allocating a fresh buffer per layer.
+        if let Some(scope) = self.active_scope() {
+            let mut in_flight = lock(&self.in_flight);
+            if let Some(parked) = in_flight.get_mut(&scope)
+                && let Some(index) = best_fit_index(parked, size, Some(usage))
+            {
+                return Some(parked.swap_remove(index));
+            }
+        }
+
+        let mut idle = lock(&self.idle);
 
         // Only search buffers with matching usage flags
         let buffers = idle.get_mut(&usage)?;
 
-        let mut best_index = None;
-        let mut best_size = u64::MAX;
+        best_fit_index(buffers, size, None).map(|index| buffers.swap_remove(index))
+    }
+}
 
-        for (index, entry) in buffers.iter().enumerate() {
-            if entry.size < size {
-                continue;
-            }
-            if entry.size < best_size {
-                best_size = entry.size;
-                best_index = Some(index);
-                if entry.size == size {
-                    break;
-                }
+/// Index of the smallest entry that is at least `size`, optionally restricted to one usage.
+/// The usage filter is needed for the scope-parked list, which is keyed by scope rather than
+/// by usage and so holds mixed usages.
+fn best_fit_index(
+    entries: &[BufferEntry],
+    size: u64,
+    usage: Option<wgpu::BufferUsages>,
+) -> Option<usize> {
+    let mut best_index = None;
+    let mut best_size = u64::MAX;
+
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.size < size || usage.is_some_and(|u| entry.usage != u) {
+            continue;
+        }
+        if entry.size < best_size {
+            best_size = entry.size;
+            best_index = Some(index);
+            if entry.size == size {
+                break;
             }
         }
+    }
 
-        best_index.map(|index| buffers.swap_remove(index))
+    best_index
+}
+
+/// Guard returned by [`GpuBufferPool::execution_scope`]. Ending it releases the buffers the
+/// scope parked back into the shared pool.
+pub struct ExecutionScope<'a> {
+    pool: &'a GpuBufferPool,
+    id: u64,
+    previous: Option<(usize, u64)>,
+}
+
+impl Drop for ExecutionScope<'_> {
+    fn drop(&mut self) {
+        ACTIVE_SCOPE.with(|slot| slot.set(self.previous));
+        self.pool.end_scope(self.id);
     }
 }
 

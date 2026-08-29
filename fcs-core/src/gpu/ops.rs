@@ -75,6 +75,15 @@ impl GpuInferenceOps {
         &self.context
     }
 
+    /// The buffer pool backing every tensor this instance allocates.
+    ///
+    /// Exposed so a caller that encodes a whole graph before submitting can wrap that work in
+    /// a [`fcs_utils::gpu::GpuBufferPool::execution_scope`], keeping released intermediates out
+    /// of other threads' reach until the work has completed.
+    pub fn buffer_pool(&self) -> &Arc<GpuBufferPool> {
+        &self.buffer_pool
+    }
+
     /// Returns the estimated total memory usage (in bytes) of buffers managed by the pool.
     pub fn memory_usage(&self) -> u64 {
         self.buffer_pool.memory_usage()

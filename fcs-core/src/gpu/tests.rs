@@ -1286,3 +1286,76 @@ fn div_ceil_uniform_rounds_up_and_keeps_zero_at_zero() {
     assert_eq!(div_ceil_uniform(9, 8), 2);
     assert_eq!(div_ceil_uniform(16, 8), 2);
 }
+
+/// Concurrent inference on a shared `GpuYuNet` must agree with sequential inference.
+///
+/// Regression test for pooled intermediates escaping to another thread mid-encode: the CLI and
+/// the GUI both run batch detection through rayon over one shared detector, and buffers released
+/// while a command encoder was still being built went straight back to the shared pool. A second
+/// thread could then acquire a buffer the first pass already referenced, so both submissions
+/// wrote the same memory. Detections came out nondeterministic — faces dropped, and sometimes
+/// spurious ones invented — with no error anywhere.
+#[test]
+fn concurrent_inference_matches_sequential() {
+    let Some(model_path) = model_file_path() else {
+        eprintln!("skipping concurrent inference test (model missing)");
+        return;
+    };
+    let model =
+        match crate::gpu::runtime::GpuYuNet::new(&model_path, crate::InputSize::new(640, 640)) {
+            Ok(model) => model,
+            Err(err) => {
+                eprintln!("skipping concurrent inference test (no adapter: {err})");
+                return;
+            }
+        };
+
+    let input = synthetic_input();
+    let tensor = || {
+        tract_ndarray::Array4::from_shape_vec((1, 3, 640, 640), input.clone())
+            .expect("input shape")
+            .into_tensor()
+    };
+
+    let plain = |t: tract_onnx::prelude::Tensor| {
+        t.into_plain_array::<f32>()
+            .expect("output is f32")
+            .into_raw_vec_and_offset()
+            .0
+    };
+    let baseline = plain(model.run(tensor()).expect("sequential inference"));
+
+    // Four threads is enough to interleave two encoders; more only slows the test down.
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let model = &model;
+                let tensor = &tensor;
+                let plain = &plain;
+                let baseline = &baseline;
+                scope.spawn(move || {
+                    for _ in 0..3 {
+                        let out = plain(model.run(tensor()).expect("concurrent inference"));
+                        assert_eq!(
+                            out.len(),
+                            baseline.len(),
+                            "concurrent inference changed the output length"
+                        );
+                        let worst = out
+                            .iter()
+                            .zip(baseline.iter())
+                            .map(|(a, b)| (a - b).abs())
+                            .fold(0.0f32, f32::max);
+                        assert!(
+                            worst < 1e-3,
+                            "concurrent inference diverged from sequential (max diff {worst})"
+                        );
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("worker thread panicked");
+        }
+    });
+}

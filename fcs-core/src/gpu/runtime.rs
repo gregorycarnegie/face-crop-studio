@@ -119,6 +119,13 @@ impl GpuYuNet {
     }
 
     fn run_inference(&self, input_gpu: &GpuTensor) -> Result<Tensor> {
+        // Hold an execution scope for the whole encode/submit/readback cycle. Intermediates are
+        // dropped while the encoder is still being built — before anything is submitted — so
+        // without this they would return to the shared pool and a concurrently encoding thread
+        // could acquire a buffer this pass already references. Declared first so it outlives
+        // every tensor below and is dropped last, once the readback has completed.
+        let _scope = self.ops.buffer_pool().execution_scope();
+
         // Accumulate the entire forward pass into one command buffer and submit
         // once. This eliminates ~53 individual queue.submit() calls (one per op)
         // and gives the GPU a full workload to pipeline, dramatically improving

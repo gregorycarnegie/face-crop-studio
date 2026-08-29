@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Batch detection on the GPU silently lost crops, and sometimes invented
+  faces.** Pooled GPU buffers were recycled by `Drop` on the host, which happens
+  while a command encoder is still being built — before anything is submitted.
+  `GpuYuNet::run` holds the workspace mutex only to take and return the input
+  tensor; `run_inference` runs unlocked, and the whole forward pass is
+  accumulated into a single command buffer that is submitted at the end. So an
+  intermediate released during encoding went straight back to the shared pool,
+  and a second thread encoding its own pass could acquire a buffer the first
+  pass already referenced. Both submissions then wrote the same memory.
+
+  Both front ends hit this: `fcs-cli` runs batch detection through `par_iter`
+  and `fcs-gui`'s export through `into_par_iter`, each over one shared detector,
+  and GPU acceleration is on by default. Over the same 20 images the CPU path
+  reported a stable 15 faces detected and 15 crops saved on every run, while the
+  GPU path gave 7, 11 and 20 detected and 7, 5 and 7 saved — dropping real faces
+  and, in the 20-face run, producing detections that are not there. Nothing was
+  logged: no warning, no `batch_failures.json`, and the summary line reported the
+  reduced count as though it were the answer. Forcing `RAYON_NUM_THREADS=1`
+  restored 15/15 exactly, which is what identified concurrency as the cause.
+
+  `GpuBufferPool` now has execution scopes. Buffers released inside a scope are
+  parked until it ends rather than returned to the shared pool, so a buffer whose
+  work is still in flight cannot reach another thread; `run_inference` holds one
+  across its whole encode/submit/readback cycle, and the readback is what
+  establishes that the work has finished. Reuse *within* a scope is deliberately
+  kept — the release and the reuse land in the same command buffer in program
+  order, so the GPU runs them in that order, and without it peak memory would
+  grow by one allocation per layer. Five consecutive runs now report 15/15,
+  matching the CPU path.
+
+  `concurrent_inference_matches_sequential` covers it: four threads running the
+  same input through one detector, compared against the sequential result. It
+  fails without the scope and passes with it.
+
 - **GPU preprocessing aliased badly on any large downscale, which moved real
   detections.** `preprocess.wgsl` resampled with a single
   `textureSampleLevel(..., 0.0)` — four bilinear taps at mip 0, and the source
