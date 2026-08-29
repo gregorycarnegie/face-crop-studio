@@ -108,7 +108,17 @@ impl YuNetDetector {
         postprocess: PostprocessConfig,
         preprocessor: Arc<dyn Preprocessor>,
     ) -> Result<Self> {
-        let model = GpuYuNet::new(model_path.as_ref(), preprocess.input_size)?;
+        // Reuse the preprocessor's device when it has one. Two independent `wgpu::Device`s
+        // cannot share tensors, so this is what makes `detect_on_device` possible at all -- and
+        // it also avoids initialising a second adapter for the same physical GPU.
+        let model = match preprocessor.as_wgpu() {
+            Some(gpu) => GpuYuNet::with_context(
+                gpu.context().clone(),
+                model_path.as_ref(),
+                preprocess.input_size,
+            )?,
+            None => GpuYuNet::new(model_path.as_ref(), preprocess.input_size)?,
+        };
         Ok(Self {
             backend: DetectorBackend::Gpu(model),
             preprocess,
@@ -127,8 +137,7 @@ impl YuNetDetector {
         let path_ref = path.as_ref();
         let image = load_image(path_ref)
             .with_context(|| format!("failed to load image from {}", path_ref.display()))?;
-        let prep = self.preprocessor.preprocess(&image, &self.preprocess)?;
-        self.run_preprocessed(prep)
+        self.detect_image(&image)
     }
 
     /// Run detection on an in-memory dynamic image.
@@ -138,8 +147,58 @@ impl YuNetDetector {
     /// * `image` - The dynamic image to process.
     pub fn detect_image(&self, image: &DynamicImage) -> Result<DetectionOutput> {
         let _guard = timing_guard("fcs_core::detect_image", log::Level::Debug);
+        if let Some(output) = self.detect_on_device(image)? {
+            return Ok(output);
+        }
         let prep = self.preprocessor.preprocess(image, &self.preprocess)?;
         self.run_preprocessed(prep)
+    }
+
+    /// End-to-end GPU detection: preprocess writes straight into the tensor inference reads.
+    ///
+    /// Returns `Ok(None)` whenever the pairing does not apply -- CPU inference, a CPU
+    /// preprocessor, a preprocessor on a different device, or an image too large for a single
+    /// texture -- leaving the caller to take the ordinary path.
+    ///
+    /// When it does apply, nothing crosses the PCIe bus between the two stages. The tensor is
+    /// allocated on the model's device, the preprocess dispatch writes it, and inference reads
+    /// it from the same queue, which orders the two submissions without host synchronisation.
+    /// The path this replaces downloaded 4.9 MB through a blocking map and uploaded the same
+    /// 4.9 MB straight back -- to a second device, since the two stages used to build their own.
+    fn detect_on_device(&self, image: &DynamicImage) -> Result<Option<DetectionOutput>> {
+        let DetectorBackend::Gpu(model) = &self.backend else {
+            return Ok(None);
+        };
+        let Some(gpu_preprocessor) = self.preprocessor.as_wgpu() else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(gpu_preprocessor.context(), model.context()) {
+            return Ok(None);
+        }
+
+        let _guard = timing_guard("fcs_core::detect_on_device", log::Level::Debug);
+        let input = model.allocate_input(self.preprocess.input_size)?;
+        let Some(scales) =
+            gpu_preprocessor.preprocess_into_tensor(image, &self.preprocess, &input)?
+        else {
+            return Ok(None);
+        };
+
+        let raw = {
+            let _guard = timing_guard("fcs_core::onnx_inference", log::Level::Debug);
+            model.run_on_device(&input)?
+        };
+        let detections = {
+            let _guard = timing_guard("fcs_core::postprocess", log::Level::Debug);
+            apply_postprocess(&raw, scales.scale_x, scales.scale_y, &self.postprocess)?
+        };
+
+        Ok(Some(DetectionOutput {
+            detections,
+            scale_x: scales.scale_x,
+            scale_y: scales.scale_y,
+            original_size: scales.original_size,
+        }))
     }
 
     /// Returns the estimated GPU memory usage in bytes, or None if running on CPU.

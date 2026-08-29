@@ -36,7 +36,6 @@ pub struct GpuYuNet {
 
 impl GpuYuNet {
     pub fn new<P: AsRef<Path>>(model_path: P, input_size: InputSize) -> Result<Self> {
-        let model_path = model_path.as_ref();
         let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
             GpuAvailability::Available(ctx) => ctx,
             GpuAvailability::Disabled { reason } => {
@@ -46,6 +45,21 @@ impl GpuYuNet {
                 anyhow::bail!("GPU backend unavailable: {error}")
             }
         };
+        Self::with_context(context, model_path, input_size)
+    }
+
+    /// Build the model on an existing device.
+    ///
+    /// Sharing a context with the preprocessor is what makes an end-to-end GPU path possible:
+    /// tensors cannot cross `wgpu::Device` boundaries, so with separate devices the preprocessed
+    /// tensor has to be downloaded and uploaded again. It also avoids initialising a second
+    /// adapter, which `new` does implicitly.
+    pub fn with_context<P: AsRef<Path>>(
+        context: Arc<GpuContext>,
+        model_path: P,
+        input_size: InputSize,
+    ) -> Result<Self> {
+        let model_path = model_path.as_ref();
         let loader = graph::load_backbone_weights(
             model_path,
             BACKBONE_STAGES.len(),
@@ -154,6 +168,36 @@ impl GpuYuNet {
 
     pub fn memory_usage(&self) -> u64 {
         self.ops.memory_usage()
+    }
+
+    /// The device this model runs on.
+    pub fn context(&self) -> &Arc<GpuContext> {
+        self.ops.context()
+    }
+
+    /// Allocate an input tensor on this model's device, for a caller that wants to write into it
+    /// directly (GPU preprocessing) rather than upload host data.
+    pub fn allocate_input(&self, input_size: InputSize) -> Result<GpuTensor> {
+        GpuTensor::uninitialized_with_pool(
+            self.ops.context().clone(),
+            Some(self.ops.buffer_pool().clone()),
+            vec![1, 3, input_size.height as usize, input_size.width as usize],
+            Some("gpu_input"),
+        )
+    }
+
+    /// Run inference on a tensor that is already on this device.
+    ///
+    /// The counterpart to [`GpuYuNet::run`], which takes host data and uploads it. Submissions on
+    /// one queue execute in order, so a preprocess dispatch submitted before this call is
+    /// guaranteed to have written `input` by the time the graph reads it -- no host
+    /// synchronisation, no round trip.
+    pub fn run_on_device(&self, input: &GpuTensor) -> Result<Tensor> {
+        anyhow::ensure!(
+            Arc::ptr_eq(input.context(), self.ops.context()),
+            "input tensor belongs to a different GPU context than the model"
+        );
+        self.run_inference(input)
     }
 }
 

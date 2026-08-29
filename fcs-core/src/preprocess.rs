@@ -3,6 +3,7 @@
 //! The helpers in this module resize images, convert them into the expected tensor layout, and
 //! return the scale factors necessary to map detections back to the source image.
 
+use crate::gpu::tensor::GpuTensor;
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable, bytes_of};
 use fcs_utils::{
@@ -172,6 +173,14 @@ pub trait Preprocessor: Send + Sync + std::fmt::Debug {
         image: &DynamicImage,
         config: &PreprocessConfig,
     ) -> Result<PreprocessOutput>;
+
+    /// The GPU implementation, when this preprocessor is one.
+    ///
+    /// Lets a detector pair a GPU preprocessor with GPU inference on the same device and keep
+    /// the tensor there, instead of downloading it and uploading it straight back.
+    fn as_wgpu(&self) -> Option<&WgpuPreprocessor> {
+        None
+    }
 }
 
 /// Default CPU implementation backed by `image` + ndarray utilities.
@@ -228,6 +237,17 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
     })
 }
 
+/// Scale factors from a preprocessing run whose tensor stayed on the GPU.
+#[derive(Debug, Clone, Copy)]
+pub struct PreprocessScales {
+    /// Horizontal factor mapping detection coordinates back to the source image.
+    pub scale_x: f32,
+    /// Vertical factor mapping detection coordinates back to the source image.
+    pub scale_y: f32,
+    /// Dimensions of the source image.
+    pub original_size: (u32, u32),
+}
+
 /// GPU-backed preprocessor that uses `wgpu` compute shaders for resize + color conversion.
 #[derive(Clone)]
 pub struct WgpuPreprocessor {
@@ -245,6 +265,53 @@ impl std::fmt::Debug for WgpuPreprocessor {
 }
 
 impl WgpuPreprocessor {
+    /// The device this preprocessor renders on.
+    ///
+    /// Used to check that inference shares it before the two are fused; tensors cannot cross
+    /// `wgpu::Device` boundaries.
+    pub fn context(&self) -> &Arc<GpuContext> {
+        &self.context
+    }
+
+    /// Preprocess directly into `output`, leaving the result on the GPU.
+    ///
+    /// `output` must be a `[1, 3, height, width]` tensor on this preprocessor's device. Returns
+    /// `Ok(None)` if the image cannot take the GPU path (it is larger than the device's maximum
+    /// texture dimension), leaving `output` untouched so the caller can fall back to the CPU.
+    pub fn preprocess_into_tensor(
+        &self,
+        image: &DynamicImage,
+        config: &PreprocessConfig,
+        output: &GpuTensor,
+    ) -> Result<Option<PreprocessScales>> {
+        anyhow::ensure!(
+            Arc::ptr_eq(output.context(), &self.context),
+            "preprocess output tensor belongs to a different GPU context"
+        );
+        let expected = [
+            1,
+            3,
+            config.input_size.height as usize,
+            config.input_size.width as usize,
+        ];
+        anyhow::ensure!(
+            output.shape().dims() == expected,
+            "preprocess output tensor has shape {:?}, expected {:?}",
+            output.shape().dims(),
+            expected
+        );
+
+        let result = gpu_preprocess_to_tensor(
+            image,
+            config,
+            self.context.as_ref(),
+            &self.pipeline,
+            self.pool.as_ref(),
+            output,
+        )?;
+        Ok(result)
+    }
+
     /// Create a GPU preprocessor from an existing `GpuContext`.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let pipeline = WgpuPreprocessPipeline::new(context.device())?;
@@ -269,6 +336,10 @@ impl Preprocessor for WgpuPreprocessor {
             &self.pipeline,
             self.pool.as_ref(),
         )
+    }
+
+    fn as_wgpu(&self) -> Option<&WgpuPreprocessor> {
+        Some(self)
     }
 }
 
@@ -383,7 +454,6 @@ struct GpuWorkBuffers {
     readback: wgpu::Buffer,
     readback_size: u64,
     uniform: wgpu::Buffer,
-    staging: Vec<u8>,
 }
 
 const UNIFORM_BUFFER_SIZE: u64 = std::mem::size_of::<PreprocessUniforms>() as u64;
@@ -404,14 +474,7 @@ impl GpuResourcePool {
         }
     }
 
-    fn recycle(&mut self, mut buffers: GpuWorkBuffers) {
-        // Shrink oversized staging buffers to avoid carrying high-water-mark
-        // allocations across batch items (a single large image can grow the
-        // staging Vec to ~100 MB which is then never freed).
-        const STAGING_SHRINK_THRESHOLD: usize = 1 << 24; // 16 MB
-        if buffers.staging.capacity() > STAGING_SHRINK_THRESHOLD {
-            buffers.staging = Vec::new();
-        }
+    fn recycle(&mut self, buffers: GpuWorkBuffers) {
         self.idle.push(buffers);
     }
 }
@@ -455,7 +518,6 @@ impl GpuWorkBuffers {
             readback,
             readback_size: output_bytes,
             uniform,
-            staging: Vec::new(),
         }
     }
 
@@ -508,102 +570,63 @@ impl GpuWorkBuffers {
     fn readback_buffer(&self) -> &wgpu::Buffer {
         &self.readback
     }
-
-    fn prepare_upload<'a>(&'a mut self, data: &'a [u8], width: u32) -> (&'a [u8], u32) {
-        let bytes_per_row = 4 * width as usize;
-        let aligned = align_to(bytes_per_row, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
-        if aligned == bytes_per_row {
-            return (data, bytes_per_row as u32);
-        }
-
-        let rows = data.len() / bytes_per_row;
-        let required = aligned * rows;
-        self.staging.resize(required, 0);
-        for row in 0..rows {
-            let src_start = row * bytes_per_row;
-            let dst_start = row * aligned;
-            self.staging[dst_start..dst_start + bytes_per_row]
-                .copy_from_slice(&data[src_start..src_start + bytes_per_row]);
-        }
-        (self.staging.as_slice(), aligned as u32)
-    }
 }
 
-fn gpu_preprocess(
+/// Upload `image` and dispatch the resize/convert shader, writing f32 CHW BGR into `output`.
+///
+/// The work is submitted but **not** waited on: the caller decides whether to read it back or
+/// leave it on the device. Callers that keep it on the device must consume it from the same
+/// `wgpu::Queue`, which orders submissions, so no host synchronisation is needed between the
+/// preprocess dispatch and whatever reads its output.
+fn encode_preprocess(
     image: &DynamicImage,
     config: &PreprocessConfig,
     context: &GpuContext,
     pipeline: &WgpuPreprocessPipeline,
-    pool: &Mutex<GpuResourcePool>,
-) -> Result<PreprocessOutput> {
+    buffers: &GpuWorkBuffers,
+    output: &wgpu::Buffer,
+) -> Result<PreprocessScales> {
     let input_w = config.input_size.width;
     let input_h = config.input_size.height;
-    anyhow::ensure!(
-        input_w > 0 && input_h > 0,
-        "input dimensions must be greater than zero"
-    );
-
     let (orig_w, orig_h) = image.dimensions();
     let device = context.device();
     let queue = context.queue();
 
-    // The source image is uploaded as a single wgpu texture, which is capped at the
-    // device's max 2D texture dimension (commonly 8192). Full-resolution camera RAWs
-    // routinely exceed this, so fall back to CPU preprocessing rather than tripping a
-    // fatal wgpu validation error. CPU resize handles arbitrarily large inputs.
-    let max_dim = device.limits().max_texture_dimension_2d;
-    if orig_w > max_dim || orig_h > max_dim {
-        log::debug!(
-            "source {orig_w}x{orig_h} exceeds GPU max texture dimension {max_dim}; using CPU preprocess"
-        );
-        return cpu_preprocess(image, config);
-    }
-
     let rgba = image.to_rgba8();
+    let texture_view = buffers
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
 
-    let src_size = wgpu::Extent3d {
-        width: orig_w,
-        height: orig_h,
-        depth_or_array_layers: 1,
-    };
-
-    let output_pixels = (input_w * input_h) as usize;
-    let output_f32_len = output_pixels * 3;
-    let output_size_bytes = (output_f32_len * std::mem::size_of::<f32>()) as u64;
-
-    let mut pool_guard = pool
-        .lock()
-        .map_err(|_| anyhow::anyhow!("GPU resource pool lock was poisoned"))?;
-    let mut buffers = pool_guard.acquire(device, src_size, output_size_bytes);
-    drop(pool_guard);
-
-    let texture_handle = buffers.texture.clone();
-    let texture_view = texture_handle.create_view(&wgpu::TextureViewDescriptor::default());
-    let storage_buffer = buffers.storage_buffer().clone();
-    let readback_buffer = buffers.readback_buffer().clone();
-    let uniform_buffer = buffers.uniform_buffer().clone();
-
-    let (input_bytes, bytes_per_row) = buffers.prepare_upload(rgba.as_raw(), orig_w);
+    // Rows go up tightly packed. `Queue::write_texture` does not require
+    // `COPY_BYTES_PER_ROW_ALIGNMENT` -- wgpu-core validates queue writes with alignment off, and
+    // only `copy_buffer_to_texture` / `copy_texture_to_buffer` demand it. Padding every row into
+    // a staging vec first, as this used to, cost a second full pass over the source (~14 ms on a
+    // 2384x4240 image) to satisfy a rule that never applied here.
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
-            texture: &texture_handle,
+            texture: &buffers.texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        input_bytes,
+        rgba.as_raw(),
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(bytes_per_row),
+            bytes_per_row: Some(4 * orig_w),
             rows_per_image: Some(orig_h),
         },
-        src_size,
+        wgpu::Extent3d {
+            width: orig_w,
+            height: orig_h,
+            depth_or_array_layers: 1,
+        },
     );
+
     let uniforms = PreprocessUniforms {
         src_size: [orig_w, orig_h],
         dst_size: [input_w, input_h],
     };
-    queue.write_buffer(&uniform_buffer, 0, bytes_of(&uniforms));
+    queue.write_buffer(buffers.uniform_buffer(), 0, bytes_of(&uniforms));
 
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("preprocess_bind_group"),
@@ -619,11 +642,11 @@ fn gpu_preprocess(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: storage_buffer.as_entire_binding(),
+                resource: output.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
-                resource: uniform_buffer.as_entire_binding(),
+                resource: buffers.uniform_buffer().as_entire_binding(),
             },
         ],
     });
@@ -638,16 +661,99 @@ fn gpu_preprocess(
         });
         pass.set_pipeline(&pipeline.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let workgroups_x = input_w.div_ceil(8);
-        let workgroups_y = input_h.div_ceil(8);
-        pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        pass.dispatch_workgroups(input_w.div_ceil(8), input_h.div_ceil(8), 1);
     }
-    encoder.copy_buffer_to_buffer(&storage_buffer, 0, &readback_buffer, 0, output_size_bytes);
     queue.submit(std::iter::once(encoder.finish()));
+
+    let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
+    Ok(PreprocessScales {
+        scale_x,
+        scale_y,
+        original_size: (orig_w, orig_h),
+    })
+}
+
+/// Shared preamble: validate the request and decide whether the GPU can take it at all.
+fn gpu_preprocess_setup(
+    image: &DynamicImage,
+    config: &PreprocessConfig,
+    context: &GpuContext,
+) -> Result<Option<(wgpu::Extent3d, u64)>> {
+    let input_w = config.input_size.width;
+    let input_h = config.input_size.height;
+    anyhow::ensure!(
+        input_w > 0 && input_h > 0,
+        "input dimensions must be greater than zero"
+    );
+
+    let (orig_w, orig_h) = image.dimensions();
+
+    // The source image is uploaded as a single wgpu texture, which is capped at the
+    // device's max 2D texture dimension (commonly 8192). Full-resolution camera RAWs
+    // routinely exceed this, so fall back to CPU preprocessing rather than tripping a
+    // fatal wgpu validation error. CPU resize handles arbitrarily large inputs.
+    let max_dim = context.device().limits().max_texture_dimension_2d;
+    if orig_w > max_dim || orig_h > max_dim {
+        log::debug!(
+            "source {orig_w}x{orig_h} exceeds GPU max texture dimension {max_dim}; using CPU preprocess"
+        );
+        return Ok(None);
+    }
+
+    let output_bytes = ((input_w * input_h) as usize * 3 * std::mem::size_of::<f32>()) as u64;
+    Ok(Some((
+        wgpu::Extent3d {
+            width: orig_w,
+            height: orig_h,
+            depth_or_array_layers: 1,
+        },
+        output_bytes,
+    )))
+}
+
+fn gpu_preprocess(
+    image: &DynamicImage,
+    config: &PreprocessConfig,
+    context: &GpuContext,
+    pipeline: &WgpuPreprocessPipeline,
+    pool: &Mutex<GpuResourcePool>,
+) -> Result<PreprocessOutput> {
+    let Some((src_size, output_size_bytes)) = gpu_preprocess_setup(image, config, context)? else {
+        return cpu_preprocess(image, config);
+    };
+    let input_w = config.input_size.width;
+    let input_h = config.input_size.height;
+    let output_f32_len = (input_w * input_h) as usize * 3;
+    let device = context.device();
+
+    let buffers = lock_pool(pool)?.acquire(device, src_size, output_size_bytes);
+
+    let scales = encode_preprocess(
+        image,
+        config,
+        context,
+        pipeline,
+        &buffers,
+        buffers.storage_buffer(),
+    )?;
+
+    // The dispatch above is already submitted; copy its output where the host can map it.
+    let readback_buffer = buffers.readback_buffer().clone();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("preprocess_readback_encoder"),
+    });
+    encoder.copy_buffer_to_buffer(
+        buffers.storage_buffer(),
+        0,
+        &readback_buffer,
+        0,
+        output_size_bytes,
+    );
+    context.queue().submit(std::iter::once(encoder.finish()));
 
     // Slice the region this dispatch actually wrote, not the whole buffer.
     // `ensure_output_buffers` only ever grows the pooled buffers, so after a
-    // larger tensor has been processed the buffer stays larger — and mapping all
+    // larger tensor has been processed the buffer stays larger -- and mapping all
     // of it made the readback length the pooled capacity rather than the
     // requested size, failing the output-size check below for every subsequent
     // smaller tensor. Reachable by lowering the detection input size while the
@@ -674,10 +780,7 @@ fn gpu_preprocess(
     drop(data);
     readback_buffer.unmap();
 
-    let mut pool_guard = pool
-        .lock()
-        .map_err(|_| anyhow::anyhow!("GPU resource pool lock was poisoned"))?;
-    pool_guard.recycle(buffers);
+    lock_pool(pool)?.recycle(buffers);
 
     anyhow::ensure!(
         floats.len() == output_f32_len,
@@ -688,34 +791,51 @@ fn gpu_preprocess(
 
     let tensor = chw_tensor_from_vec(floats, input_w, input_h)?;
 
-    let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
-
     Ok(PreprocessOutput {
         tensor,
-        scale_x,
-        scale_y,
-        original_size: (orig_w, orig_h),
+        scale_x: scales.scale_x,
+        scale_y: scales.scale_y,
+        original_size: scales.original_size,
     })
 }
 
-/// Build a `[1, 3, H, W]` tensor by taking ownership of an existing CHW
-/// buffer. `Array4::from_shape_vec` + `into_tensor` reuse the allocation,
-/// unlike `Tensor::from_shape`, which copies the slice.
+/// Preprocessing that leaves its result on the GPU.
+///
+/// The shader already writes exactly the layout a tensor wants -- f32, CHW, BGR -- so it is
+/// pointed straight at `output`s buffer and nothing is copied. This skips the 4.9 MB download
+/// and the blocking map that [`gpu_preprocess`] needs, and lets inference consume the result
+/// without uploading it again.
+///
+/// Returns `Ok(None)` when the image cannot go through the GPU path at all, so the caller can
+/// fall back rather than have a CPU tensor handed back through a GPU-shaped return type.
+fn gpu_preprocess_to_tensor(
+    image: &DynamicImage,
+    config: &PreprocessConfig,
+    context: &GpuContext,
+    pipeline: &WgpuPreprocessPipeline,
+    pool: &Mutex<GpuResourcePool>,
+    output: &GpuTensor,
+) -> Result<Option<PreprocessScales>> {
+    let Some((src_size, output_size_bytes)) = gpu_preprocess_setup(image, config, context)? else {
+        return Ok(None);
+    };
+
+    let buffers = lock_pool(pool)?.acquire(context.device(), src_size, output_size_bytes);
+    let result = encode_preprocess(image, config, context, pipeline, &buffers, output.buffer())?;
+    lock_pool(pool)?.recycle(buffers);
+    Ok(Some(result))
+}
+
+fn lock_pool(pool: &Mutex<GpuResourcePool>) -> Result<std::sync::MutexGuard<'_, GpuResourcePool>> {
+    pool.lock()
+        .map_err(|_| anyhow::anyhow!("GPU resource pool lock was poisoned"))
+}
+
 fn chw_tensor_from_vec(data: Vec<f32>, input_w: u32, input_h: u32) -> Result<Tensor> {
     let array =
         tract_ndarray::Array4::from_shape_vec((1, 3, input_h as usize, input_w as usize), data)
             .map_err(|e| anyhow::anyhow!("failed to build tensor: {e}"))?;
     Ok(array.into_tensor())
-}
-
-fn align_to(value: usize, alignment: usize) -> usize {
-    debug_assert!(
-        alignment.is_power_of_two(),
-        "alignment must be a power of two for bitwise optimization"
-    );
-    // Optimized for power-of-2 alignment using bitwise operations
-    // (value + alignment - 1) & !(alignment - 1)
-    (value + alignment - 1) & !(alignment - 1)
 }
 
 #[cfg(test)]
@@ -879,17 +999,6 @@ mod tests {
     }
 
     #[test]
-    fn align_to_leaves_small_alignments_alone() {
-        // The existing coverage is all 256-byte alignment, where `& !(a - 1)`
-        // and a plain round-up agree on every probe used.
-        assert_eq!(align_to(5, 4), 8);
-        assert_eq!(align_to(8, 4), 8);
-        assert_eq!(align_to(9, 8), 16);
-        assert_eq!(align_to(3, 1), 3);
-        assert_eq!(align_to(1, 2), 2);
-    }
-
-    #[test]
     fn chw_tensor_from_vec_rejects_a_mismatched_buffer() {
         // 3 * 2 * 2 = 12 elements are required.
         assert!(chw_tensor_from_vec(vec![0.0; 11], 2, 2).is_err());
@@ -922,17 +1031,6 @@ mod tests {
         let config: PreprocessConfig = dims.into();
         assert_eq!(config.input_size.width, 320);
         assert_eq!(config.input_size.height, 240);
-    }
-
-    #[test]
-    fn align_to_power_of_two() {
-        // Already aligned
-        assert_eq!(align_to(256, 256), 256);
-        assert_eq!(align_to(512, 256), 512);
-        // Rounds up
-        assert_eq!(align_to(1, 256), 256);
-        assert_eq!(align_to(257, 256), 512);
-        assert_eq!(align_to(0, 256), 0);
     }
 
     #[test]
@@ -1136,6 +1234,61 @@ mod gpu_parity_tests {
     use super::*;
     use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
     use image::{DynamicImage, RgbaImage};
+
+    /// The GPU-native path must produce exactly what the readback path produces.
+    ///
+    /// `preprocess_into_tensor` skips the download and re-upload by pointing the shader straight
+    /// at an inference tensor, so it shares the dispatch with `preprocess` and should differ in
+    /// nothing but where the bytes end up. Comparing them keeps a future change to either from
+    /// silently diverging -- and the end-to-end parity suite would not catch it, since it would
+    /// still pass if the detector quietly fell back to the readback path.
+    #[test]
+    fn preprocess_into_tensor_matches_the_readback_path() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping GPU tensor parity test: no adapter");
+            return;
+        };
+        // Non-square and not a workgroup multiple, so a mis-rounded dispatch shows up, and large
+        // enough relative to the target that the box filter takes several taps.
+        let image = gradient(300, 130);
+        let config = PreprocessConfig {
+            input_size: InputSize::new(64, 48),
+            resize_quality: ResizeQuality::Quality,
+        };
+
+        let expected = gpu
+            .preprocess(&image, &config)
+            .expect("readback preprocess");
+
+        let tensor = GpuTensor::uninitialized(
+            gpu.context().clone(),
+            vec![1, 3, 48, 64],
+            Some("parity_input"),
+        )
+        .expect("allocate tensor");
+        let scales = gpu
+            .preprocess_into_tensor(&image, &config, &tensor)
+            .expect("gpu-native preprocess")
+            .expect("image is small enough for the GPU path");
+
+        assert_eq!(scales.scale_x, expected.scale_x);
+        assert_eq!(scales.scale_y, expected.scale_y);
+        assert_eq!(scales.original_size, expected.original_size);
+
+        let actual = tensor.to_vec().expect("download tensor");
+        let want = expected
+            .tensor
+            .into_plain_array::<f32>()
+            .expect("expected tensor is f32")
+            .into_raw_vec_and_offset()
+            .0;
+        assert_eq!(actual.len(), want.len(), "tensor length");
+        // Same shader, same inputs, no conversion on either route: this should be exact.
+        assert_eq!(
+            actual, want,
+            "gpu-native tensor differs from the readback tensor"
+        );
+    }
 
     fn gpu_preprocessor() -> Option<WgpuPreprocessor> {
         match GpuContext::init_with_fallback(&GpuContextOptions::default()) {

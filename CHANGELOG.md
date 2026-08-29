@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-
 - **Batch detection on the GPU silently lost crops, and sometimes invented
   faces.** Pooled GPU buffers were recycled by `Drop` on the host, which happens
   while a command encoder is still being built — before anything is submitted.
@@ -88,6 +87,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same search — in the benchmark, in `gpu/tests.rs`, and the broken one here.
 
 ### Changed
+- **Detection can now run end to end on the GPU, without a round trip through
+  host memory.** Preprocessing and inference each used to build their own
+  `wgpu::Device` — a default CLI run initialised the adapter twice — so the
+  preprocessed tensor had to be downloaded through a blocking map and uploaded
+  straight back before inference could touch it, 4.9 MB each way.
+
+  `GpuYuNet::with_context` now takes an existing device, and `YuNetDetector`
+  hands it the preprocessor's, so the two stages share one. The preprocess
+  shader already writes exactly the layout a tensor wants (f32, CHW, BGR), so
+  `WgpuPreprocessor::preprocess_into_tensor` points it straight at an inference
+  tensor's buffer: nothing is copied, and nothing is read back. Ordering comes
+  free from the queue, which executes submissions in order, so the two stages
+  need no host synchronisation at all. `YuNetDetector::detect_on_device` picks
+  this path whenever GPU inference and a GPU preprocessor share a device, and
+  returns to the previous route otherwise — CPU inference, a CPU preprocessor,
+  mismatched devices, or an image too large for one texture.
+
+  Measured per detection over 20 fixtures, single-threaded: **5.9 ms median,
+  against 64.6 ms on the CPU path** — about 11x. Note this is per-image latency,
+  not batch throughput: GPU work serialises on one queue, so a whole-folder run
+  on a many-core machine is still faster on the CPU, where rayon spreads
+  detections across cores (482 ms vs 1301 ms for 20 images here). Restricted to
+  one rayon thread the ordering reverses, 1288 ms GPU against 1620 ms CPU. The
+  win is therefore real for interactive single-image work and for machines with
+  few cores, and the CLI's batch default should still be reconsidered
+  separately.
+
+- Removed a redundant row-padding pass from GPU preprocessing. Every row of the
+  source was copied into an aligned staging buffer before upload — a second full
+  pass over the image, ~14 ms on a 2384x4240 source — to satisfy
+  `COPY_BYTES_PER_ROW_ALIGNMENT`. That rule does not apply here:
+  wgpu validates `Queue::write_texture` with alignment checks disabled, and
+  requires the alignment only for `copy_buffer_to_texture` and
+  `copy_texture_to_buffer`. Rows now go up tightly packed. This also retires the
+  staging buffer, its high-water-mark shrink logic, and a local `align_to`
+  helper duplicating the one in `model.rs`.
+
+
+
 
 - Dependency bumps: `tract-onnx` 0.23.4 → 0.23.5, `libheif-rs` 2.7.0 → 3.0.0,
   `wgpu`/`naga` 30.0.0 → 30.0.1, `imagepipe` 0.5.0 → 0.5.1, `imgref` 1.12.2 →
