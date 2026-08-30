@@ -7,35 +7,49 @@ use fcs_core::{
     CpuPreprocessor, PostprocessConfig, PreprocessConfig, Preprocessor, WgpuPreprocessor,
     YuNetDetector,
 };
-use fcs_utils::gpu::GpuStatusIndicator;
+use fcs_utils::{config::GpuSettings, gpu::GpuStatusIndicator};
 use log::{info, warn};
 
 use crate::gpu::CliGpuRuntime;
 
+/// Build the detector the CLI will use, honouring every GPU setting.
+///
+/// Takes the whole [`GpuSettings`] rather than a per-feature flag: `preprocessing` used to have
+/// no parameter at all, so the CLI ran GPU preprocessing whenever an adapter existed no matter
+/// what the setting said, while the GUI honoured it. Deriving both preferences here keeps the
+/// two front ends from drifting apart again.
 pub fn build_cli_detector(
     model_path: &Path,
     preprocess: &PreprocessConfig,
     postprocess: &PostprocessConfig,
     gpu_runtime: &CliGpuRuntime,
-    prefer_gpu_inference: bool,
+    gpu: &GpuSettings,
 ) -> Result<YuNetDetector> {
-    if prefer_gpu_inference {
+    let use_gpu_inference = gpu.enabled && gpu.inference;
+    let use_gpu_preprocessing = gpu.enabled && gpu.preprocessing;
+
+    if use_gpu_inference {
         if let Some(gpu_ctx) = gpu_runtime.context() {
-            let preprocessor: Arc<dyn Preprocessor> = match WgpuPreprocessor::new(gpu_ctx.clone()) {
-                Ok(pre) => {
-                    info!(
-                        "Using GPU preprocessing + inference on {} ({:?})",
-                        gpu_ctx.adapter_info().name,
-                        gpu_ctx.adapter_info().backend
-                    );
-                    Arc::new(pre)
+            let preprocessor: Arc<dyn Preprocessor> = if use_gpu_preprocessing {
+                match WgpuPreprocessor::new(gpu_ctx.clone()) {
+                    Ok(pre) => {
+                        info!(
+                            "Using GPU preprocessing + inference on {} ({:?})",
+                            gpu_ctx.adapter_info().name,
+                            gpu_ctx.adapter_info().backend
+                        );
+                        Arc::new(pre)
+                    }
+                    Err(err) => {
+                        warn!(
+                            "GPU preprocessor initialization failed ({err}); using CPU preprocessing for GPU inference."
+                        );
+                        Arc::new(CpuPreprocessor)
+                    }
                 }
-                Err(err) => {
-                    warn!(
-                        "GPU preprocessor initialization failed ({err}); using CPU preprocessing for GPU inference."
-                    );
-                    Arc::new(CpuPreprocessor)
-                }
+            } else {
+                info!("Using CPU preprocessing + GPU inference (GPU preprocessing disabled).");
+                Arc::new(CpuPreprocessor)
             };
 
             match YuNetDetector::with_gpu_preprocessor(
@@ -59,7 +73,7 @@ pub fn build_cli_detector(
         }
     }
 
-    if let Some(gpu_ctx) = gpu_runtime.context() {
+    if let Some(gpu_ctx) = gpu_runtime.context().filter(|_| use_gpu_preprocessing) {
         match WgpuPreprocessor::new(gpu_ctx.clone()) {
             Ok(pre) => {
                 info!(

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`fcs-cli` ignored `gpu.preprocessing` entirely.** The setting exists, the
+  GUI honours it, and the CLI had no parameter for it at all — it built a
+  `WgpuPreprocessor` whenever an adapter was present, whatever the config said.
+  `build_cli_detector` now takes the whole `GpuSettings` instead of a single
+  `prefer_gpu_inference` flag and derives both preferences in one place, so the
+  two front ends cannot drift apart on one flag again. With
+  `preprocessing: false` the CLI now reports "Using CPU preprocessing + GPU
+  inference" and takes that path.
+
+
 - **Large batches filled VRAM and then failed, because pooled buffers were
   filed under the wrong size.** `GpuBufferPool::acquire` satisfies a request
   from any idle buffer at least as large, so a 4 MB buffer is routinely handed
@@ -85,6 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `concurrent_inference_matches_sequential` covers it: four threads running the
   same input through one detector, compared against the sequential result. It
   fails without the scope and passes with it.
+
+  This also accounts for the intermittent failure in
+  `fcs-cli`'s `test_batch_processing_with_multiple_images`, which copies one
+  fixture three times and so ran three detections in parallel through a shared
+  detector — the corrupted runs produced no output files and tripped its
+  assertion. It failed roughly one run in three before, and passed 23
+  consecutive runs after. CI never saw it because the nextest profile retries
+  once.
 
 - **GPU preprocessing aliased badly on any large downscale, which moved real
   detections.** `preprocess.wgsl` resampled with a single

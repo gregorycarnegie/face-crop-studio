@@ -545,7 +545,10 @@ mod tests {
             &preprocess,
             &postprocess,
             no_gpu_runtime().as_ref(),
-            false,
+            &fcs_utils::config::GpuSettings {
+                enabled: false,
+                ..Default::default()
+            },
         )
         .ok()?;
         Some(Arc::new(detector))

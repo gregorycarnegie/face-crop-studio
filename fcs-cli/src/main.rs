@@ -90,13 +90,12 @@ fn main() -> Result<()> {
             input_size.width,
             input_size.height
         );
-        let prefer_gpu_inference = settings.gpu.enabled && settings.gpu.inference;
         let detector = build_cli_detector(
             &model_path,
             &preprocess_config,
             &postprocess_config,
             gpu_runtime.as_ref(),
-            prefer_gpu_inference,
+            &settings.gpu,
         )?;
         let detector = Arc::new(detector);
         let settings = Arc::new(settings);
@@ -142,13 +141,12 @@ fn main() -> Result<()> {
         input_size.width,
         input_size.height
     );
-    let prefer_gpu_inference = settings.gpu.enabled && settings.gpu.inference;
     let detector = build_cli_detector(
         &model_path,
         &preprocess_config,
         &postprocess_config,
         gpu_runtime.as_ref(),
-        prefer_gpu_inference,
+        &settings.gpu,
     )?;
 
     if args.mapping_file.is_some() && !args.crop {
