@@ -181,6 +181,14 @@ fn main() -> Result<()> {
 
     let counters = ProgressCounters::default();
 
+    // ponytail: Rayon's default pool, one worker per logical processor. Measured on 968 images
+    // (7950X, 16c/32t, RTX 4090) the GPU path is flat from 8 to 16 workers (~11.5 s) and
+    // degrades above the physical core count, reaching 14.0 s at the default 32 — the GPU
+    // dispatches serialise, but decode/convert/encode around them do not, and the extra workers
+    // end up contending. `RAYON_NUM_THREADS` already overrides this, so no pool is built here.
+    // Capping automatically needs data from a hybrid-core CPU first: "physical cores" counts P
+    // and E cores alike, so a rule tuned on symmetric cores could easily be wrong there. See the
+    // "Batch worker threads" section in README.md.
     let results: Vec<ImageDetections> = processing_items
         .par_iter()
         .filter_map(|target| {

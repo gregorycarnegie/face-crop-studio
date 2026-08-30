@@ -60,6 +60,35 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 - **GPU context pooling** – CLI uses async GPU context pool for efficient batch operations; GUI shares wgpu context with eframe's rendering backend.
 - **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. Use `--gpu` or `--no-gpu` flags in CLI for explicit control.
 
+### Batch worker threads
+
+Batch detection runs through Rayon, which defaults to one worker per *logical*
+processor. On the GPU path that overshoots: only the GPU dispatches serialise,
+but the work around them — JPEG decode, RGBA conversion, PNG encode — is
+CPU-bound, and past a point the extra workers contend rather than help.
+
+Measured on 968 images (Ryzen 9 7950X, 16 cores / 32 threads, RTX 4090):
+
+| Rayon threads | 4 | 8 | 12 | 16 | 20 | 24 | 32 |
+|---|---|---|---|---|---|---|---|
+| Wall clock | 15.6 s | 11.5 s | 11.4 s | 11.6 s | 12.8 s | 13.0 s | 14.0 s |
+
+Throughput is flat from 8 to 16 and falls away above the physical core count,
+so Rayon's default of 32 costs about 17% on this machine. `RAYON_NUM_THREADS`
+sets it — `RAYON_NUM_THREADS=16` recovers that.
+
+This is deliberately not applied automatically. The measurement is one machine
+and one workload: larger source images shift more of the cost into decode and
+encode, which would move the plateau, and "physical cores" is not a meaningful
+figure on hybrid CPUs, where performance and efficiency cores are not
+interchangeable. Encoding a rule from a single symmetric-core CPU would likely
+be wrong on hardware that is not one. Data from a hybrid-core machine would
+settle it.
+
+For comparison, the same sweep on the CPU path: 40.4 s at 4 threads, 18.4 s at
+8, 14.6 s at 16, 14.4 s at 32 — the GPU path is ahead at every thread count,
+by the widest margin (2.5x) on the fewest cores.
+
 ### Requirements
 
 - **Hardware**: Vulkan 1.2+, DirectX 12, or Metal-capable GPU.
