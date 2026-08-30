@@ -71,11 +71,9 @@ struct Scenario {
     settings: CropSettings,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn scenario(
     name: &'static str,
-    img_w: u32,
-    img_h: u32,
+    image: [u32; 2],
     bbox: [f32; 4],
     output: [u32; 2],
     face_height_pct: f32,
@@ -84,8 +82,8 @@ fn scenario(
 ) -> Scenario {
     Scenario {
         name,
-        img_w,
-        img_h,
+        img_w: image[0],
+        img_h: image[1],
         bbox: BoundingBox {
             x: bbox[0],
             y: bbox[1],
@@ -121,8 +119,7 @@ fn scenarios() -> Vec<Scenario> {
         // Face centered well inside a square source: no padding expected.
         scenario(
             "center_square_in_bounds",
-            512,
-            512,
+            [512, 512],
             [160.0, 160.0, 140.0, 140.0],
             [256, 256],
             70.0,
@@ -134,8 +131,7 @@ fn scenarios() -> Vec<Scenario> {
         // is off-center).
         scenario(
             "center_requires_padding_all_sides",
-            200,
-            200,
+            [200, 200],
             [40.0, 40.0, 140.0, 140.0],
             [256, 256],
             50.0,
@@ -145,8 +141,7 @@ fn scenarios() -> Vec<Scenario> {
         // Face at the very top-left corner: padding on left and top only.
         scenario(
             "face_top_left_corner",
-            500,
-            500,
+            [500, 500],
             [0.0, 0.0, 120.0, 120.0],
             [256, 256],
             80.0,
@@ -156,8 +151,7 @@ fn scenarios() -> Vec<Scenario> {
         // Rule-of-thirds positioning on a landscape source.
         scenario(
             "rule_of_thirds_landscape",
-            800,
-            600,
+            [800, 600],
             [300.0, 200.0, 160.0, 160.0],
             [400, 400],
             60.0,
@@ -167,8 +161,7 @@ fn scenarios() -> Vec<Scenario> {
         // Custom offsets pushing the face right and down.
         scenario(
             "custom_offset_right_down",
-            600,
-            600,
+            [600, 600],
             [250.0, 250.0, 120.0, 120.0],
             [300, 300],
             50.0,
@@ -178,8 +171,7 @@ fn scenarios() -> Vec<Scenario> {
         // Portrait 9:16 output.
         scenario(
             "portrait_output_9x16",
-            1080,
-            1920,
+            [1080, 1920],
             [400.0, 500.0, 300.0, 300.0],
             [360, 640],
             70.0,
@@ -189,8 +181,7 @@ fn scenarios() -> Vec<Scenario> {
         // Landscape 16:9 output.
         scenario(
             "landscape_output_16x9",
-            1920,
-            1080,
+            [1920, 1080],
             [800.0, 400.0, 260.0, 260.0],
             [640, 360],
             65.0,
@@ -200,8 +191,7 @@ fn scenarios() -> Vec<Scenario> {
         // Small face with a low coverage target: large crop, likely padded.
         scenario(
             "small_face_low_pct",
-            1000,
-            1000,
+            [1000, 1000],
             [450.0, 450.0, 80.0, 80.0],
             [400, 400],
             20.0,

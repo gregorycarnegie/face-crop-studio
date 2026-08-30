@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the four `#[allow(clippy::too_many_arguments)]` suppressions rather
+  than carrying them. Each hid a parameter list that had a grouping already
+  implied by the code: `encode_stage_block` took the four fields of a
+  `StageBlock` that every caller was destructuring at the call site and now
+  takes the block; the conv2d pipeline's `input`/`weights`/`bias` became
+  `Conv2dTensors`, which `execute` benefits from too; the golden-crop test
+  helper's `img_w`/`img_h` became one `[u32; 2]`, matching how that file
+  already spells pairs. In `fcs-cli`, `process_single_image` and
+  `process_crops` each took eleven arguments, six of which were the same per-run
+  constants threaded through both; those are now a `BatchContext` built once
+  before the parallel loop, taking both functions to six parameters. No
+  behaviour change, and the workspace is slightly smaller for it.
+
 ### Fixed
 
 - **`fcs-cli` ignored `gpu.preprocessing` entirely.** The setting exists, the

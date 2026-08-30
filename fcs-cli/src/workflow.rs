@@ -25,6 +25,20 @@ use crate::{
 #[cfg(test)]
 use crate::{detector::build_cli_detector, gpu::init_cli_gpu_runtime};
 
+/// State a batch run holds constant for every image.
+///
+/// These were threaded one by one through `process_single_image` and again through
+/// `process_crops`, which is what pushed both past the argument-count lint. None of it varies
+/// per image, so it is built once before the parallel loop and shared by reference.
+pub(crate) struct BatchContext<'a> {
+    pub(crate) settings: &'a Arc<AppSettings>,
+    pub(crate) quality_filter: &'a Arc<fcs_utils::QualityFilter>,
+    pub(crate) enhancement_settings: &'a Option<Arc<fcs_utils::EnhancementSettings>>,
+    pub(crate) runtime: &'a Arc<gpu::CliGpuRuntime>,
+    pub(crate) args: &'a DetectArgs,
+    pub(crate) counters: &'a ProgressCounters,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProcessedCrop {
     pub(crate) index: usize,
@@ -34,21 +48,17 @@ pub(crate) struct ProcessedCrop {
     pub(crate) score: f32,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn process_single_image(
+    ctx: &BatchContext<'_>,
     target: &input::ProcessingItem,
     detector: &Arc<fcs_core::YuNetDetector>,
     annotate_dir: &Arc<Option<PathBuf>>,
-    settings: &Arc<AppSettings>,
-    quality_filter: &Arc<fcs_utils::QualityFilter>,
-    enhancement_settings: &Option<Arc<fcs_utils::EnhancementSettings>>,
-    runtime: &Arc<gpu::CliGpuRuntime>,
-    args: &DetectArgs,
     crop_enabled: bool,
     crop_output_dir: &Arc<Option<PathBuf>>,
-    counters: &ProgressCounters,
 ) -> Option<ImageDetections> {
-    counters.images_processed.fetch_add(1, Ordering::Relaxed);
+    ctx.counters
+        .images_processed
+        .fetch_add(1, Ordering::Relaxed);
     let image_path = &target.source;
     let override_target = target.output_override.as_ref();
     if let Some(row) = target.mapping_row {
@@ -59,7 +69,7 @@ pub(crate) fn process_single_image(
     // must see the same EXIF-oriented pixels the crops are taken from.
     let img_opt = load_source_image(image_path);
     let output = detect_image(detector, img_opt.as_ref()?, image_path)?;
-    counters
+    ctx.counters
         .faces_detected
         .fetch_add(output.detections.len(), Ordering::Relaxed);
 
@@ -78,17 +88,12 @@ pub(crate) fn process_single_image(
     match (crop_enabled, crop_output_dir.as_ref(), img_opt.as_ref()) {
         (true, Some(out_dir), Some(img)) => {
             process_crops(
+                ctx,
                 img,
                 image_path,
                 &output.detections,
-                settings,
-                quality_filter,
-                enhancement_settings,
-                runtime,
-                args,
                 out_dir,
                 override_target,
-                counters,
             );
         }
         (true, Some(_), None) => {
@@ -109,20 +114,22 @@ pub(crate) fn process_single_image(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn process_crops(
+    ctx: &BatchContext<'_>,
     img: &image::DynamicImage,
     image_path: &Path,
     detections: &[fcs_core::Detection],
-    settings: &Arc<AppSettings>,
-    quality_filter: &Arc<fcs_utils::QualityFilter>,
-    enhancement_settings: &Option<Arc<fcs_utils::EnhancementSettings>>,
-    runtime: &Arc<gpu::CliGpuRuntime>,
-    args: &DetectArgs,
     out_dir: &Path,
     override_target: Option<&PathBuf>,
-    counters: &ProgressCounters,
 ) {
+    let BatchContext {
+        settings,
+        quality_filter,
+        enhancement_settings,
+        runtime,
+        args,
+        counters,
+    } = ctx;
     let output_options = OutputOptions::from_crop_settings(&settings.crop);
     let core_settings: fcs_core::CropSettings = (&settings.crop).into();
     let processed = generate_processed_crops(
@@ -554,6 +561,26 @@ mod tests {
         Some(Arc::new(detector))
     }
 
+    /// Assemble the per-run context the workflow functions take. Every field is a reference,
+    /// so the caller's locals must outlive it -- which they do, being test-body locals.
+    fn batch_ctx<'a>(
+        settings: &'a Arc<AppSettings>,
+        quality_filter: &'a Arc<QualityFilter>,
+        enhancement_settings: &'a Option<Arc<fcs_utils::EnhancementSettings>>,
+        runtime: &'a Arc<gpu::CliGpuRuntime>,
+        args: &'a DetectArgs,
+        counters: &'a ProgressCounters,
+    ) -> BatchContext<'a> {
+        BatchContext {
+            settings,
+            quality_filter,
+            enhancement_settings,
+            runtime,
+            args,
+            counters,
+        }
+    }
+
     fn write_sample_png(path: &Path) {
         sample_image(32, 32)
             .save(path)
@@ -756,18 +783,15 @@ mod tests {
         let dir = tempdir().expect("temp directory should be created");
         let counters = ProgressCounters::default();
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &sample_image(24, 24),
             Path::new("input.png"),
             &[],
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             None,
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
@@ -795,18 +819,15 @@ mod tests {
         let counters = ProgressCounters::default();
         let detections = vec![sample_detection(2.0, 2.0, 10.0, 10.0, 0.9)];
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &solid_image(24, 24, 80),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             None,
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
@@ -832,18 +853,15 @@ mod tests {
             sample_detection(10.0, 10.0, 8.0, 8.0, 0.95),
         ];
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &sample_image(24, 24),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             None,
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
@@ -865,18 +883,15 @@ mod tests {
         let counters = ProgressCounters::default();
         let detections = vec![sample_detection(2.0, 2.0, 10.0, 10.0, 0.9)];
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &solid_image(24, 24, 64),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             None,
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
@@ -893,18 +908,15 @@ mod tests {
         let counters = ProgressCounters::default();
         let detections = vec![sample_detection(2.0, 2.0, 10.0, 10.0, 0.9)];
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &sample_image(24, 24),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             None,
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
@@ -942,18 +954,15 @@ mod tests {
             sample_detection(20.0, 0.0, 18.0, 18.0, 0.9),
         ];
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &DynamicImage::ImageRgba8(image),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             None,
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 1);
@@ -976,18 +985,15 @@ mod tests {
         let detections = vec![sample_detection(2.0, 2.0, 10.0, 10.0, 0.9)];
         let override_target = PathBuf::from("nested/custom-name.jpg");
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &sample_image(24, 24),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             dir.path(),
             Some(&override_target),
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 1);
@@ -1008,18 +1014,15 @@ mod tests {
         let detections = vec![sample_detection(2.0, 2.0, 10.0, 10.0, 0.9)];
         let override_target = PathBuf::from("nested/output.png");
 
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
         process_crops(
+            &ctx,
             &sample_image(24, 24),
             Path::new("input.png"),
             &detections,
-            &settings,
-            &filter,
-            &None,
-            &runtime,
-            &args,
             &blocked,
             Some(&override_target),
-            &counters,
         );
 
         assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
@@ -1052,18 +1055,22 @@ mod tests {
         let crop_output_dir = Arc::new(None);
         let counters = ProgressCounters::default();
 
+        let enhancement = None;
+        let ctx = batch_ctx(
+            &settings,
+            &quality_filter,
+            &enhancement,
+            &runtime,
+            &args,
+            &counters,
+        );
         let result = process_single_image(
+            &ctx,
             &target,
             &detector,
             &annotate_dir,
-            &settings,
-            &quality_filter,
-            &None,
-            &runtime,
-            &args,
             false,
             &crop_output_dir,
-            &counters,
         )
         .expect("processing one test image should succeed");
 

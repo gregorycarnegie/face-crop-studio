@@ -14,6 +14,17 @@ const CONV2D_WGSL: &str = include_str!("conv2d.wgsl");
 const CONV_WORKGROUP_X: u32 = 8;
 const CONV_WORKGROUP_Y: u32 = 8;
 
+/// The tensor operands of one convolution.
+///
+/// Grouped because they are meaningless apart: every call site passes exactly these three, in
+/// this order, and validation relates their shapes to each other.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Conv2dTensors<'a> {
+    pub(super) input: &'a GpuTensor,
+    pub(super) weights: &'a GpuTensor,
+    pub(super) bias: &'a GpuTensor,
+}
+
 #[derive(Debug)]
 pub(super) struct Conv2dPipeline {
     pipeline: wgpu::ComputePipeline,
@@ -43,17 +54,19 @@ impl Conv2dPipeline {
     }
 
     /// Record the Conv2D dispatch into `encoder` without submitting.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         context: &Arc<GpuContext>,
         pool: &Arc<GpuBufferPool>,
-        input: &GpuTensor,
-        weights: &GpuTensor,
-        bias: &GpuTensor,
+        tensors: Conv2dTensors<'_>,
         config: &Conv2dConfig,
     ) -> Result<GpuTensor> {
+        let Conv2dTensors {
+            input,
+            weights,
+            bias,
+        } = tensors;
         let device = context.device();
         let uniforms = Conv2dUniforms::from(config);
         let uniform_buffer = create_uniform_buffer(device, "yunet_conv2d_uniforms", &uniforms);
@@ -114,9 +127,7 @@ impl Conv2dPipeline {
         &self,
         context: &Arc<GpuContext>,
         pool: &Arc<GpuBufferPool>,
-        input: &GpuTensor,
-        weights: &GpuTensor,
-        bias: &GpuTensor,
+        tensors: Conv2dTensors<'_>,
         config: &Conv2dConfig,
     ) -> Result<GpuTensor> {
         let mut encoder =
@@ -125,7 +136,7 @@ impl Conv2dPipeline {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("conv2d_encoder"),
                 });
-        let output = self.encode(&mut encoder, context, pool, input, weights, bias, config)?;
+        let output = self.encode(&mut encoder, context, pool, tensors, config)?;
         context.queue().submit(Some(encoder.finish()));
         Ok(output)
     }

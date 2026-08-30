@@ -234,27 +234,9 @@ fn encode_stage_blocks(
     let Some((first, rest)) = blocks.split_first() else {
         anyhow::bail!("stage block list cannot be empty");
     };
-    let mut current = encode_stage_block(
-        encoder,
-        ops,
-        weights,
-        input,
-        first.point_weight,
-        first.point_bias,
-        first.depth_weight,
-        first.depth_bias,
-    )?;
+    let mut current = encode_stage_block(encoder, ops, weights, input, first)?;
     for block in rest {
-        current = encode_stage_block(
-            encoder,
-            ops,
-            weights,
-            &current,
-            block.point_weight,
-            block.point_bias,
-            block.depth_weight,
-            block.depth_bias,
-        )?;
+        current = encode_stage_block(encoder, ops, weights, &current, block)?;
     }
     Ok(current)
 }
@@ -405,21 +387,17 @@ fn encode_head_branch(
     ops.encode_conv2d_tensor(encoder, &reduced, &depth_weight, &depth_bias, &depth_cfg)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn encode_stage_block(
     encoder: &mut wgpu::CommandEncoder,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     input: &GpuTensor,
-    point_weight: &str,
-    point_bias: &str,
-    depth_weight: &str,
-    depth_bias: &str,
+    block: &StageBlock,
 ) -> Result<GpuTensor> {
-    let pw = weight(weights, point_weight)?;
-    let pb = weight(weights, point_bias)?;
-    let dw = weight(weights, depth_weight)?;
-    let db = weight(weights, depth_bias)?;
+    let pw = weight(weights, block.point_weight)?;
+    let pb = weight(weights, block.point_bias)?;
+    let dw = weight(weights, block.depth_weight)?;
+    let db = weight(weights, block.depth_bias)?;
     encode_separable_block(encoder, ops, input, &pw, &pb, &dw, &db)
 }
 

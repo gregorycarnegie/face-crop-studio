@@ -181,6 +181,15 @@ fn main() -> Result<()> {
 
     let counters = ProgressCounters::default();
 
+    let batch_ctx = workflow::BatchContext {
+        settings: &shared_settings,
+        quality_filter: &quality_filter,
+        enhancement_settings: &enhancement_settings,
+        runtime: &gpu_runtime,
+        args: &args,
+        counters: &counters,
+    };
+
     // ponytail: Rayon's default pool, one worker per logical processor. Measured on 968 images
     // (7950X, 16c/32t, RTX 4090) the GPU path is flat from 8 to 16 workers (~11.5 s) and
     // degrades above the physical core count, reaching 14.0 s at the default 32 — the GPU
@@ -193,17 +202,12 @@ fn main() -> Result<()> {
         .par_iter()
         .filter_map(|target| {
             process_single_image(
+                &batch_ctx,
                 target,
                 &detector,
                 &annotate_dir,
-                &shared_settings,
-                &quality_filter,
-                &enhancement_settings,
-                &gpu_runtime,
-                &args,
                 crop_enabled,
                 &crop_output_dir,
-                &counters,
             )
         })
         .collect();

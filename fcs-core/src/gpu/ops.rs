@@ -2,7 +2,7 @@ use super::{
     activation::{ActivationKind, ActivationPipeline},
     add::AddPipeline,
     batch_norm::{BatchNormBindings, BatchNormConfig, BatchNormPipeline},
-    conv2d::{Conv2dConfig, Conv2dPipeline},
+    conv2d::{Conv2dConfig, Conv2dPipeline, Conv2dTensors},
     max_pool::{MaxPoolConfig, MaxPoolPipeline},
     tensor::GpuTensor,
     upsample2x::Upsample2xPipeline,
@@ -116,9 +116,11 @@ impl GpuInferenceOps {
         self.conv2d.execute(
             &self.context,
             &self.buffer_pool,
-            input,
-            weights,
-            bias,
+            Conv2dTensors {
+                input,
+                weights,
+                bias,
+            },
             config,
         )
     }
@@ -142,9 +144,11 @@ impl GpuInferenceOps {
         self.conv2d.execute(
             &self.context,
             &self.buffer_pool,
-            input,
-            weights,
-            bias,
+            Conv2dTensors {
+                input,
+                weights,
+                bias,
+            },
             config,
         )
     }
@@ -289,9 +293,11 @@ impl GpuInferenceOps {
             encoder,
             &self.context,
             &self.buffer_pool,
-            input,
-            weights,
-            bias,
+            Conv2dTensors {
+                input,
+                weights,
+                bias,
+            },
             config,
         )
     }
