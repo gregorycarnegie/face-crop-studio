@@ -8,6 +8,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+
+- **Large batches filled VRAM and then failed, because pooled buffers were
+  filed under the wrong size.** `GpuBufferPool::acquire` satisfies a request
+  from any idle buffer at least as large, so a 4 MB buffer is routinely handed
+  out for a 256 KB request — but `recycle` filed it back under the size the
+  caller *asked for*, not the size it actually is. A large buffer relabelled as
+  small then stopped matching large requests, so every recurrence of the larger
+  size allocated a fresh buffer while the mislabelled one sat idle forever. On a
+  folder of mixed image sizes that ratchets upward without limit: a probe
+  cycling ten sizes retained 126 MB, then 160 MB, then 194 MB over three
+  identical rounds. `recycle` now takes the size from the buffer itself.
+
+  Nothing bounded the growth either. Every pipeline in `fcs-utils` builds its
+  pool with `max_memory: None`, which meant the `clear` path that releases idle
+  buffers was unreachable, so the pool only ever grew. Such pools now retain at
+  most `DEFAULT_MAX_IDLE_BYTES` (512 MiB) of idle buffers, evicting
+  smallest-first — smallest because a large buffer can serve a small request but
+  never the reverse, so the large ones are the ones worth keeping.
+
+  Pools built *with* a `max_memory` budget are exempt: `acquire` already
+  releases idle buffers when that budget is reached, and adding a ceiling on top
+  made inference evict at exactly the threshold it works at, freeing buffers the
+  next call immediately re-allocated. That showed up as `fcs-core`'s GPU tests
+  going from five seconds to minutes. `with_idle_limit` sets the ceiling
+  explicitly where a test needs a reachable one.
+
+  Over 968 images the pool now plateaus and stays there rather than climbing.
+
+- **A batch with fewer crops than the one before it failed outright.**
+  `gpu_readback!` mapped the entire readback buffer (`slice(..)`) and then
+  checked the result length against the expected output. Since the pool returns
+  any buffer at least as large as the request, a batch sized for three faces
+  left a buffer that a later one-face batch reused — and the check compared one
+  face of output against three faces of capacity, failing with "unexpected GPU
+  batch crop output size (expected 4096, got 12288)" on a buffer that was
+  perfectly valid. No memory pressure was needed; an image with one face after
+  an image with three was enough. The macro now maps only the region the
+  operation wrote.
+
+  This is the same defect 1.5.4 fixed in `preprocess.rs`; the shared macro was
+  missed, so it still affected batch cropping, both blurs, pixel adjust,
+  red-eye, shape masking and histogram equalisation — every operation that reads
+  results back.
+
 - **Batch detection on the GPU silently lost crops, and sometimes invented
   faces.** Pooled GPU buffers were recycled by `Drop` on the host, which happens
   while a command encoder is still being built — before anything is submitted.

@@ -157,7 +157,24 @@ macro_rules! gpu_readback {
         use bytemuck::cast_slice;
         use std::sync::mpsc;
 
-        let slice = $readback.slice(..);
+        // Map only the region this operation wrote, not the whole buffer. The pool hands back
+        // any idle buffer at least as large as the request, so a readback buffer is routinely
+        // bigger than the data in it -- and mapping all of it made the length check below
+        // compare against the pooled capacity instead of the output, failing on a buffer that
+        // is perfectly valid. Reachable whenever a smaller batch follows a larger one, e.g. an
+        // image with one face after an image with three. `preprocess.rs` and `gpu/runtime.rs`
+        // already sliced explicitly; this brings every operation using the macro in line.
+        let expected_len = $expected_len;
+        let expected_bytes = (expected_len as wgpu::BufferAddress)
+            * (std::mem::size_of::<u32>() as wgpu::BufferAddress);
+        anyhow::ensure!(
+            $readback.size() >= expected_bytes,
+            "GPU {} readback buffer is {} bytes, need {}",
+            $operation,
+            $readback.size(),
+            expected_bytes
+        );
+        let slice = $readback.slice(0..expected_bytes);
         let (sender, receiver) = mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = sender.send(res);
@@ -183,10 +200,10 @@ macro_rules! gpu_readback {
         $readback.unmap();
 
         anyhow::ensure!(
-            result_u32.len() == $expected_len,
+            result_u32.len() == expected_len,
             "unexpected GPU {} output size (expected {}, got {})",
             $operation,
-            $expected_len,
+            expected_len,
             result_u32.len()
         );
 

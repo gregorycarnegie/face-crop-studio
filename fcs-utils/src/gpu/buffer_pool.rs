@@ -42,6 +42,20 @@ thread_local! {
 /// Best-fit pool for `wgpu::Buffer` allocations organized by usage flags.
 /// Buffers are grouped by usage to improve search performance and avoid
 /// iterating through incompatible buffers.
+/// Ceiling on the bytes held in `idle` when the pool has no explicit `max_memory`.
+///
+/// Without a bound the pool only ever grows: `take_best_fit` needs a buffer at least as large as
+/// the request, so every new high-water size allocates a fresh buffer and the smaller ones are
+/// retained forever. A small request also consumes a larger idle buffer, so the larger size
+/// re-allocates the next time it appears -- on a folder of mixed image sizes that ratchets upward
+/// indefinitely, and every pipeline in this crate builds its pool with `max_memory: None`, so
+/// nothing ever triggered `clear`.
+///
+/// ponytail: one fixed ceiling for every device. Deriving it from actual VRAM would suit a 24 GB
+/// discrete card and a shared-memory integrated GPU better, if this ever proves too tight or too
+/// slack in practice.
+const DEFAULT_MAX_IDLE_BYTES: u64 = 512 * 1024 * 1024;
+
 pub struct GpuBufferPool {
     context: Arc<GpuContext>,
     idle: Mutex<HashMap<wgpu::BufferUsages, Vec<BufferEntry>>>,
@@ -51,6 +65,9 @@ pub struct GpuBufferPool {
     in_flight: Mutex<HashMap<u64, Vec<BufferEntry>>>,
     next_scope: std::sync::atomic::AtomicU64,
     total_allocated_bytes: std::sync::atomic::AtomicU64,
+    /// Bytes currently sitting in `idle`, kept under `max_idle_bytes`.
+    idle_bytes: std::sync::atomic::AtomicU64,
+    max_idle_bytes: u64,
     max_memory: Option<u64>,
 }
 
@@ -62,7 +79,33 @@ impl GpuBufferPool {
             in_flight: Mutex::new(HashMap::new()),
             next_scope: std::sync::atomic::AtomicU64::new(0),
             total_allocated_bytes: std::sync::atomic::AtomicU64::new(0),
+            idle_bytes: std::sync::atomic::AtomicU64::new(0),
+            // Pools given an explicit `max_memory` are already bounded: `acquire` releases
+            // idle buffers once the budget is reached. Imposing an idle ceiling as well would
+            // fight that, evicting at the very threshold the pool is meant to work at and
+            // freeing buffers the next call immediately re-allocates. The ceiling is the safety
+            // net for pools with no budget at all -- which is every pipeline in this crate.
+            max_idle_bytes: match max_memory {
+                Some(_) => u64::MAX,
+                None => DEFAULT_MAX_IDLE_BYTES,
+            },
             max_memory,
+        }
+    }
+
+    /// Build a pool with an explicit ceiling on retained idle bytes.
+    ///
+    /// Distinct from `max_memory`, which is a hard budget on everything this pool has allocated
+    /// and makes `acquire` fail once exceeded. The idle ceiling never fails a request; it only
+    /// decides how much is kept for reuse rather than released.
+    pub fn with_idle_limit(
+        context: Arc<GpuContext>,
+        max_memory: Option<u64>,
+        max_idle_bytes: u64,
+    ) -> Self {
+        Self {
+            max_idle_bytes,
+            ..Self::new(context, max_memory)
         }
     }
 
@@ -112,10 +155,10 @@ impl GpuBufferPool {
             in_flight.remove(&id)
         };
         let Some(parked) = parked else { return };
-        let mut idle = lock(&self.idle);
         for entry in parked {
-            idle.entry(entry.usage).or_default().push(entry);
+            self.push_idle(entry);
         }
+        self.evict_to_cap();
     }
 
     pub fn acquire(
@@ -165,17 +208,79 @@ impl GpuBufferPool {
         Ok(buffer)
     }
 
+    /// Return a buffer to the pool.
+    ///
+    /// `size` is what the caller *asked* for, which is not necessarily what it got: `acquire`
+    /// satisfies a request from any buffer at least as large, so a 4 MB buffer is routinely
+    /// handed out for a 256 KB request. Filing it back under the requested size would relabel a
+    /// large buffer as a small one -- it would then stop matching large requests, which allocate
+    /// a fresh buffer instead, and the pool grows without ever reusing what it already holds.
+    /// The buffer knows its own size, so use that and treat `size` as advisory.
     pub fn recycle(&self, buffer: wgpu::Buffer, size: u64, usage: wgpu::BufferUsages) {
+        debug_assert!(
+            buffer.size() >= size,
+            "recycled buffer is smaller than the size it was acquired for"
+        );
         let entry = BufferEntry {
+            size: buffer.size(),
             buffer,
-            size,
             usage,
         };
         // Inside a scope the GPU may still be reading this buffer, so park it until the scope
         // ends rather than offering it to other threads.
         match self.active_scope() {
             Some(scope) => lock(&self.in_flight).entry(scope).or_default().push(entry),
-            None => lock(&self.idle).entry(usage).or_default().push(entry),
+            None => {
+                self.push_idle(entry);
+                self.evict_to_cap();
+            }
+        }
+    }
+
+    fn push_idle(&self, entry: BufferEntry) {
+        self.idle_bytes
+            .fetch_add(entry.size, std::sync::atomic::Ordering::Relaxed);
+        lock(&self.idle).entry(entry.usage).or_default().push(entry);
+    }
+
+    /// Drop idle buffers, smallest first, until the pool holds no more than `max_idle_bytes`.
+    ///
+    /// Smallest first because `take_best_fit` will serve a small request from a large buffer but
+    /// never the reverse, so the large ones are the reusable ones -- evicting those would just
+    /// force them to be allocated again.
+    fn evict_to_cap(&self) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.idle_bytes.load(Relaxed) <= self.max_idle_bytes {
+            return;
+        }
+
+        let mut idle = lock(&self.idle);
+        let mut freed = 0u64;
+        // Recomputed against the live total so a concurrent acquire that drained the pool in the
+        // meantime does not make this evict more than it needs to.
+        while self.idle_bytes.load(Relaxed).saturating_sub(freed) > self.max_idle_bytes {
+            let Some((usage, index, size)) = idle
+                .iter()
+                .flat_map(|(usage, entries)| {
+                    entries
+                        .iter()
+                        .enumerate()
+                        .map(move |(i, e)| (*usage, i, e.size))
+                })
+                .min_by_key(|(_, _, size)| *size)
+            else {
+                break;
+            };
+            if let Some(entries) = idle.get_mut(&usage) {
+                entries.swap_remove(index);
+            }
+            freed += size;
+        }
+        drop(idle);
+
+        if freed > 0 {
+            self.idle_bytes.fetch_sub(freed, Relaxed);
+            self.total_allocated_bytes.fetch_sub(freed, Relaxed);
         }
     }
 
@@ -208,6 +313,8 @@ impl GpuBufferPool {
         }
 
         idle.clear();
+        self.idle_bytes
+            .store(0, std::sync::atomic::Ordering::Relaxed);
 
         // Note: We only decrement for buffers that were actually in the pool.
         // Buffers currently in use are not affected, but total_allocated_bytes tracks *all* allocated
@@ -267,7 +374,12 @@ impl GpuBufferPool {
         // Only search buffers with matching usage flags
         let buffers = idle.get_mut(&usage)?;
 
-        best_fit_index(buffers, size, None).map(|index| buffers.swap_remove(index))
+        let entry = best_fit_index(buffers, size, None).map(|index| buffers.swap_remove(index));
+        if let Some(entry) = entry.as_ref() {
+            self.idle_bytes
+                .fetch_sub(entry.size, std::sync::atomic::Ordering::Relaxed);
+        }
+        entry
     }
 }
 
@@ -345,6 +457,69 @@ mod tests {
         let pool = GpuBufferPool::new(ctx, None);
         let debug_str = format!("{pool:?}");
         assert!(debug_str.contains("GpuBufferPool"));
+    }
+
+    /// A buffer handed out for a small request must go back under its own size.
+    ///
+    /// `acquire` satisfies a request from any buffer at least as large, so callers routinely
+    /// recycle a big buffer citing the small size they asked for. Filing it under that size
+    /// relabels it as small, so it stops matching large requests and the pool allocates a fresh
+    /// large buffer every time one comes round -- unbounded growth on a folder of mixed sizes.
+    #[test]
+    fn a_reused_buffer_keeps_its_real_size() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, None);
+
+        let big = pool.acquire(8192, STORAGE, None).expect("acquire");
+        pool.recycle(big, 8192, STORAGE);
+
+        // Ask for far less than is pooled; best fit hands over the 8192 buffer.
+        let reused = pool.acquire(512, STORAGE, None).expect("acquire");
+        assert_eq!(
+            reused.size(),
+            8192,
+            "the pooled buffer should have been reused"
+        );
+        // Recycled citing the *requested* size, as every caller in this crate does.
+        pool.recycle(reused, 512, STORAGE);
+
+        // If it had been filed as 512 this would allocate a second buffer.
+        let big_again = pool.acquire(8192, STORAGE, None).expect("acquire");
+        assert_eq!(
+            pool.available(),
+            0,
+            "the 8192 buffer should still satisfy an 8192 request after a small reuse"
+        );
+        pool.recycle(big_again, 8192, STORAGE);
+    }
+
+    /// Retained buffers stay under the idle ceiling however many sizes go through the pool.
+    #[test]
+    fn idle_memory_stays_under_the_ceiling() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping buffer_pool test: no GPU");
+            return;
+        };
+        let cap = 64 * 1024;
+        let pool = GpuBufferPool::with_idle_limit(ctx, None, cap);
+
+        // Mixed sizes in a repeating order, which is what ratcheted the pool upward before.
+        for _ in 0..6 {
+            for multiple in [3u64, 17, 5, 29, 8, 21, 2, 13] {
+                let size = multiple * 1024;
+                let buffer = pool.acquire(size, STORAGE, None).expect("acquire");
+                pool.recycle(buffer, size, STORAGE);
+            }
+        }
+
+        assert!(
+            pool.memory_usage() <= cap,
+            "retained {} bytes, ceiling is {cap}",
+            pool.memory_usage()
+        );
     }
 
     #[test]

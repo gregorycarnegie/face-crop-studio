@@ -432,6 +432,33 @@ mod tests {
         );
     }
 
+    /// A batch with fewer crops than the one before it must still read back.
+    ///
+    /// The pool sizes its readback buffer for the largest batch it has seen and hands that
+    /// buffer to later, smaller batches. `gpu_readback!` used to map the whole buffer, so the
+    /// length check compared the output against the pooled capacity and failed -- an image with
+    /// one face after an image with three was enough to break it, with no memory pressure
+    /// involved at all.
+    #[test]
+    fn a_smaller_batch_after_a_larger_one_still_reads_back() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping batch crop test: no GPU");
+            return;
+        };
+        let cropper = GpuBatchCropper::new(ctx).expect("init");
+        let image = gradient_image(400, 400);
+        let at = |x: u32| request(x, 0, 100, 100, 64, 64);
+
+        let many = cropper
+            .crop(&image, &[at(0), at(100), at(200)])
+            .expect("three crops");
+        assert_eq!(many.len(), 3);
+
+        let few = cropper.crop(&image, &[at(0)]).expect("one crop");
+        assert_eq!(few.len(), 1);
+        assert_eq!((few[0].width(), few[0].height()), (64, 64));
+    }
+
     #[test]
     fn memory_usage_reports_pooled_buffers_until_cleared() {
         let Some(ctx) = test_context() else {
