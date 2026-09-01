@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `docs/PERFORMANCE.md` presented INT8 quantisation and adopting the `ort` crate
+  as the same decision, pointing both "Future Opportunities" rows at
+  `ONNX_RUNTIME_OPTIONS.md` — which never mentions INT8 at all. They are
+  independent: `ort` swaps the inference runtime and adds a ~160 MB shared
+  library, while INT8 changes only the model file and needs no runtime change,
+  since `tract-onnx` already registers `QuantizeLinear`, `DequantizeLinear`,
+  `QLinearConv` and `QLinearMatMul` and `tract-linalg` ships x86_64 i8 GEMM
+  kernels selected by runtime CPUID. A new section says so, and records what
+  would actually decide the idea: whether a quantised export still survives
+  `into_optimized()` given this model already needed a fixed-shape re-export,
+  whether the i8 GEMM kernels are even on the critical path for a
+  depthwise-separable backbone, and what post-training quantisation costs in
+  recall. It also notes that gains depend heavily on the CPU — AVX512-VNNI gives
+  a 4-way i8 dot per lane, whereas the shipped `x86-64-v3` baseline falls back to
+  computing i8 products in i16 lanes, the same lane count as f32 FMA — so
+  benchmarking only on a VNNI developer machine overstates what users get.
+
+- The `2–4×` and `2–5×` gain estimates on those two rows were never measured in
+  this repository. Both now read "Unmeasured", with a note defining the column,
+  so the table is not read as a set of predictions.
+
+- Recorded the `wide` crate under "What Did Not Work". It was removed in
+  `616ffa0` because the plain scalar loop benched 18% faster, but the Phase 11
+  table still listed "Saturation `wide::f32x4` SIMD" as a shipped optimisation
+  with the revert buried in a later row, so the obvious next question — "where
+  could SIMD help?" — led straight back to an experiment already run and lost.
+  The new entry gives both reasons it lost and why they still hold: the build
+  sets `target-cpu=x86-64-v3`, so LLVM autovectorises those loops at AVX2 width,
+  and every remaining hot loop is either an interleaved-pixel deinterleave (RGBA
+  saturation, RGB→BGR CHW) or a table lookup (tone LUTs, histogram equalisation,
+  the bilateral colour LUT), which need `pshufb`/`vgather` — operations `wide`
+  does not expose. The Phase 11 rows are merged into one honest entry.
+
+- `docs/ONNX_RUNTIME_OPTIONS.md` gained a scope note saying it covers runtime
+  replacement only, so the cross-reference now works in both directions.
+
 ## [1.6.0] - 2026-08-30
 
 ### Changed

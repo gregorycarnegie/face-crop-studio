@@ -5,6 +5,10 @@
 > remains the best route to DirectML/CoreML acceleration if we ever want full ONNX op coverage or
 > hardware-vendor-optimised kernels without maintaining our own shaders.
 
+> **Scope:** this note is only about replacing the *runtime*. INT8 quantisation is a change to the
+> *model file* and needs none of what follows — `tract` parses quantised graphs already. See the
+> "INT8 quantisation is not the `ort` question" section of PERFORMANCE.md.
+
 Phase 12 explored accelerators beyond the current `tract-onnx` CPU backend. This note captures the practical options we can integrate from Rust today, their maturity, and what it would take to adopt them inside Face Crop Studio.
 
 ## Comparison Summary
