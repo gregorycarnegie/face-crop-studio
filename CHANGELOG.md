@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **YuNet's topology moved out of `gpu` into `fcs-core::yunet`**, along with the
+  ONNX initializer reader and the macros that build the block tables. None of it
+  was ever GPU-specific — `gpu/graph.rs` hand-encodes the architecture and reads
+  only weights from the model file — but it lived under `gpu` because that was
+  the only backend at the time. With the pure-Rust graph added, `cpu/graph.rs`
+  was reaching across into `gpu` for the network definition, which reads as a
+  dependency between backends rather than what it is: both describing the same
+  network. `gpu/graph.rs` drops from 487 lines to 338, keeping only the WGSL
+  encoding. A pure move; no behaviour changed, and the parity suites cover it.
+
+- Every backend now logs itself at the same level. `tract` announced itself at
+  `debug` while the other two used `info`, so the quietest backend was also the
+  slowest one and the least likely to be noticed. `YuNetDetector::
+  inference_backend()` exposes the winner, and both front ends report it once
+  after selection — which backend runs depends on what is installed and what the
+  GPU offered, so the settings alone do not say.
+
 ### Added
 
 - **An ONNX Runtime CPU inference backend, selected automatically when its

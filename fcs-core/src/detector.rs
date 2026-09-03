@@ -210,6 +210,18 @@ impl YuNetDetector {
     }
 
     /// Access the underlying postprocess configuration.
+    /// Which inference backend this detector actually ended up on.
+    ///
+    /// Backends are chosen by what is available at load time, so "which one am
+    /// I running?" is not answerable from configuration alone — and it is the
+    /// first thing worth knowing when detection is unexpectedly slow.
+    pub fn inference_backend(&self) -> &'static str {
+        match &self.backend {
+            DetectorBackend::Gpu(_) => "wgsl-gpu",
+            DetectorBackend::Cpu(model) => model.backend_name(),
+        }
+    }
+
     pub fn postprocess_config(&self) -> &PostprocessConfig {
         &self.postprocess
     }

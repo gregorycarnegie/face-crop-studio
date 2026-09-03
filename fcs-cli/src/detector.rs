@@ -25,6 +25,22 @@ pub fn build_cli_detector(
     gpu_runtime: &CliGpuRuntime,
     gpu: &GpuSettings,
 ) -> Result<YuNetDetector> {
+    let detector = select_detector(model_path, preprocess, postprocess, gpu_runtime, gpu)?;
+    // Reported once, after selection: the backend depends on what is installed
+    // and what the GPU offered, so the settings alone do not say which one won.
+    info!("Detection backend: {}", detector.inference_backend());
+    Ok(detector)
+}
+
+/// The selection itself, which returns from several places depending on what
+/// initialises successfully.
+fn select_detector(
+    model_path: &Path,
+    preprocess: &PreprocessConfig,
+    postprocess: &PostprocessConfig,
+    gpu_runtime: &CliGpuRuntime,
+    gpu: &GpuSettings,
+) -> Result<YuNetDetector> {
     let use_gpu_inference = gpu.enabled && gpu.inference;
     let use_gpu_preprocessing = gpu.enabled && gpu.preprocessing;
 

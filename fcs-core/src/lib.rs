@@ -3,6 +3,9 @@
 //! This crate loads the YuNet ONNX model, runs inference with `tract-onnx`,
 //! and provides preprocessing and postprocessing helpers.
 
+/// YuNet's architecture, shared by every backend.
+#[macro_use]
+pub mod yunet;
 /// Pure-Rust CPU inference graph.
 pub mod cpu;
 /// Face cropping utilities (Phase 4)

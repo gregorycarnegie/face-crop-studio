@@ -4,11 +4,8 @@
 //! against each other and against `tract`, so any divergence here shows up as a
 //! parity failure rather than as a subtly worse detection.
 //!
-//! ponytail: the topology constants and the ONNX weight reader are borrowed
-//! from `crate::gpu`, which is the wrong home for them now that a second
-//! backend uses them. Left alone deliberately — moving them is a mechanical
-//! change to working, parity-tested code and belongs in its own step, not
-//! bundled into bringing this backend up.
+//! The topology itself lives in [`crate::yunet`], shared with the WGSL backend
+//! so the two cannot describe different networks.
 
 use std::{collections::HashMap, path::Path};
 
@@ -19,8 +16,9 @@ use super::{
     ops,
     tensor::Tensor,
 };
-use crate::gpu::graph::{
+use crate::yunet::{
     BACKBONE_STAGES, DETECTION_HEADS, DetectionHeadConfig, HeadBlock, NECK_BLOCKS, StageBlock,
+    load_backbone_weights,
 };
 
 /// Convolution parameters read out of the ONNX initializers, keyed by the
@@ -40,7 +38,7 @@ impl std::fmt::Debug for Weights {
 impl Weights {
     /// Read every initializer the graph needs and pair weights with biases.
     pub fn load(model_path: &Path) -> Result<Self> {
-        let initializers = crate::gpu::graph::load_backbone_weights(
+        let initializers = load_backbone_weights(
             model_path,
             BACKBONE_STAGES.len(),
             true,

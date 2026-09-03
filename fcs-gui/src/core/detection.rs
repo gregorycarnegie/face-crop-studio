@@ -95,6 +95,12 @@ pub fn build_detector(
         build_cpu()
     };
 
+    // Reported once, after selection: which backend wins depends on what is
+    // installed and what the GPU offered, not on the settings alone.
+    if let Ok(detector) = &detector_result {
+        info!("Detection backend: {}", detector.inference_backend());
+    }
+
     (gpu_status, gpu_context, detector_result)
 }
 

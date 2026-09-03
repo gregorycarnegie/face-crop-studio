@@ -4,10 +4,12 @@ use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
 use std::path::{Path, PathBuf};
 use tract_onnx::prelude::*;
 
-use crate::gpu::{
-    OnnxInitializerMap, OnnxTensor,
-    conv2d::{Conv2dChannels, Conv2dOptions, SpatialDims},
-    max_pool::MaxPoolConfig,
+use crate::{
+    gpu::{
+        conv2d::{Conv2dChannels, Conv2dOptions, SpatialDims},
+        max_pool::MaxPoolConfig,
+    },
+    yunet::onnx::{OnnxInitializerMap, OnnxTensor},
 };
 
 macro_rules! test_backbone_stage {
@@ -148,7 +150,7 @@ fn upload_named(
     upload_onx_tensor(ops, tensor, name)
 }
 
-use crate::gpu::graph::{
+use crate::yunet::{
     BACKBONE_STAGES, DETECTION_HEADS, DetectionHeadConfig, HeadBlock, NECK_BLOCKS, STAGE1_BLOCKS,
     StageBlock, load_backbone_weights,
 };

@@ -1,7 +1,6 @@
 use crate::{
     gpu::{
-        graph::{self, BACKBONE_STAGES, DETECTION_HEADS, DetectionLevelOutputs},
-        onnx::OnnxInitializerMap,
+        graph::{self, DetectionLevelOutputs},
         ops::GpuInferenceOps,
         tensor::GpuTensor,
     },
@@ -20,6 +19,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tract_onnx::prelude::Tensor;
+
+use crate::yunet::{BACKBONE_STAGES, DETECTION_HEADS, onnx::OnnxInitializerMap};
 
 #[derive(Debug, Default)]
 struct GpuYuNetWorkspace {
@@ -60,7 +61,7 @@ impl GpuYuNet {
         input_size: InputSize,
     ) -> Result<Self> {
         let model_path = model_path.as_ref();
-        let loader = graph::load_backbone_weights(
+        let loader = crate::yunet::load_backbone_weights(
             model_path,
             BACKBONE_STAGES.len(),
             true,

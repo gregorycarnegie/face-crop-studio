@@ -170,7 +170,7 @@ impl YuNetModel {
             }
         }
 
-        debug!("YuNet inference backend: tract");
+        info!("YuNet inference backend: tract");
 
         let runnable = match load_runnable_model(path, input_size, true) {
             Ok(model) => {
