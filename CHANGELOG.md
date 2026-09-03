@@ -7,7 +7,241 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An ONNX Runtime CPU inference backend, selected automatically when its
+  library is present.** 1.5.3 found that 59-61% of a CPU detection sits in
+  tract's `depth_wise::inner_loop_generic`, because tract only unrolls depthwise
+  zones with at most 4 taps and YuNet's 3x3 kernels have 9, so every zone takes
+  the scalar fallback — and concluded it was "not reachable from this side".
+  That held within tract. Swapping runtimes reaches it: ONNX Runtime vectorises
+  those convolutions and runs the same graph in 6.7 ms against 65.9 ms.
+
+  Measured per stage on `fixtures/images/006.jpg`, mimalloc enabled as shipped:
+  `detect_image` 69.6 ms → 10.7 ms, end-to-end including JPEG decode
+  86.9 ms → 31.3 ms. Batch is a different story — 20 images through rayon go
+  236 ms → 118 ms, only 2.0x, because batch already parallelised across images
+  and becomes memory bound once inference stops being the constraint. The
+  single-image figure is the one users feel; the batch figure is the one to
+  quote for folder runs.
+
+  This is aimed at machines with no usable GPU. Where one exists the WGSL graph
+  already does the whole detection in 8.2 ms, and DirectML was measured and
+  deliberately excluded: at ~9.8 ms end to end it merely ties that, for a second
+  17.7 MB library. Only the CPU execution provider is used, so one 20.1 MB
+  library ships and there is no per-platform provider matrix. (An earlier note
+  in `ONNX_RUNTIME_OPTIONS.md` put the cost at ~160 MB; that is the full
+  multi-provider package, not what a CPU-only build needs.)
+
+  `YuNetModel::load` prefers ONNX Runtime when a compatible library is found and
+  falls back to tract otherwise, matching how GPU acceleration is already
+  selected by availability rather than configuration. `load_with` forces a
+  specific backend, and `backend_name` reports which is live.
+
+  Two hazards are handled explicitly, both discovered the hard way:
+
+  - **A bad runtime aborts the process rather than returning an error.** `ort`
+    has no fallible initialisation: it calls `.expect()` inside a `#[cold]`
+    non-unwinding function, the failure poisons a global mutex, and the process
+    aborts somewhere `catch_unwind` cannot reach. `dylib_available()` therefore
+    duplicates `ort`'s own path resolution *and* its minor-version check before
+    any `ort` API is touched. This is not theoretical — a machine with an
+    unrelated `onnxruntime.dll` 1.17 on PATH resolved the bare library name to
+    that copy, and a probe that only checked the file loaded and exported
+    `OrtGetApiBase` passed it straight through to an abort at startup.
+  - **`Session::run` takes `&mut self`.** A single shared session behind a lock
+    would serialise every detection, which loses outright to tract on batch runs
+    — tract is slower per image but spreads across every core. `OrtPool` hands
+    out one session per concurrent caller, created on demand so a single-image
+    run pays for exactly one graph optimisation.
+
+  `tests/backend_parity.rs` compares final detections, not raw head tensors,
+  across 20 fixtures: decode and NMS sit downstream of the runtime and can turn
+  a small numeric difference into a different face. Face counts match exactly,
+  with scores inside 1e-3 and boxes inside 5 px — the same budget
+  `gpu_cpu_parity` allows.
+
+  `ort` is pinned at `=2.0.0-rc.13`, the only non-stable dependency in the
+  workspace, and is loaded dynamically rather than linked because the prebuilt
+  static library is built against the dynamic CRT and collides with
+  `+crt-static`.
+
+- **A pure-Rust CPU inference graph (`fcs-core::cpu`), needing neither an
+  external runtime nor a GPU.** Measured at **16 ms** against tract's 66-76 ms
+  on the same fixture — roughly 4.5x — with no explicit SIMD anywhere. ONNX Runtime remains ahead at 6-9 ms.
+
+  This is far less code than "write an ONNX runtime" because the model was
+  already re-implemented once: `gpu/graph.rs` is not an ONNX interpreter but
+  YuNet's topology hand-encoded in Rust, with only the weights read from the
+  file. The CPU backend runs that same topology, so the op set is four
+  operators — convolution (dense, depthwise or grouped, optionally fusing
+  ReLU), 2x2 max pooling, elementwise add, nearest 2x upsample — plus sigmoid
+  and a CHW->HWC reorder on the way out. BatchNorm needs no implementation at
+  all; it is already folded into the exported weights.
+
+  Convolution takes three paths because YuNet only ever asks for three shapes:
+  a pointwise 1x1 where most of the arithmetic lives, a depthwise KxK (the case
+  tract lowers to a scalar loop), and a general fallback used once for the
+  strided stem. The depthwise path splits interior pixels from the padded frame
+  so the common case carries no bounds checks.
+
+  Correctness is the whole risk here — a transposed weight layout, an
+  off-by-one pad or a missing ReLU all still produce plausible numbers — so it
+  is checked at two levels. Each operator is compared against a naive reference
+  written straight from the definition, over shapes chosen to exercise borders
+  (a 1x1 image is all border; a 17x5 one is mostly interior), groups, strides
+  and batches. Then `tests/cpu_parity.rs` compares final detections against
+  tract across 20 real fixtures, because decode and NMS sit downstream and can
+  turn a small numeric difference into a different face. Both passed on the
+  first run.
+
+  It is wired into `YuNetModel` as `InferenceBackend::CpuGraph`, and `Auto` now
+  selects ONNX Runtime, then this, then tract. tract stays as the last resort
+  because it is the only backend that interprets an arbitrary ONNX graph: the
+  built-in one knows YuNet's topology and nothing else, so a model whose
+  initializers do not match falls through to it. It is also the reference the
+  other two are checked against, which is why `backend_parity` now compares
+  every available backend to tract rather than just ONNX Runtime. With no
+  runtime installed, `detect_image` goes from 69.6 ms to 23.2 ms.
+
+  A second optimisation pass took 32 ms to 16 ms, again decided by measurement:
+
+  - **Parallelism, not arithmetic, was the limit.** All three convolution paths
+    split work by output channel, so the stem got 16 tasks on a 32-thread
+    machine — and the layers with fewest channels are exactly the ones running
+    at the largest spatial sizes. Splitting by (channel, row-block) instead cut
+    the stem from 4.1 ms to 2.9 ms and the whole model from 19.2 ms to 16.0 ms.
+    The block size always divides the output height, so a chunk never straddles
+    two channel planes.
+  - **Zero-initialisation was measured and dismissed.** Allocating every
+    activation buffer costs 0.33 ms of a 16 ms run — 2% — so the `unsafe`
+    needed to skip it buys nothing.
+  - **Removing the backbone's feature-map clones changed nothing measurable**,
+    which the zeroing figure had already predicted. Kept anyway, since it is
+    less code.
+
+  One finding is left deliberately unacted on. Single-image inference is 35%
+  faster on 16 rayon threads than on 32 (14.3 ms against 22.0 ms) — the machine
+  has 16 physical cores, and SMT siblings contend for the same cache and
+  execution units on memory-bound work. Batch export wants the opposite, being
+  7% faster on 32 (249 ms against 267 ms for 20 images), because parallelism
+  across images already saturates the machine. Changing the global rayon pool
+  would trade one for the other and would also affect decode, enhancement and
+  export, so it is recorded rather than applied.
+
+  What remains is memory traffic in the pointwise path: it reads its whole input
+  once per output channel, which is 105 MB for a single 64->64 layer at 80x80.
+  Blocking output channels to cut that is the textbook fix and measured slower
+  both times it was tried — the second time because blocking and row-splitting
+  compete for the same tasks, and with at most 64 channels against 32 threads
+  the row split is worth more. Closing the remaining gap to ONNX Runtime needs
+  a loop restructure that keeps input rows resident across all output channels,
+  which cannot be expressed with `par_chunks_mut` over a channel-major buffer.
+
+  Getting from a first working version (32 ms) to 18.5 ms was decided entirely
+  by measurement, and the measurement disagreed with every guess:
+
+  - The **stem** turned out to be the single most expensive layer in the
+    network at 6.7 ms — 26% of all convolution time in one layer — despite
+    being the one written "for clarity rather than speed" on the assumption it
+    did not matter. It runs at the full 640x640 input, which the small channel
+    counts hide. Splitting interior rows from the padded edge took it to 3.8 ms.
+  - **Depthwise** went from 11.1 ms to 5.3 ms by accumulating a whole output row
+    per kernel tap (`out[x] += k * in[x + shift]` over a contiguous span)
+    instead of gathering nine taps per pixel. The span form vectorises and also
+    removes bounds checking, since the valid range of `x` follows from the shift
+    rather than being tested per pixel.
+  - **Pointwise blocking was tried and reverted.** Handling four output channels
+    per pass to cut input re-reads is the textbook fix, and it measured *slower*
+    — 18.5 ms against 17.4 ms. The simple contiguous accumulate already streams
+    predictably enough for the prefetcher, and blocking only added
+    `split_at_mut` bookkeeping and register pressure. The reasoning sits next to
+    the code so it is not re-attempted.
+
+  One real bug came out of that attempt: chunking the output buffer by block
+  size let a chunk straddle two batch items whenever the output channel count
+  was not a multiple of the block, pairing one image's outputs with another's
+  inputs. YuNet always runs with a batch of one, so nothing would have caught it
+  in practice; `pointwise_blocks_do_not_straddle_the_batch_boundary` does.
+
+- **`fcs-ort`, a new workspace crate that will take over from the `ort` crate a
+  piece at a time.** It starts by owning the whole of ONNX Runtime discovery and
+  validation, which `fcs-core` no longer does itself, and `fcs-core` keeps using
+  `ort` for sessions and tensors.
+
+  Discovery was the right first piece because it was already the part with no
+  `ort` in it — just `libloading` — and the part where getting it wrong aborts
+  the process. Moving it made the crate load-bearing immediately rather than
+  scaffolding waiting for a second commit.
+
+  The `ort` crate is now gone from the workspace: `fcs-ort` owns the whole
+  binding — environment, session options, session, tensors in and out, and
+  error handling — over 29 C API functions. Inference speed is unchanged
+  (6.3 ms against `ort`'s 6.7 ms, batch 128 ms against 132 ms, both inside this
+  machine's noise), but three things improved.
+
+  **The session pool and its lock are gone.** `ort::Session::run` takes
+  `&mut self`, which forced a lock, which would have serialised every detection
+  — hence the pool built to work around it. ONNX Runtime itself documents
+  concurrent `Run` on one session as safe, so the binding takes `&self` and
+  batch export shares a single session with no pool, no lock and no
+  session-per-thread memory. `concurrent_runs_match_sequential` checks that
+  against eight threads rather than trusting the documentation.
+
+  **The `REQUIRED_API_VERSION` / `api-NN` lockstep is gone**, along with the
+  release-candidate dependency. Nothing enforced that coupling, and getting it
+  wrong meant accepting a library that `ort` then aborted on.
+
+  **A process-wide environment.** ONNX Runtime expects one `OrtEnv` per process;
+  `Environment::shared` caches it, including the negative result, so a machine
+  with no runtime does not repeat a failed library search on every model load.
+
+  Growing the C API surface is safe incrementally because `OrtApi` is
+  append-only: new ONNX Runtime releases add function pointers at the end and
+  never reorder existing ones, which is what lets one binary serve every
+  `ORT_API_VERSION`. So a declaration covering only the leading fields is
+  ABI-correct, and `fcs-ort` can add one function at a time instead of vendoring
+  1100 lines of bindings up front. `sys.rs` documents the two rules that come
+  with that: declare every field from the start of the struct in header order
+  including ones you do not call (a skipped field silently shifts every later
+  offset, which is undefined behaviour rather than a compile error), and take
+  signatures from the oldest supported release.
+
+  That append-only property is what made the whole thing tractable: everything
+  Face Crop Studio needs lives in the first 101 of 424 entries, so 323 fields
+  are omitted outright and only 29 of the declared 101 need real signatures.
+
+  The offset hazard is not hypothetical. A first pass at generating the prefix
+  from `ort-sys`'s bindings counted `#[cfg]`-duplicated fields twice — it
+  declares `CreateSession` once for `wasm32` and once for native — which put the
+  struct at 427 fields instead of 424 and shifted three offsets in the region we
+  call. That would have compiled and then called the wrong function pointers.
+  Two guards now exist: a `const` assertion that the declared struct is exactly
+  one pointer per field, which catches a wrong or duplicated *type*, and
+  `fcs-ort/tests/end_to_end.rs`, which calls through offsets 3 to 100 against a
+  real runtime, which catches a wrong *position*.
+
+  Two fixes came out of the move. The FFI declarations now use `extern "system"`
+  rather than `extern "C"`, matching the header's `ORT_API_CALL` — identical on
+  x86_64 but wrong on 32-bit Windows. And validation now calls
+  `GetApi(REQUIRED_API_VERSION)` and checks for null, the authoritative ABI test
+  that the version-string comparison only approximates; a corrupt or mismatched
+  build can report a plausible version and still fail to serve the API. The
+  library is also held open for the lifetime of the `Runtime`, so the copy that
+  was validated is the copy that stays mapped rather than being unloaded and
+  re-resolved later against a possibly different file.
+
+- `examples/stage_breakdown.rs`, which prints the per-stage cost of one
+  detection plus batch throughput. Written after a detour spent optimising a
+  stage that turned out to be 3% of the pipeline.
+
 ### Changed
+
+- `docs/PERFORMANCE.md` claimed preprocessing was 33% of the detection pipeline
+  and inference 52%. Measured, preprocessing is 3% (2.9 ms) and inference 95% of
+  `detect_image`. The wrong figure had already sent one optimisation hunt at a
+  stage costing 2.9 ms. The stage table now carries measured per-stage numbers
+  for all three backends and names the command that produces them.
 
 - `docs/PERFORMANCE.md` presented INT8 quantisation and adopting the `ort` crate
   as the same decision, pointing both "Future Opportunities" rows at
@@ -44,6 +278,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/ONNX_RUNTIME_OPTIONS.md` gained a scope note saying it covers runtime
   replacement only, so the cross-reference now works in both directions.
+
+- `parquet` 59.2.0 -> 59.3.0.
 
 ## [1.6.0] - 2026-08-30
 

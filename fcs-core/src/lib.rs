@@ -3,6 +3,8 @@
 //! This crate loads the YuNet ONNX model, runs inference with `tract-onnx`,
 //! and provides preprocessing and postprocessing helpers.
 
+/// Pure-Rust CPU inference graph.
+pub mod cpu;
 /// Face cropping utilities (Phase 4)
 pub mod cropper;
 /// High-level face detection runner.
@@ -17,6 +19,8 @@ pub mod model;
 pub mod model_config;
 /// Non-maximum suppression implementation (spatial grid + naive fallback).
 mod nms;
+/// ONNX Runtime inference backend (dynamically loaded, optional at runtime).
+mod ort_backend;
 /// Detection post-processing (NMS, score filtering).
 pub mod postprocess;
 /// Image pre-processing (resizing, tensor conversion).
@@ -31,7 +35,7 @@ pub use crate::{
 };
 
 pub use detector::{DetectionOutput, YuNetDetector};
-pub use model::YuNetModel;
+pub use model::{InferenceBackend, YuNetModel};
 pub use postprocess::{BoundingBox, Detection, Landmark, PostprocessConfig, apply_postprocess};
 pub use preprocess::{
     CpuPreprocessor, InputSize, PreprocessConfig, PreprocessOutput, Preprocessor, WgpuPreprocessor,

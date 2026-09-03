@@ -1,12 +1,14 @@
 use crate::{
+    cpu::runtime::CpuYuNet,
     model_config::{
         DETECTION_OUTPUT_COLS, DETECTION_SCORE_INDEX, OUTPUTS_PER_STRIDE, STRIDE_ALIGNMENT, STRIDES,
     },
+    ort_backend::OrtBackend,
     preprocess::InputSize,
 };
 
 use anyhow::{Context, Result};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::{fmt::Write, path::Path, sync::Arc};
 use tract_onnx::prelude::{
     Framework, InferenceModelExt, IntoRunnable, IntoTensor, Tensor, TypedRunnableModel, tvec,
@@ -52,17 +54,123 @@ struct CellDecodeInput {
 /// Wrapper around the YuNet ONNX runnable model.
 ///
 /// This struct handles loading the ONNX graph, preparing it for execution, and running inference.
+/// Which inference runtime to use. `Auto` is what shipping code wants; the
+/// explicit variants exist so the backend-parity test can run both over the
+/// same fixtures, and so a user hitting a bad ONNX Runtime can be told to force
+/// `Tract` rather than being stuck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InferenceBackend {
+    /// Fastest available: ONNX Runtime, then the built-in CPU graph, then tract.
+    #[default]
+    Auto,
+    /// Always tract. The only backend that interprets an arbitrary ONNX graph,
+    /// so it is also the reference the other two are tested against.
+    Tract,
+    /// ONNX Runtime, failing if no compatible dylib is present.
+    OnnxRuntime,
+    /// The built-in pure-Rust graph. Needs no external runtime, but only knows
+    /// YuNet's topology, so it fails on any other model.
+    CpuGraph,
+}
+
+#[derive(Debug)]
+enum Backend {
+    Tract(RunnableModel),
+    /// One session, shared. ONNX Runtime allows concurrent runs on it, so
+    /// batch export needs neither a lock nor a pool.
+    Ort(OrtBackend),
+    /// The built-in pure-Rust graph.
+    CpuGraph(Box<CpuYuNet>),
+}
+
 #[derive(Debug)]
 pub struct YuNetModel {
-    runnable: RunnableModel,
+    backend: Backend,
     input_size: InputSize,
 }
 
 impl YuNetModel {
     /// Load and optimize the YuNet ONNX graph for a specific input size.
+    /// Prefers ONNX Runtime when its dylib is present and falls back to
+    /// `tract` otherwise, mirroring how GPU acceleration is already selected by
+    /// availability rather than by configuration. See `ort_backend` for why the
+    /// probe has to happen before any `ort` call.
     pub fn load<P: AsRef<Path>>(model_path: P, input_size: InputSize) -> Result<Self> {
+        Self::load_with(model_path, input_size, InferenceBackend::Auto)
+    }
+
+    /// Load with an explicit backend choice. See [`InferenceBackend`].
+    pub fn load_with<P: AsRef<Path>>(
+        model_path: P,
+        input_size: InputSize,
+        backend: InferenceBackend,
+    ) -> Result<Self> {
         let path = model_path.as_ref();
         anyhow::ensure!(path.exists(), "model file not found: {}", path.display());
+
+        let wants_ort = matches!(
+            backend,
+            InferenceBackend::Auto | InferenceBackend::OnnxRuntime
+        );
+        let environment = wants_ort.then(fcs_ort::Environment::shared).flatten();
+
+        if backend == InferenceBackend::OnnxRuntime && environment.is_none() {
+            anyhow::bail!(
+                "InferenceBackend::OnnxRuntime requested but no compatible ONNX Runtime                  (1.{}+) was found; set ORT_DYLIB_PATH or place {} beside the executable",
+                fcs_ort::REQUIRED_API_VERSION,
+                fcs_ort::library_name(),
+            );
+        }
+
+        if backend == InferenceBackend::CpuGraph {
+            let graph = CpuYuNet::load(path, input_size)
+                .context("InferenceBackend::CpuGraph requested but the model would not load")?;
+            return Ok(Self {
+                backend: Backend::CpuGraph(Box::new(graph)),
+                input_size,
+            });
+        }
+
+        if let Some(environment) = environment {
+            match OrtBackend::load(&environment, path) {
+                Ok(backend) => {
+                    info!(
+                        "YuNet inference backend: ONNX Runtime {} ({})",
+                        environment.runtime().version(),
+                        environment.runtime().path().display()
+                    );
+                    return Ok(Self {
+                        backend: Backend::Ort(backend),
+                        input_size,
+                    });
+                }
+                Err(err) => warn!(
+                    "ONNX Runtime {} at {} failed to open a session ({err}); using tract",
+                    environment.runtime().version(),
+                    environment.runtime().path().display()
+                ),
+            }
+        }
+        // The built-in graph beats tract by roughly 4x and needs nothing
+        // installed, so it is preferred whenever it can load. It only knows
+        // YuNet's topology, so a model whose initializers do not match falls
+        // through to tract, which interprets any ONNX graph.
+        if backend == InferenceBackend::Auto {
+            match CpuYuNet::load(path, input_size) {
+                Ok(graph) => {
+                    info!("YuNet inference backend: built-in CPU graph");
+                    return Ok(Self {
+                        backend: Backend::CpuGraph(Box::new(graph)),
+                        input_size,
+                    });
+                }
+                Err(err) => {
+                    debug!("built-in CPU graph unavailable for this model ({err}); using tract")
+                }
+            }
+        }
+
+        debug!("YuNet inference backend: tract");
 
         let runnable = match load_runnable_model(path, input_size, true) {
             Ok(model) => {
@@ -103,7 +211,7 @@ impl YuNetModel {
         };
 
         Ok(Self {
-            runnable,
+            backend: Backend::Tract(runnable),
             input_size,
         })
     }
@@ -114,15 +222,16 @@ impl YuNetModel {
     /// `[x, y, w, h, re_x, re_y, le_x, le_y, nt_x, nt_y, rcm_x, rcm_y, lcm_x, lcm_y, score]`
     /// in the resized input coordinate space.
     pub fn run(&self, input: Tensor) -> Result<Tensor> {
-        let outputs = self
-            .runnable
-            .run(tvec![input.into()])
-            .map_err(|e| anyhow::anyhow!("YuNet execution failed: {e}"))?;
-
-        let mut tensors: Vec<Tensor> = outputs
-            .into_iter()
-            .map(|value| value.into_tensor())
-            .collect();
+        let mut tensors: Vec<Tensor> = match &self.backend {
+            Backend::Ort(session) => session.run(&input, self.input_size)?,
+            Backend::CpuGraph(graph) => graph.head_tensors(&input)?,
+            Backend::Tract(runnable) => runnable
+                .run(tvec![input.into()])
+                .map_err(|e| anyhow::anyhow!("YuNet execution failed: {e}"))?
+                .into_iter()
+                .map(|value| value.into_tensor())
+                .collect(),
+        };
 
         match tensors.len() {
             0 => anyhow::bail!("YuNet model produced no outputs"),
@@ -137,6 +246,15 @@ impl YuNetModel {
                 STRIDES.len() * OUTPUTS_PER_STRIDE,
                 other
             ),
+        }
+    }
+
+    /// Name of the runtime actually in use, for logging and telemetry.
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            Backend::Ort(_) => "onnxruntime",
+            Backend::CpuGraph(_) => "cpu-graph",
+            Backend::Tract(_) => "tract",
         }
     }
 

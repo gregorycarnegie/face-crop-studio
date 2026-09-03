@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytemuck.workspace = true
+fcs-ort.workspace = true
 fcs-utils.workspace = true
 image.workspace = true
 imageproc.workspace = true

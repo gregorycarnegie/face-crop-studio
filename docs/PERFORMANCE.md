@@ -2,27 +2,38 @@
 
 ## Current Performance Profile
 
-### Detection Pipeline (Release Build, 640×640, GTX 1080 Ti / Vulkan)
+### Detection Pipeline (Release Build, 640x640, RTX 4090 / Ryzen 9 7950X)
 
-| Stage              | CPU-only   | GPU-enabled | Notes                                 |
-|--------------------|------------|-------------|---------------------------------------|
-| Model loading      | 0.11–0.29s | 0.11–0.29s  | Cached after first load               |
-| Preprocessing      | ~43ms      | ~51ms¹      | Criterion: CPU 162ms, GPU 51ms        |
-| ONNX inference     | ~82ms      | N/A²        | Custom WGPU inference available       |
-| Postprocessing     | <1ms       | <1ms        | Grid-based NMS, already optimal       |
-| Enhancement (full) | ~798ms     | GPU shaders | Criterion: 895ms→798ms after LUT/SIMD |
+Measured per stage on `fixtures/images/006.jpg` (2384x4240 -> 640x640) with
+`cargo run --release -p fcs-core --example stage_breakdown`, mimalloc enabled as
+in the shipped binaries.
 
-¹ CLI `--benchmark-preprocess` GPU path is currently bottlenecked by host map/poll latency;
-  Criterion GPU benchmark (device-resident) measures ~51ms.  
-² Custom WGPU GPU inference (Phase 12) available via `--gpu-inference`; timing varies by image
-  size and driver scheduling.
+| Stage              | tract    | ONNX Runtime | GPU (WGSL) |
+|--------------------|----------|--------------|------------|
+| JPEG decode        | 20.7 ms  | 20.7 ms      | 20.7 ms    |
+| Preprocessing      | 2.9 ms   | 2.9 ms       | on device  |
+| Inference          | 65.9 ms  | 6.7 ms       | —          |
+| Postprocessing     | <1 ms    | <1 ms        | <1 ms      |
+| **`detect_image`** | 69.6 ms  | **10.7 ms**  | **8.2 ms** |
+| End-to-end / image | 86.9 ms  | 31.3 ms      | ~29 ms     |
+
+Batch, 20 images through rayon over one shared detector: tract 236 ms,
+ONNX Runtime 118 ms. The batch gain (2.0x) is far smaller than the single-image
+gain (6.5x) because batch was already parallel across images and becomes memory
+bound once inference stops being the constraint — worth remembering before
+quoting the single-image ratio at anyone.
 
 ### Bottleneck Summary
 
-- **Preprocessing** (33%): rayon, buffer pooling, GPU preprocessing all implemented.
-- **Inference** (52%): tract CPU baseline ~82ms; custom WGPU inference reduces this further.
-- **Enhancement**: LUT + autovectorisation pass achieved −10.9% (895ms→798ms); GPU shaders give
-  larger gains. Hand-written SIMD is not the lever here — see "What Did Not Work".
+- **Inference** (76% of end-to-end on tract, 95% of `detect_image`): the one
+  stage worth optimising. See the ONNX Runtime backend below.
+- **JPEG decode** (24%): becomes the dominant cost once ONNX Runtime is in use.
+  Untried idea: decode at reduced scale, since a 2384x4240 source is discarded
+  down to 640x640 anyway. `image` uses zune-jpeg, which exposes no scaling API;
+  `jpeg-decoder` does and is pure Rust.
+- **Preprocessing** (3%): not a bottleneck, despite earlier revisions of this
+  document claiming 33%. That figure was wrong and sent at least one
+  optimisation hunt at a stage that costs 2.9 ms.
 - **Postprocessing** (<1%): spatial grid NMS, optimal.
 
 ---
@@ -121,7 +132,7 @@ and a saturating `(x + 0.5) as u8` cast instead, marked with `ponytail:` comment
 | Opportunity                   | Est. Gain       | Notes                                                     |
 |-------------------------------|-----------------|-----------------------------------------------------------|
 | INT8 model quantisation       | Unmeasured      | Independent of `ort` — `tract` already parses QDQ graphs; see below  |
-| `ort` crate (DirectML/CoreML) | Unmeasured      | Adds ~160MB runtime; see ONNX_RUNTIME_OPTIONS.md          |
+| `ort` DirectML/CoreML EPs     | None expected   | Measured: ties the WGSL path already shipped; see below    |
 | Wider CPU SIMD (`wide` crate) | None expected   | Tried and reverted; see "What Did Not Work"                |
 | macOS/Linux GPU testing       | Validation only | Metal and Vulkan paths exist; untested on hardware        |
 | CLI GPU map/poll latency      | ~20ms           | Staging buffer strategy; deferred                         |
@@ -129,6 +140,46 @@ and a saturating `(x + 0.5) as u8` cast instead, marked with `ponytail:` comment
 Figures in the "Est. Gain" column are measured only where a row says so. "Unmeasured" means no
 benchmark exists in this repo for that idea — treat those rows as directions to investigate, not
 as predictions.
+
+### The ONNX Runtime CPU backend (shipped in fcs-core)
+
+`tract` lowers YuNet's 3x3 depthwise convolutions to a scalar fallback — it only
+unrolls zones with at most 4 taps — which 1.5.3 measured at 59-61% of a CPU
+detection and concluded was "not reachable from this side". That was true within
+tract. Swapping the runtime reaches it: ONNX Runtime vectorises those
+convolutions and runs the same graph in 6.7 ms against 65.9 ms.
+
+Scope deliberately excludes DirectML. Measured end to end it lands at ~9.8 ms
+against the 8.2 ms the WGSL graph already achieves with no dependency at all, so
+the GPU execution providers buy nothing here. Only the CPU EP is used, which
+also means one library (20.1 MB) rather than the ~38 MB a DirectML build needs,
+and no per-platform execution-provider matrix.
+
+Loaded dynamically rather than linked: the prebuilt static library is built
+against the dynamic CRT and collides with the workspace's `+crt-static`, and
+dynamic loading keeps DirectML out of the build entirely.
+
+The binding lives in `fcs-ort` and is ours — the `ort` crate is no longer a
+dependency. `fcs-core/src/ort_backend.rs` only adapts between tract tensors and
+that binding. Two things to know before touching either:
+
+1. **`sys::OrtApi` is a hand-maintained prefix of a 424-entry function table.**
+   A wrong offset is undefined behaviour, not a compile error. Read the rules in
+   `fcs-ort/src/sys.rs` before adding a field, and note that generated bindings
+   declare some fields twice under `#[cfg]` — counting those duplicates shifts
+   every later offset. Two guards exist: a `const` assertion that the struct is
+   exactly one pointer per declared field, and `fcs-ort/tests/end_to_end.rs`,
+   which calls through offsets 3 to 100 against a real runtime.
+2. **A bad runtime must never reach the FFI.** `fcs_ort::locate` reproduces the
+   version rule and adds an ABI check, because a machine with an unrelated
+   `onnxruntime.dll` on PATH will otherwise be resolved and used. This mattered
+   more when `ort` was in the picture — its version rejection aborted the
+   process — but a mismatched library is still worth refusing outright.
+
+Sessions are shared, not pooled: ONNX Runtime permits concurrent `Run` on one
+session, which `concurrent_runs_match_sequential` verifies against eight
+threads. `SessionOptions::intra_threads` defaults to 1 because parallelism comes
+from rayon running whole images at once.
 
 ### INT8 quantisation is not the `ort` question
 

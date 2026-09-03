@@ -15,7 +15,7 @@ incremental = true
 opt-level = 3
 
 [workspace]
-members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-cli", "fcs-gui"]
+members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-ort", "fcs-cli", "fcs-gui"]
 resolver = "3"
 
 [workspace.package]
@@ -45,6 +45,7 @@ all = { level = "warn", priority = -1 }
 # Workspace crates
 fcs-core = { path = "fcs-core" }
 fcs-mapping = { path = "fcs-mapping" }
+fcs-ort = { path = "fcs-ort" }
 fcs-utils = { path = "fcs-utils" }
 
 # Error handling and logging
@@ -97,6 +98,8 @@ tiny-skia = "0.12.0"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 prost = "0.14.4"
 tract-onnx = "0.23.5"
+# Dynamic loading of the ONNX Runtime library, used by fcs-ort.
+libloading = "0.9.0"
 
 # GPU and shader support
 metal = "0.33.0"
@@ -126,7 +129,7 @@ base64 = "0.23.1"
 calamine = "0.36.1"
 crc32fast = "1.5.1"
 csv = "1.4.0"
-parquet = { version = "59.2.0", default-features = false, features = [
+parquet = { version = "59.3.0", default-features = false, features = [
     "arrow",
     "flate2",
     "flate2-zlib-rs",
