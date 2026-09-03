@@ -27,10 +27,8 @@ quoting the single-image ratio at anyone.
 
 - **Inference** (76% of end-to-end on tract, 95% of `detect_image`): the one
   stage worth optimising. See the ONNX Runtime backend below.
-- **JPEG decode** (24%): becomes the dominant cost once ONNX Runtime is in use.
-  Untried idea: decode at reduced scale, since a 2384x4240 source is discarded
-  down to 640x640 anyway. `image` uses zune-jpeg, which exposes no scaling API;
-  `jpeg-decoder` does and is pure Rust.
+- **JPEG decode** (~21 ms, and the largest stage once inference drops): looks
+  like the obvious next target and is not one. See "What Did Not Work".
 - **Preprocessing** (3%): not a bottleneck, despite earlier revisions of this
   document claiming 33%. That figure was wrong and sent at least one
   optimisation hunt at a stage that costs 2.9 ms.
@@ -105,6 +103,36 @@ Criterion results are written to `target/criterion/`. Do not commit benchmark ou
 Parallelizing the inner `row`/`col` loops within each stride added overhead rather than saving
 time. Thread coordination cost exceeded the per-row work. The existing stride-level parallelism
 (3 parallel tasks for strides 8/16/32) is the right granularity for this workload.
+
+### Decoding JPEGs at reduced scale
+
+The arithmetic is tempting: detection runs at 640x640, sources are routinely
+2384x4240, so decode appears to produce 93% pixels that are thrown away. JPEG
+supports 1/2, 1/4 and 1/8 scale decode natively in the DCT at a fraction of the
+cost.
+
+It does not work here, because those pixels are not thrown away — they are the
+product. `process_single_image` decodes once and passes the same image to both
+detection and `crop_face_from_image`, and the output crop is cut from the
+full-resolution pixels. Detection only needs 640x640; cropping needs everything.
+Decoding at reduced scale would degrade every crop the app produces. Decoding
+twice (scaled for detection, full for cropping) is strictly more work for any
+image that actually contains a face, which is most of them.
+
+Two further measurements close the stage off as a target entirely:
+
+- **The decoder is already fast.** zune-jpeg, via `image`, runs at 390-570
+  Mpx/s on this hardware. The ~21 ms is simply what 10.1 megapixels costs; it is
+  not overhead waiting to be removed.
+- **It cannot be parallelised for these files.** Decode is single-threaded —
+  identical timings under `RAYON_NUM_THREADS=1` and 32 — and splitting one image
+  across threads requires restart markers to give independent entry points into
+  the entropy-coded stream. None of the fixtures have any (no DRI segment, zero
+  RST markers): baseline sequential JPEG is one continuous Huffman run, so no
+  MCU can be decoded without decoding every MCU before it.
+
+Batch throughput is unaffected either way, since whole images already decode in
+parallel across rayon workers. This is a single-image latency figure only.
 
 ### Hand-written SIMD via the `wide` crate
 
