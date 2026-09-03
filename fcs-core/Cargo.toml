@@ -21,10 +21,14 @@ prost.workspace = true
 rayon.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-tract-onnx.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]
+# Dev-only: tract no longer runs inference, but it remains the independent
+# oracle the other backends are checked against — it interprets the ONNX graph
+# rather than re-implementing it, and can be stopped at a named node to validate
+# a single GPU op. Nothing it provides reaches a shipped binary.
+tract-onnx.workspace = true
 criterion.workspace = true
 mimalloc.workspace = true
 fcs-utils = { workspace = true, features = ["fixtures"] }

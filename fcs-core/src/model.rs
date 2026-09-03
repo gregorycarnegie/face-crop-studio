@@ -7,14 +7,10 @@ use crate::{
     preprocess::InputSize,
 };
 
+use crate::tensor::Tensor;
 use anyhow::{Context, Result};
-use log::{debug, info, warn};
-use std::{fmt::Write, path::Path, sync::Arc};
-use tract_onnx::prelude::{
-    Framework, InferenceModelExt, IntoRunnable, IntoTensor, Tensor, TypedRunnableModel, tvec,
-};
-
-type RunnableModel = Arc<TypedRunnableModel>;
+use log::{info, warn};
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 struct StrideMeta {
@@ -57,25 +53,22 @@ struct CellDecodeInput {
 /// Which inference runtime to use. `Auto` is what shipping code wants; the
 /// explicit variants exist so the backend-parity test can run both over the
 /// same fixtures, and so a user hitting a bad ONNX Runtime can be told to force
-/// `Tract` rather than being stuck.
+/// the built-in graph rather than being stuck.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InferenceBackend {
-    /// Fastest available: ONNX Runtime, then the built-in CPU graph, then tract.
+    /// ONNX Runtime when a compatible library is present, else the built-in
+    /// graph.
     #[default]
     Auto,
-    /// Always tract. The only backend that interprets an arbitrary ONNX graph,
-    /// so it is also the reference the other two are tested against.
-    Tract,
-    /// ONNX Runtime, failing if no compatible dylib is present.
+    /// ONNX Runtime, failing if no compatible library is present.
     OnnxRuntime,
-    /// The built-in pure-Rust graph. Needs no external runtime, but only knows
+    /// The built-in pure-Rust graph. Needs nothing installed, but knows only
     /// YuNet's topology, so it fails on any other model.
     CpuGraph,
 }
 
 #[derive(Debug)]
 enum Backend {
-    Tract(RunnableModel),
     /// One session, shared. ONNX Runtime allows concurrent runs on it, so
     /// batch export needs neither a lock nor a pool.
     Ort(OrtBackend),
@@ -90,11 +83,11 @@ pub struct YuNetModel {
 }
 
 impl YuNetModel {
-    /// Load and optimize the YuNet ONNX graph for a specific input size.
-    /// Prefers ONNX Runtime when its dylib is present and falls back to
-    /// `tract` otherwise, mirroring how GPU acceleration is already selected by
-    /// availability rather than by configuration. See `ort_backend` for why the
-    /// probe has to happen before any `ort` call.
+    /// Load YuNet, preferring ONNX Runtime when a compatible library is present
+    /// and falling back to the built-in graph otherwise — mirroring how GPU
+    /// acceleration is already selected by availability rather than by
+    /// configuration. See `fcs_ort` for why the probe has to happen before any
+    /// ONNX Runtime call.
     pub fn load<P: AsRef<Path>>(model_path: P, input_size: InputSize) -> Result<Self> {
         Self::load_with(model_path, input_size, InferenceBackend::Auto)
     }
@@ -145,73 +138,26 @@ impl YuNetModel {
                     });
                 }
                 Err(err) => warn!(
-                    "ONNX Runtime {} at {} failed to open a session ({err}); using tract",
+                    "ONNX Runtime {} at {} failed to open a session ({err}); using the built-in graph",
                     environment.runtime().version(),
                     environment.runtime().path().display()
                 ),
             }
         }
-        // The built-in graph beats tract by roughly 4x and needs nothing
-        // installed, so it is preferred whenever it can load. It only knows
-        // YuNet's topology, so a model whose initializers do not match falls
-        // through to tract, which interprets any ONNX graph.
-        if backend == InferenceBackend::Auto {
-            match CpuYuNet::load(path, input_size) {
-                Ok(graph) => {
-                    info!("YuNet inference backend: built-in CPU graph");
-                    return Ok(Self {
-                        backend: Backend::CpuGraph(Box::new(graph)),
-                        input_size,
-                    });
-                }
-                Err(err) => {
-                    debug!("built-in CPU graph unavailable for this model ({err}); using tract")
-                }
-            }
-        }
-
-        info!("YuNet inference backend: tract");
-
-        let runnable = match load_runnable_model(path, input_size, true) {
-            Ok(model) => {
-                debug!(
-                    "YuNet model {} optimized successfully ({}x{})",
-                    path.display(),
-                    input_size.width,
-                    input_size.height
-                );
-                model
-            }
-            Err(opt_err) => {
-                let optimize_msg = format!("{opt_err}");
-                let mut chain_msg = String::new();
-                for cause in opt_err.chain() {
-                    let _ = writeln!(&mut chain_msg, "  • {cause}");
-                }
-                warn!(
-                    "YuNet model {} failed optimized load ({}); falling back to decluttered graph (~2x slower).\nError chain:\n{}",
-                    path.display(),
-                    optimize_msg,
-                    chain_msg.trim_end()
-                );
-                let decluttered =
-                    load_runnable_model(path, input_size, false).with_context(|| {
-                    format!(
-                        "fallback to decluttered YuNet graph failed after optimize error: {optimize_msg}"
-                    )
-                })?;
-                debug!(
-                    "YuNet model {} running in decluttered mode ({}x{})",
-                    path.display(),
-                    input_size.width,
-                    input_size.height
-                );
-                decluttered
-            }
-        };
-
+        // Nothing else is available: the built-in graph needs no runtime and is
+        // the only remaining backend. It knows YuNet's topology and nothing
+        // else, so a model whose initializers do not match is a hard error
+        // rather than a fallback — which is the honest outcome now that no
+        // general ONNX interpreter is bundled.
+        let graph = CpuYuNet::load(path, input_size).with_context(|| {
+            format!(
+                "cannot run {}: no compatible ONNX Runtime was found, and the built-in graph                  accepts only a YuNet export matching the bundled model",
+                path.display()
+            )
+        })?;
+        info!("YuNet inference backend: built-in CPU graph");
         Ok(Self {
-            backend: Backend::Tract(runnable),
+            backend: Backend::CpuGraph(Box::new(graph)),
             input_size,
         })
     }
@@ -225,12 +171,6 @@ impl YuNetModel {
         let mut tensors: Vec<Tensor> = match &self.backend {
             Backend::Ort(session) => session.run(&input, self.input_size)?,
             Backend::CpuGraph(graph) => graph.head_tensors(&input)?,
-            Backend::Tract(runnable) => runnable
-                .run(tvec![input.into()])
-                .map_err(|e| anyhow::anyhow!("YuNet execution failed: {e}"))?
-                .into_iter()
-                .map(|value| value.into_tensor())
-                .collect(),
         };
 
         match tensors.len() {
@@ -254,7 +194,6 @@ impl YuNetModel {
         match &self.backend {
             Backend::Ort(_) => "onnxruntime",
             Backend::CpuGraph(_) => "cpu-graph",
-            Backend::Tract(_) => "tract",
         }
     }
 
@@ -263,36 +202,12 @@ impl YuNetModel {
     }
 }
 
-fn load_runnable_model(
-    path: &Path,
-    _input_size: InputSize,
-    optimized: bool,
-) -> Result<RunnableModel> {
-    // Load model and let it infer shape from ONNX file
-    // The input_size parameter is used for preprocessing and coordinate scaling,
-    // but the model itself should match the ONNX file's declared input shape
-    let model = tract_onnx::onnx()
-        .model_for_path(path)
-        .with_context(|| format!("failed to parse ONNX graph from {}", path.display()))?;
-
-    if optimized {
-        model
-            .into_optimized()
-            .map_err(|e| anyhow::anyhow!("unable to optimize YuNet graph: {e}"))?
-            .into_runnable()
-            .map_err(|e| anyhow::anyhow!("unable to make YuNet graph runnable: {e}"))
-    } else {
-        model
-            .into_typed()
-            .map_err(|e| anyhow::anyhow!("unable to type-check YuNet graph: {e}"))?
-            .into_decluttered()
-            .map_err(|e| anyhow::anyhow!("unable to declutter YuNet graph: {e}"))?
-            .into_runnable()
-            .map_err(|e| anyhow::anyhow!("unable to make YuNet graph runnable: {e}"))
-    }
-}
-
-pub(crate) fn decode_yunet_outputs(outputs: &[Tensor], input_size: InputSize) -> Result<Tensor> {
+/// Decode YuNet's twelve raw head tensors into `[N, 15]` detection rows.
+///
+/// Public because a backend that produces head tensors — including one outside
+/// this crate — still needs the shared decoder; having two decoders is how the
+/// backends would drift apart.
+pub fn decode_yunet_outputs(outputs: &[Tensor], input_size: InputSize) -> Result<Tensor> {
     anyhow::ensure!(
         outputs.len() == STRIDES.len() * OUTPUTS_PER_STRIDE,
         "YuNet decode expects {} tensors, got {}",
@@ -368,22 +283,10 @@ fn validate_stride_outputs<'a>(
     outputs: &'a [Tensor],
     meta: &StrideMeta,
 ) -> Result<StrideOutputs<'a>> {
-    let cls_slice = outputs[meta.stride_index]
-        .try_as_plain()
-        .and_then(|view| view.as_slice::<f32>())
-        .map_err(|e| anyhow::anyhow!("cls output not f32: {e}"))?;
-    let obj_slice = outputs[meta.stride_index + STRIDES.len()]
-        .try_as_plain()
-        .and_then(|view| view.as_slice::<f32>())
-        .map_err(|e| anyhow::anyhow!("obj output not f32: {e}"))?;
-    let bbox_slice = outputs[meta.stride_index + STRIDES.len() * 2]
-        .try_as_plain()
-        .and_then(|view| view.as_slice::<f32>())
-        .map_err(|e| anyhow::anyhow!("bbox output not f32: {e}"))?;
-    let kps_slice = outputs[meta.stride_index + STRIDES.len() * 3]
-        .try_as_plain()
-        .and_then(|view| view.as_slice::<f32>())
-        .map_err(|e| anyhow::anyhow!("kps output not f32: {e}"))?;
+    let cls_slice = outputs[meta.stride_index].as_slice();
+    let obj_slice = outputs[meta.stride_index + STRIDES.len()].as_slice();
+    let bbox_slice = outputs[meta.stride_index + STRIDES.len() * 2].as_slice();
+    let kps_slice = outputs[meta.stride_index + STRIDES.len() * 3].as_slice();
 
     anyhow::ensure!(
         cls_slice.len() == meta.cell_count,
@@ -528,10 +431,20 @@ mod tests {
 
         let err = YuNetModel::load(temp.path(), InputSize::default())
             .expect_err("invalid ONNX should fail");
-        let message = format!("{err}");
+
+        // Assert the intent rather than one backend's wording: the failure must
+        // name the file and explain what was expected, and the chain must still
+        // carry the underlying decode error so "corrupt file" is
+        // distinguishable from "valid ONNX that is not YuNet".
+        let top = format!("{err}");
         assert!(
-            message.contains("failed to parse ONNX") || message.contains("unable to optimize"),
-            "Unexpected error message: {message}"
+            top.contains(&temp.path().display().to_string()),
+            "error should name the offending file: {top}"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.to_lowercase().contains("onnx") || chain.to_lowercase().contains("decode"),
+            "error chain should explain what failed to load: {chain}"
         );
     }
 
@@ -607,10 +520,7 @@ mod tests {
         assert_eq!(result.shape().len(), 2);
         assert_eq!(result.shape()[1], DETECTION_OUTPUT_COLS);
         // Verify scores are in [0, 1]
-        let data = result
-            .try_as_plain()
-            .and_then(|view| view.as_slice::<f32>())
-            .expect("output tensor is f32");
+        let data = result.as_slice();
         for score in data
             .iter()
             .skip(DETECTION_SCORE_INDEX)
@@ -813,22 +723,10 @@ mod benches {
                 let cell_count = rows * cols;
                 let stride_f = stride as f32;
 
-                let cls_slice = outputs[stride_index]
-                    .try_as_plain()
-                    .and_then(|view| view.as_slice::<f32>())
-                    .map_err(|e| anyhow::anyhow!("cls output not f32: {e}"))?;
-                let obj_slice = outputs[stride_index + STRIDES.len()]
-                    .try_as_plain()
-                    .and_then(|view| view.as_slice::<f32>())
-                    .map_err(|e| anyhow::anyhow!("obj output not f32: {e}"))?;
-                let bbox_slice = outputs[stride_index + STRIDES.len() * 2]
-                    .try_as_plain()
-                    .and_then(|view| view.as_slice::<f32>())
-                    .map_err(|e| anyhow::anyhow!("bbox output not f32: {e}"))?;
-                let kps_slice = outputs[stride_index + STRIDES.len() * 3]
-                    .try_as_plain()
-                    .and_then(|view| view.as_slice::<f32>())
-                    .map_err(|e| anyhow::anyhow!("kps output not f32: {e}"))?;
+                let cls_slice = outputs[stride_index].as_slice();
+                let obj_slice = outputs[stride_index + STRIDES.len()].as_slice();
+                let bbox_slice = outputs[stride_index + STRIDES.len() * 2].as_slice();
+                let kps_slice = outputs[stride_index + STRIDES.len() * 3].as_slice();
 
                 anyhow::ensure!(
                     cls_slice.len() == cell_count,

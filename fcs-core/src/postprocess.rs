@@ -1,7 +1,7 @@
+use crate::tensor::Tensor;
 use anyhow::Result;
 use fcs_utils::{config::DetectionSettings, point::Point};
 use std::cmp::Ordering;
-use tract_onnx::prelude::{Tensor, tract_ndarray::ArrayView2};
 
 use crate::{
     model_config::{DETECTION_OUTPUT_COLS, DETECTION_SCORE_INDEX},
@@ -149,15 +149,12 @@ pub fn apply_postprocess(
     scale_y: f32,
     config: &PostprocessConfig,
 ) -> Result<Vec<Detection>> {
+    // The column count is checked inside detection_rows, which is what makes
+    // the chunked iteration exact.
     let rows = detection_rows(output)?;
-    anyhow::ensure!(
-        rows.shape()[1] == DETECTION_OUTPUT_COLS,
-        "YuNet output must have {} columns per detection",
-        DETECTION_OUTPUT_COLS
-    );
 
-    let mut detections = Vec::with_capacity(rows.nrows());
-    for row in rows.rows() {
+    let mut detections = Vec::new();
+    for row in rows {
         let score = row[DETECTION_SCORE_INDEX];
         if !score.is_finite() || score < config.score_threshold {
             continue;
@@ -219,26 +216,28 @@ pub fn apply_postprocess(
 }
 
 /// Extract the detection rows from the model's output tensor.
-fn detection_rows<'a>(output: &'a Tensor) -> Result<ArrayView2<'a, f32>> {
+///
+/// Rows are yielded as plain slices rather than an ndarray view: the tensor is
+/// densely packed by construction, so a chunked iterator is the whole of what
+/// the view was providing.
+fn detection_rows(output: &Tensor) -> Result<impl Iterator<Item = &[f32; DETECTION_OUTPUT_COLS]>> {
     let shape = output.shape();
-    let rows = match shape {
-        [rows, DETECTION_OUTPUT_COLS] => *rows,
-        [1, rows, DETECTION_OUTPUT_COLS] => *rows,
+    match shape {
+        [_, DETECTION_OUTPUT_COLS] | [1, _, DETECTION_OUTPUT_COLS] => {}
         other => anyhow::bail!(
             "YuNet output must have shape [N, {}] or [1, N, {}] (got {:?})",
             DETECTION_OUTPUT_COLS,
             DETECTION_OUTPUT_COLS,
             other
         ),
-    };
-
-    let slice = output
-        .try_as_plain()
-        .and_then(|view| view.as_slice::<f32>())
-        .map_err(|e| anyhow::anyhow!("YuNet output is not f32: {e}"))?;
-
-    ArrayView2::from_shape((rows, DETECTION_OUTPUT_COLS), slice)
-        .map_err(|_| anyhow::anyhow!("YuNet output data is not contiguous"))
+    }
+    // `as_chunks` over `chunks_exact`: the column count is a constant, so the
+    // rows come back as fixed-size arrays and the length check is compile-time.
+    Ok(output
+        .as_slice()
+        .as_chunks::<DETECTION_OUTPUT_COLS>()
+        .0
+        .iter())
 }
 
 /// Apply non-maximum suppression to a list of detections.
@@ -438,13 +437,8 @@ mod tests {
             .to_string();
         assert!(err.contains("YuNet output must have shape"));
 
-        let wrong_type =
-            Tensor::from_shape(&[1, DETECTION_OUTPUT_COLS], &[1i32; DETECTION_OUTPUT_COLS])
-                .expect("build wrong-type test tensor");
-        let err = apply_postprocess(&wrong_type, 1.0, 1.0, &PostprocessConfig::default())
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("YuNet output is not f32"));
+        // The old "output is not f32" case is gone: `Tensor` is f32 by
+        // construction now, so a wrong element type cannot be built at all.
     }
 
     #[test]

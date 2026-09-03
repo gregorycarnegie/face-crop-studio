@@ -31,7 +31,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selecting the built-in graph, which needs nothing installed; extending this is
   the same mechanism with different archive names.
 
+### Removed
+
+- **`tract-onnx` is no longer in the shipped binaries.** It stopped being an
+  inference backend when the built-in graph landed — it was 4x slower and only
+  ever reached as a fallback — but it was still linked into every release, and
+  it was large: `fcs-cli` drops from 56.6 MB to **30.2 MB** and `fcs-gui` from
+  62.6 MB to **36.3 MB**. That more than pays for the ONNX Runtime library now
+  shipped alongside: the total Windows download falls from 119 MB to 87 MB even
+  after adding 20 MB of DLL.
+
+  Removing it meant replacing two things it was quietly providing.
+
+  The **tensor type** flowing between preprocessing, inference and decoding was
+  `tract_onnx::prelude::Tensor`, which brought arbitrary dtypes, quantisation,
+  views and lazy shapes to a pipeline that only ever moves densely packed f32
+  through four shapes. `fcs_core::tensor::Tensor` replaces it in about 100
+  lines. One test disappeared with it — the "output is not f32" case can no
+  longer be constructed, since the type is f32 by definition now.
+
+  The **ONNX protobuf schema** was `tract_onnx::pb`. Reading initializers needs
+  three messages and five fields, so `yunet::proto` declares exactly those with
+  `prost`, which is already a dependency. Protobuf skips fields it does not
+  know, so a subset parses a complete ONNX file. The field tags are the
+  load-bearing detail — a wrong tag reads the wrong field rather than failing —
+  so they were taken from tract's own generated code and are pinned by a
+  round-trip test, with `cpu_parity` reading the real model as the check that
+  they match ONNX itself.
+
+  `tract` stays as a **dev-dependency**, which is the part worth keeping. It is
+  the only implementation available that interprets the ONNX graph instead of
+  re-encoding YuNet's topology by hand, so it remains the oracle both shipped
+  backends are checked against — they could otherwise share a mistake about the
+  architecture and agree with each other perfectly. `tests/common/mod.rs` runs
+  it directly now that `InferenceBackend::Tract` is gone, and `gpu/tests.rs`
+  still stops it at a named node to validate individual GPU ops. Nothing it
+  provides reaches a released binary.
+
+  The remaining consequence is deliberate: with no general ONNX interpreter
+  bundled, a model whose initializers do not match YuNet's topology is now a
+  hard error rather than a silent fallback to a slower backend that would have
+  coped.
+
 ### Fixed
+
+- The CLI's JSON snapshot test pinned floats to `1e-5`, which was tighter than
+  the difference between backends: it passed on the built-in graph and failed on
+  ONNX Runtime, so whether the suite was green depended on what happened to be
+  installed. Now that releases ship ONNX Runtime, this would have started
+  failing in CI. Widened to `1e-3` — roughly five times the measured
+  cross-backend spread, and still far tighter than any real regression, which
+  moves boxes by whole pixels rather than by the last digit.
+
+- Loading a file that is not a YuNet export reported only that it "does not
+  match YuNet's topology", which could not distinguish a corrupt file from a
+  valid ONNX graph of some other model. The error now names the file and keeps
+  the underlying decode failure in its chain.
 
 - The NSIS uninstaller removed files by pattern (`*.exe`, `*.ico`, `*.md`,
   `LICENSE-*`) with no `*.dll` among them, so bundling ONNX Runtime would have

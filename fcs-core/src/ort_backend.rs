@@ -8,8 +8,9 @@
 //! Finding and validating the runtime, and the FFI itself, are `fcs-ort`'s job.
 //! This module only adapts between tract tensors and that binding.
 
-use anyhow::Result;
-use tract_onnx::prelude::Tensor;
+use anyhow::{Context, Result};
+
+use crate::tensor::Tensor;
 
 use crate::{
     model_config::{OUTPUTS_PER_STRIDE, STRIDES},
@@ -42,10 +43,7 @@ impl OrtBackend {
     /// Run the graph and return the head outputs as tract tensors, so both
     /// backends share `decode_yunet_outputs` rather than reimplementing it.
     pub(crate) fn run(&self, input: &Tensor, input_size: InputSize) -> Result<Vec<Tensor>> {
-        let data = input
-            .try_as_plain()
-            .and_then(|t| t.as_slice::<f32>())
-            .map_err(|e| anyhow::anyhow!("input tensor is not plain f32: {e}"))?;
+        let data = input.as_slice();
         let shape = [
             1usize,
             3,
@@ -69,8 +67,8 @@ impl OrtBackend {
             .into_iter()
             .enumerate()
             .map(|(i, out)| {
-                Tensor::from_shape(&out.shape, &out.data)
-                    .map_err(|e| anyhow::anyhow!("output {i} to tensor: {e}"))
+                Tensor::from_vec(&out.shape, out.data)
+                    .with_context(|| format!("output {i} to tensor"))
             })
             .collect()
     }

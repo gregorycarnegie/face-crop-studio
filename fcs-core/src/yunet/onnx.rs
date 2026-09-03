@@ -4,10 +4,10 @@ use std::{
     path::Path,
 };
 
+use super::proto::{self as pb, DATA_TYPE_FLOAT};
 use anyhow::{Context, Result, anyhow};
 use bytemuck::cast_slice;
 use prost::Message;
-use tract_onnx::pb;
 
 /// Thin wrapper around a subset of ONNX initializers (float tensors only).
 #[derive(Debug)]
@@ -77,9 +77,8 @@ pub struct OnnxTensor {
 
 impl OnnxTensor {
     fn from_proto(proto: &pb::TensorProto) -> Result<Self> {
-        use pb::tensor_proto::DataType;
         anyhow::ensure!(
-            proto.data_type == DataType::Float as i32,
+            proto.data_type == DATA_TYPE_FLOAT,
             "only float initializers are supported (found {})",
             proto.data_type
         );

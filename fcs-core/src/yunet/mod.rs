@@ -7,6 +7,7 @@
 #[macro_use]
 pub mod macros;
 pub mod onnx;
+pub mod proto;
 
 use std::path::Path;
 

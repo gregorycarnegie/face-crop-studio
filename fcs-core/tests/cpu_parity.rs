@@ -7,9 +7,12 @@
 //! fixtures, because decode and NMS sit downstream and can turn a small numeric
 //! difference into a different face.
 
+mod common;
+
+use common::TractOracle;
 use fcs_core::{
-    InferenceBackend, InputSize, PostprocessConfig, PreprocessConfig, YuNetModel,
-    cpu::runtime::CpuYuNet, preprocess_dynamic_image,
+    InputSize, PostprocessConfig, PreprocessConfig, cpu::runtime::CpuYuNet,
+    preprocess_dynamic_image,
 };
 use fcs_utils::{fixtures_dir, model_path};
 
@@ -30,7 +33,7 @@ fn cpu_graph_matches_tract_detections() {
 
     let size = InputSize::new(640, 640);
     let cpu = CpuYuNet::load(&model, size).expect("cpu graph should load");
-    let tract = YuNetModel::load_with(&model, size, InferenceBackend::Tract).expect("tract");
+    let tract = TractOracle::load(&model, 640, 640).expect("tract oracle should load");
 
     let cfg = PreprocessConfig {
         input_size: size,
@@ -54,13 +57,9 @@ fn cpu_graph_matches_tract_detections() {
         };
         let pre = preprocess_dynamic_image(&image, &cfg).expect("preprocess");
 
-        let expected = fcs_core::apply_postprocess(
-            &tract.run(pre.tensor.clone()).expect("tract run"),
-            pre.scale_x,
-            pre.scale_y,
-            &post,
-        )
-        .expect("tract postprocess");
+        let expected = tract
+            .detect(pre.tensor.as_slice(), pre.scale_x, pre.scale_y, &post)
+            .expect("tract oracle run");
         let actual = fcs_core::apply_postprocess(
             &cpu.run(pre.tensor.clone()).expect("cpu run"),
             pre.scale_x,

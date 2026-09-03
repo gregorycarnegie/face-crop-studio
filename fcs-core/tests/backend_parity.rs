@@ -8,6 +8,9 @@
 //! Skips when no compatible ONNX Runtime is present, unless FCS_STRICT_TESTS is
 //! set, matching how the GPU parity tests treat a missing adapter.
 
+mod common;
+
+use common::TractOracle;
 use fcs_core::{InferenceBackend, InputSize, PostprocessConfig, PreprocessConfig, YuNetModel};
 use fcs_utils::{fixtures_dir, model_path};
 
@@ -29,8 +32,7 @@ fn every_backend_matches_tract_detections() {
     };
 
     let size = InputSize::new(640, 640);
-    let tract = YuNetModel::load_with(&model, size, InferenceBackend::Tract).expect("tract load");
-    assert_eq!(tract.backend_name(), "tract");
+    let tract = TractOracle::load(&model, 640, 640).expect("tract oracle should load");
 
     // The built-in graph needs nothing installed, so it is always compared.
     let cpu_graph =
@@ -76,13 +78,9 @@ fn every_backend_matches_tract_detections() {
         };
         let pre = fcs_core::preprocess_dynamic_image(&image, &cfg).expect("preprocess");
 
-        let a = fcs_core::apply_postprocess(
-            &tract.run(pre.tensor.clone()).expect("tract run"),
-            pre.scale_x,
-            pre.scale_y,
-            &post,
-        )
-        .expect("tract postprocess");
+        let a = tract
+            .detect(pre.tensor.as_slice(), pre.scale_x, pre.scale_y, &post)
+            .expect("tract oracle run");
 
         for (name, model) in &alternatives {
             let b = fcs_core::apply_postprocess(

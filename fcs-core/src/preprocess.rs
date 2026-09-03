@@ -4,6 +4,7 @@
 //! return the scale factors necessary to map detections back to the source image.
 
 use crate::gpu::tensor::GpuTensor;
+use crate::tensor::Tensor;
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable, bytes_of};
 use fcs_utils::{
@@ -19,7 +20,6 @@ use std::{
     path::Path,
     sync::{Arc, Mutex, mpsc},
 };
-use tract_onnx::prelude::{IntoTensor, Tensor, tract_ndarray};
 
 /// Desired input resolution for YuNet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -832,10 +832,8 @@ fn lock_pool(pool: &Mutex<GpuResourcePool>) -> Result<std::sync::MutexGuard<'_, 
 }
 
 fn chw_tensor_from_vec(data: Vec<f32>, input_w: u32, input_h: u32) -> Result<Tensor> {
-    let array =
-        tract_ndarray::Array4::from_shape_vec((1, 3, input_h as usize, input_w as usize), data)
-            .map_err(|e| anyhow::anyhow!("failed to build tensor: {e}"))?;
-    Ok(array.into_tensor())
+    Tensor::from_vec(&[1, 3, input_h as usize, input_w as usize], data)
+        .context("failed to build the preprocessed tensor")
 }
 
 #[cfg(test)]
@@ -866,22 +864,13 @@ mod tests {
         assert_eq!(output.scale_y, 2.0);
         assert_eq!(output.tensor.shape(), &[1, 3, 2, 2]);
 
-        let data = output
-            .tensor
-            .try_as_plain()
-            .and_then(|view| view.as_slice::<f32>())
-            .unwrap();
+        let data = output.tensor.as_slice();
         assert!(data.iter().all(|v| *v >= 0.0 && *v <= 255.0));
     }
 
     /// Read a plain `f32` tensor back out as a slice.
     fn tensor_data(output: &PreprocessOutput) -> Vec<f32> {
-        output
-            .tensor
-            .try_as_plain()
-            .and_then(|view| view.as_slice::<f32>())
-            .expect("tensor should be plain f32")
-            .to_vec()
+        output.tensor.as_slice().to_vec()
     }
 
     #[test]
@@ -1201,16 +1190,8 @@ mod tests {
         assert_eq!(trait_output.scale_y, helper_output.scale_y);
         assert_eq!(trait_output.tensor.shape(), helper_output.tensor.shape());
 
-        let trait_data = trait_output
-            .tensor
-            .try_as_plain()
-            .and_then(|view| view.as_slice::<f32>())
-            .unwrap();
-        let helper_data = helper_output
-            .tensor
-            .try_as_plain()
-            .and_then(|view| view.as_slice::<f32>())
-            .unwrap();
+        let trait_data = trait_output.tensor.as_slice();
+        let helper_data = helper_output.tensor.as_slice();
         assert_eq!(trait_data, helper_data);
     }
 }
@@ -1276,12 +1257,7 @@ mod gpu_parity_tests {
         assert_eq!(scales.original_size, expected.original_size);
 
         let actual = tensor.to_vec().expect("download tensor");
-        let want = expected
-            .tensor
-            .into_plain_array::<f32>()
-            .expect("expected tensor is f32")
-            .into_raw_vec_and_offset()
-            .0;
+        let want = expected.tensor.into_vec();
         assert_eq!(actual.len(), want.len(), "tensor length");
         // Same shader, same inputs, no conversion on either route: this should be exact.
         assert_eq!(
@@ -1311,12 +1287,7 @@ mod gpu_parity_tests {
     }
 
     fn as_floats(out: &PreprocessOutput) -> Vec<f32> {
-        out.tensor
-            .to_plain_array_view::<f32>()
-            .expect("f32 tensor")
-            .iter()
-            .copied()
-            .collect()
+        out.tensor.as_slice().to_vec()
     }
 
     fn config_for(width: u32, height: u32) -> PreprocessConfig {

@@ -30,6 +30,8 @@ pub mod postprocess;
 pub mod preprocess;
 /// Standard crop size presets for face crops.
 pub mod presets;
+/// The f32 tensor shared by every stage.
+pub mod tensor;
 
 pub use crate::{
     cropper::{CropRegion, CropSettings, FillColor, PositioningMode, calculate_crop_region},
@@ -38,7 +40,7 @@ pub use crate::{
 };
 
 pub use detector::{DetectionOutput, YuNetDetector};
-pub use model::{InferenceBackend, YuNetModel};
+pub use model::{InferenceBackend, YuNetModel, decode_yunet_outputs};
 pub use postprocess::{BoundingBox, Detection, Landmark, PostprocessConfig, apply_postprocess};
 pub use preprocess::{
     CpuPreprocessor, InputSize, PreprocessConfig, PreprocessOutput, Preprocessor, WgpuPreprocessor,

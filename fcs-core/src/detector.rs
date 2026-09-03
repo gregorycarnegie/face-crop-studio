@@ -10,11 +10,11 @@ use crate::{
     preprocess::{CpuPreprocessor, PreprocessConfig, PreprocessOutput, Preprocessor},
 };
 
+use crate::tensor::Tensor;
 use anyhow::{Context, Result};
 use fcs_utils::{load_image, timing_guard};
 use image::DynamicImage;
 use std::{path::Path, sync::Arc};
-use tract_onnx::prelude::Tensor;
 
 /// Result of running YuNet on an image.
 ///

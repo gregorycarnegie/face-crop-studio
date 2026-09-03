@@ -12,7 +12,18 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 const MODEL_REL_PATH: &str = "../models/face_detection_yunet_2023mar_640.onnx";
-const SNAPSHOT_FLOAT_TOLERANCE: f64 = 1.0e-5;
+/// How far a float in the CLI's JSON may drift from the snapshot.
+///
+/// This has to be loose enough to span backends. Detection now runs on ONNX
+/// Runtime when the library is present and the built-in graph otherwise, and
+/// the two agree to about 2e-4 px on box coordinates and exactly on scores —
+/// so at the previous 1e-5 the snapshot passed on one backend and failed on the
+/// other, making a green suite depend on what happened to be installed.
+///
+/// 1e-3 keeps roughly five times the observed cross-backend spread while still
+/// catching any real regression, which moves boxes by whole pixels rather than
+/// by the last digit.
+const SNAPSHOT_FLOAT_TOLERANCE: f64 = 1.0e-3;
 
 #[test]
 fn detect_single_image_produces_json_output() -> Result<(), Box<dyn Error>> {

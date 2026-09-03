@@ -11,6 +11,7 @@ use bytemuck::cast_slice;
 use std::sync::mpsc;
 use wgpu::CommandEncoderDescriptor;
 
+use crate::tensor::Tensor;
 use anyhow::{Context, Result, anyhow};
 use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
 use std::{
@@ -18,7 +19,6 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
 };
-use tract_onnx::prelude::Tensor;
 
 use crate::yunet::{BACKBONE_STAGES, DETECTION_HEADS, onnx::OnnxInitializerMap};
 
@@ -81,10 +81,7 @@ impl GpuYuNet {
 
     pub fn run(&self, tensor: Tensor) -> Result<Tensor> {
         let dims = tensor.shape().to_vec();
-        let data = tensor
-            .try_as_plain()
-            .and_then(|view| view.as_slice::<f32>())
-            .context("gpu input must be contiguous f32")?;
+        let data = tensor.as_slice();
 
         // 1. Acquire a tensor from the pool or create a new one
         let input_gpu = {
@@ -271,7 +268,7 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
         let rows = m.height * m.width;
         outputs.push(
             Tensor::from_shape(&[rows, m.channels], &flattened)
-                .map_err(|e| anyhow!("failed to build tensor from branch output: {e}"))?,
+                .context("failed to build tensor from branch output")?,
         );
     }
 

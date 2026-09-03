@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
+use crate::tensor::Tensor as CoreTensor;
 use anyhow::{Context, Result};
-use tract_onnx::prelude::Tensor as TractTensor;
 
 use super::{graph, tensor::Tensor};
 use crate::{model::decode_yunet_outputs, preprocess::InputSize};
@@ -37,11 +37,8 @@ impl CpuYuNet {
     /// Run the network and return the twelve raw head tensors, in the order
     /// `decode_yunet_outputs` expects. `YuNetModel` decodes them itself, the
     /// same way it does for the other backends.
-    pub fn head_tensors(&self, input: &TractTensor) -> Result<Vec<TractTensor>> {
-        let data = input
-            .try_as_plain()
-            .and_then(|t| t.as_slice::<f32>())
-            .map_err(|e| anyhow::anyhow!("input tensor is not plain f32: {e}"))?;
+    pub fn head_tensors(&self, input: &CoreTensor) -> Result<Vec<CoreTensor>> {
+        let data = input.as_slice();
 
         let height = self.input_size.height as usize;
         let width = self.input_size.width as usize;
@@ -53,15 +50,15 @@ impl CpuYuNet {
             .into_iter()
             .enumerate()
             .map(|(i, out)| {
-                TractTensor::from_shape(&[out.rows, out.channels], &out.data)
-                    .map_err(|e| anyhow::anyhow!("head output {i} to tensor: {e}"))
+                CoreTensor::from_vec(&[out.rows, out.channels], out.data)
+                    .with_context(|| format!("head output {i} to tensor"))
             })
             .collect()
     }
 
     /// Run detection and decode, returning the `[N, 15]` rows. Convenience for
     /// callers that are not going through [`crate::YuNetModel`].
-    pub fn run(&self, input: TractTensor) -> Result<TractTensor> {
+    pub fn run(&self, input: CoreTensor) -> Result<CoreTensor> {
         let tensors = self.head_tensors(&input)?;
         decode_yunet_outputs(&tensors, self.input_size)
     }

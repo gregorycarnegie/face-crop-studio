@@ -1313,18 +1313,10 @@ fn concurrent_inference_matches_sequential() {
         };
 
     let input = synthetic_input();
-    let tensor = || {
-        tract_ndarray::Array4::from_shape_vec((1, 3, 640, 640), input.clone())
-            .expect("input shape")
-            .into_tensor()
-    };
+    let tensor =
+        || crate::tensor::Tensor::from_shape(&[1, 3, 640, 640], &input).expect("input shape");
 
-    let plain = |t: tract_onnx::prelude::Tensor| {
-        t.into_plain_array::<f32>()
-            .expect("output is f32")
-            .into_raw_vec_and_offset()
-            .0
-    };
+    let plain = |t: crate::tensor::Tensor| t.into_vec();
     let baseline = plain(model.run(tensor()).expect("sequential inference"));
 
     // Four threads is enough to interleave two encoders; more only slows the test down.
