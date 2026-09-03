@@ -193,11 +193,23 @@ pub fn conv2d(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> Res
 /// spatial axis runs innermost, which makes the inner statement a scaled add of
 /// two contiguous slices — the shape that vectorises.
 ///
-/// This reads the whole input once per output channel, and blocking several
-/// output channels together to cut that traffic was tried and measured
-/// *slower* (18.5 ms against 17.4 ms for the model): the simple form already
-/// streams predictably enough for the prefetcher, and the blocked version only
-/// added `split_at_mut` bookkeeping and register pressure.
+/// This reads the whole input once per output channel — 105 MB for a single
+/// 64->64 layer at 80x80 — and cutting that traffic has now been attempted
+/// twice, both times measuring *slower*. Do not attempt a third time without a
+/// new idea:
+///
+/// * Blocking four output channels per pass: 18.5 ms against 17.4 ms. It also
+///   fought the row-splitting in `rows_per_task` for the same tasks, and with
+///   at most 64 channels against 32 threads the row split is worth more.
+/// * Regrouping `chunks_mut` by row-band so one task writes every channel plane
+///   and a band of input rows is read once for all of them: 18.2 ms against
+///   15.4 ms. Safe, no `unsafe` needed — but building the `Vec<Vec<&mut [f32]>>`
+///   per call, the indirection through it in the inner loop, and scattering the
+///   writes across `c_out` bands each cost more than the reads saved.
+///
+/// The plain form below wins because its inner statement is a scaled add of two
+/// contiguous slices, which vectorises and which the prefetcher handles; the
+/// arithmetic is memory-bound in theory and latency-hidden in practice.
 fn conv_pointwise(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> Result<Tensor> {
     let (n, c_in, h, w) = (
         input.batch(),

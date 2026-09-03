@@ -138,6 +138,7 @@ Section "Uninstall"
   ; and assets are added or renamed without needing manual updates here.
   ; Wildcards cover all present and future executables / icons / docs.
   Delete "$INSTDIR\*.exe"     ; fcs-gui.exe, fcs-cli.exe, Uninstall.exe
+  Delete "$INSTDIR\*.dll"     ; onnxruntime.dll
   Delete "$INSTDIR\*.ico"
   Delete "$INSTDIR\*.md"
   Delete "$INSTDIR\LICENSE-*"

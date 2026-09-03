@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Windows releases now ship ONNX Runtime**, so the fastest backend is the one
+  users actually get: inference drops from ~15-20 ms on the built-in graph to
+  ~7 ms. `onnxruntime.dll` (20 MB, pinned to 1.24.4) and its licence go into the
+  dist directory beside the executables, which is where `fcs_ort::locate` looks
+  first; the NSIS and WiX installers both harvest that directory, so they pick it
+  up without further change.
+
+  A packaging step that quietly does nothing is the failure mode worth guarding,
+  because every way this can break — a missing DLL, one placed where `fcs-ort`
+  does not look, a version below `REQUIRED_API_VERSION`, an unmet dependency of
+  the DLL itself — degrades silently to the built-in graph and ships roughly 3x
+  slower with no error. So the workflow runs the *packaged* `fcs-cli.exe` and
+  fails the build unless it reports `Detection backend: onnxruntime`.
+
+  Verified locally against a simulated dist layout, including from an unrelated
+  working directory: resolution is relative to the executable, not the cwd, and
+  the bundled copy is preferred over an older `onnxruntime.dll` on `PATH`.
+
+  Windows only for now, which matches where the users are. Linux and macOS keep
+  selecting the built-in graph, which needs nothing installed; extending this is
+  the same mechanism with different archive names.
+
+### Fixed
+
+- The NSIS uninstaller removed files by pattern (`*.exe`, `*.ico`, `*.md`,
+  `LICENSE-*`) with no `*.dll` among them, so bundling ONNX Runtime would have
+  orphaned 20 MB in the install directory on every uninstall.
+
 ### Changed
 
 - **YuNet's topology moved out of `gpu` into `fcs-core::yunet`**, along with the

@@ -226,11 +226,31 @@ jobs:
 
           Remove-Item $CertPath -Force
 
+      - name: Fetch ONNX Runtime
+        shell: pwsh
+        env:
+          # The minor version IS the ONNX Runtime API version, and it must be at
+          # least fcs_ort::REQUIRED_API_VERSION or fcs-ort rejects the library and
+          # silently drops to the slower built-in graph. The smoke test after
+          # packaging is what actually catches a mismatch.
+          ORT_VERSION: "1.24.4"
+        run: |
+          $Zip = "$env:RUNNER_TEMP/onnxruntime.zip"
+          $Url = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip"
+          Invoke-WebRequest -Uri $Url -OutFile $Zip
+          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP/ort" -Force
+          $OrtDir = (Get-ChildItem "$env:RUNNER_TEMP/ort" -Directory | Select-Object -First 1).FullName
+          if (-not (Test-Path "$OrtDir/lib/onnxruntime.dll")) {
+            throw "onnxruntime.dll not found under $OrtDir"
+          }
+          "ORT_DIR=$OrtDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Package artifacts
         shell: pwsh
         run: |
           $DistName = $env:DIST_NAME
           $DistDir = "dist/$DistName"
+          $OrtDir = $env:ORT_DIR
           New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
           New-Item -ItemType Directory -Force -Path "$DistDir/models" | Out-Null
 
@@ -254,6 +274,9 @@ jobs:
             Copy-Item LICENSE-MIT "$DistDir/LICENSE-MIT"
           }
 
+          Copy-Item "$OrtDir/lib/onnxruntime.dll" "$DistDir/onnxruntime.dll"
+          Copy-Item "$OrtDir/LICENSE" "$DistDir/LICENSE-onnxruntime"
+
           Compress-Archive -Path "$DistDir/*" -DestinationPath "dist/$DistName.zip" -Force
 
       - name: Verify packaged model path
@@ -263,6 +286,26 @@ jobs:
           if (-not (Test-Path $ModelPath)) {
             Write-Error "Expected packaged model missing at $ModelPath"
             exit 1
+          }
+
+      - name: Verify the packaged build uses ONNX Runtime
+        shell: pwsh
+        # Running the packaged binary is the only check that covers every way
+        # this can silently degrade: a missing DLL, one placed where fcs-ort does
+        # not look, a version older than REQUIRED_API_VERSION, or a missing
+        # dependency of the DLL itself. Each of those falls back to the built-in
+        # CPU graph and ships quietly ~3x slower, so a hard failure is wanted.
+        run: |
+          $DistDir = "dist/$env:DIST_NAME"
+          if (-not (Test-Path "$DistDir/onnxruntime.dll")) {
+            throw "onnxruntime.dll missing from the package"
+          }
+          $env:RUST_LOG = "info"
+          $Out = & "$DistDir/fcs-cli.exe" --input fixtures/images/001.jpg `
+                   --output-dir "$env:RUNNER_TEMP/ort-smoke" --no-gpu 2>&1 | Out-String
+          Write-Host $Out
+          if ($Out -notmatch "Detection backend: onnxruntime") {
+            throw "packaged build did not select ONNX Runtime; it fell back to another backend"
           }
 
       - name: Build NSIS installer
