@@ -76,3 +76,36 @@ assets = [
     ["../samples/*.md", "usr/share/face-crop-studio/samples/", "644"],
     ["../README.md", "usr/share/doc/face-crop-studio/README.md", "644"],
 ]
+
+# Selected by installer/linux/build_linux.sh only when an ONNX Runtime library
+# has been fetched. cargo-deb asset lists are static and it fails on a missing
+# file, so bundling unconditionally would force every local `cargo deb` to
+# download the library first. The asset list is repeated rather than extended
+# because a variant replaces the field rather than merging into it; `name` is
+# restated so the produced package is identical apart from the extra file.
+[package.metadata.deb.variants.bundled-ort]
+name = "face-crop-studio"
+assets = [
+    ["../target/release/fcs-gui", "usr/bin/", "755"],
+    [
+        "../models/face_detection_yunet_2023mar_640.onnx",
+        "usr/share/face-crop-studio/models/",
+        "644",
+    ],
+    [
+        "../installer/linux/face-crop-studio.desktop",
+        "usr/share/applications/",
+        "644",
+    ],
+    [
+        "../installer/linux/face-crop-studio.png",
+        "usr/share/icons/hicolor/256x256/apps/",
+        "644",
+    ],
+    ["../samples/*.jpg", "usr/share/face-crop-studio/samples/", "644"],
+    ["../samples/*.md", "usr/share/face-crop-studio/samples/", "644"],
+    ["../README.md", "usr/share/doc/face-crop-studio/README.md", "644"],
+    # Beside the executable: fcs-ort looks there first, so this cannot be
+    # shadowed by, or collide with, a distro-provided onnxruntime.
+    ["../target/release/libonnxruntime.so", "usr/bin/", "644"],
+]

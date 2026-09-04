@@ -28,7 +28,9 @@
 //! is `stdcall`.
 #![allow(non_snake_case)]
 
-use std::ffi::{c_char, c_int, c_ushort, c_void};
+#[cfg(target_os = "windows")]
+use std::ffi::c_ushort;
+use std::ffi::{c_char, c_int, c_void};
 
 /// `ORTCHAR_T`: UTF-16 on Windows, bytes elsewhere. Model paths use it, which
 /// is why [`crate::session`] encodes paths per platform rather than as UTF-8.

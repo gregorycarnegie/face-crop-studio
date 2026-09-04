@@ -27,9 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   working directory: resolution is relative to the executable, not the cwd, and
   the bundled copy is preferred over an older `onnxruntime.dll` on `PATH`.
 
-  Windows only for now, which matches where the users are. Linux and macOS keep
-  selecting the built-in graph, which needs nothing installed; extending this is
-  the same mechanism with different archive names.
+  Linux and macOS now bundle it too. The AppImage and the `.app` both place the
+  library beside the executable — the first place `fcs-ort` looks — rather than
+  in a lib directory, which would depend on the loader's search path and could
+  be shadowed by a distro-provided onnxruntime. Each platform gets the same
+  run-the-packaged-artifact check as Windows, exercising `fcs-ort`'s loader
+  against the exact library that was packaged.
+
+  Two platform details were not optional. On macOS a bundled dylib is nested
+  code, so it has to be signed before the bundle or `codesign --verify --deep
+  --strict` rejects the result; it is signed without entitlements, which apply
+  to executables rather than libraries. And for the `.deb`, cargo-deb asset
+  lists are static and it fails on a missing file, so bundling unconditionally
+  would have forced every local `cargo deb` to download the library first —
+  hence a `bundled-ort` variant that `build_linux.sh` selects only when the
+  library is present, restating the package name so the artifact is otherwise
+  identical.
+
+  `FCS_ORT_LIB` is optional in both installer scripts: unset, they build exactly
+  as before and the package falls back to the built-in graph, so a local build
+  still needs no network. Only arm64 is published for macOS at 1.24.4, which is
+  all that job targets anyway.
 
 ### Removed
 

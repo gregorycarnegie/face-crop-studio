@@ -81,6 +81,22 @@ cp "$BIN_SRC" "$APP_DIR/Contents/MacOS/$BINARY_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$BINARY_NAME"
 cp "$MODEL_FILE" "$APP_DIR/Contents/MacOS/models/"
 
+# ONNX Runtime, beside the executable where fcs-ort looks first. Optional: with
+# no FCS_ORT_LIB the bundle still works and uses the built-in CPU graph, so a
+# local build needs no download.
+ORT_LIB="${FCS_ORT_LIB:-}"
+if [ -n "$ORT_LIB" ]; then
+    if [ ! -f "$ORT_LIB" ]; then
+        echo "error: FCS_ORT_LIB is set but $ORT_LIB does not exist" >&2
+        exit 1
+    fi
+    cp "$ORT_LIB" "$APP_DIR/Contents/MacOS/libonnxruntime.dylib"
+    chmod 644 "$APP_DIR/Contents/MacOS/libonnxruntime.dylib"
+    echo "Bundled ONNX Runtime from $ORT_LIB"
+else
+    echo "No FCS_ORT_LIB set; bundling without ONNX Runtime (built-in graph only)"
+fi
+
 if [ -d samples ]; then
     cp -R samples "$APP_DIR/Contents/Resources/samples"
 fi
@@ -94,6 +110,15 @@ SIGNING_IDENTITY="${APPLE_DEVELOPER_ID_NAME:-}"
 if [ -n "$SIGNING_IDENTITY" ]; then
     echo "Signing bundle with: $SIGNING_IDENTITY"
     # Sign inner binary first, then bundle (deep is deprecated for nested signing).
+    # The bundled dylib is nested code and has to be signed before the bundle,
+    # or the `codesign --verify --deep --strict` below rejects the result. No
+    # entitlements: those apply to executables, not to libraries.
+    if [ -f "$APP_DIR/Contents/MacOS/libonnxruntime.dylib" ]; then
+        codesign --force --sign "$SIGNING_IDENTITY" \
+                 --options runtime \
+                 --timestamp \
+                 "$APP_DIR/Contents/MacOS/libonnxruntime.dylib"
+    fi
     codesign --force --sign "$SIGNING_IDENTITY" \
              --options runtime \
              --entitlements installer/macos/entitlements.plist \

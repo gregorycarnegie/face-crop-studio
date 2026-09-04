@@ -5,6 +5,10 @@
 #   - target/release/fcs-gui exists (built by caller, x86_64-unknown-linux-gnu)
 #   - models/face_detection_yunet_2023mar_640.onnx exists (downloaded by caller)
 #   - rsvg-convert, appimagetool, cargo-deb available on PATH
+#
+# Optional: set FCS_ORT_LIB to a libonnxruntime.so to bundle it, which makes
+# detection roughly 3x faster. Without it the packages still work and fall back
+# to the built-in CPU graph, so local builds need no download.
 
 set -euo pipefail
 
@@ -24,6 +28,12 @@ BIN_SRC="target/release/${BINARY_NAME}"
 MODEL_FILE="models/face_detection_yunet_2023mar_640.onnx"
 DESKTOP_FILE="installer/linux/face-crop-studio.desktop"
 ICON_PNG="installer/linux/face-crop-studio.png"
+
+ORT_LIB="${FCS_ORT_LIB:-}"
+if [ -n "$ORT_LIB" ] && [ ! -f "$ORT_LIB" ]; then
+    echo "error: FCS_ORT_LIB is set but $ORT_LIB does not exist" >&2
+    exit 1
+fi
 
 DIST_DIR="dist/linux"
 APPDIR="$DIST_DIR/${APP_NAME}.AppDir"
@@ -52,6 +62,13 @@ mkdir -p "$APPDIR/usr/share/face-crop-studio/models"
 cp "$BIN_SRC" "$APPDIR/usr/bin/$BINARY_NAME"
 chmod +x "$APPDIR/usr/bin/$BINARY_NAME"
 cp "$MODEL_FILE" "$APPDIR/usr/share/face-crop-studio/models/"
+# Beside the executable, which is the first place fcs-ort looks. Putting it in a
+# lib directory instead would rely on the loader's search path and could collide
+# with a distro-provided onnxruntime.
+if [ -n "$ORT_LIB" ]; then
+    cp "$ORT_LIB" "$APPDIR/usr/bin/libonnxruntime.so"
+    chmod 644 "$APPDIR/usr/bin/libonnxruntime.so"
+fi
 cp "$DESKTOP_FILE" "$APPDIR/usr/share/applications/"
 cp "$ICON_PNG" "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png"
 
@@ -74,8 +91,21 @@ echo "Building AppImage at $APPIMAGE_PATH"
 ARCH="$APPIMAGE_ARCH" appimagetool --no-appstream "$APPDIR" "$APPIMAGE_PATH"
 
 # --- .deb: cargo-deb reads metadata from fcs-gui/Cargo.toml -----------------
+# The bundled-ort variant exists because cargo-deb asset lists are static and it
+# fails on a missing file: without the variant, every local build would need the
+# library downloaded first. The variant is selected only when it is actually
+# present, and sets the same package name so the artifact is identical either way.
+DEB_VARIANT=()
+if [ -n "$ORT_LIB" ]; then
+    cp "$ORT_LIB" "target/release/libonnxruntime.so"
+    DEB_VARIANT=(--variant bundled-ort)
+    echo "Bundling ONNX Runtime from $ORT_LIB"
+else
+    echo "No FCS_ORT_LIB set; packaging without ONNX Runtime (built-in graph only)"
+fi
+
 echo "Building .deb"
-cargo deb -p fcs-gui --no-build --no-strip --output "$DIST_DIR/face-crop-studio-${VERSION}-${ARCH}.deb"
+cargo deb -p fcs-gui --no-build --no-strip "${DEB_VARIANT[@]}"     --output "$DIST_DIR/face-crop-studio-${VERSION}-${ARCH}.deb"
 
 echo "Linux build complete:"
 ls -lh "$DIST_DIR"
