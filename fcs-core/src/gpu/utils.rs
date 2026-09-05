@@ -1,6 +1,51 @@
 use anyhow::{Context, Result};
 use bytemuck::{Pod, bytes_of};
 
+/// Records a dispatch in a new profiled pass or an already-open compute pass.
+/// Both paths use the same graph and resource preparation code.
+pub trait ComputeDispatch {
+    fn record_dispatch(
+        &mut self,
+        context: &fcs_utils::gpu::GpuContext,
+        label: &str,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        groups: [u32; 3],
+    );
+}
+
+impl ComputeDispatch for wgpu::CommandEncoder {
+    fn record_dispatch(
+        &mut self,
+        context: &fcs_utils::gpu::GpuContext,
+        label: &str,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        groups: [u32; 3],
+    ) {
+        let mut pass = self.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes: context.timestamp_writes(label),
+        });
+        pass.record_dispatch(context, label, pipeline, bind_group, groups);
+    }
+}
+
+impl ComputeDispatch for wgpu::ComputePass<'_> {
+    fn record_dispatch(
+        &mut self,
+        _context: &fcs_utils::gpu::GpuContext,
+        _label: &str,
+        pipeline: &wgpu::ComputePipeline,
+        bind_group: &wgpu::BindGroup,
+        [x, y, z]: [u32; 3],
+    ) {
+        self.set_pipeline(pipeline);
+        self.set_bind_group(0, bind_group, &[]);
+        self.dispatch_workgroups(x, y, z);
+    }
+}
+
 pub(super) fn create_uniform_buffer(
     device: &wgpu::Device,
     label: &str,

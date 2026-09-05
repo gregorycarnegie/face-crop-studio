@@ -1302,6 +1302,50 @@ fn concurrent_inference_matches_sequential() {
 }
 
 #[test]
+fn profiled_and_merged_inference_match() {
+    let Some(model_path) = model_file_path() else {
+        return;
+    };
+    let mut baseline = None;
+    for profiling in [false, true] {
+        let options = GpuContextOptions {
+            profiling,
+            ..Default::default()
+        };
+        let context = match GpuContext::init_with_fallback(&options) {
+            GpuAvailability::Available(ctx) => ctx,
+            other => {
+                eprintln!("Skipping pass-mode parity test: {other:?}");
+                return;
+            }
+        };
+        let model = GpuYuNet::with_context(
+            context.clone(),
+            &model_path,
+            crate::InputSize::new(640, 640),
+        )
+        .expect("build GPU model");
+        let input = crate::tensor::Tensor::from_shape(&[1, 3, 640, 640], &synthetic_input())
+            .expect("input shape");
+        let output = model.run(input).expect("inference").into_vec();
+        if let Some(baseline) = &baseline {
+            assert_eq!(&output, baseline, "pass mode changed inference output");
+        } else {
+            baseline = Some(output);
+        }
+        let timings = context.take_pass_timings().expect("read timestamps");
+        if context.profiler().is_some() {
+            assert_eq!(timings.len(), 61, "profiling must retain every operation");
+            for (label, count) in [("conv2d", 53), ("max_pool", 4), ("add", 2), ("resize2x", 2)] {
+                assert_eq!(timings.iter().filter(|t| t.label == label).count(), count);
+            }
+        } else {
+            assert!(timings.is_empty());
+        }
+    }
+}
+
+#[test]
 fn conv2d_reuses_one_uniform_buffer_per_distinct_config() {
     use crate::gpu::conv2d::Conv2dPipeline;
 
@@ -1328,8 +1372,7 @@ fn conv2d_reuses_one_uniform_buffer_per_distinct_config() {
     };
 
     // Two dispatches of the same layer must land on one buffer -- that reuse is the whole
-    // point, and creating 53 of these per forward pass cost more CPU than the dispatches
-    // they describe cost GPU.
+    // point: creating 53 of these per forward pass cost 0.445 ms of CPU time.
     let first = pipeline.uniform_buffer_for_test(ctx.device(), &cfg(320));
     let again = pipeline.uniform_buffer_for_test(ctx.device(), &cfg(320));
     assert!(

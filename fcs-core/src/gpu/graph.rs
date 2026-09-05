@@ -4,6 +4,7 @@ use crate::{
         conv2d::{Conv2dChannels, Conv2dConfig, Conv2dOptions, SpatialDims},
         ops::GpuInferenceOps,
         tensor::GpuTensor,
+        utils::ComputeDispatch,
     },
     yunet::{
         BACKBONE_STAGES, DETECTION_HEADS, DetectionHeadConfig, HeadBlock, NECK_BLOCKS, StageBlock,
@@ -24,7 +25,7 @@ fn weight(weights: &GpuWeights, name: &str) -> Result<GpuTensor> {
 }
 
 fn encode_stage0_block(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     input: &GpuTensor,
@@ -76,7 +77,7 @@ fn encode_stage0_block(
 }
 
 fn encode_stage_blocks(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     input: &GpuTensor,
@@ -93,7 +94,7 @@ fn encode_stage_blocks(
 }
 
 fn encode_pool_tensor(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     tensor: &GpuTensor,
 ) -> Result<GpuTensor> {
@@ -102,7 +103,7 @@ fn encode_pool_tensor(
 }
 
 pub fn encode_backbone_features(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     input: &GpuTensor,
@@ -129,7 +130,7 @@ pub struct DetectionLevelOutputs {
 }
 
 pub fn encode_neck_and_heads(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     features: &[GpuTensor],
@@ -164,7 +165,7 @@ pub fn encode_neck_and_heads(
 }
 
 fn encode_detection_level(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     feature: GpuTensor,
@@ -184,7 +185,7 @@ fn encode_detection_level(
 }
 
 fn encode_head_branch(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     input: &GpuTensor,
@@ -239,7 +240,7 @@ fn encode_head_branch(
 }
 
 fn encode_stage_block(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     input: &GpuTensor,
@@ -253,7 +254,7 @@ fn encode_stage_block(
 }
 
 fn encode_separable_block(
-    encoder: &mut wgpu::CommandEncoder,
+    encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     input: &GpuTensor,
     point_weight: &GpuTensor,

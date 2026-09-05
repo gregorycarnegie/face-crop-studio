@@ -1,6 +1,8 @@
 use super::{
     activation::ActivationKind,
-    utils::{buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry},
+    utils::{
+        ComputeDispatch, buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry,
+    },
 };
 use crate::gpu::GpuTensor;
 use fcs_utils::create_gpu_pipeline;
@@ -35,8 +37,8 @@ pub(super) struct Conv2dPipeline {
     pixels_per_thread: u32,
     /// Uniform buffers, reused across dispatches with identical contents.
     ///
-    /// Creating one 56-byte buffer per dispatch measured at 0.445 ms per forward pass —
-    /// more than the 53 dispatches it describes cost the GPU to run. The graph is static,
+    /// Creating one 56-byte buffer per dispatch measured at 0.445 ms per forward pass,
+    /// substantial overhead beside the ~0.9 ms of GPU compute. The graph is static,
     /// so those 53 uniforms take only a handful of distinct values and after the first
     /// pass every lookup hits.
     ///
@@ -108,7 +110,7 @@ impl Conv2dPipeline {
     /// Record the Conv2D dispatch into `encoder` without submitting.
     pub(super) fn encode(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         context: &Arc<GpuContext>,
         pool: &Arc<GpuBufferPool>,
         tensors: Conv2dTensors<'_>,
@@ -155,21 +157,19 @@ impl Conv2dPipeline {
             ],
         });
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("conv2d_pass"),
-                timestamp_writes: context.timestamp_writes("conv2d"),
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
+        encoder.record_dispatch(
+            context,
+            "conv2d",
+            &self.pipeline,
+            &bind_group,
+            [
                 config
                     .output_width
                     .div_ceil(CONV_WORKGROUP_X * self.pixels_per_thread),
                 config.output_height.div_ceil(CONV_WORKGROUP_Y),
                 config.output_channels,
-            );
-        }
+            ],
+        );
 
         Ok(output)
     }

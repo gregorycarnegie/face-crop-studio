@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **GPU inference now records its 61 dispatches in one compute pass when
+  profiling is off.** The experiment was kept: on an RTX 4090 / D3D12, three
+  alternating, same-process comparisons measured `encoder.finish()` at
+  **0.35-0.36 ms with separate passes versus 0.07-0.08 ms merged**. Total
+  encode/finish/submit/wait time fell from **1.58-1.66 ms to 1.18-1.25 ms**,
+  consistently saving about 0.40 ms. This is smaller than the previously
+  suggested ~0.9 ms; that was a hypothesis based on an earlier timing, not a
+  saving the experiment established.
+
+  Whole `detect_image` timings also improved: an old/new/new/old sequence of
+  release benchmark binaries measured **4.16-4.41 ms separate versus
+  3.30-3.63 ms merged**, using `inference_pipeline/detect_image/gpu` (CPU
+  speed resize plus GPU inference). These are ranges of run estimates, not
+  confidence intervals, and their drift is why the smaller paired measurement
+  is recorded alongside them. No batch-throughputput gain is claimed.
+
+  Per-operation GPU profiling is retained. With a profiler present, inference
+  uses separate passes and still reports all 53 convolutions, four pools, two
+  adds and two resizes. Both modes share the graph, validation, resource
+  preparation and dispatch code; only the pass lifetime differs. Each compute
+  dispatch has its own [WebGPU usage scope](https://www.w3.org/TR/webgpu/#programming-model-synchronization), so dependencies between layers
+  and reuse of pooled intermediates do not require separate passes. The
+  execution scope still isolates concurrent inferences through completion.
+
+  `cargo run --release -p fcs-core --example gpu_encode_comparison` reproduces
+  the paired measurement with profiling off, reverses the order on each pair,
+  and verifies exact equality of all 12 raw detection heads. A regression test
+  also compares normal and profiled inference and checks the 61 timestamp
+  records; the existing concurrency and ONNX parity checks cover the merged
+  runtime path. Validation: 822 workspace tests and two doctests passed, with
+  strict model/fixture/runtime checks enabled for the workspace suite.
+
+- **Convolution uniform buffers are cached by contents instead of rebuilt for
+  every dispatch.** On the RTX 4090, `detect_image` fell from **4.79 ms to
+  3.73 ms (22%)**, with 823 tests passing, including concurrent inference and
+  the ONNX parity chain.
+
+  An encode probe put creation of the 53 tiny uniforms at 0.445 ms (26% of
+  encode/finish/submit time), versus 0.107 ms (6%) for bind groups. The cache
+  shares immutable buffers across concurrent encodes; distinct configurations
+  cannot collide because the key contains the complete uniform contents.
+  YuNet uses fewer than twenty distinct configurations, but callers sweeping
+  arbitrary shapes through one pipeline can grow the cache without bound.
+
+  Bind groups still refer to pooled buffers that change between runs, so
+  caching them would require a larger change for a smaller measured cost.
+  The eight pool/add/resize dispatches retain their existing uniforms.
+  `encoder.finish()` was the largest measured component at 0.981 ms, which
+  prompted the compute-pass experiment recorded above. These latency figures
+  do not establish a batch-throughputput gain.
+
 ### Added
 
 - **GPU compute passes can now be timed on the GPU's own clock**, via wgpu

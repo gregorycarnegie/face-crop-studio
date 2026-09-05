@@ -1,4 +1,6 @@
-use super::utils::{buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry};
+use super::utils::{
+    ComputeDispatch, buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry,
+};
 use fcs_utils::create_gpu_pipeline;
 
 use crate::gpu::GpuTensor;
@@ -113,7 +115,7 @@ impl MaxPoolPipeline {
     /// Record the max-pool dispatch into `encoder` without submitting.
     pub(super) fn encode(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         context: &Arc<GpuContext>,
         pool: &Arc<GpuBufferPool>,
         tensor: &GpuTensor,
@@ -157,19 +159,17 @@ impl MaxPoolPipeline {
             ],
         });
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("max_pool_pass"),
-                timestamp_writes: context.timestamp_writes("max_pool"),
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
+        encoder.record_dispatch(
+            context,
+            "max_pool",
+            &self.pipeline,
+            &bind_group,
+            [
                 config.output_width.div_ceil(POOL_WORKGROUP_X),
                 config.output_height.div_ceil(POOL_WORKGROUP_Y),
                 config.channels,
-            );
-        }
+            ],
+        );
 
         Ok(output)
     }

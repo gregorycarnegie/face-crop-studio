@@ -156,15 +156,18 @@ impl GpuYuNet {
                     .create_command_encoder(&CommandEncoderDescriptor {
                         label: Some("inference"),
                     });
-            let features = graph::encode_backbone_features(
-                &mut encoder,
-                &self.ops,
-                &self.weights,
-                input_gpu,
-                BACKBONE_STAGES.len(),
-            )?;
-            let levels =
-                graph::encode_neck_and_heads(&mut encoder, &self.ops, &self.weights, &features)?;
+            let levels = if self.context().profiler().is_some() {
+                self.encode_inference(&mut encoder, input_gpu)?
+            } else {
+                // Compute dispatches have separate usage scopes even inside one pass:
+                // wgpu inserts the dependencies needed for pooled-buffer reuse.
+                // Keep separate passes only when per-op timestamps are requested.
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("yunet_forward"),
+                    timestamp_writes: None,
+                });
+                self.encode_inference(&mut pass, input_gpu)?
+            };
             self.ops.context().queue().submit(Some(encoder.finish()));
             levels
         };
@@ -178,6 +181,21 @@ impl GpuYuNet {
 
         let _guard = timing_guard("fcs_core::gpu_decode", log::Level::Trace);
         decode_yunet_outputs(&outputs, self.input_size)
+    }
+
+    fn encode_inference(
+        &self,
+        encoder: &mut impl super::utils::ComputeDispatch,
+        input: &GpuTensor,
+    ) -> Result<[DetectionLevelOutputs; 3]> {
+        let features = graph::encode_backbone_features(
+            encoder,
+            &self.ops,
+            &self.weights,
+            input,
+            BACKBONE_STAGES.len(),
+        )?;
+        graph::encode_neck_and_heads(encoder, &self.ops, &self.weights, &features)
     }
 
     pub fn memory_usage(&self) -> u64 {

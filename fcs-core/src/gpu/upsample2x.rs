@@ -1,4 +1,4 @@
-use super::utils::{buffer_entry, create_uniform_buffer, uniform_entry};
+use super::utils::{ComputeDispatch, buffer_entry, create_uniform_buffer, uniform_entry};
 use fcs_utils::create_gpu_pipeline;
 
 use crate::gpu::GpuTensor;
@@ -37,7 +37,7 @@ impl Upsample2xPipeline {
     /// Record the 2x upsample dispatch into `encoder` without submitting.
     pub(super) fn encode(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         context: &Arc<GpuContext>,
         pool: &Arc<GpuBufferPool>,
         tensor: &GpuTensor,
@@ -84,19 +84,17 @@ impl Upsample2xPipeline {
                 ],
             });
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("resize2x_pass"),
-                timestamp_writes: context.timestamp_writes("resize2x"),
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
+        encoder.record_dispatch(
+            context,
+            "resize2x",
+            &self.pipeline,
+            &bind_group,
+            [
                 ((dims[3] * 2) as u32).div_ceil(UPSAMPLE_WORKGROUP_X),
                 ((dims[2] * 2) as u32).div_ceil(UPSAMPLE_WORKGROUP_Y),
                 dims[1] as u32,
-            );
-        }
+            ],
+        );
 
         Ok(output)
     }

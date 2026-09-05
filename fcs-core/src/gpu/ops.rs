@@ -5,6 +5,7 @@ use super::{
     max_pool::{MaxPoolConfig, MaxPoolPipeline},
     tensor::GpuTensor,
     upsample2x::Upsample2xPipeline,
+    utils::ComputeDispatch,
 };
 
 use anyhow::Result;
@@ -213,7 +214,7 @@ impl GpuInferenceOps {
 
     pub fn encode_conv2d_tensor(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         input: &GpuTensor,
         weights: &GpuTensor,
         bias: &GpuTensor,
@@ -242,7 +243,7 @@ impl GpuInferenceOps {
 
     pub fn encode_max_pool_tensor(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         tensor: &GpuTensor,
         config: &MaxPoolConfig,
     ) -> Result<GpuTensor> {
@@ -253,7 +254,7 @@ impl GpuInferenceOps {
 
     pub fn encode_add_tensors(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         lhs: &GpuTensor,
         rhs: &GpuTensor,
     ) -> Result<GpuTensor> {
@@ -271,7 +272,7 @@ impl GpuInferenceOps {
 
     pub fn encode_resize2x_tensor(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         tensor: &GpuTensor,
     ) -> Result<GpuTensor> {
         self.ensure_same_context(tensor, "resize tensor")?;

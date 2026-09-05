@@ -1,4 +1,4 @@
-use super::utils::{buffer_entry, create_uniform_buffer, uniform_entry};
+use super::utils::{ComputeDispatch, buffer_entry, create_uniform_buffer, uniform_entry};
 use crate::gpu::GpuTensor;
 use fcs_utils::create_gpu_pipeline;
 
@@ -37,7 +37,7 @@ impl AddPipeline {
     /// Record the element-wise add dispatch into `encoder` without submitting.
     pub(super) fn encode(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut impl ComputeDispatch,
         context: &Arc<GpuContext>,
         pool: &Arc<GpuBufferPool>,
         lhs: &GpuTensor,
@@ -80,15 +80,13 @@ impl AddPipeline {
                 ],
             });
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("add_pass"),
-                timestamp_writes: context.timestamp_writes("add"),
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(uniforms.len.div_ceil(ADD_WORKGROUP_SIZE), 1, 1);
-        }
+        encoder.record_dispatch(
+            context,
+            "add",
+            &self.pipeline,
+            &bind_group,
+            [uniforms.len.div_ceil(ADD_WORKGROUP_SIZE), 1, 1],
+        );
 
         Ok(output)
     }
