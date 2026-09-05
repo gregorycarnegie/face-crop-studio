@@ -174,6 +174,20 @@ pub fn is_supported_image_path(path: &Path) -> bool {
 pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
 
+    // Opt-in while the output difference is being judged: libjpeg-turbo decodes the
+    // fixture corpus about 1.23x faster than the default path, but the two disagree by up
+    // to 5/255 on a channel, and those pixels reach exported crops. Speed alone does not
+    // decide that, so it is off unless asked for.
+    if jpeg_turbo_enabled()
+        && path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
+        && let Some(image) = decode_jpeg_turbo(path_ref)
+    {
+        return Ok(image);
+    }
+
     #[cfg(feature = "raw")]
     if path_ref
         .extension()
@@ -209,6 +223,50 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
 }
 
 /// Load an image from disk without applying EXIF orientation.
+/// Whether to decode JPEGs with libjpeg-turbo instead of the `image` crate's decoder.
+///
+/// A build without NASM compiles libjpeg-turbo's scalar fallback and is *slower* than the
+/// default path, so this is not something to turn on blind -- see CONTRIBUTING.md.
+fn jpeg_turbo_enabled() -> bool {
+    std::env::var_os("FCS_JPEG_TURBO").is_some_and(|v| v != "0")
+}
+
+/// Decode a JPEG with libjpeg-turbo, or `None` to fall back to the ordinary path.
+///
+/// Returns `None` rather than an error for anything unusual -- a CMYK or 16-bit file, a
+/// truncated one, a `.jpg` that is not a JPEG at all -- because the caller has a decoder
+/// that handles more formats than this one does and should simply use it. Only the common
+/// case is taken here.
+///
+/// Orientation still comes from `image`'s EXIF parsing: building the decoder reads headers
+/// and not pixels, so asking it for the orientation costs nothing and avoids a second EXIF
+/// implementation disagreeing with the first about which way a photo goes.
+fn decode_jpeg_turbo(path: &Path) -> Option<DynamicImage> {
+    let bytes = std::fs::read(path).ok()?;
+
+    let mut decoder = ImageReader::new(std::io::Cursor::new(&bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_decoder()
+        .ok()?;
+    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+
+    let decompress = mozjpeg::Decompress::new_mem(&bytes).ok()?;
+    let mut started = decompress.rgb().ok()?;
+    let (width, height) = (started.width(), started.height());
+    let pixels: Vec<u8> = started.read_scanlines().ok()?;
+    started.finish().ok()?;
+
+    let buffer = RgbImage::from_raw(
+        u32::try_from(width).ok()?,
+        u32::try_from(height).ok()?,
+        pixels,
+    )?;
+    let mut image = DynamicImage::ImageRgb8(buffer);
+    image.apply_orientation(orientation);
+    Some(image)
+}
+
 pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
 

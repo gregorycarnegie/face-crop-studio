@@ -1326,14 +1326,40 @@ So libjpeg-turbo is **1.23x faster** -- about 5-10 ms per photo -- and the
 scalar fallback is roughly 2.2x slower than the SIMD build, which is what the
 first run was really measuring.
 
-**Not adopted yet, because it is not only a speed question.** The two decoders
-disagree: mean absolute channel difference 0.029, worst single channel **5/255**
-over the same 15 images. The JPEG standard leaves IDCT precision open and both
-are valid, but those pixels reach exported crops, so this changes output rather
-than merely producing it faster. It also needs a JPEG-only fast path with a
-fallback for everything `image` handles that `mozjpeg` does not, and EXIF
-orientation still applied afterwards. That is a deliberate product decision
-about output stability, not a drop-in optimisation, and it is left for one.
+**Not adopted, because it is not only a speed question.** It is now wired up
+behind `FCS_JPEG_TURBO` so the outputs can be judged rather than argued about.
+`load_image` takes the turbo path only for `.jpg`/`.jpeg`, and returns `None`
+into the ordinary path for anything unusual -- CMYK, 16-bit, truncated, a `.jpg`
+that is not a JPEG -- because `image` handles formats `mozjpeg` does not. EXIF
+orientation still comes from `image`'s parsing: building its decoder reads
+headers, not pixels, so a second EXIF implementation cannot disagree with the
+first about which way a photo goes. Verified over 12 fixtures: **0 dimension
+mismatches**, so orientation survives.
+
+What actually changes, measured rather than assumed:
+
+| Level | Difference |
+| --- | --- |
+| Decoded pixels | mean 0.03, worst single channel **5/255** |
+| Detection boxes | shift **0.28-1.30 px** across 6 sample images |
+| Landmarks | shift **at most 0.37 px** |
+| Exported crops | 76-84% of pixels differ, max channel 70-111 |
+
+The crop figure looks alarming and is the least meaningful of the four: the
+crop rectangle moves by about a pixel, so the whole crop resamples at a
+different offset. It is a shift, not colour corruption -- the decoded pixels
+themselves are within 5/255. Reproduce with
+`fcs-core/examples/cropdiff.rs`, which compares two folders of exported crops.
+
+`cli_json_output_matches_snapshot` fails with the flag on -- 829.4791 against a
+recorded 829.6314, against a 0.001 tolerance. That is the output-stability
+question stated exactly: adopting this means accepting a sub-pixel change to
+recorded detection coordinates and updating that snapshot. Everything passes
+with the flag off, which is the default.
+
+The remaining decision is a product one -- whether ~1.23x on the dominant cost
+is worth outputs that are not bit-reproducible against previous releases -- and
+it belongs to a person, not to this backlog.
 
 **Separate finding, acted on.** `CONTRIBUTING.md` lists NASM as a required build
 tool, but a missing NASM only warns and silently degrades -- the build succeeds

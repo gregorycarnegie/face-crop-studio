@@ -126,5 +126,49 @@ fn main() -> Result<()> {
         "pixel difference: mean of per-image means {:.4}, worst single channel {worst_max}",
         all_mean.iter().sum::<f64>() / all_mean.len() as f64
     );
+
+    // The production entry point, not the raw decoders: this is where EXIF orientation is
+    // applied, and a turbo path that ignored it would return a correctly coloured image of
+    // the wrong shape. Dimensions are checked first for exactly that reason.
+    println!(
+        "
+via load_image (FCS_JPEG_TURBO off vs on)"
+    );
+    let mut mismatched_dims = 0usize;
+    let mut worst_load = 0u8;
+    for path in &paths {
+        // SAFETY: single-threaded probe.
+        unsafe { std::env::remove_var("FCS_JPEG_TURBO") };
+        let plain = fcs_utils::load_image(path)?.to_rgb8();
+        unsafe { std::env::set_var("FCS_JPEG_TURBO", "1") };
+        let turbo = fcs_utils::load_image(path)?.to_rgb8();
+        unsafe { std::env::remove_var("FCS_JPEG_TURBO") };
+
+        if plain.dimensions() != turbo.dimensions() {
+            mismatched_dims += 1;
+            println!(
+                "  {} DIMENSION MISMATCH {:?} vs {:?}",
+                path.display(),
+                plain.dimensions(),
+                turbo.dimensions()
+            );
+            continue;
+        }
+        let max = plain
+            .pixels()
+            .zip(turbo.pixels())
+            .flat_map(|(a, b)| a.0.iter().zip(b.0.iter()).map(|(x, y)| x.abs_diff(*y)))
+            .max()
+            .unwrap_or(0);
+        worst_load = worst_load.max(max);
+    }
+    println!(
+        "  {} images, {mismatched_dims} dimension mismatches, worst channel difference {worst_load}",
+        paths.len()
+    );
+    anyhow::ensure!(
+        mismatched_dims == 0,
+        "orientation handling differs between the two decode paths"
+    );
     Ok(())
 }

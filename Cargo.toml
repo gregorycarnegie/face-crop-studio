@@ -66,6 +66,9 @@ rfd = "0.17.2"
 
 # Image processing and graphics
 fast_image_resize = { version = "6.1.0", features = ["rayon"] }
+# libjpeg-turbo. Pulled in transitively by nokhwa regardless, so naming it directly
+# adds no native build cost. Needs NASM at build time or it silently drops to scalar C.
+mozjpeg = "0.10.13"
 image = { version = "0.25.10", default-features = false, features = [
     "ico",
     "png",

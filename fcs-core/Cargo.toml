@@ -37,9 +37,7 @@ fcs-utils = { workspace = true, features = ["fixtures"] }
 proptest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-# Dev-only, for experiment 67: libjpeg-turbo is already linked into every binary
-# through nokhwa, so benchmarking it as a decoder costs no new native dependency.
-mozjpeg = "0.10.13"
+mozjpeg.workspace = true
 
 [[bench]]
 name = "preprocessing"

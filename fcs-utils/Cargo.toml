@@ -16,6 +16,9 @@ bytemuck.workspace = true
 crc32fast.workspace = true
 env_logger.workspace = true
 fast_image_resize.workspace = true
+# Already linked into every binary through nokhwa, which decodes webcam MJPEG with it.
+# Used here for still JPEGs too, behind FCS_JPEG_TURBO -- see `decode_jpeg_turbo`.
+mozjpeg.workspace = true
 image.workspace = true
 imgref.workspace = true
 log.workspace = true
