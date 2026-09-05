@@ -1,7 +1,6 @@
 use super::{
     activation::{ActivationKind, ActivationPipeline},
     add::AddPipeline,
-    batch_norm::{BatchNormBindings, BatchNormConfig, BatchNormPipeline},
     conv2d::{Conv2dConfig, Conv2dPipeline, Conv2dTensors},
     max_pool::{MaxPoolConfig, MaxPoolPipeline},
     tensor::GpuTensor,
@@ -14,14 +13,13 @@ use std::sync::Arc;
 
 /// Collection of GPU-backed YuNet primitives.
 ///
-/// This type owns the compiled WGSL pipelines for convolution, batch
-/// normalization, and activations so callers can reuse them across layers.
+/// This type owns the compiled WGSL pipelines for convolution, pooling and
+/// activations so callers can reuse them across layers.
 #[derive(Debug)]
 pub struct GpuInferenceOps {
     context: Arc<GpuContext>,
     buffer_pool: Arc<GpuBufferPool>,
     conv2d: Conv2dPipeline,
-    batch_norm: BatchNormPipeline,
     activation: ActivationPipeline,
     max_pool: MaxPoolPipeline,
     add: AddPipeline,
@@ -35,7 +33,6 @@ impl GpuInferenceOps {
         let buffer_pool = Arc::new(GpuBufferPool::new(context.clone(), memory_limit));
         Ok(Self {
             conv2d: Conv2dPipeline::new(device, 4)?,
-            batch_norm: BatchNormPipeline::new(device)?,
             activation: ActivationPipeline::new(device)?,
             max_pool: MaxPoolPipeline::new(device)?,
             add: AddPipeline::new(device)?,
@@ -167,65 +164,6 @@ impl GpuInferenceOps {
             self.upload_tensor(config.weight_shape_dims(), weights, Some("conv_weights"))?;
         let bias_tensor = self.upload_tensor(config.bias_shape_dims(), bias, Some("conv_bias"))?;
         let output = self.conv2d_tensor(&input_tensor, &weight_tensor, &bias_tensor, config)?;
-        output.to_vec()
-    }
-
-    /// Batch-norm that keeps data on the GPU.
-    pub fn batch_norm_tensor(
-        &self,
-        tensor: &GpuTensor,
-        gamma: &GpuTensor,
-        beta: &GpuTensor,
-        mean: &GpuTensor,
-        variance: &GpuTensor,
-        config: &BatchNormConfig,
-    ) -> Result<GpuTensor> {
-        config.validate(
-            tensor.shape().elements(),
-            gamma.shape().elements(),
-            beta.shape().elements(),
-            mean.shape().elements(),
-            variance.shape().elements(),
-        )?;
-        self.ensure_same_context(tensor, "batch_norm tensor")?;
-        self.ensure_same_context(gamma, "batch_norm gamma")?;
-        self.ensure_same_context(beta, "batch_norm beta")?;
-        self.ensure_same_context(mean, "batch_norm mean")?;
-        self.ensure_same_context(variance, "batch_norm variance")?;
-        let tensors = BatchNormBindings {
-            tensor,
-            gamma,
-            beta,
-            mean,
-            variance,
-        };
-        self.batch_norm.execute(&self.context, tensors, config)
-    }
-
-    pub fn batch_norm(
-        &self,
-        tensor: &[f32],
-        gamma: &[f32],
-        beta: &[f32],
-        mean: &[f32],
-        variance: &[f32],
-        config: &BatchNormConfig,
-    ) -> Result<Vec<f32>> {
-        let tensor_gpu =
-            self.upload_tensor(config.tensor_shape_dims(), tensor, Some("bn_tensor"))?;
-        let channels = config.channels as usize;
-        let gamma_gpu = self.upload_tensor([channels], gamma, Some("bn_gamma"))?;
-        let beta_gpu = self.upload_tensor([channels], beta, Some("bn_beta"))?;
-        let mean_gpu = self.upload_tensor([channels], mean, Some("bn_mean"))?;
-        let variance_gpu = self.upload_tensor([channels], variance, Some("bn_variance"))?;
-        let output = self.batch_norm_tensor(
-            &tensor_gpu,
-            &gamma_gpu,
-            &beta_gpu,
-            &mean_gpu,
-            &variance_gpu,
-            config,
-        )?;
         output.to_vec()
     }
 

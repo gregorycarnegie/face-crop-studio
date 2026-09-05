@@ -1,12 +1,11 @@
 //! GPU inference building blocks for the YuNet model.
 //!
 //! Phase 13.3 Option C starts by reimplementing the fundamental layers (conv,
-//! batch-norm, activations) as WGSL compute shaders. These building blocks
+//! pooling, activations) as WGSL compute shaders. These building blocks
 //! will power the end-to-end YuNet port in subsequent increments.
 
 pub mod activation;
 pub mod add;
-pub mod batch_norm;
 pub mod conv2d;
 pub mod max_pool;
 pub mod ops;
@@ -17,7 +16,6 @@ pub mod utils;
 mod tests;
 
 pub use activation::ActivationKind;
-pub use batch_norm::BatchNormConfig;
 pub use conv2d::{Conv2dConfig, Conv2dOptions};
 pub use ops::GpuInferenceOps;
 pub mod tensor;

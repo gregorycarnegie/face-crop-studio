@@ -528,31 +528,6 @@ fn activation_matches_cpu() {
 }
 
 #[test]
-fn batch_norm_matches_cpu() {
-    let Some(ops) = gpu_ops() else {
-        eprintln!("Skipping batch-norm GPU test (no adapter)");
-        return;
-    };
-    let config =
-        BatchNormConfig::new(4, 2, 3, 1e-5).expect("batch norm test config should be valid");
-    let tensor: Vec<f32> = (0..24).map(|i| (i % 7) as f32 * 0.25).collect();
-    let gamma: Vec<f32> = vec![1.0, 0.75, 1.25];
-    let beta: Vec<f32> = vec![0.0, 0.1, -0.1];
-    let mean: Vec<f32> = vec![0.5, 0.4, 0.3];
-    let variance: Vec<f32> = vec![0.2, 0.3, 0.1];
-    let gpu = ops
-        .batch_norm(&tensor, &gamma, &beta, &mean, &variance, &config)
-        .expect("batch norm should run on GPU");
-    let cpu = batch_norm_cpu(&tensor, &gamma, &beta, &mean, &variance, &config);
-    assert!(
-        gpu.iter()
-            .zip(cpu.iter())
-            .all(|(a, b)| (a - b).abs() < 1e-4),
-        "batch-norm mismatch"
-    );
-}
-
-#[test]
 fn conv2d_matches_cpu_groups() {
     let Some(ops) = gpu_ops() else {
         eprintln!("Skipping conv2d GPU test (no adapter)");
@@ -640,34 +615,6 @@ fn conv2d_cpu(input: &[f32], weights: &[f32], bias: &[f32], cfg: &Conv2dConfig) 
         }
     }
     output
-}
-
-fn batch_norm_cpu(
-    tensor: &[f32],
-    gamma: &[f32],
-    beta: &[f32],
-    mean: &[f32],
-    variance: &[f32],
-    cfg: &BatchNormConfig,
-) -> Vec<f32> {
-    let mut out = tensor.to_vec();
-    let width = cfg.width as usize;
-    let height = cfg.height as usize;
-    let channels = cfg.channels as usize;
-    let plane = width * height;
-    for c in 0..channels {
-        let gamma_c = gamma[c];
-        let beta_c = beta[c];
-        let mean_c = mean[c];
-        let var_c = variance[c];
-        let inv_std = 1.0 / (var_c + cfg.epsilon).sqrt();
-        for idx in 0..plane {
-            let offset = c * plane + idx;
-            let gain = inv_std * gamma_c;
-            out[offset] = gain.mul_add(out[offset] - mean_c, beta_c);
-        }
-    }
-    out
 }
 
 #[test]
