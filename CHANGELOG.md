@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GPU compute passes can now be timed on the GPU's own clock**, via wgpu
+  timestamp queries. Set `GpuContextOptions::profiling`; `TIMESTAMP_QUERY` is
+  then requested opportunistically, so an adapter without it still builds a
+  context and simply records nothing. Off by default, allocating nothing.
+
+  Wall-clock benchmarks around a dispatch cannot resolve a shader change here.
+  Running an *identical* bench binary twice against the same criterion baseline
+  reported "improvements" of 19–47% at p<0.05, because the measurement is
+  dominated by upload, readback and GPU clock ramping rather than by the
+  shader. Anything smaller than that noise — which is most shader work — was
+  invisible, and several plausible-sounding optimisations turned out on
+  careful measurement to be regressions.
+
+  All 16 compute passes across both crates are instrumented. Resolving happens
+  inside `GpuProfiler::take` with its own encoder rather than in each caller's,
+  since timestamps live in the query set until read — which is what keeps
+  instrumenting a pass to a single line at the `ComputePassDescriptor` and
+  leaves every submit path untouched.
+
+  `examples/gpu_pass_breakdown.rs` prints the per-pass cost of one YuNet
+  forward pass. It reports 0.911 ms of GPU compute across 61 passes, 94.6% of
+  it convolution — against 2.95 ms wall for the same call, so roughly 70% of
+  even the inference call is encode, submit, sync and readback that no shader
+  change can reach. `examples/preprocess_cost.rs` does the same for the
+  preprocessing paths. The `inference_pipeline` bench also gains
+  `gpu_on_device` and `gpu_quality` cases; it previously could not measure the
+  fully on-device path at all, because `new_gpu` always pairs GPU inference
+  with the CPU preprocessor.
+
 - **Windows releases now ship ONNX Runtime**, so the fastest backend is the one
   users actually get: inference drops from ~15-20 ms on the built-in graph to
   ~7 ms. `onnxruntime.dll` (20 MB, pinned to 1.24.4) and its licence go into the
@@ -51,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The GPU batch-norm op is gone** — shader, pipeline, the two
+  `GpuInferenceOps` methods and its test, 251 lines. BatchNorm is folded into
+  the exported weights, so `gpu/graph.rs` never encoded one; nothing outside
+  the test suite had called it since.
+
 - **`tract-onnx` is no longer in the shipped binaries.** It stopped being an
   inference backend when the built-in graph landed — it was 4x slower and only
   ever reached as a fallback — but it was still linked into every release, and
@@ -92,6 +126,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coped.
 
 ### Fixed
+
+- **GPU preprocessing uploaded the source image at full resolution, which cost
+  far more than the transfer it was introduced to avoid.** `detect_on_device`
+  fuses preprocessing and inference onto one device so the 640x640 tensor never
+  makes a 4.9 MB round trip through host memory. But fusing means the *source*
+  goes up instead, and a 10 MP photo is 40.4 MB of RGBA — plus a
+  full-resolution `to_rgba8` on the CPU first. End to end on an RTX 4090 the
+  fully on-device path measured **19.1 ms against 11.1 ms** for the same
+  inference with a CPU resize.
+
+  The shape of it only became visible with GPU timestamps: the preprocess
+  shader runs in **0.04 ms** while the path around it takes **6.5 ms**, against
+  0.6 ms to resize on the CPU and upload the tensor. The dispatch was never the
+  cost; getting the image to it was.
+
+  `WgpuPreprocessor` now declines sources above 1.5 MP and defers to the CPU
+  preprocessor, which brings the on-device path to **9.6 ms** — now the fastest
+  configuration rather than the slowest. The threshold sits inside a measured
+  1.1–2.5 MP crossover and is a tuning constant, not a law: PCIe bandwidth,
+  CPU resize speed and decode all move it, so `examples/preprocess_cost.rs`
+  prints both sides and finds the crossover on the hardware at hand. Integrated
+  GPUs skip the check, since there the upload is a copy inside memory the CPU
+  already owns and the penalty does not exist.
+
+  The check lives in the preprocessor rather than in `detect_on_device`, and
+  that placement is the whole fix. Declining in the detector sends the caller
+  to `WgpuPreprocessor::preprocess` — the *unfused* GPU path, which uploads the
+  source whole **and** rounds the result back through host memory. Guarding
+  there made the same benchmark slower still, at 23.0 ms. Both entry points
+  have to defer for either to help.
 
 - The CLI's JSON snapshot test pinned floats to `1e-5`, which was tighter than
   the difference between backends: it passed on the built-in graph and failed on
