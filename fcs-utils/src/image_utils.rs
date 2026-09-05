@@ -259,6 +259,21 @@ pub fn resize_image(image: &DynamicImage, width: u32, height: u32, filter: Filte
 /// showed to be ~60% of the whole `Quality` detection pipeline. The kernels below are the same
 /// filters, so output is equivalent up to rounding.
 fn fir_alg(filter: FilterType) -> fir::ResizeAlg {
+    // Experiment 51: FCS_RESIZE_ALG swaps the algorithm used for the `Quality` filter so a
+    // candidate can be evaluated against production without a second build. Candidates are
+    // quality-changing and none is adopted; `examples/resize_quality.rs` is what decides.
+    if filter == FilterType::Triangle
+        && let Some(alg) = std::env::var_os("FCS_RESIZE_ALG")
+    {
+        let alg = alg.to_string_lossy();
+        if let Some(multiplicity) = alg.strip_prefix("super") {
+            let m: u8 = multiplicity.parse().unwrap_or(2);
+            return fir::ResizeAlg::SuperSampling(fir::FilterType::Bilinear, m);
+        }
+        if alg == "interp" {
+            return fir::ResizeAlg::Interpolation(fir::FilterType::Bilinear);
+        }
+    }
     match filter {
         FilterType::Nearest => fir::ResizeAlg::Nearest,
         FilterType::Triangle => fir::ResizeAlg::Convolution(fir::FilterType::Bilinear),

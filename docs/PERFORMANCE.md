@@ -64,6 +64,27 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The resize is at its floor
+
+After the changes above, the CPU source resize is the largest single cost in
+detecting a large image -- 1.39 ms at 10 MP, 2.78 ms at 22 MP -- and experiment
+51 establishes that it cannot be made faster without changing what is detected.
+`SuperSampling` measured **slower** (its nearest-neighbour first pass still
+reads every source pixel, then adds a convolution over the intermediate).
+`Interpolation` is 0.7-2.0 ms faster precisely because its fixed two-tap kernel
+reads about four source pixels per output instead of the ~14 the ratio calls
+for, and it moved landmarks by up to **35 px** over the fixture corpus.
+
+At a fixed source resolution the resize is bounded below by reading the source
+once, which production's adaptive-kernel convolution already does. The remaining
+lever is fewer source pixels -- a decode-stage change (experiment 86), not a
+resize-stage one.
+
+`examples/resize_quality.rs` is what makes that kind of question decidable: it
+runs the detector twice over the corpus and reports faces lost or gained,
+landmark displacement in source pixels, box IoU and score deltas, against an
+A/A control that reads exactly 0.00 px and IoU 1.0000.
+
 ### Changes retained in this round
 
 | Change | Effect | Where |

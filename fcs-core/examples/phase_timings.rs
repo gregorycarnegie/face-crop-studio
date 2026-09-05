@@ -162,8 +162,8 @@ fn main() -> Result<()> {
     // process. Comparing across processes cannot resolve these candidates: repeated
     // identical runs drift by up to 0.08 ms on `gpu_readback` as the GPU clocks ramp,
     // which is larger than anything the readback experiments change.
-    if let Some(var) = ab_variable() {
-        return run_ab(&detector, &image, &var);
+    if let Some((var, value)) = ab_variable() {
+        return run_ab(&detector, &image, &var, &value);
     }
 
     let mut wall = Vec::with_capacity(RUNS);
@@ -229,20 +229,31 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn ab_variable() -> Option<String> {
+/// `--ab VAR` toggles a flag on and off; `--ab VAR=VALUE` sets it to that value, for
+/// candidates selected by content rather than by presence.
+fn ab_variable() -> Option<(String, String)> {
     let args: Vec<String> = std::env::args().collect();
     let index = args.iter().position(|a| a == "--ab")?;
-    args.get(index + 1).cloned()
+    let spec = args.get(index + 1)?;
+    Some(match spec.split_once('=') {
+        Some((name, value)) => (name.to_string(), value.to_string()),
+        None => (spec.clone(), "1".to_string()),
+    })
 }
 
 /// Blocks per variant, alternated so a drifting clock lands on both equally.
 const AB_BLOCKS: usize = 8;
 const AB_BLOCK_RUNS: usize = 15;
 
-fn run_ab(detector: &YuNetDetector, image: &image::DynamicImage, var: &str) -> Result<()> {
+fn run_ab(
+    detector: &YuNetDetector,
+    image: &image::DynamicImage,
+    var: &str,
+    value: &str,
+) -> Result<()> {
     println!(
         "
-in-process A/B on {var}: {AB_BLOCKS} blocks per variant, {AB_BLOCK_RUNS} runs each"
+in-process A/B on {var}={value}: {AB_BLOCKS} blocks per variant, {AB_BLOCK_RUNS} runs each"
     );
 
     // label -> (off samples, on samples)
@@ -256,7 +267,7 @@ in-process A/B on {var}: {AB_BLOCKS} blocks per variant, {AB_BLOCK_RUNS} runs ea
         // SAFETY: single-threaded probe; nothing else reads the environment concurrently.
         unsafe {
             if enabled {
-                std::env::set_var(var, "1");
+                std::env::set_var(var, value);
             } else {
                 std::env::remove_var(var);
             }

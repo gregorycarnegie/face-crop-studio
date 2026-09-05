@@ -301,7 +301,7 @@ implementation or workload.
   queue writes against reusable staging/texture resources at representative
   sizes. Include allocation and transfer cost, alignment rules and concurrent
   ownership; a discrete-GPU result need not apply to unified memory.
-- [ ] **51. Tune preprocessing shader geometry and sampling.** Compare bounded
+- [x] **51. Tune preprocessing shader geometry and sampling.** Compare bounded
   workgroups and explicit vector loads or texture sampling under the same
   resize contract. Validate borders and CPU/GPU parity; any different filter or
   coordinate convention is a separately assessed Q candidate.
@@ -459,6 +459,16 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [ ] **86. Detect from a reduced-scale decode, crop from the full one.**
+  Experiment 51 showed the resize is bounded below by reading the source once,
+  so the only remaining lever on it is fewer source pixels. A JPEG decoded at
+  1/2 via DCT scaling is a proper low-pass, not a dropped-pixel approximation,
+  and at 1/2 a 10 MP source is still 4x the 640x640 input. Detection would read
+  2.5 MP instead of 10; crops keep the full-resolution decode, so this is not
+  the rejected reduced-scale crop workflow. Measure both decodes where a face is
+  found, and evaluate recall on small faces with `resize_quality.rs`. Q, and it
+  changes the decode stage rather than preprocessing. Distinct from 73, which
+  screens for whether faces exist at all.
 
 ## Result record for each new experiment
 
@@ -1217,6 +1227,71 @@ fixed small kernel "moved real detections (23px on a landmark)".
 `Interpolation(filter)` has the same problem by construction. Either is a Q
 candidate needing a recall and landmark-error budget and a corpus, not a
 drop-in; neither was measured, and no quality claim is made about them here.
+
+### 51. Cheaper resize algorithms - rejected, and the avenue is closed
+
+After experiment 50, `cpu_resize` is the largest single cost in the application:
+1.39 ms at 10 MP, 2.78 ms at 22 MP, against 0.31 ms for the GPU conversion and
+1.39 ms for all of inference. Nothing else is close. `fast_image_resize` offers
+two cheaper algorithms, and both are quality-changing, so a harness had to come
+first.
+
+**The harness.** `fcs-core/examples/resize_quality.rs` runs the whole detector
+twice over the fixture corpus -- production's resize, then a candidate selected
+by `FCS_RESIZE_ALG` -- and reports faces lost and gained, landmark displacement
+in source pixels, box IoU and score deltas. No ground truth is needed or used:
+production is the reference, and the question is only whether a candidate moves
+detections relative to it. A/A control (an unrecognised algorithm name, which
+falls through to production) over 40 images: **0 lost, 0 gained, 0.00 px
+landmark shift, IoU exactly 1.0000** -- so any difference below is the
+candidate, not the harness.
+
+**Quality**, 120 images, 51 matched faces:
+
+| Candidate | Lost | Gained | Landmark p50 | p95 | max | IoU min |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `SuperSampling(Bilinear, 2)` | 0 | 0 | 0.00 | 0.00 | 1.04 px | 0.9970 |
+| `SuperSampling(Bilinear, 4)` | 0 | 0 | 0.00 | 0.00 | 0.00 px | 1.0000 |
+| `Interpolation(Bilinear)` | 0 | 0 | **1.50** | **7.00** | **35.39 px** | 0.9526 |
+
+`Interpolation` reproduces the failure `preprocess.wgsl` already documents from
+the GPU side -- "moved real detections (23px on a landmark)" -- and this time
+with a distribution behind it. A 35 px landmark shift places a crop visibly
+wrong. Rejected on quality regardless of speed.
+
+`SuperSampling(_, 4)` is identical to production because it never engaged: it
+only splits into two steps when `min(scale) / multiplicity > 1.2`, and at a
+3.7x downscale that is 0.93. Its row is an accidental second A/A control.
+
+**Speed**, in-process A/B on `phase_timings --ab FCS_RESIZE_ALG=<alg>`,
+`cpu_resize` p50 (A/A control on this path: +0.020 ms):
+
+| Candidate | 10 MP | 22 MP |
+| --- | ---: | ---: |
+| `SuperSampling(Bilinear, 2)` | **+0.17 to +0.22 (slower)** | - |
+| `SuperSampling(Bilinear, 3)` | **+1.23 to +1.43 (slower)** | - |
+| `Interpolation(Bilinear)` | -0.69 to -0.89 | -1.95 |
+
+**SuperSampling is slower, which settles the avenue.** Its first step is a
+nearest-neighbour downscale, and that still reads every source pixel; the
+convolution then runs over the intermediate as well. It adds a pass without
+removing the dominant one. `Interpolation` is fast for exactly the reason it is
+inaccurate: a fixed two-tap kernel reads about four source pixels per output
+pixel instead of the ~14 the downscale ratio calls for, so it never touches most
+of the image.
+
+The conclusion generalises past these two candidates: **at a fixed source
+resolution the resize is bounded below by reading the source once**, and
+production's adaptive-kernel convolution already does that and nothing more.
+There is no faster *correct* algorithm to find here. The remaining lever is to
+make the source smaller before it is read, which is a decode-stage change (see
+the new experiment 86), not a resize-stage one.
+
+Nothing adopted. `FCS_RESIZE_ALG` is retained as evaluation scaffolding in
+`fir_alg`, since experiments 54, 74, 59 and 79 are all quality-changing and this
+harness is what makes them decidable; the per-call `var_os` lookup is on the
+order of a microsecond against a 1.3 ms resize and did not separate from noise
+in the A/A control.
 
 ### Previous work
 
