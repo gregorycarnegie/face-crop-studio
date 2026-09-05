@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable, bytes_of};
 use fcs_utils::{
     compute_resize_scales,
     config::{InputDimensions, ResizeQuality},
-    gpu::{GpuContext, PREPROCESS_WGSL},
+    gpu::{GpuContext, PREPROCESS_WGSL, RGB_TO_CHW_WGSL},
     load_image, resize_image, rgb_to_bgr_chw,
     telemetry::timing_guard,
 };
@@ -217,6 +217,7 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
             None => Cow::Owned(image.to_rgb8()),
         }
     } else {
+        let _guard = timing_guard("fcs_core::cpu_resize", log::Level::Trace);
         Cow::Owned(resize_image(
             image,
             input_w,
@@ -224,7 +225,13 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
             config.resize_filter(),
         ))
     };
-    let data = rgb_to_bgr_chw(&resized_rgb);
+    // Split from the resize because the two scale differently: the resize grows with the
+    // source, this one is fixed by the input size, so on a large image they are separate
+    // problems with separate fixes.
+    let data = {
+        let _guard = timing_guard("fcs_core::bgr_chw", log::Level::Trace);
+        rgb_to_bgr_chw(&resized_rgb)
+    };
     let tensor = chw_tensor_from_vec(data, input_w, input_h)?;
 
     let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
@@ -253,6 +260,7 @@ pub struct PreprocessScales {
 pub struct WgpuPreprocessor {
     context: Arc<GpuContext>,
     pipeline: Arc<WgpuPreprocessPipeline>,
+    rgb_to_chw: Arc<RgbToChwPipeline>,
     pool: Arc<Mutex<GpuResourcePool>>,
 }
 
@@ -310,9 +318,8 @@ impl WgpuPreprocessor {
 
         // Checked after the validations above, not before: a caller passing a mismatched
         // tensor is a bug and should hear about it whatever size the image happens to be.
-        // Declining sends the caller down the ordinary path, cheaper for a large source.
         if !self.upload_pays_for_source(image) {
-            return Ok(None);
+            return self.resize_then_convert(image, config, output).map(Some);
         }
 
         let result = gpu_preprocess_to_tensor(
@@ -324,6 +331,56 @@ impl WgpuPreprocessor {
             output,
         )?;
         Ok(result)
+    }
+
+    /// Resize on the CPU, then let the GPU do only the type and layout change.
+    ///
+    /// The middle road between the two paths that existed before. Uploading a large source
+    /// whole is what `upload_pays_for_source` rejects -- 40 MB and a full-resolution
+    /// `to_rgba8` for a 10 MP photo -- but that was never a reason to also do the *cheap*
+    /// half on the CPU. The resize stays on the CPU, where it reads the source once; the
+    /// u8-to-f32, RGB-to-BGR, interleaved-to-planar conversion moves to the GPU, which
+    /// turns a 4.9 MB float upload into a 1.2 MB byte upload and writes straight into the
+    /// tensor.
+    ///
+    /// Pixel values are untouched by the move: the shader does no sampling and no
+    /// arithmetic, so each output float is exactly the integer value of one source byte.
+    fn resize_then_convert(
+        &self,
+        image: &DynamicImage,
+        config: &PreprocessConfig,
+        output: &GpuTensor,
+    ) -> Result<PreprocessScales> {
+        let input_w = config.input_size.width;
+        let input_h = config.input_size.height;
+        let (orig_w, orig_h) = image.dimensions();
+
+        let resized: Cow<'_, RgbImage> = if orig_w == input_w && orig_h == input_h {
+            match image.as_rgb8() {
+                Some(rgb) => Cow::Borrowed(rgb),
+                None => Cow::Owned(image.to_rgb8()),
+            }
+        } else {
+            let _guard = timing_guard("fcs_core::cpu_resize", log::Level::Trace);
+            Cow::Owned(resize_image(
+                image,
+                input_w,
+                input_h,
+                config.resize_filter(),
+            ))
+        };
+
+        {
+            let _guard = timing_guard("fcs_core::gpu_rgb_to_chw", log::Level::Trace);
+            encode_rgb_to_tensor(self.context.as_ref(), &self.rgb_to_chw, &resized, output)?;
+        }
+
+        let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
+        Ok(PreprocessScales {
+            scale_x,
+            scale_y,
+            original_size: (orig_w, orig_h),
+        })
     }
 
     /// Whether putting this source image on the GPU is worth what it costs to get it there.
@@ -352,9 +409,11 @@ impl WgpuPreprocessor {
     /// Create a GPU preprocessor from an existing `GpuContext`.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let pipeline = WgpuPreprocessPipeline::new(context.device())?;
+        let rgb_to_chw = RgbToChwPipeline::new(context.device())?;
         Ok(Self {
             context,
             pipeline: Arc::new(pipeline),
+            rgb_to_chw: Arc::new(rgb_to_chw),
             pool: Arc::new(Mutex::new(GpuResourcePool::default())),
         })
     }
@@ -385,6 +444,156 @@ impl Preprocessor for WgpuPreprocessor {
     fn as_wgpu(&self) -> Option<&WgpuPreprocessor> {
         Some(self)
     }
+}
+
+/// Packed 8-bit RGB straight into the f32 BGR CHW tensor, with no resize.
+///
+/// For sources too large to upload whole: they are resized on the CPU, and only the type
+/// and layout change happens here. Separate from [`WgpuPreprocessPipeline`] because it
+/// binds a buffer rather than a texture and needs no sampler.
+struct RgbToChwPipeline {
+    bind_group_layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+}
+
+impl RgbToChwPipeline {
+    fn new(device: &wgpu::Device) -> Result<Self> {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rgb_to_chw.wgsl shader"),
+            source: wgpu::ShaderSource::Wgsl(RGB_TO_CHW_WGSL.into()),
+        });
+
+        let storage = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rgb_to_chw_bgl"),
+            entries: &[
+                storage(0, true),
+                storage(1, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rgb_to_chw_pipeline_layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("rgb_to_chw.wgsl pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        Ok(Self {
+            bind_group_layout,
+            pipeline,
+        })
+    }
+}
+
+/// Upload `rgb` as bytes and convert it into `output` on the device.
+///
+/// Submitted, not waited on: the same queue orders this before whatever reads `output`.
+fn encode_rgb_to_tensor(
+    context: &GpuContext,
+    pipeline: &RgbToChwPipeline,
+    rgb: &RgbImage,
+    output: &GpuTensor,
+) -> Result<()> {
+    let (width, height) = rgb.dimensions();
+    let device = context.device();
+    let queue = context.queue();
+
+    // The shader reads the bytes as `array<u32>`, so the buffer has to be a whole number of
+    // words even when three bytes per pixel is not. The tail bytes are never read.
+    let bytes = rgb.as_raw();
+    let padded = (bytes.len() as u64).next_multiple_of(4);
+    let source = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rgb_to_chw_source"),
+        size: padded,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    // `write_buffer` requires the *copy length* to respect COPY_BUFFER_ALIGNMENT, not just
+    // the buffer size, and three bytes per pixel is only a multiple of four for some image
+    // sizes -- 640x640 is, 33x17 is not. Send the aligned prefix, then the last one to
+    // three bytes zero-padded into a word. The padding is never read: the shader indexes by
+    // pixel and stops at `plane_size`.
+    let aligned = bytes.len() & !3;
+    queue.write_buffer(&source, 0, &bytes[..aligned]);
+    if aligned < bytes.len() {
+        let mut tail = [0u8; 4];
+        tail[..bytes.len() - aligned].copy_from_slice(&bytes[aligned..]);
+        queue.write_buffer(&source, aligned as u64, &tail);
+    }
+
+    let uniforms = PreprocessUniforms {
+        src_size: [width, height],
+        dst_size: [width, height],
+    };
+    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rgb_to_chw_uniform"),
+        size: UNIFORM_BUFFER_SIZE,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    queue.write_buffer(&uniform, 0, bytes_of(&uniforms));
+
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("rgb_to_chw_bind_group"),
+        layout: &pipeline.bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: source.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniform.as_entire_binding(),
+            },
+        ],
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("rgb_to_chw_encoder"),
+    });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("rgb_to_chw_pass"),
+            timestamp_writes: context.timestamp_writes("rgb_to_chw"),
+        });
+        pass.set_pipeline(&pipeline.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.dispatch_workgroups((width * height).div_ceil(64), 1, 1);
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+    Ok(())
 }
 
 struct WgpuPreprocessPipeline {
@@ -1335,6 +1544,85 @@ mod gpu_parity_tests {
         assert_eq!(
             actual, want,
             "gpu-native tensor differs from the readback tensor"
+        );
+    }
+
+    /// The CPU-resize-then-GPU-convert route must equal the all-CPU route exactly.
+    ///
+    /// `resize_then_convert` moves only the type and layout change to the GPU: the resize
+    /// still happens on the CPU with the same filter, and the shader does no sampling and
+    /// no arithmetic. So this is not a "within tolerance" comparison -- every float has to
+    /// match, and anything else means the shader is reading the wrong bytes.
+    ///
+    /// Called directly rather than through `preprocess_into_tensor`, because on an
+    /// integrated GPU `upload_pays_for_source` accepts any size and the routing would send
+    /// this down the texture path instead.
+    #[test]
+    fn resize_then_convert_matches_cpu_preprocess() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping resize_then_convert parity test: no adapter");
+            return;
+        };
+        // Odd dimensions on both sides: the source row length is not a multiple of four
+        // bytes, so a byte-offset error in the shader cannot hide behind alignment, and the
+        // destination is not a multiple of the 64-wide workgroup.
+        let image = gradient(457, 311);
+        let config = PreprocessConfig {
+            input_size: InputSize::new(70, 46),
+            resize_quality: ResizeQuality::Quality,
+        };
+
+        let expected = cpu_preprocess(&image, &config).expect("cpu preprocess");
+
+        let tensor = GpuTensor::uninitialized(
+            gpu.context().clone(),
+            vec![1, 3, 46, 70],
+            Some("resize_then_convert_input"),
+        )
+        .expect("allocate tensor");
+        let scales = gpu
+            .resize_then_convert(&image, &config, &tensor)
+            .expect("resize then convert");
+
+        assert_eq!(scales.scale_x, expected.scale_x);
+        assert_eq!(scales.scale_y, expected.scale_y);
+        assert_eq!(scales.original_size, expected.original_size);
+
+        let actual = tensor.to_vec().expect("download tensor");
+        let want = expected.tensor.into_vec();
+        assert_eq!(actual.len(), want.len(), "tensor length");
+        assert_eq!(
+            actual, want,
+            "GPU byte conversion differs from the CPU conversion"
+        );
+    }
+
+    /// A source already at the input size must skip the resize and still convert correctly.
+    #[test]
+    fn resize_then_convert_handles_a_source_already_at_input_size() {
+        let Some(gpu) = gpu_preprocessor() else {
+            eprintln!("Skipping resize_then_convert identity test: no adapter");
+            return;
+        };
+        let image = gradient(33, 17);
+        let config = PreprocessConfig {
+            input_size: InputSize::new(33, 17),
+            resize_quality: ResizeQuality::Quality,
+        };
+
+        let expected = cpu_preprocess(&image, &config).expect("cpu preprocess");
+        let tensor = GpuTensor::uninitialized(
+            gpu.context().clone(),
+            vec![1, 3, 17, 33],
+            Some("identity_input"),
+        )
+        .expect("allocate tensor");
+        gpu.resize_then_convert(&image, &config, &tensor)
+            .expect("resize then convert");
+
+        assert_eq!(
+            tensor.to_vec().expect("download"),
+            expected.tensor.into_vec()
         );
     }
 

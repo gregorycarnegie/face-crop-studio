@@ -68,6 +68,7 @@ sits within +/-0.003 ms per phase.
 
 | Change | Effect | Where |
 | --- | --- | --- |
+| Upload resized bytes and convert on the GPU | **-0.6 to -1.0 ms** on large images | `preprocess.rs`, `rgb_to_chw.wgsl` |
 | Threaded source resize above 4 MP | **-0.6 ms** on large images | `fcs-utils/src/image_utils.rs` |
 | One `fir::Resizer` per thread | -0.1 to -0.15 ms on large images | `fcs-utils/src/image_utils.rs` |
 | Stop zeroing the BGR/CHW buffer | -0.1 to -0.2 ms on large images | `fcs-utils/src/image_utils.rs` |

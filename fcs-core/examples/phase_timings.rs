@@ -35,6 +35,9 @@ const RUNS: usize = 30;
 const DISPLAY: &[(&str, usize)] = &[
     ("fcs_core::detect_image", 0),
     ("fcs_core::preprocess_dynamic_image", 1),
+    ("fcs_core::cpu_resize", 2),
+    ("fcs_core::bgr_chw", 2),
+    ("fcs_core::gpu_rgb_to_chw", 2),
     ("fcs_core::detect_on_device", 1),
     ("fcs_core::onnx_inference", 2),
     ("fcs_core::gpu_encode", 3),

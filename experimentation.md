@@ -297,7 +297,7 @@ implementation or workload.
   row layout and upload buffers; remove only measured redundant conversions or
   copies. Compare throughput on large images and verify colour order, stride,
   alpha handling and orientation.
-- [ ] **50. Compare upload strategies and resource reuse.** Measure existing
+- [x] **50. Compare upload strategies and resource reuse.** Measure existing
   queue writes against reusable staging/texture resources at representative
   sizes. Include allocation and transfer cost, alignment rules and concurrent
   ownership; a discrete-GPU result need not apply to unified memory.
@@ -1156,6 +1156,67 @@ final layer write HWC so the CPU would not have to reorder. There is no CPU
 reorder left to save, and this cost no GPU time at all, so 38 would now have to
 justify itself on GPU store coalescing alone. It stays unchecked, but its
 stated motivation is gone.
+
+### 50. Upload bytes, not floats, for CPU-resized sources - kept
+
+Instrumenting the two halves of CPU preprocessing separately (`cpu_resize` and
+`bgr_chw` guards) corrected an earlier estimate made by subtracting one probe's
+number from another's, which is invalid across processes on this machine. The
+real split at 10 MP is **resize 1.71 ms, conversion 0.32 ms**, not 1.60 / 0.73.
+
+That still left two costs the GPU could take: the u8-to-f32, RGB-to-BGR,
+interleaved-to-planar conversion (0.32-0.40 ms, on the CPU), and the 4.9 MB
+float upload that followed it (`gpu_upload`, 0.36-0.47 ms).
+
+Kept: `WgpuPreprocessor::resize_then_convert`, a third route between the two
+that existed. Large sources are still resized on the CPU -- uploading a 10 MP
+image whole is what `upload_pays_for_source` rejects, and that has not
+changed -- but the 640x640 result now goes up as **1.2 MB of bytes** and
+`rgb_to_chw.wgsl` writes the tensor directly. `preprocess_into_tensor` no longer
+declines for large images, so `detect_on_device` handles every size.
+
+In-process A/B on `FCS_CPU_CHW`, `detect_image` p50, GPU route minus CPU route:
+
+| Image | Runs | Delta |
+| --- | --- | ---: |
+| 10.1 MP | 6 | -0.03, -0.59, -0.67, -0.69, -0.89, -0.98 |
+| 22.1 MP | 5 | -0.45, -0.75, -1.02, -1.07, -1.09 |
+
+**Roughly 0.6-1.0 ms off every large-image detection**, the largest single win
+in this round. Phase-level: `gpu_rgb_to_chw` at 0.33-0.47 ms replaces
+`bgr_chw` 0.33-0.40 plus `gpu_upload` 0.36-0.47, and the host no longer
+allocates a 4.9 MB f32 tensor per image.
+
+The shader does no sampling and no arithmetic -- each output float is exactly
+the integer value of one source byte -- so this is bit-exact, not
+within-tolerance. `resize_then_convert_matches_cpu_preprocess` asserts every
+float equals `cpu_preprocess` at 457x311 to 70x46, chosen so the source row
+length is not a multiple of four bytes and the destination is not a multiple of
+the 64-wide workgroup.
+
+**That test earned its keep immediately.** `Queue::write_buffer` requires the
+*copy length* to respect `COPY_BUFFER_ALIGNMENT`, not merely the buffer size,
+and three bytes per pixel is only a multiple of four for some image sizes.
+640x640 is one of them, so production would never have hit it; 33x17 panicked.
+The aligned prefix is now written separately from a zero-padded tail word.
+
+Not pursued: `queue.write_buffer` still copies 1.2 MB into wgpu's staging belt,
+and the source and uniform buffers are created per call. Resizing straight into
+a `mapped_at_creation` buffer would remove both, but needs `resize_image` to
+write into a caller-provided slice.
+
+**Also assessed and not adopted: a cheaper resize algorithm.** `cpu_resize` is
+now the largest cost in the application by a wide margin (1.71 ms at 10 MP,
+3.56 ms at 22 MP - 84% of preprocessing). `fast_image_resize` offers
+`SuperSampling(filter, multiplicity)`, which is far cheaper for large
+downscales. Reading its implementation, the first step is `resample_nearest` -
+it *discards* source pixels before convolving, so a 3.7x downscale would
+average a handful of the ~14 source pixels per output pixel. That is precisely
+the failure `preprocess.wgsl` already documents from the GPU side, where a
+fixed small kernel "moved real detections (23px on a landmark)".
+`Interpolation(filter)` has the same problem by construction. Either is a Q
+candidate needing a recall and landmark-error budget and a corpus, not a
+drop-in; neither was measured, and no quality claim is made about them here.
 
 ### Previous work
 
