@@ -183,7 +183,7 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
-        && let Some(image) = decode_jpeg_turbo(path_ref)
+        && let Some(image) = decode_jpeg_turbo(path_ref, true)
     {
         return Ok(image);
     }
@@ -238,18 +238,23 @@ fn jpeg_turbo_enabled() -> bool {
 /// that handles more formats than this one does and should simply use it. Only the common
 /// case is taken here.
 ///
-/// Orientation still comes from `image`'s EXIF parsing: building the decoder reads headers
-/// and not pixels, so asking it for the orientation costs nothing and avoids a second EXIF
-/// implementation disagreeing with the first about which way a photo goes.
-fn decode_jpeg_turbo(path: &Path) -> Option<DynamicImage> {
+/// With `apply_exif_orientation`, orientation comes from `image`'s EXIF parsing: building
+/// the decoder reads headers and not pixels, so asking it costs nothing and avoids a second
+/// EXIF implementation disagreeing with the first about which way a photo goes. Without it,
+/// the pixels are returned as stored -- matching [`load_image_raw`].
+fn decode_jpeg_turbo(path: &Path, apply_exif_orientation: bool) -> Option<DynamicImage> {
     let bytes = std::fs::read(path).ok()?;
 
-    let mut decoder = ImageReader::new(std::io::Cursor::new(&bytes))
-        .with_guessed_format()
-        .ok()?
-        .into_decoder()
-        .ok()?;
-    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let orientation = if apply_exif_orientation {
+        let mut decoder = ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .ok()?
+            .into_decoder()
+            .ok()?;
+        decoder.orientation().unwrap_or(Orientation::NoTransforms)
+    } else {
+        Orientation::NoTransforms
+    };
 
     let decompress = mozjpeg::Decompress::new_mem(&bytes).ok()?;
     let mut started = decompress.rgb().ok()?;
@@ -269,6 +274,19 @@ fn decode_jpeg_turbo(path: &Path) -> Option<DynamicImage> {
 
 pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
+
+    // Same opt-in as `load_image`, and it has to be here too: the GUI picks between the
+    // two loaders on the auto-orient setting, so hooking only one would decode a detection
+    // with one decoder and its export with the other inside a single run.
+    if jpeg_turbo_enabled()
+        && path_ref
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
+        && let Some(image) = decode_jpeg_turbo(path_ref, false)
+    {
+        return Ok(image);
+    }
 
     #[cfg(feature = "raw")]
     if path_ref
