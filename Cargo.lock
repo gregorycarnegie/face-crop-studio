@@ -2249,6 +2249,7 @@ dependencies = [
  "imageproc",
  "log",
  "mimalloc",
+ "mozjpeg",
  "proptest",
  "prost",
  "rayon",

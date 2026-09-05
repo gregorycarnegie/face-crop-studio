@@ -64,6 +64,19 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### Decode, not detection, sets what a folder costs
+
+Warm, from memory, 10 MP fixture: **JPEG decode 24.0 ms against 3.1 ms of
+`detect_image`**. Every remaining item in the detection path is small against
+that, so experiments 67 and 68 outrank them for folder work. Interactive
+single-image latency is the case where the detection numbers below still
+dominate.
+
+A comparison against libjpeg-turbo is currently **blocked, not resolved**:
+`mozjpeg-sys` falls back to `jsimd_none.c` when NASM is absent, so the local
+build measures scalar C. See experiment 67 for the reproduction steps and for a
+related build-configuration issue affecting released binaries.
+
 ### The resize is at its floor
 
 After the changes above, the CPU source resize is the largest single cost in

@@ -1293,6 +1293,47 @@ harness is what makes them decidable; the per-call `var_os` lookup is on the
 order of a microsecond against a 1.3 ms resize and did not separate from noise
 in the A/A control.
 
+### 67. Alternative JPEG decoders - blocked, and a build-configuration finding
+
+Detection is now about 3.1 ms for a 10 MP photo. Decoding that photo is
+**24.0 ms** (`stage_breakdown`, warm, from memory), so on a folder of images the
+decoder, not the detector, sets what the job costs. That reorders the backlog:
+everything left in detection is small against this.
+
+`mozjpeg` (libjpeg-turbo) is already linked into every binary through `nokhwa`,
+which uses it for webcam MJPEG frames, so trying it as a still decoder costs no
+new native dependency. `fcs-core/examples/decode_bench.rs` compares it with the
+shipped `image`/zune-jpeg path over the largest fixtures, decoding from memory
+so cold I/O is excluded.
+
+It measured **0.51-0.59x -- roughly half the speed** of zune-jpeg across 15
+images from 8.3 to 22.1 MP.
+
+**That result is void.** `mozjpeg-sys` emits
+`NASM not installed. Mozjpeg's SIMD won't be enabled` and compiles
+`jsimd_none.c`, so what was measured is libjpeg-turbo's scalar C fallback, not
+libjpeg-turbo. No conclusion about the decoder can be drawn from it, in either
+direction. Status: **blocked on a build tool**, not rejected.
+
+To finish: install NASM (`choco install nasm`, then
+`C:\Program Files\NASM` on `PATH`), rebuild so `mozjpeg-sys` picks up SIMD --
+confirm via `target/release/build/mozjpeg-sys-*/output` -- and re-run
+`cargo run --release -p fcs-core --example decode_bench`.
+
+**Separate finding, worth acting on regardless of this experiment.**
+`CONTRIBUTING.md` lists NASM as a required build tool, but the build only warns
+when it is missing and silently falls back to scalar C. `.github/workflows/release.yml`
+installs `nsis` and `pkgconfiglite` and never installs NASM, so unless the
+hosted runner image happens to ship it, **released binaries decode webcam MJPEG
+frames without SIMD**. That is a shipped-performance question independent of
+which still decoder is chosen, and it is invisible in CI because the build
+succeeds either way. Verify against a release build's log before assuming; the
+local build is confirmed to be missing it.
+
+Recorded regardless of the decoder outcome: **decode is 24 ms against 3.1 ms of
+detection**, so experiments 67 and 68 outrank anything remaining in the
+detection path for folder work.
+
 ### Previous work
 
 The compute-pass merge is already shipped in the baseline: roughly 0.40 ms saved in paired
