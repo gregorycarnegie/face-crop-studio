@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **GPU convolutions now specialize pointwise and depthwise layers.** Eligible
+  1x1 convolutions bypass general spatial loops and compute four output channels
+  per thread; depthwise 3x3 convolutions reuse six input values per row for four
+  adjacent outputs. The general fallback and fused activations remain available.
+  Paired full-graph profiling on RTX 4090 / D3D12 reduced GPU compute from
+  **about 0.910 ms to 0.536 ms (41%)** across three separately measured changes.
+  Final whole-detection timings overlapped around 3.5 ms, so this is not an
+  established detection-latency or batch-throughputput improvement.
+
+  [experimentation.md](experimentation.md) records every attempt and decision.
+  FP16 storage was slower; subgroup reduction helped small layers but heavily
+  regressed large ones. Both remain standalone probes, with no new production
+  feature requirements. Convolution timestamps now distinguish pointwise,
+  depthwise and general families, and `conv2d_experiment` compares actual shader
+  variants with alternating GPU timestamp pairs and raw-output checks. The old
+  standard/vec4 benchmark labels, which called the same pipeline, were replaced
+  by one explicitly named operation-with-readback benchmark. Validation: 823
+  strict workspace tests and two doctests passed, plus Clippy and formatting.
+
 - **GPU inference now records its 61 dispatches in one compute pass when
   profiling is off.** The experiment was kept: on an RTX 4090 / D3D12, three
   alternating, same-process comparisons measured `encoder.finish()` at

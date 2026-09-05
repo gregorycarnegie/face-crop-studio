@@ -566,6 +566,71 @@ fn conv2d_matches_cpu_groups() {
     );
 }
 
+#[test]
+fn specialized_convolutions_match_cpu_for_tails_activations_and_fallbacks() {
+    let Some(ops) = gpu_ops() else {
+        eprintln!("Skipping specialized convolution test (no adapter)");
+        return;
+    };
+    for (width, stride, pad, groups, kernel) in [
+        (1, 1, 0, 1, 1),
+        (3, 1, 0, 1, 1),
+        (4, 1, 0, 1, 1),
+        (5, 1, 0, 1, 1),
+        (37, 1, 0, 1, 1),
+        (17, 2, 0, 1, 1),
+        (17, 1, 1, 1, 1),
+        (17, 1, 0, 2, 1),
+        (1, 1, 1, 6, 3),
+        (3, 1, 1, 6, 3),
+        (37, 1, 1, 6, 3),
+        (17, 2, 1, 6, 3),
+        (17, 1, 0, 6, 3),
+    ] {
+        for activation in [
+            None,
+            Some(ActivationKind::Relu),
+            Some(ActivationKind::Sigmoid),
+        ] {
+            let output_channels = if groups == 6 { 6 } else { 10 };
+            let cfg = Conv2dConfig::new(
+                1,
+                Conv2dChannels::new(6, output_channels),
+                SpatialDims::new(width, 5),
+                SpatialDims::new(kernel, kernel),
+                SpatialDims::new(stride, stride),
+                SpatialDims::new(pad, pad),
+                Conv2dOptions::new(groups, activation),
+            )
+            .expect("convolution config");
+            let data = |n| {
+                (0..n)
+                    .map(|i| ((i * 17 % 101) as f32 - 50.0) / 100.0)
+                    .collect::<Vec<_>>()
+            };
+            let input = data(cfg.input_shape_dims().iter().product());
+            let weights = data(cfg.weight_shape_dims().iter().product());
+            let bias = data(output_channels as usize);
+            let expected = conv2d_cpu(&input, &weights, &bias, &cfg);
+            let actual = ops
+                .conv2d(&input, &weights, &bias, &cfg)
+                .expect("convolution dispatch");
+            assert_eq!(actual.len(), expected.len());
+            for (actual, raw) in actual.iter().zip(expected) {
+                let expected = match activation {
+                    None => raw,
+                    Some(ActivationKind::Relu) => raw.max(0.0),
+                    Some(ActivationKind::Sigmoid) => 1.0 / (1.0 + (-raw).exp()),
+                };
+                assert!(
+                    (actual - expected).abs() < 1e-4,
+                    "width={width} stride={stride} pad={pad} groups={groups} activation={activation:?}: {actual} vs {expected}"
+                );
+            }
+        }
+    }
+}
+
 fn conv2d_cpu(input: &[f32], weights: &[f32], bias: &[f32], cfg: &Conv2dConfig) -> Vec<f32> {
     let mut output = vec![0.0; cfg.output_element_count()];
     let in_c = cfg.input_channels as usize;
@@ -1336,7 +1401,14 @@ fn profiled_and_merged_inference_match() {
         let timings = context.take_pass_timings().expect("read timestamps");
         if context.profiler().is_some() {
             assert_eq!(timings.len(), 61, "profiling must retain every operation");
-            for (label, count) in [("conv2d", 53), ("max_pool", 4), ("add", 2), ("resize2x", 2)] {
+            for (label, count) in [
+                ("conv2d/pointwise", 26),
+                ("conv2d/depthwise", 26),
+                ("conv2d/general", 1),
+                ("max_pool", 4),
+                ("add", 2),
+                ("resize2x", 2),
+            ] {
                 assert_eq!(timings.iter().filter(|t| t.label == label).count(), count);
             }
         } else {

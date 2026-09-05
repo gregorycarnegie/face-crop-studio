@@ -14,7 +14,7 @@ fn setup_gpu() -> Option<Arc<GpuContext>> {
     }
 }
 
-fn benchmark_conv2d_standard_vs_vec4(c: &mut Criterion) {
+fn benchmark_conv2d_with_readback(c: &mut Criterion) {
     let Some(ctx) = setup_gpu() else {
         eprintln!("Skipping GPU benchmark (no adapter available)");
         return;
@@ -67,8 +67,8 @@ fn benchmark_conv2d_standard_vs_vec4(c: &mut Criterion) {
 
         let mut group = c.benchmark_group(name);
 
-        // Benchmark standard shader
-        group.bench_function("standard", |b| {
+        // End-to-end operation latency. For shader A/B timings use the conv2d_experiment example.
+        group.bench_function("gpu_with_readback", |b| {
             b.iter(|| {
                 let output = ops
                     .conv2d_tensor(
@@ -83,25 +83,9 @@ fn benchmark_conv2d_standard_vs_vec4(c: &mut Criterion) {
             });
         });
 
-        // Benchmark vectorized shader
-        group.bench_function("vec4", |b| {
-            b.iter(|| {
-                let output = ops
-                    .conv2d_vec4_tensor(
-                        black_box(&input_gpu),
-                        black_box(&weight_gpu),
-                        black_box(&bias_gpu),
-                        black_box(&config),
-                    )
-                    .unwrap();
-                // Force GPU completion by downloading
-                black_box(output.to_vec().unwrap());
-            });
-        });
-
         group.finish();
     }
 }
 
-criterion_group!(benches, benchmark_conv2d_standard_vs_vec4);
+criterion_group!(benches, benchmark_conv2d_with_readback);
 criterion_main!(benches);

@@ -34,9 +34,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Each thread computes 4 output pixels horizontally
     let ox_start = global_id.x * 4u;
     let oy = global_id.y;
-    let oc = global_id.z;
+    let pointwise_mode = params.kernel_width == 1u && params.kernel_height == 1u &&
+       params.stride_x == 1u && params.stride_y == 1u &&
+       params.pad_x == 0u && params.pad_y == 0u && params.groups == 1u;
+    let oc = global_id.z * select(1u, 4u, pointwise_mode);
 
     if ox_start >= params.output_width || oy >= params.output_height || oc >= params.output_channels {
+        return;
+    }
+
+    if pointwise_mode {
+        pointwise(ox_start, oy, oc);
+        return;
+    }
+
+    if params.kernel_width == 3u && params.kernel_height == 3u &&
+       params.stride_x == 1u && params.stride_y == 1u &&
+       params.pad_x == 1u && params.pad_y == 1u &&
+       params.groups == params.input_channels && params.output_channels == params.input_channels {
+        depthwise(ox_start, oy, oc);
         return;
     }
 
@@ -128,6 +144,37 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         local_ic = local_ic + 1u;
     }
 
+    write_output(ox_start, oy, oc, acc);
+}
+
+// Four output channels share each loaded input vector. Dispatch z covers ceil(channels / 4).
+fn pointwise(ox_start: u32, oy: u32, oc: u32) {
+    let plane = params.input_width * params.input_height;
+    let pixel = oy * params.input_width + ox_start;
+    var acc: array<vec4<f32>, 4>;
+    for (var j = 0u; j < 4u; j++) {
+        if oc + j < params.output_channels { acc[j] = vec4<f32>(bias[oc + j]); }
+    }
+    for (var ic = 0u; ic < params.input_channels; ic++) {
+        let base = ic * plane + pixel;
+        var values = vec4<f32>(0.0);
+        values.x = input_tensor[base];
+        if ox_start + 1u < params.input_width { values.y = input_tensor[base + 1u]; }
+        if ox_start + 2u < params.input_width { values.z = input_tensor[base + 2u]; }
+        if ox_start + 3u < params.input_width { values.w = input_tensor[base + 3u]; }
+        for (var j = 0u; j < 4u; j++) {
+            if oc + j < params.output_channels {
+                acc[j] = fma(values, vec4<f32>(weights[(oc + j) * params.input_channels + ic]), acc[j]);
+            }
+        }
+    }
+    for (var j = 0u; j < 4u; j++) {
+        if oc + j < params.output_channels { write_output(ox_start, oy, oc + j, acc[j]); }
+    }
+}
+
+fn write_output(ox_start: u32, oy: u32, oc: u32, value: vec4<f32>) {
+    var acc = value;
     // Apply fused activation
     if params.activation_mode == ACT_RELU {
         acc = max(acc, vec4<f32>(0.0));
@@ -156,4 +203,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if ox_start + 3u < params.output_width {
         output_tensor[out_row_base + ox_start + 3u] = acc.w;
     }
+}
+
+fn depthwise(ox_start: u32, oy: u32, oc: u32) {
+    var acc = vec4<f32>(bias[oc]);
+    for (var ky = 0u; ky < 3u; ky++) {
+        let iy = i32(oy) + i32(ky) - 1;
+        if iy < 0 || iy >= i32(params.input_height) { continue; }
+        let base = (oc * params.input_height + u32(iy)) * params.input_width;
+        var row: array<f32, 6>;
+        for (var i = 0u; i < 6u; i++) {
+            let ix = i32(ox_start) + i32(i) - 1;
+            row[i] = 0.0;
+            if ix >= 0 && ix < i32(params.input_width) { row[i] = input_tensor[base + u32(ix)]; }
+        }
+        for (var kx = 0u; kx < 3u; kx++) {
+            let values = vec4<f32>(row[kx], row[kx + 1u], row[kx + 2u], row[kx + 3u]);
+            acc = fma(values, vec4<f32>(weights[oc * 9u + ky * 3u + kx]), acc);
+        }
+    }
+    write_output(ox_start, oy, oc, acc);
 }

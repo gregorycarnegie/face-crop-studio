@@ -2,7 +2,33 @@
 
 ## Current Performance Profile
 
-### Detection Pipeline (Release Build, 640x640, RTX 4090 / Ryzen 9 7950X)
+### Latest GPU results (2026-09-05)
+
+The completed shader experiments reduced full-graph GPU compute from **0.910 ms
+to about 0.536 ms (41% less time)** on RTX 4090 / D3D12 at 640x640. Three f32
+changes were retained: pointwise specialization, depthwise input reuse, and a
+four-output-channel pointwise tile. FP16 storage and subgroup reduction were
+measured but not adopted. These changes are in the working tree at the time of
+this report; the experiment baseline is commit `c332075`.
+
+The final whole-detection A/B/B/A estimates were **3.561 / 3.504 / 3.495 /
+3.463 ms**, with overlapping intervals. They establish **no reliable
+whole-detection speedup** from this shader round. This Criterion case is
+`inference_pipeline/detect_image/gpu`: CPU speed resize followed by GPU inference,
+excluding image decode. It is distinct from `gpu_on_device` and `gpu_quality`.
+No new batch-throughputput measurement was made.
+
+The [GPU experiment results](#gpu-experiment-results) below consolidate
+the findings; [experimentation.md](../experimentation.md) retains the sequential
+checklist, individual runs and reproduction commands. Finishing that checklist
+does **not** mean the performance search is exhausted.
+
+### Historical stage breakdown (before the latest GPU optimizations)
+
+Release build, 640x640, RTX 4090 / Ryzen 9 7950X. The following measurements
+belong to an earlier revision and are retained for CPU/decode context. The GPU
+8.2 ms figure is not the current baseline; do not combine this table with the
+latest shader timings to calculate stage shares or gains.
 
 Measured per stage on `fixtures/images/006.jpg` (2384x4240 -> 640x640) with
 `cargo run --release -p fcs-core --example stage_breakdown`, mimalloc enabled as
@@ -25,14 +51,24 @@ quoting the single-image ratio at anyone.
 
 ### Bottleneck Summary
 
-- **Inference** (76% of end-to-end on tract, 95% of `detect_image`): the one
-  stage worth optimising. See the ONNX Runtime backend below.
-- **JPEG decode** (~21 ms, and the largest stage once inference drops): looks
-  like the obvious next target and is not one. See "What Did Not Work".
-- **Preprocessing** (3%): not a bottleneck, despite earlier revisions of this
-  document claiming 33%. That figure was wrong and sent at least one
-  optimisation hunt at a stage that costs 2.9 ms.
-- **Postprocessing** (<1%): spatial grid NMS, optimal.
+- **Current GPU inference:** convolution still dominates GPU compute, but shader
+  time is only one part of detection. Measure CPU recording, submission, buffer
+  allocation, synchronization, readback and output conversion separately before
+  selecting the next latency change.
+- **Remaining shader budget:** about 0.536 ms in this measured profiled graph.
+  Halving all shader time would remove about 0.268 ms of GPU work; eliminating
+  it entirely would remove about 0.536 ms. These are fixed-workload arithmetic
+  ceilings, not promised wall-time savings. Profiling uses separate passes;
+  normal inference uses one merged pass, so validate gains in the normal path.
+- **Full-resolution image processing:** JPEG decode was about 21 ms in the
+  historical fixture measurement and remains a separate workload from
+  `detect_image`. Reduced-resolution decode does not preserve crop quality.
+- **Batch and interactive work:** CPU parallelism, GPU queue occupancy and
+  latency overlap differ. Remeasure the actual export or webcam/preview path;
+  a single-image shader result cannot select the fastest batch backend.
+- **Preprocessing and postprocessing:** the old tract-based percentages do not
+  describe today's GPU path. Neither stage has been proved optimal; prioritize
+  them only after measuring their current absolute cost.
 
 ---
 
@@ -74,6 +110,64 @@ quoting the single-image ratio at anyone.
 | GPU batch crop extraction         | ✅ Shipped | Parallel crop regions as GPU draw calls     |
 | GPU buffer/texture pool           | ✅ Shipped | Avoids repeated allocation overhead         |
 
+### GPU experiment results
+
+Baseline `c332075` already contains convolution uniform caching and the merged
+compute pass. The latter previously saved about 0.40 ms in paired
+encode/finish/submit/wait measurements while retaining all 61 per-op profiling
+records. That CPU/driver saving is separate from the shader results below.
+See [CHANGELOG.md](../CHANGELOG.md) for those earlier measurements.
+
+| Experiment | Paired full-graph GPU time, A/B/B/A | Decision |
+| --- | --- | --- |
+| 0. Timestamp families and genuine shader A/B probe | Baseline about 0.910 ms | Keep measurement tools; retire duplicate standard/vec4 benchmark labels |
+| 1. Specialized 1x1 convolution | 0.909 / 0.673 / 0.672 / 0.910 ms | Keep; about 0.237 ms saved |
+| 2. Depthwise 3x3 overlapping-input reuse | 0.673 / 0.648 / 0.646 / 0.674 ms | Keep; about 0.027 ms saved beyond step 1 |
+| 3. Four-channel pointwise register tile | 0.647 / 0.535 / 0.538 / 0.651 ms | Keep; about 0.113 ms saved beyond step 2 |
+| 4a. FP16 storage, f32 accumulation | Microbenchmarks only; eight cases 3-15% slower, two unchanged | Reject this candidate; no full-graph trial warranted |
+| 4b. Subgroup channel reduction | Microbenchmarks only; large cases 2.9-9.9x as slow, some small cases faster | Reject as a general replacement; selective use remains untested |
+
+Each A/B/B/A row compares the previous retained version with that experiment's
+candidate. The savings are rounded from separate comparisons; they are not
+independent percentages to add. The final comparison with the original baseline
+is about 41% less GPU time, not 41% less detection time.
+
+Pointwise specialization requires a 1x1 kernel, unit stride, zero padding and
+one group. The four-channel tile shares each loaded four-pixel input vector
+across four accumulators; dispatch-z rounds up and guards channel tails.
+Depthwise specialization requires a 3x3 kernel, unit stride, pad 1 and channel
+multiplier 1. It loads six values per row for four adjacent outputs, expressing
+18 distinct input loads rather than 36. Other configurations retain the general
+shader. Fused activations and the shared graph/profiling path are preserved.
+
+A representative final profiled graph breaks down as follows (20 runs; values
+rounded, so sums can differ slightly):
+
+| Family | Dispatches | Before shaders | After shaders | Current GPU share |
+| --- | ---: | ---: | ---: | ---: |
+| Pointwise | 26 | 673.8 us | 320.5 us | 60.0% |
+| Depthwise | 26 | 145.4 us | 123.9 us | 23.2% |
+| General/stem | 1 | 42.0 us | 41.0 us | 7.7% |
+| Pool/resize/add | 8 | 49.1 us | 49.2 us | 9.2% |
+| **Total** | **61** | **about 910 us** | **about 535 us** | **100%** |
+
+The reusable shader probe checks finite raw outputs, warms up for 20 pairs,
+then measures 50 pairs with alternating order in one process. Compilation,
+upload, validation readback and timestamp resolution are outside its GPU timer.
+Identical-file controls established roughly 1.024 us timestamp granularity;
+one-tick changes on tiny layers are weak evidence. Full-graph runs are separate
+binary A/B/B/A comparisons. The final Criterion latency check used 3 seconds of
+warm-up and 30 samples over at least 6 seconds per run; historical cached
+Criterion change percentages were not used for the conclusion.
+
+Final validation: **823 strict workspace tests plus two doctests passed**, with
+eight workspace tests and five doctests skipped/ignored. Coverage included
+ONNX raw-output and detection parity, profiled/merged equality, concurrent
+inference, spatial/channel tails, exposed activations and stride/pad/group
+fallbacks. Workspace and core all-target Clippy, formatting and diff checks
+passed. This is validation on the tested hardware, not cross-adapter performance
+validation.
+
 ---
 
 ## Benchmark Infrastructure
@@ -88,7 +182,19 @@ cargo run -p fcs-cli -- --input fixtures/images --benchmark-preprocess
 # Full pipeline example
 cargo run --release --example profile_pipeline -p fcs-core
 
-# GPU/CPU parity validation
+# Full-graph GPU timestamp families (profiling path)
+cargo run --release -p fcs-core --example gpu_pass_breakdown
+
+# Actual shader A/B, current four-channel pointwise grid on both sides
+cargo run --release -p fcs-core --example conv2d_experiment -- fcs-core/src/gpu/conv2d.wgsl fcs-core/src/gpu/conv2d.wgsl 32 8 4 32 8 4
+
+# Paired separate/merged pass encoding costs
+cargo run --release -p fcs-core --example gpu_encode_comparison
+
+# Whole detection; keep gpu, gpu_on_device and gpu_quality results separate
+cargo bench -p fcs-core --bench inference_pipeline
+
+# GPU/CPU parity validation (set FCS_STRICT_TESTS=1 to reject missing prerequisites)
 cargo test -p fcs-core gpu_inference_matches_cpu_baseline -- --nocapture
 ```
 
@@ -97,6 +203,36 @@ Criterion results are written to `target/criterion/`. Do not commit benchmark ou
 ---
 
 ## What Did Not Work
+
+### FP16 storage and a general subgroup replacement
+
+The default D3D12 context selected FXC and exposed neither optional shader
+feature. Making Windows SDK DXC 1.9.2602.17 (SDK 10.0.28000.0) available on the
+probe's process-local PATH enabled both SHADER_F16 and SUBGROUP on the same
+RTX 4090. Lack of compiler support was not lack of physical GPU support.
+
+The FP16 candidate packed input, weights and bias to f16, accumulated in f32,
+and returned f32. Its maximum synthetic raw error was 0.000824, within the
+probe's absolute 1e-3 screening budget. It was slower even with packing excluded
+from timing, so it did not advance to full-graph or detection parity testing.
+This rejects that storage/conversion strategy, not every FP16 arithmetic, packed
+layout or mixed-precision implementation.
+
+The subgroup candidate reduced input channels across one 32-lane subgroup for
+four output pixels. Raw f32 comparisons passed, but 320x320 16 -> 16 cost
+201.728 us versus 20.480 us for the f32 tile under DXC. Small layers did improve:
+20x20 64 -> 64 fell from 29.696 to 8.192 us. It was not suitable across the graph.
+
+DXC also slowed the retained f32 tile: 160x160 64 -> 64 measured 67.584 us
+versus 27.648 us under the existing FXC setup. A whole-context compiler switch
+would sacrifice large-layer performance to enable the small-layer subgroup
+candidate. Selective kernels need a compiler/deployment solution and a full-graph
+measurement before adoption. Other subgroup algorithms have not been exhausted.
+
+The standalone [FP16](../fcs-core/examples/shaders/pointwise_f16.wgsl) and
+[subgroup](../fcs-core/examples/shaders/pointwise_subgroup.wgsl) probes and exact
+commands remain in [experimentation.md](../experimentation.md). Neither adds a
+production feature requirement.
 
 ### Nested loop parallelisation in `decode_yunet_outputs`
 
@@ -119,11 +255,12 @@ Decoding at reduced scale would degrade every crop the app produces. Decoding
 twice (scaled for detection, full for cropping) is strictly more work for any
 image that actually contains a face, which is most of them.
 
-Two further measurements close the stage off as a target entirely:
+Two further measurements explain why reduced-scale or within-image parallel
+decode was not pursued for these fixtures:
 
 - **The decoder is already fast.** zune-jpeg, via `image`, runs at 390-570
   Mpx/s on this hardware. The ~21 ms is simply what 10.1 megapixels costs; it is
-  not overhead waiting to be removed.
+  not evidence of avoidable overhead. No faster decoder has been established here.
 - **It cannot be parallelised for these files.** Decode is single-threaded —
   identical timings under `RAYON_NUM_THREADS=1` and 32 — and splitting one image
   across threads requires restart markers to give independent entry points into
@@ -131,8 +268,9 @@ Two further measurements close the stage off as a target entirely:
   RST markers): baseline sequential JPEG is one continuous Huffman run, so no
   MCU can be decoded without decoding every MCU before it.
 
-Batch throughput is unaffected either way, since whole images already decode in
-parallel across rayon workers. This is a single-image latency figure only.
+Whole images already decode in parallel across rayon workers. Any new decoder
+or scheduling strategy needs a separate batch measurement; the figures above
+are single-image latency measurements.
 
 ### Hand-written SIMD via the `wide` crate
 
@@ -157,17 +295,49 @@ and a saturating `(x + 0.5) as u8` cast instead, marked with `ponytail:` comment
 
 ## Future Opportunities
 
-| Opportunity                   | Est. Gain       | Notes                                                     |
-|-------------------------------|-----------------|-----------------------------------------------------------|
-| INT8 model quantisation       | Unmeasured      | Independent of `ort` — `tract` already parses QDQ graphs; see below  |
-| `ort` DirectML/CoreML EPs     | None expected   | Measured: ties the WGSL path already shipped; see below    |
-| Wider CPU SIMD (`wide` crate) | None expected   | Tried and reverted; see "What Did Not Work"                |
-| macOS/Linux GPU testing       | Validation only | Metal and Vulkan paths exist; untested on hardware        |
-| CLI GPU map/poll latency      | ~20ms           | Staging buffer strategy; deferred                         |
+**No, the avenues are not exhausted.** This round tested a small set of kernels
+on one GPU/backend/compiler configuration. It did not sweep workgroup sizes,
+implement cooperative workgroup tiling, fuse adjacent layers, or redesign
+readback and frame scheduling. The following is a ranked investigation list,
+not a promise that each idea will win.
 
-Figures in the "Est. Gain" column are measured only where a row says so. "Unmeasured" means no
-benchmark exists in this repo for that idea — treat those rows as directions to investigate, not
-as predictions.
+The full [experiment backlog](../experimentation.md#remaining-experiments) assigns
+stable IDs, prerequisites and acceptance checks to 81 further experiments. Start
+with phase measurements (5), then the preliminary readback wait (11); the table
+below is the shorter priority summary.
+
+| Priority | Next experiment | Evidence and acceptance condition |
+| --- | --- | --- |
+| 1 | Measure and simplify head readback | `batch_download` still creates 12 staging buffers, submits a second command buffer, waits, starts 12 maps, then waits again. Measure those components; try mapping before the first wait, then pooled/packed staging separately. Require raw-head equality and concurrent-inference safety. |
+| 2 | Sweep small f32 workgroup and tile choices | Only 1/2/4 output-channel register tiles were compared. Sweep a bounded set of workgroup shapes and pixels/channels per thread on the expensive pointwise shapes. Keep a shape-specific variant only if full-graph gain pays for its complexity. |
+| 3 | Reuse inputs/weights across a workgroup or fuse adjacent layers | Cooperative pointwise tiles and depthwise-to-pointwise fusion remain untested. They may save reads and dispatches, but add barriers, storage/register pressure or redundant work. Benchmark one hotspot first; preserve activation boundaries and parity. |
+| 4 | Measure batch and webcam scheduling | Test bounded frames/images in flight and CPU/GPU work overlap against the current path. Preserve per-inference buffer ownership through completion. Report throughput and frame latency separately; more concurrent submissions alone are not a gain. |
+| 5 | Resolve compiler effects, then revisit selective subgroups/precision | Small-layer subgroup gains exist, but DXC regressed the f32 baseline. Test compiler/code-generation and backend variants before introducing optional production kernels. FP16 arithmetic and packed layouts are different, untried candidates with accuracy/deployment costs. |
+| 6 | Reprofile preprocessing, output conversion and command recording | Preprocess-to-inference GPU residency and merged passes already exist. Time the remaining upload, CHW/HWC conversion, sigmoid/decode, uniform and bind-group work. Avoid rebuilding those already-completed optimizations. |
+| 7 | Broaden hardware and model experiments | Measure AMD/Intel, Metal/Vulkan and representative image sets. Smaller detector input, model changes or INT8 require explicit recall/landmark/crop-quality evaluation as well as speed measurements. The current GPU implementation is f32. |
+
+For priority 1, inspect [runtime.rs](../fcs-core/src/gpu/runtime.rs), especially
+`run_inference`, `build_decode_tensors` and `batch_download`. The proposed
+single-wait experiment follows wgpu's documented asynchronous mapping behavior:
+a map can wait for preceding GPU work, with callbacks driven by polling. That
+supports a test, not a claim of measured savings. Mapped buffers cannot be used
+by the GPU until unmapped. [wgpu buffer mapping documentation](https://docs.rs/wgpu/latest/wgpu/struct.Buffer.html#mapping-buffers).
+
+For cooperative tiling, [ONNX Runtime's packed WebGPU matmul](https://github.com/microsoft/onnxruntime/blob/main/js/web/lib/wasm/jsep/webgpu/ops/3rd-party/matmul_packed_webgpu.ts)
+provides a concrete primary-source implementation using workgroup tiles and
+barriers. Applying it to our pointwise layers is an unmeasured hypothesis; the
+current four-channel register tile does not exhaust that design space.
+
+Bind-group caching alone previously accounted for only about 0.107 ms of encode
+cost, and fixed intermediate buffers would be a larger architectural change.
+Remeasure before pursuing it. The old unverified "~20 ms CLI map/poll" estimate
+has been retired; it is not compatible with using today's roughly 3.5 ms
+single-detection result as the reference workload.
+
+DirectML was measured without a win in the historical comparison below; CoreML
+was not established by that comparison. Hand-written `wide` SIMD was tried and
+reverted. These are scoped negative results, not proofs that every runtime,
+compiler or architecture will behave the same way.
 
 ### The ONNX Runtime CPU backend (shipped in fcs-core)
 
@@ -178,9 +348,10 @@ tract. Swapping the runtime reaches it: ONNX Runtime vectorises those
 convolutions and runs the same graph in 6.7 ms against 65.9 ms.
 
 Scope deliberately excludes DirectML. Measured end to end it lands at ~9.8 ms
-against the 8.2 ms the WGSL graph already achieves with no dependency at all, so
-the GPU execution providers buy nothing here. Only the CPU EP is used, which
-also means one library (20.1 MB) rather than the ~38 MB a DirectML build needs,
+against the then-current 8.2 ms WGSL graph without an additional runtime DLL,
+so that comparison did not justify adopting DirectML. It did not measure CoreML
+or establish a permanent ceiling for other execution providers. Only the CPU EP
+is used, which also means one library (20.1 MB) rather than the ~38 MB a DirectML build needs,
 and no per-platform execution-provider matrix.
 
 Loaded dynamically rather than linked: the prebuilt static library is built
@@ -213,8 +384,9 @@ from rayon running whole images at once.
 
 These are often conflated. They are separate decisions:
 
-- **`ort`** replaces the inference runtime and adds a ~160MB shared-library dependency. That is
-  the subject of ONNX_RUNTIME_OPTIONS.md.
+- **Runtime selection** changes the inference implementation. This workspace now
+  uses its own `fcs-ort` binding and a roughly 20 MB dynamically loaded ONNX
+  Runtime library; the external `ort` crate is no longer the integration.
 - **INT8** is a change to the *model file*, and needs no runtime change at all. `tract-onnx`
   already registers `QuantizeLinear`, `DequantizeLinear`, `QLinearConv` and `QLinearMatMul`, and
   `tract-linalg` ships x86_64 i8 GEMM kernels (`avx2_mmm_i32_8x8`, `avxvnni_mmm_i32_8x8`,
@@ -230,7 +402,7 @@ and they are listed in the order that kills the idea cheapest:
 2. **Are the i8 kernels even on the critical path?** YuNet is a depthwise-separable backbone
    (53 convs, all carrying a `group` attribute). Depthwise convolution does not lower to GEMM
    cleanly, so the i8 GEMM kernels above may contribute little.
-3. **What does it cost in recall?** Post-training quantisation on a small detector loses
+3. **What does it cost in recall?** Post-training quantisation on a small detector can lose
    detections, and the quality thresholds are tuned against f32 behaviour.
 
 Two further costs are easy to overlook. INT8 gains depend strongly on the CPU: with AVX512-VNNI

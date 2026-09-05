@@ -18,6 +18,8 @@ use std::{
 const CONV2D_WGSL: &str = include_str!("conv2d.wgsl");
 const CONV_WORKGROUP_X: u32 = 8;
 const CONV_WORKGROUP_Y: u32 = 8;
+// Must match the pointwise channel tile in conv2d.wgsl.
+const POINTWISE_CHANNEL_TILE: u32 = 4;
 
 /// The tensor operands of one convolution.
 ///
@@ -157,9 +159,24 @@ impl Conv2dPipeline {
             ],
         });
 
+        let pointwise = config.kernel_width == 1
+            && config.kernel_height == 1
+            && config.stride_x == 1
+            && config.stride_y == 1
+            && config.pad_x == 0
+            && config.pad_y == 0
+            && config.groups == 1;
         encoder.record_dispatch(
             context,
-            "conv2d",
+            if config.kernel_width == 1 && config.kernel_height == 1 && config.groups == 1 {
+                "conv2d/pointwise"
+            } else if config.groups == config.input_channels
+                && config.output_channels == config.input_channels
+            {
+                "conv2d/depthwise"
+            } else {
+                "conv2d/general"
+            },
             &self.pipeline,
             &bind_group,
             [
@@ -167,7 +184,9 @@ impl Conv2dPipeline {
                     .output_width
                     .div_ceil(CONV_WORKGROUP_X * self.pixels_per_thread),
                 config.output_height.div_ceil(CONV_WORKGROUP_Y),
-                config.output_channels,
+                config
+                    .output_channels
+                    .div_ceil(if pointwise { POINTWISE_CHANNEL_TILE } else { 1 }),
             ],
         );
 
