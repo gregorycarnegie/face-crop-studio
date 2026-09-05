@@ -165,6 +165,14 @@ impl YuNetDetector {
     /// it from the same queue, which orders the two submissions without host synchronisation.
     /// The path this replaces downloaded 4.9 MB through a blocking map and uploaded the same
     /// 4.9 MB straight back -- to a second device, since the two stages used to build their own.
+    ///
+    /// That saving is only a saving while the source is small. Fusing sends the image up at
+    /// full resolution, so a 10 MP photo uploads 40 MB to avoid a 9.8 MB round trip, and the
+    /// CPU pays a full-resolution `to_rgba8` first. Measured on an RTX 4090 the preprocess
+    /// shader itself runs in 0.04 ms while the path around it takes 6.5 ms, against 0.6 ms for
+    /// resizing on the CPU and uploading the 640x640 tensor -- so past roughly 1.2 MP the
+    /// fusion loses, and it loses by more the larger the image gets. See
+    /// `examples/preprocess_cost.rs`, which prints both sides and the crossover.
     fn detect_on_device(&self, image: &DynamicImage) -> Result<Option<DetectionOutput>> {
         let DetectorBackend::Gpu(model) = &self.backend else {
             return Ok(None);

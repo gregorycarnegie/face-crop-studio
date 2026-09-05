@@ -264,6 +264,13 @@ impl std::fmt::Debug for WgpuPreprocessor {
     }
 }
 
+/// Source pixels above which GPU preprocessing costs more than it saves on a discrete GPU.
+///
+/// A tuning constant, not a law: PCIe bandwidth, CPU resize speed and decode all move the
+/// crossover, so re-run `examples/preprocess_cost.rs` on the target hardware rather than
+/// assuming 1.5 MP transfers. It sits inside the 1.1-2.5 MP band measured on an RTX 4090.
+const MAX_GPU_PREPROCESS_PIXELS: u32 = 1_500_000;
+
 impl WgpuPreprocessor {
     /// The device this preprocessor renders on.
     ///
@@ -301,6 +308,13 @@ impl WgpuPreprocessor {
             expected
         );
 
+        // Checked after the validations above, not before: a caller passing a mismatched
+        // tensor is a bug and should hear about it whatever size the image happens to be.
+        // Declining sends the caller down the ordinary path, cheaper for a large source.
+        if !self.upload_pays_for_source(image) {
+            return Ok(None);
+        }
+
         let result = gpu_preprocess_to_tensor(
             image,
             config,
@@ -310,6 +324,29 @@ impl WgpuPreprocessor {
             output,
         )?;
         Ok(result)
+    }
+
+    /// Whether putting this source image on the GPU is worth what it costs to get it there.
+    ///
+    /// Preprocessing uploads the image at full resolution, so the transfer grows with the
+    /// source while the win -- skipping a 4.9 MB round trip of the 640x640 tensor -- does
+    /// not. Measured on an RTX 4090, the preprocess shader runs in 0.04 ms while the path
+    /// around it costs 6.5 ms for a 10 MP image (a full-resolution `to_rgba8` plus a 40 MB
+    /// upload), against 0.6 ms to resize on the CPU and upload the tensor. The crossover sat
+    /// between 1.1 and 2.5 MP; `examples/preprocess_cost.rs` prints both sides and finds it.
+    ///
+    /// On an integrated GPU there is no bus to cross -- the upload is a copy inside memory
+    /// the CPU already owns -- so the penalty does not apply and the GPU path stays preferred
+    /// at any size.
+    fn upload_pays_for_source(&self, image: &DynamicImage) -> bool {
+        if matches!(
+            self.context.adapter_info().device_type,
+            wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
+        ) {
+            return true;
+        }
+        let (width, height) = image.dimensions();
+        width.saturating_mul(height) <= MAX_GPU_PREPROCESS_PIXELS
     }
 
     /// Create a GPU preprocessor from an existing `GpuContext`.
@@ -329,6 +366,13 @@ impl Preprocessor for WgpuPreprocessor {
         image: &DynamicImage,
         config: &PreprocessConfig,
     ) -> Result<PreprocessOutput> {
+        // Same size trade as `preprocess_into_tensor`, and it has to be made here too:
+        // when that one declines, the detector falls back to this method, and sending a
+        // large image up here would be worse still -- it uploads the source whole *and*
+        // rounds the result back through host memory.
+        if !self.upload_pays_for_source(image) {
+            return CpuPreprocessor.preprocess(image, config);
+        }
         gpu_preprocess(
             image,
             config,
@@ -657,7 +701,7 @@ fn encode_preprocess(
     {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("preprocess_pass"),
-            timestamp_writes: None,
+            timestamp_writes: context.timestamp_writes("preprocess"),
         });
         pass.set_pipeline(&pipeline.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
@@ -841,6 +885,34 @@ mod tests {
     use super::*;
     use fcs_utils::config::{InputDimensions, ResizeQuality};
     use image::{ImageBuffer, Rgb};
+
+    /// The size half of `upload_pays_for_source`, without needing a GPU adapter for the
+    /// device-type half.
+    fn source_fits(width: u32, height: u32) -> bool {
+        width.saturating_mul(height) <= MAX_GPU_PREPROCESS_PIXELS
+    }
+
+    #[test]
+    fn a_source_near_the_model_input_is_worth_uploading() {
+        assert!(source_fits(640, 640));
+        assert!(source_fits(1280, 1000));
+    }
+
+    #[test]
+    fn a_camera_sized_source_is_not_worth_uploading() {
+        // The 10.1 MP bench fixture, and a routine 12 MP phone photo. Both upload tens of
+        // megabytes to save a 9.8 MB round trip.
+        assert!(!source_fits(2384, 4240));
+        assert!(!source_fits(4032, 3024));
+    }
+
+    #[test]
+    fn an_overflowing_source_does_not_wrap_into_the_gpu_path() {
+        // saturating_mul: without it a u32 overflow wraps a huge image back under the
+        // threshold and routes the most expensive case down the path meant for the cheapest.
+        assert!(!source_fits(u32::MAX, u32::MAX));
+        assert!(!source_fits(65_536, 65_536));
+    }
 
     #[test]
     fn preprocess_generates_bgr_tensor() {

@@ -1,11 +1,15 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::{hint::black_box, path::Path};
+use std::{hint::black_box, path::Path, sync::Arc};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use fcs_core::{InputSize, PostprocessConfig, PreprocessConfig, YuNetDetector};
-use fcs_utils::{config::ResizeQuality, load_fixture_image, model_path};
+use fcs_core::{InputSize, PostprocessConfig, PreprocessConfig, WgpuPreprocessor, YuNetDetector};
+use fcs_utils::{
+    config::ResizeQuality,
+    gpu::{GpuAvailability, GpuContext, GpuContextOptions},
+    load_fixture_image, model_path,
+};
 
 const MODEL_PATH: &str = "models/face_detection_yunet_2023mar_640.onnx";
 const FIXTURE_IMAGE: &str = "images/006.jpg";
@@ -42,7 +46,52 @@ fn build_detectors(model_path: &Path) -> Vec<(&'static str, YuNetDetector)> {
         Err(err) => eprintln!("skipping the gpu inference benchmark; detector init failed: {err}"),
     }
 
+    // Same GPU inference, but a filtered CPU resize rather than nearest. This is the
+    // quality-comparable partner to `gpu_on_device`: nearest aliases badly on a 6x
+    // downscale, so timing the on-device path against `gpu` alone flatters it.
+    let gpu_quality_preprocess = PreprocessConfig {
+        input_size: INPUT_SIZE,
+        resize_quality: ResizeQuality::Quality,
+    };
+    match YuNetDetector::new_gpu(
+        model_path,
+        gpu_quality_preprocess,
+        PostprocessConfig::default(),
+    ) {
+        Ok(detector) => detectors.push(("gpu_quality", detector)),
+        Err(err) => eprintln!("skipping the gpu_quality benchmark; detector init failed: {err}"),
+    }
+
+    // Preprocess on the GPU as well, which is what lets `detect_on_device` fuse the two
+    // stages onto one device and skip the CPU resize entirely. `new_gpu` above always
+    // pairs GPU inference with the CPU preprocessor, so without this case the bench
+    // cannot see the fully on-device path the app actually prefers.
+    match build_on_device_detector(model_path) {
+        Ok(Some(detector)) => detectors.push(("gpu_on_device", detector)),
+        Ok(None) => eprintln!("skipping the on-device benchmark; no GPU adapter"),
+        Err(err) => eprintln!("skipping the on-device benchmark; init failed: {err}"),
+    }
+
     detectors
+}
+
+fn build_on_device_detector(model_path: &Path) -> anyhow::Result<Option<YuNetDetector>> {
+    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+        GpuAvailability::Available(ctx) => ctx,
+        _ => return Ok(None),
+    };
+    let preprocessor = Arc::new(WgpuPreprocessor::new(context)?);
+    let preprocess = PreprocessConfig {
+        input_size: INPUT_SIZE,
+        resize_quality: ResizeQuality::Speed,
+    };
+    YuNetDetector::with_gpu_preprocessor(
+        model_path,
+        preprocess,
+        PostprocessConfig::default(),
+        preprocessor,
+    )
+    .map(Some)
 }
 
 fn inference_pipeline_benchmark(c: &mut Criterion) {
