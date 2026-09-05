@@ -91,8 +91,8 @@ fn main() -> Result<()> {
         let reference = image::load_from_memory(&bytes)?.to_rgb8();
         let (mut sum, mut count, mut max) = (0u64, 0u64, 0u8);
         for (a, b) in reference.pixels().zip(turbo_pixels.iter()) {
-            for c in 0..3 {
-                let d = a.0[c].abs_diff(b[c]);
+            for (left, right) in a.0.iter().zip(b.iter()) {
+                let d = left.abs_diff(*right);
                 sum += u64::from(d);
                 count += 1;
                 max = max.max(d);
