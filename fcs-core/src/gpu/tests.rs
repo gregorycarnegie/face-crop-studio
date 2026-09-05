@@ -1300,3 +1300,48 @@ fn concurrent_inference_matches_sequential() {
         }
     });
 }
+
+#[test]
+fn conv2d_reuses_one_uniform_buffer_per_distinct_config() {
+    use crate::gpu::conv2d::Conv2dPipeline;
+
+    let Some(ctx) = (match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+        GpuAvailability::Available(ctx) => Some(ctx),
+        _ => None,
+    }) else {
+        eprintln!("Skipping conv2d uniform cache test (no adapter)");
+        return;
+    };
+    let pipeline = Conv2dPipeline::new(ctx.device(), 4).expect("build conv2d pipeline");
+
+    let cfg = |width: u32| {
+        Conv2dConfig::new(
+            1,
+            Conv2dChannels::new(16, 16),
+            SpatialDims::new(width, 320),
+            SpatialDims::new(3, 3),
+            SpatialDims::new(1, 1),
+            SpatialDims::new(1, 1),
+            Conv2dOptions::new(1, None),
+        )
+        .expect("uniform cache test config should be valid")
+    };
+
+    // Two dispatches of the same layer must land on one buffer -- that reuse is the whole
+    // point, and creating 53 of these per forward pass cost more CPU than the dispatches
+    // they describe cost GPU.
+    let first = pipeline.uniform_buffer_for_test(ctx.device(), &cfg(320));
+    let again = pipeline.uniform_buffer_for_test(ctx.device(), &cfg(320));
+    assert!(
+        Arc::ptr_eq(&first, &again),
+        "an identical config should hit the cache"
+    );
+
+    // A different shape must not: sharing a buffer across configs would feed one layer's
+    // geometry to another, which the ONNX parity tests would catch only by luck.
+    let other = pipeline.uniform_buffer_for_test(ctx.device(), &cfg(160));
+    assert!(
+        !Arc::ptr_eq(&first, &other),
+        "a different config must get its own buffer"
+    );
+}
