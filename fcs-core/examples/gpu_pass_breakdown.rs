@@ -29,6 +29,15 @@ const INPUT: InputSize = InputSize::new(640, 640);
 const RUNS: usize = 20;
 
 fn main() -> Result<()> {
+    // Turns on the `timing_guard` phase lines inside the GPU runtime. Filtered to the
+    // telemetry target so wgpu's own debug output does not bury them.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("fcs::telemetry=trace"),
+    )
+    .format_timestamp(None)
+    .init();
+    fcs_utils::telemetry::configure(true, log::LevelFilter::Trace);
+
     let options = GpuContextOptions {
         profiling: true,
         ..GpuContextOptions::default()

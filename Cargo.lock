@@ -2239,6 +2239,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "criterion",
+ "env_logger",
  "fcs-ort",
  "fcs-utils",
  "image",

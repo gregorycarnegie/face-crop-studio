@@ -30,6 +30,8 @@ wgpu.workspace = true
 # a single GPU op. Nothing it provides reaches a shipped binary.
 tract-onnx.workspace = true
 criterion.workspace = true
+# Dev-only: lets the profiling examples switch on the runtime's `timing_guard` lines.
+env_logger.workspace = true
 mimalloc.workspace = true
 fcs-utils = { workspace = true, features = ["fixtures"] }
 proptest.workspace = true

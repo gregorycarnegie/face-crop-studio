@@ -14,6 +14,7 @@ use wgpu::CommandEncoderDescriptor;
 use crate::tensor::Tensor;
 use anyhow::{Context, Result, anyhow};
 use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
+use fcs_utils::timing_guard;
 use std::{
     collections::HashMap,
     path::Path,
@@ -142,25 +143,40 @@ impl GpuYuNet {
         // once. This eliminates ~53 individual queue.submit() calls (one per op)
         // and gives the GPU a full workload to pipeline, dramatically improving
         // utilisation vs the previous per-op-submit pattern.
-        let mut encoder =
-            self.ops
-                .context()
-                .device()
-                .create_command_encoder(&CommandEncoderDescriptor {
-                    label: Some("inference"),
-                });
-        let features = graph::encode_backbone_features(
-            &mut encoder,
-            &self.ops,
-            &self.weights,
-            input_gpu,
-            BACKBONE_STAGES.len(),
-        )?;
-        let levels =
-            graph::encode_neck_and_heads(&mut encoder, &self.ops, &self.weights, &features)?;
-        self.ops.context().queue().submit(Some(encoder.finish()));
+        // Split into three guards because the whole call is dominated by what happens
+        // around the dispatches rather than by the dispatches: GPU timestamps put the
+        // forward pass at ~0.9 ms against several ms of wall time, so knowing which of
+        // encode, readback and decode owns the rest is what makes the gap actionable.
+        let levels = {
+            let _guard = timing_guard("fcs_core::gpu_encode", log::Level::Trace);
+            let mut encoder =
+                self.ops
+                    .context()
+                    .device()
+                    .create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("inference"),
+                    });
+            let features = graph::encode_backbone_features(
+                &mut encoder,
+                &self.ops,
+                &self.weights,
+                input_gpu,
+                BACKBONE_STAGES.len(),
+            )?;
+            let levels =
+                graph::encode_neck_and_heads(&mut encoder, &self.ops, &self.weights, &features)?;
+            self.ops.context().queue().submit(Some(encoder.finish()));
+            levels
+        };
 
-        let outputs = build_decode_tensors(&levels)?;
+        // Blocks until the GPU has finished, so it absorbs the forward pass itself as
+        // well as the download of the 12 head outputs.
+        let outputs = {
+            let _guard = timing_guard("fcs_core::gpu_readback", log::Level::Trace);
+            build_decode_tensors(&levels)?
+        };
+
+        let _guard = timing_guard("fcs_core::gpu_decode", log::Level::Trace);
         decode_yunet_outputs(&outputs, self.input_size)
     }
 
