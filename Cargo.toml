@@ -65,7 +65,7 @@ egui_kittest = "0.36.1"
 rfd = "0.17.2"
 
 # Image processing and graphics
-fast_image_resize = "6.1.0"
+fast_image_resize = { version = "6.1.0", features = ["rayon"] }
 image = { version = "0.25.10", default-features = false, features = [
     "ico",
     "png",

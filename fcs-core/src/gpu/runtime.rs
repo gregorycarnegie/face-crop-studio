@@ -4,7 +4,7 @@ use crate::{
         ops::GpuInferenceOps,
         tensor::GpuTensor,
     },
-    model::decode_yunet_outputs,
+    model::{HeadLayout, decode_yunet_outputs_with},
     preprocess::InputSize,
 };
 use bytemuck::cast_slice;
@@ -86,6 +86,7 @@ impl GpuYuNet {
 
         // 1. Acquire a tensor from the pool or create a new one
         let input_gpu = {
+            let _guard = timing_guard("fcs_core::gpu_upload", log::Level::Trace);
             let mut workspace = self
                 .workspace
                 .lock()
@@ -156,19 +157,25 @@ impl GpuYuNet {
                     .create_command_encoder(&CommandEncoderDescriptor {
                         label: Some("inference"),
                     });
-            let levels = if self.context().profiler().is_some() {
-                self.encode_inference(&mut encoder, input_gpu)?
-            } else {
-                // Compute dispatches have separate usage scopes even inside one pass:
-                // wgpu inserts the dependencies needed for pooled-buffer reuse.
-                // Keep separate passes only when per-op timestamps are requested.
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("yunet_forward"),
-                    timestamp_writes: None,
-                });
-                self.encode_inference(&mut pass, input_gpu)?
+            let levels = {
+                let _record = timing_guard("fcs_core::gpu_record", log::Level::Trace);
+                if self.context().profiler().is_some() {
+                    self.encode_inference(&mut encoder, input_gpu)?
+                } else {
+                    // Compute dispatches have separate usage scopes even inside one pass:
+                    // wgpu inserts the dependencies needed for pooled-buffer reuse.
+                    // Keep separate passes only when per-op timestamps are requested.
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("yunet_forward"),
+                        timestamp_writes: None,
+                    });
+                    self.encode_inference(&mut pass, input_gpu)?
+                }
             };
-            self.ops.context().queue().submit(Some(encoder.finish()));
+            {
+                let _submit = timing_guard("fcs_core::gpu_submit", log::Level::Trace);
+                self.ops.context().queue().submit(Some(encoder.finish()));
+            }
             levels
         };
 
@@ -180,7 +187,7 @@ impl GpuYuNet {
         };
 
         let _guard = timing_guard("fcs_core::gpu_decode", log::Level::Trace);
-        decode_yunet_outputs(&outputs, self.input_size)
+        decode_yunet_outputs_with(&outputs, self.input_size, HeadLayout::ChannelMajorLogits)
     }
 
     fn encode_inference(
@@ -257,7 +264,6 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
         height: usize,
         width: usize,
         channels: usize,
-        apply_sigmoid: bool,
     }
 
     let mut gpu_tensors: Vec<&GpuTensor> = Vec::with_capacity(DET_HEAD_OUTPUTS);
@@ -273,19 +279,20 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
         let height = shape[2];
         let width = shape[3];
 
-        // cls, obj, bbox, kps — interleaved by level so we can split later
-        for (tensor, channels, apply_sigmoid) in [
-            (&level.cls, 1usize, true),
-            (&level.obj, 1usize, true),
-            (&level.bbox, 4usize, false),
-            (&level.kps, 10usize, false),
+        // cls, obj, bbox, kps — interleaved by level so we can split later. Which of
+        // these need sigmoid is the decoder's business: it is told the heads are raw
+        // logits and activates cls and obj itself.
+        for (tensor, channels) in [
+            (&level.cls, 1usize),
+            (&level.obj, 1usize),
+            (&level.bbox, 4usize),
+            (&level.kps, 10usize),
         ] {
             gpu_tensors.push(tensor);
             meta.push(BranchMeta {
                 height,
                 width,
                 channels,
-                apply_sigmoid,
             });
         }
     }
@@ -294,14 +301,16 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
     let raw_data = batch_download(gpu_tensors[0].context(), &gpu_tensors)
         .context("batch download of detection head outputs")?;
 
-    // Reorder each downloaded buffer from CHW → HWC (+ optional sigmoid)
-    // and build the tract Tensors.
+    // Wrap each downloaded buffer as it already is -- channel-major, scores still raw --
+    // and let the decoder gather from that layout. Experiment 55: transposing all twelve
+    // heads to HWC first, only for the decoder to read them cell by cell, was pure
+    // rearrangement of data nothing else looked at. FCS_OLD_CONVERT restores it for A/B.
+    let _convert = timing_guard("fcs_core::gpu_convert", log::Level::Trace);
     let mut outputs: Vec<Tensor> = Vec::with_capacity(DET_HEAD_OUTPUTS);
     for (flat, m) in raw_data.into_iter().zip(meta.iter()) {
-        let flattened = reorder_hw_major(&flat, m.channels, m.height, m.width, m.apply_sigmoid);
         let rows = m.height * m.width;
         outputs.push(
-            Tensor::from_shape(&[rows, m.channels], &flattened)
+            Tensor::from_vec(&[m.channels, rows], flat)
                 .context("failed to build tensor from branch output")?,
         );
     }
@@ -336,57 +345,66 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
 
     // Allocate one HOST_VISIBLE readback buffer per tensor.
     let readback_usage = wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ;
-    let readback_bufs: Vec<wgpu::Buffer> = tensors
-        .iter()
-        .map(|t| {
-            device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("batch_readback"),
-                size: t.size_bytes(),
-                usage: readback_usage,
-                mapped_at_creation: false,
+    let readback_bufs: Vec<wgpu::Buffer> = {
+        let _guard = timing_guard("fcs_core::readback_alloc", log::Level::Trace);
+        tensors
+            .iter()
+            .map(|t| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("batch_readback"),
+                    size: t.size_bytes(),
+                    usage: readback_usage,
+                    mapped_at_creation: false,
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
 
-    // One encoder copies all tensors to their readback buffers.
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("batch_readback_encoder"),
-    });
-    for (tensor, readback) in tensors.iter().zip(readback_bufs.iter()) {
-        encoder.copy_buffer_to_buffer(tensor.buffer(), 0, readback, 0, tensor.size_bytes());
+    {
+        // One encoder copies all tensors to their readback buffers.
+        let _guard = timing_guard("fcs_core::readback_copy", log::Level::Trace);
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("batch_readback_encoder"),
+        });
+        for (tensor, readback) in tensors.iter().zip(readback_bufs.iter()) {
+            encoder.copy_buffer_to_buffer(tensor.buffer(), 0, readback, 0, tensor.size_bytes());
+        }
+        context.queue().submit(Some(encoder.finish()));
     }
-    context.queue().submit(Some(encoder.finish()));
 
-    // One poll waits for all copies to land in system RAM.
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .map_err(|e| anyhow!("batch readback poll failed: {e}"))?;
+    // Request every map before waiting for anything. `map_async` on a buffer with a
+    // pending submission is already deferred until that submission completes, so one
+    // wait drives the copies and the map callbacks together; polling for the copies
+    // first only added a second blocking call that had nothing left to wait for.
+    let receivers: Vec<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>> = {
+        let _guard = timing_guard("fcs_core::readback_map", log::Level::Trace);
+        readback_bufs
+            .iter()
+            .map(|buf| {
+                let (tx, rx) = mpsc::channel();
+                buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = tx.send(r);
+                });
+                rx
+            })
+            .collect()
+    };
 
-    // Kick off all 12 map_async calls simultaneously (data is already in
-    // HOST_VISIBLE memory so these complete on the next poll).
-    let receivers: Vec<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>> = readback_bufs
-        .iter()
-        .map(|buf| {
-            let (tx, rx) = mpsc::channel();
-            buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-                let _ = tx.send(r);
-            });
-            rx
-        })
-        .collect();
-
-    // One poll flushes all pending map callbacks.
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .map_err(|e| anyhow!("batch readback map poll failed: {e}"))?;
+    {
+        // The one blocking wait: the copies land and every map callback fires. It
+        // absorbs the forward pass itself, so this is GPU execution plus the copies,
+        // not idle cost, and must not be added to a GPU timestamp total.
+        let _guard = timing_guard("fcs_core::readback_wait", log::Level::Trace);
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .map_err(|e| anyhow!("batch readback poll failed: {e}"))?;
+    }
 
     // Collect data from all mapped buffers and unmap.
+    let _collect = timing_guard("fcs_core::readback_collect", log::Level::Trace);
     let mut results = Vec::with_capacity(tensors.len());
     for (i, (buf, rx)) in readback_bufs.iter().zip(receivers.iter()).enumerate() {
         rx.recv()
@@ -411,36 +429,8 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
         );
         results.push(floats);
     }
+
     Ok(results)
-}
-
-fn reorder_hw_major(
-    data: &[f32],
-    channels: usize,
-    height: usize,
-    width: usize,
-    apply_sigmoid: bool,
-) -> Vec<f32> {
-    let mut out = vec![0.0f32; height * width * channels];
-    for c in 0..channels {
-        for y in 0..height {
-            for x in 0..width {
-                let src = (c * height + y) * width + x;
-                let dst = (y * width + x) * channels + c;
-                let mut value = data[src];
-                if apply_sigmoid {
-                    value = sigmoid(value);
-                }
-                out[dst] = value;
-            }
-        }
-    }
-    out
-}
-
-#[inline]
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
 }
 
 /// The heuristic requirement in bytes, before any hardware cap is applied.
@@ -535,56 +525,6 @@ fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- sigmoid ---
-
-    #[test]
-    fn sigmoid_zero_is_half() {
-        assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn sigmoid_large_positive_approaches_one() {
-        assert!(sigmoid(100.0) > 0.9999);
-    }
-
-    #[test]
-    fn sigmoid_large_negative_approaches_zero() {
-        assert!(sigmoid(-100.0) < 0.0001);
-    }
-
-    // --- reorder_hw_major ---
-
-    #[test]
-    fn reorder_hw_major_single_channel_no_sigmoid_is_identity() {
-        // 1 channel, 2x2 → channel-major and HW-major are the same layout
-        let data = vec![1.0f32, 2.0, 3.0, 4.0];
-        let out = reorder_hw_major(&data, 1, 2, 2, false);
-        assert_eq!(out, data);
-    }
-
-    #[test]
-    fn reorder_hw_major_two_channels_transposes_correctly() {
-        // Input is CHW: [c0_y0x0, c0_y0x1, c1_y0x0, c1_y0x1]
-        // Output is HWC: [c0_y0x0, c1_y0x0, c0_y0x1, c1_y0x1]
-        let data = vec![1.0f32, 2.0, 10.0, 20.0];
-        let out = reorder_hw_major(&data, 2, 1, 2, false);
-        assert_eq!(out, vec![1.0, 10.0, 2.0, 20.0]);
-    }
-
-    #[test]
-    fn reorder_hw_major_applies_sigmoid_when_requested() {
-        let data = vec![0.0f32];
-        let out = reorder_hw_major(&data, 1, 1, 1, true);
-        assert!((out[0] - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn reorder_hw_major_no_sigmoid_preserves_values() {
-        let data = vec![0.0f32];
-        let out = reorder_hw_major(&data, 1, 1, 1, false);
-        assert_eq!(out[0], 0.0);
-    }
 
     // --- memory estimate ---
 

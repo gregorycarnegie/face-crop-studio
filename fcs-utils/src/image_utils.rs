@@ -288,11 +288,74 @@ fn resize_image_fast(
     .ok()?;
 
     let mut dst = FirImage::new(width, height, fir::PixelType::U8x3);
-    let mut resizer = fir::Resizer::new();
     let options = fir::ResizeOptions::new().resize_alg(alg);
-    resizer.resize(&src, &mut dst, &options).ok()?;
+    let threaded = threading_pays(alg, rgb.width(), rgb.height());
+    let run = |resizer: &mut fir::Resizer| {
+        if threaded {
+            resizer.resize(&src, &mut dst, &options)
+        } else if let Some(pool) = single_thread_pool() {
+            pool.install(|| resizer.resize(&src, &mut dst, &options))
+        } else {
+            resizer.resize(&src, &mut dst, &options)
+        }
+    };
+    RESIZER.with_borrow_mut(run).ok()?;
 
     RgbImage::from_raw(width, height, dst.into_vec())
+}
+
+thread_local! {
+    /// One `Resizer` per thread, kept alive between calls for its scratch buffer.
+    ///
+    /// A separable convolution writes an intermediate image between the horizontal and
+    /// vertical passes, and `fast_image_resize` holds that buffer inside the `Resizer`,
+    /// growing it on demand and zeroing the new part. Building a `Resizer` per call threw
+    /// the buffer away every time, so every resize re-zeroed it: for a 10 MP source the
+    /// intermediate is 640x4240x3 = 8.1 MB, and profiling warm detection put that `memset`
+    /// at 4.1% of all CPU time -- more than the decode of the model outputs.
+    ///
+    /// Thread-local rather than shared: `resize` needs `&mut`, and a mutex here would
+    /// serialise the batch path. The cost is one retained buffer per thread that has ever
+    /// resized, sized to the largest source that thread has seen.
+    static RESIZER: std::cell::RefCell<fir::Resizer> =
+        std::cell::RefCell::new(fir::Resizer::new());
+}
+
+/// Source pixels below which threading the resize costs more than it saves.
+///
+/// Measured on this workstation (32 rayon threads) by alternating a one-thread pool against
+/// the default pool in one process, 640x640 output, bilinear: 0.6 MP 0.79x, 1.1 MP 0.85x,
+/// 2.5 MP 0.80-0.89x, 5.5 MP 1.27x, 10.1 MP 1.46-1.58x, 22.1 MP 1.16-1.26x. Fork and join
+/// cost a roughly fixed 0.10-0.17 ms, which is most of a small resize and a fraction of a
+/// large one, so the crossover sits near 4 MP.
+///
+/// ponytail: one constant for every machine. It is a function of core count and memory
+/// bandwidth, so a smaller or larger box has a different crossover; `examples/resize_threading.rs`
+/// in fcs-core re-measures it if this ever looks wrong.
+const RESIZE_THREADING_MIN_PIXELS: u32 = 4_000_000;
+
+/// Whether to let `fast_image_resize` spread this resize across the rayon pool.
+///
+/// The crate reads its thread count from `rayon::current_num_threads()` and has no per-call
+/// switch, so the only way to say no is to run it inside a one-thread pool.
+fn threading_pays(alg: fir::ResizeAlg, width: u32, height: u32) -> bool {
+    // Nearest just gathers one source pixel per output pixel: 0.17-0.22 ms even for a 22 MP
+    // source, which is less than the cost of handing it to other threads. Measured 0.54-0.73x
+    // at every size.
+    if matches!(alg, fir::ResizeAlg::Nearest) {
+        return false;
+    }
+    width.saturating_mul(height) >= RESIZE_THREADING_MIN_PIXELS
+}
+
+/// A one-thread rayon pool, built once, used to hold `fast_image_resize` to a single core.
+///
+/// Returns `None` if the pool cannot be built, which sends the caller down the threaded path
+/// rather than failing the resize -- slower than intended is better than no image.
+fn single_thread_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().num_threads(1).build().ok())
+        .as_ref()
 }
 
 /// Convert an RGB image into a BGR CHW array with values matching OpenCV's `blobFromImage`.
@@ -314,27 +377,38 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Vec<f32> {
     let row_stride = w * 3; // Keep as multiplication since 3 is not a power of 2
     let pixels = image.as_raw();
 
-    let mut data = vec![0.0f32; 3 * channel_len];
+    let total = 3 * channel_len;
+    // Deliberately uninitialised. The loop below writes every element, so `vec![0.0; total]`
+    // would zero 4.9 MB per 640x640 detection for nothing; profiling put that `memset` at
+    // 3.1% of all CPU time in the warm GPU path, and removing it measured 0.09-0.38 ms off
+    // preprocessing (experiment 49).
+    let mut data: Vec<f32> = Vec::with_capacity(total);
+    {
+        let spare = &mut data.spare_capacity_mut()[..total];
+        let (b_slice, rest) = spare.split_at_mut(channel_len);
+        let (g_slice, r_slice) = rest.split_at_mut(channel_len);
 
-    let (b_slice, rest) = data.split_at_mut(channel_len);
-    let (g_slice, r_slice) = rest.split_at_mut(channel_len);
-
-    b_slice
-        .par_chunks_mut(w)
-        .zip(g_slice.par_chunks_mut(w))
-        .zip(r_slice.par_chunks_mut(w))
-        .enumerate()
-        .for_each(|(y, ((b_row, g_row), r_row))| {
-            let src_row = &pixels[y * row_stride..(y + 1) * row_stride];
-            for x in 0..w {
-                // Optimized: x * 3 = (x << 1) + x
-                let src = (x << 1) + x;
-                b_row[x] = src_row[src + 2] as f32;
-                g_row[x] = src_row[src + 1] as f32;
-                r_row[x] = src_row[src] as f32;
-            }
-        });
-
+        b_slice
+            .par_chunks_mut(w)
+            .zip(g_slice.par_chunks_mut(w))
+            .zip(r_slice.par_chunks_mut(w))
+            .enumerate()
+            .for_each(|(y, ((b_row, g_row), r_row))| {
+                let src_row = &pixels[y * row_stride..(y + 1) * row_stride];
+                for x in 0..w {
+                    // Optimized: x * 3 = (x << 1) + x
+                    let src = (x << 1) + x;
+                    b_row[x].write(f32::from(src_row[src + 2]));
+                    g_row[x].write(f32::from(src_row[src + 1]));
+                    r_row[x].write(f32::from(src_row[src]));
+                }
+            });
+    }
+    // SAFETY: the three planes above partition all `total` elements, `par_chunks_mut(w)`
+    // covers each plane's `h` rows exactly, and the inner loop writes all `w` of every row,
+    // so every element is initialised. `f32` has no destructor, so an unwind out of the
+    // loop leaves a length-0 `Vec` with nothing to drop.
+    unsafe { data.set_len(total) };
     data
 }
 
@@ -379,6 +453,45 @@ pub fn compute_resize_scales(original: (u32, u32), target: (u32, u32)) -> Result
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
+
+    /// Every element of the output must be written, on an awkward size.
+    ///
+    /// `rgb_to_bgr_chw` fills a `Vec` it allocated uninitialised and then claims the whole
+    /// length, so "the loop covers every index" is a safety requirement, not a nicety. A
+    /// spot check of three elements cannot see a gap; this compares all of them against an
+    /// independently computed reference, at a width and height that share no convenient
+    /// factor with any chunking the implementation might use.
+    #[test]
+    fn rgb_to_bgr_chw_writes_every_element() {
+        let (w, h) = (37u32, 23u32);
+        let image = RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([
+                ((x * 7 + y) % 256) as u8,
+                ((y * 13 + x * 3) % 256) as u8,
+                ((x * y + 11) % 256) as u8,
+            ])
+        });
+
+        let out = rgb_to_bgr_chw(&image);
+        assert_eq!(out.len() as u32, 3 * w * h);
+
+        let plane = (w * h) as usize;
+        for y in 0..h {
+            for x in 0..w {
+                let px = image.get_pixel(x, y).0;
+                let cell = (y * w + x) as usize;
+                // BGR channel order, one plane per channel.
+                for (channel, source) in [px[2], px[1], px[0]].into_iter().enumerate() {
+                    let got = out[channel * plane + cell];
+                    assert_eq!(
+                        got,
+                        f32::from(source),
+                        "channel {channel} at ({x}, {y}) was not written correctly"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn rgb_to_bgr_chw_converts_correctly() {
@@ -455,6 +568,44 @@ mod tests {
         // A representative positive case, so the test fails if the list breaks
         // rather than passing because everything returns false.
         assert!(is_supported_image_path(Path::new("photo.png")));
+    }
+
+    /// Threading the resize must not change a single pixel.
+    ///
+    /// `resize_image` hands large sources to the rayon pool and keeps small ones on one
+    /// thread, so the same image resized either way has to come out identical -- otherwise
+    /// detections would depend on how many cores the machine has.
+    #[test]
+    fn threaded_and_single_threaded_resize_agree() {
+        // Over RESIZE_THREADING_MIN_PIXELS, so the default path threads it.
+        let (w, h) = (2400u32, 1800u32);
+        assert!(
+            w * h >= RESIZE_THREADING_MIN_PIXELS,
+            "source must cross the gate"
+        );
+        let source = RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x % 251) as u8, (y % 241) as u8, ((x ^ y) % 233) as u8])
+        });
+        let dynamic = DynamicImage::ImageRgb8(source);
+
+        let single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("single-thread pool");
+
+        for filter in [
+            FilterType::Triangle,
+            FilterType::Lanczos3,
+            FilterType::Nearest,
+        ] {
+            let threaded = resize_image(&dynamic, 640, 640, filter);
+            let serial = single.install(|| resize_image(&dynamic, 640, 640, filter));
+            assert_eq!(
+                threaded.as_raw(),
+                serial.as_raw(),
+                "{filter:?} resize differs between one thread and many"
+            );
+        }
     }
 
     #[test]

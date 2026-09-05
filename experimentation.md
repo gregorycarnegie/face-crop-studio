@@ -28,6 +28,11 @@ speedups. Completing one can make others unnecessary.
   Follow the suggested route below, then pick by evidence rather than treating
   all later items as mandatory. A deferred or blocked item stays unchecked with
   its reason. A tested rejection is checked and labelled rejected in Results.
+- Box states: `[ ]` not yet tried, `[x]` tried and assessed (kept or rejected),
+  `[~]` **premise removed** -- another result eliminated the cost this item was
+  written to attack, so there is nothing left for it to win. `[~]` is not a
+  skip: the reason belongs in Results like any other outcome, and the item can
+  be reopened if a different motivation for it appears.
 
 **Suggested next route:** 5 (fresh phase timings), 11 (remove the preliminary
 readback wait), 12 (reuse staging buffers), 13 (pack head readback), then 14
@@ -90,7 +95,7 @@ implementation or workload.
 
 ### Measurement and controls (P0)
 
-- [ ] **5. Reprofile the current normal detection path.** Split preprocessing,
+- [x] **5. Reprofile the current normal detection path.** Split preprocessing,
   input upload, resource preparation, recording, finish, submit, GPU execution,
   readback allocation/copy/map/waits, output conversion and decode. Measure GPU
   and wall intervals separately; waiting includes preceding GPU work and must
@@ -107,7 +112,7 @@ implementation or workload.
   graph timestamp where supported versus summed per-op timestamps and normal
   wall time. Separate query resolution/profiler overhead; verify identical raw
   heads. Do not optimize an artifact of the separate-pass profiling path.
-- [ ] **9. Capture a native CPU/GPU timeline for one bottleneck.** Use an
+- [x] **9. Capture a native CPU/GPU timeline for one bottleneck.** Use an
   available platform/vendor profiler to distinguish allocation/driver work,
   queue idle gaps, memory traffic and GPU occupancy. Record tool overhead and
   return to the uninstrumented release benchmark to validate any conclusion.
@@ -118,19 +123,19 @@ implementation or workload.
 
 ### Readback and synchronization (P0 first, then P1)
 
-- [ ] **11. Request maps before the preliminary blocking poll.** In
+- [x] **11. Request maps before the preliminary blocking poll.** In
   `batch_download`, submit copies, start all maps, then drive completion with
   one wait. Compare with the existing wait-map-wait sequence. Require exact raw
   head equality, map-error propagation and concurrent-inference safety.
-- [ ] **12. Reuse the 12 staging buffers.** Compare per-run allocation with
+- [x] **12. Reuse the 12 staging buffers.** Compare per-run allocation with
   size-aware reuse. Keep each buffer owned until its mapped view is dropped
   and it is unmapped; test concurrent requests and changing output sizes.
   Measure allocation time, wall latency and retained memory separately.
-- [ ] **13. Pack all head outputs into one staging buffer.** Compare 12 maps
+- [x] **13. Pack all head outputs into one staging buffer.** Compare 12 maps
   against one aligned allocation/map plus offsets. Include CPU slicing/copy
   cost, odd sizes and changing resolutions; validate every raw head and avoid
   reading unused capacity from a larger reused buffer.
-- [ ] **14. Encode output copies with inference.** Append copies after the
+- [x] **14. Encode output copies with inference.** Append copies after the
   compute pass ends and submit once instead of creating a second encoder and
   submission. Preserve tensor/pool lifetimes through completion; compare with
   the latest retained readback strategy, not the original baseline.
@@ -153,7 +158,7 @@ implementation or workload.
 
 ### CPU recording and resource allocation (P1)
 
-- [ ] **19. Profile and reduce per-layer host bookkeeping.** Measure shape
+- [x] **19. Profile and reduce per-layer host bookkeeping.** Measure shape
   validation, graph traversal, weight-name lookup, temporary collections,
   labels and reference counting in warm inference. Pre-resolve only repeated
   immutable data that is a measured cost; keep public input validation.
@@ -234,10 +239,12 @@ implementation or workload.
 - [ ] **37. Compute detection head branches together.** Test sharing input
   loads across cls/obj/bbox/keypoint outputs at one level. Include small and
   mismatched channel counts, occupancy and output layout; validate all 12 heads.
-- [ ] **38. Write head outputs in CPU decode order.** Compare final-layer
+- [~] **38. Write head outputs in CPU decode order.** Compare final-layer
   direct HWC/packed output with CHW followed by CPU reorder. Include GPU store
   coalescing, downstream binding changes and decode cost; do not move sigmoid
-  across other operations or apply it twice.
+  across other operations or apply it twice. **Premise removed by 55:** there
+  is no CPU reorder left to save. Reopen only if GPU store coalescing alone
+  justifies it.
 - [ ] **39. Fuse compatible preprocessing and stem work.** Prototype only
   after 48 identifies a relevant cost. Account for source texture sampling,
   resize semantics, border handling and source-pixel reuse; keep the exact
@@ -282,11 +289,11 @@ implementation or workload.
 
 ### Preprocessing and image upload (P1/P2)
 
-- [ ] **48. Refresh CPU versus on-device preprocessing measurements.** Compare
+- [x] **48. Refresh CPU versus on-device preprocessing measurements.** Compare
   `gpu`, `gpu_on_device` and `gpu_quality` with matched input/resize semantics.
   Split upload, conversion, resize and inference handoff; warm and cold paths
   need separate results. Do not recreate the already-removed tensor round trip.
-- [ ] **49. Reduce source pixel conversion and copies.** Trace decoded RGB/RGBA,
+- [x] **49. Reduce source pixel conversion and copies.** Trace decoded RGB/RGBA,
   row layout and upload buffers; remove only measured redundant conversions or
   copies. Compare throughput on large images and verify colour order, stride,
   alpha handling and orientation.
@@ -313,7 +320,7 @@ implementation or workload.
 
 ### Detection output conversion and filtering (P1/P2)
 
-- [ ] **55. Combine CPU reorder, sigmoid and decode work.** Profile current
+- [x] **55. Combine CPU reorder, sigmoid and decode work.** Profile current
   traversals and temporary tensors, then fuse one measured redundant pass.
   Compare exact output ordering and established numerical tolerances; avoid
   reproducing the already-rejected fine-grained loop parallelism.
@@ -672,6 +679,483 @@ The workspace run used `--all-features`, `FCS_STRICT_TESTS=1` and the compatible
 ONNX Runtime DLL, covering raw ONNX parity, final detections, concurrent
 inference, and profiled/merged equality. Workspace Clippy, core all-target
 Clippy, formatting and `git diff --check` also passed.
+
+### 5. Phase timings for the normal detection path - kept (measurement)
+
+Split the existing three GPU guards into eleven, so recording, submission and
+each readback phase are separately visible, and added
+`fcs-core/examples/phase_timings.rs`, which captures the guard log lines
+instead of printing them and reports a p50/p95 per label over 30 warm runs.
+
+```powershell
+cargo run --release -p fcs-core --example phase_timings                          # 10 MP
+cargo run --release -p fcs-core --example phase_timings fixtures/images/249_o.jpg # 0.17 MP
+```
+
+RTX 4090 / D3D12 / FXC, warm, single request, baseline `9906987` plus the guard
+diff. Milliseconds; indentation is containment, so children must not be summed
+with their parent. `readback_wait` **contains the forward pass**: it is GPU
+execution plus the head copies, not idle time to be added to a GPU total.
+
+| Phase | 0.17 MP p50 | 0.17 MP p95 | 10 MP p50 | 10 MP p95 |
+| --- | ---: | ---: | ---: | ---: |
+| detect_image | 1.570 | 1.770 | 4.680 | 5.610 |
+| - preprocess (CPU, large only) | - | - | 2.650 | - |
+| - on-device preprocess (small only) | ~0.21 | - | - | - |
+| - inference | 1.350 | 1.560 | 1.970 | 2.470 |
+| - - encode | 0.343 | 0.417 | 0.449 | 0.768 |
+| - - - record | 0.213 | 0.263 | 0.281 | 0.464 |
+| - - - finish + submit | 0.128 | 0.160 | 0.160 | 0.296 |
+| - - readback | 0.792 | 1.030 | 1.040 | 1.430 |
+| - - - staging alloc | 0.044 | 0.053 | 0.052 | 0.073 |
+| - - - copy encode + submit | 0.045 | 0.059 | 0.059 | 0.092 |
+| - - - wait (contains GPU execution) | 0.501 | 0.739 | 0.767 | 1.130 |
+| - - - map request | 0.001 | 0.002 | 0.003 | 0.004 |
+| - - - map wait | 0.004 | 0.006 | 0.005 | 0.008 |
+| - - - collect + unmap | 0.064 | 0.080 | 0.029 | 0.039 |
+| - - - CHW to HWC + sigmoid | 0.108 | 0.131 | 0.111 | 0.133 |
+| - - decode | 0.205 | 0.217 | 0.188 | 0.209 |
+| - - host upload of input tensor | - | - | 0.280 | 0.359 |
+| - postprocess | 0.010 | 0.023 | 0.005 | 0.007 |
+
+Two different paths, not one. At 0.17 MP `detect_on_device` applies and
+preprocessing costs about 0.21 ms. At 10 MP `upload_pays_for_source` declines,
+so the CPU preprocessor runs at **2.650 ms — 57% of the whole detection** — and
+the input tensor is then uploaded for another 0.280 ms. The 22 MP fixtures take
+the same route. Large-image detection is therefore a preprocessing problem, not
+a shader problem.
+
+Inside inference the ~0.536 ms of profiled GPU compute sits inside the 0.501 ms
+small-image wait, and the host work around it is comparable in size:
+
+- recording 0.213-0.281 ms of pure CPU bookkeeping before anything is submitted
+- decode 0.188-0.205 ms plus CHW-to-HWC conversion 0.108-0.111 ms on the CPU
+- readback overhead outside the wait: alloc 0.044-0.052, copy 0.045-0.059,
+  collect 0.029-0.064 ms, so about 0.15 ms total
+
+Ranked recoverable time on this evidence: CPU preprocessing for large images
+(48-51), host recording (19-25), CPU output conversion and decode (55), then
+readback bookkeeping (11-13). Shader work is not the top target for either
+image size. Nothing was adopted or rejected here; the guards and the probe are
+retained as measurement infrastructure.
+
+### 11. One readback poll instead of two - kept (no speed gain)
+
+`batch_download` submitted the head copies, blocked until they landed, then
+started the maps and blocked again. `map_async` on a buffer with a pending
+submission is already deferred until that submission completes, so the maps can
+be requested first and one wait drives both.
+
+A/B/B/A in alternating processes, RTX 4090 / D3D12 / FXC, warm, single request,
+0.17 MP fixture (the on-device path), 30 samples each. `gpu_readback` p50:
+
+| Order | Variant | gpu_readback p50 | detect_image p50 |
+| --- | --- | ---: | ---: |
+| A | two polls | 0.700 ms | 1.345 ms |
+| B | one poll | 0.697 ms | 1.363 ms |
+| B | one poll | 0.693 ms | 1.323 ms |
+| A | two polls | 0.717 ms | 1.432 ms |
+
+**No measurable gain.** The reason is visible in the baseline breakdown: with
+the copies already waited for, the second poll measured 0.003-0.005 ms, because
+the map callbacks had nothing left to wait on. Removing it recovers that and
+nothing more, which is below the noise on this path.
+
+Retained anyway on simplicity, not speed: one blocking call instead of two,
+twelve fewer lines, and the ordering the rest of the readback group (12-14)
+builds on. No performance claim is made for it.
+
+Validation: new `fcs-core/examples/readback_parity.rs` prints an FNV-1a
+fingerprint of all 126000 raw output floats over five runs. Both variants gave
+`0xa116e42f7c2dabdb` on every run, so the readback is bit-exact, not merely
+within tolerance. The 46 GPU tests (ONNX parity, profiled/merged equality) and
+`concurrent_inference_matches_sequential` passed under the candidate with
+`FCS_STRICT_TESTS=1`. Map errors still propagate per buffer through the same
+channel receive.
+
+### 7 (partial). In-process A/B and the noise floor - kept (measurement)
+
+Comparing candidates across separate processes could not resolve this group:
+repeated identical runs drifted 0.696-0.779 ms on `gpu_readback` p50 as the GPU
+clocks ramped, swamping every effect being tested. `phase_timings --ab VAR` now
+alternates an environment flag between 15-run blocks inside one warm process,
+8 blocks per variant, and reports a per-phase p50 for each.
+
+A/A control (`--ab FCS_AA_CONTROL`, a flag nothing reads): every phase delta
+within **+/-0.003 ms**, `detect_image` +0.000 ms, off-block spread
+1.308-1.388 ms. Effects at or below about 0.005 ms stay inconclusive; anything
+above roughly 0.01 ms is now resolvable. Experiment 7 is only partly covered:
+this is one machine, one thermal state, and no independent-repetition or
+power-mode record.
+
+### 12. Pooled readback staging buffers - rejected
+
+Acquired the 12 staging buffers from the existing `GpuBufferPool` and recycled
+them after unmap, instead of `create_buffer` per run. In-process A/B, 0.17 MP
+fixture, RTX 4090 / D3D12:
+
+| Phase | fresh | pooled | delta |
+| --- | ---: | ---: | ---: |
+| readback_alloc | 0.042 | 0.003 | **-0.039** |
+| readback_wait | 0.487 | 0.533 | **+0.046** |
+| gpu_readback | 0.701 | 0.697 | -0.004 |
+| detect_image | 1.350 | 1.350 | +0.000 |
+
+The allocation cost is real and the pool removes essentially all of it. It buys
+nothing, because it sits in the window between submit and the blocking wait,
+where the host is already ahead of the GPU: the wait grows by what the
+allocation shed, to within 0.007 ms. Whole-path delta is zero against a
++/-0.003 ms control.
+
+Reverted. Revisit only under actual batch concurrency (60), where host time is
+not hidden behind one request's GPU work and allocation churn may matter.
+Bit-exact under the fingerprint probe; 46 GPU tests and the concurrency test
+passed with it enabled.
+
+### 13. One packed staging buffer - rejected
+
+One pooled or fresh allocation sized to the sum of the 12 head outputs, each
+copied to its own `COPY_BUFFER_ALIGNMENT` offset, one `map_async`, one unmap,
+and CPU slicing per head. Only each tensor's own byte range is read, so a
+larger pooled buffer contributes no stale capacity.
+
+| Phase | 12 buffers | 1 packed | delta |
+| --- | ---: | ---: | ---: |
+| readback_alloc | 0.043 | 0.009 | **-0.034** |
+| readback_wait | 0.483 | 0.521 | **+0.038** |
+| readback_collect | 0.020 | 0.018 | -0.002 |
+| gpu_readback | 0.698 | 0.690 | -0.008 |
+| detect_image | 1.330 | 1.320 | -0.010 |
+
+Same outcome and same cause as 12: one allocation instead of twelve, and the
+wait absorbs the difference. The -0.010 ms on `detect_image` is at the edge of
+the control's resolution and is not claimed as a gain. CPU slicing cost nothing
+measurable, so packing is not what fails here.
+
+Reverted. **The finding that generalises: on the single-image path, host work
+between the inference submit and the readback wait is free.** Experiments 12,
+13 and anything else that only shortens that window cannot improve latency. The
+critical path is what happens before the submit (recording, 0.18 ms), the GPU
+work itself (about 0.54 ms), and what happens after the wait (collect 0.02 ms,
+CHW-to-HWC 0.095 ms, decode 0.176 ms) - plus CPU preprocessing on large images.
+
+### 14. Head copies encoded with inference - rejected (slower)
+
+Allocated the staging buffers and appended the 12 head copies to the inference
+encoder, so one submission carried the forward pass and the readback copies
+instead of building a second encoder and submitting again. In-process A/B,
+0.17 MP fixture, 8 blocks per variant:
+
+| Phase | separate submit | merged submit | delta |
+| --- | ---: | ---: | ---: |
+| gpu_encode | 0.314 | 0.380 | **+0.066** |
+| gpu_submit | 0.120 | 0.140 | +0.020 |
+| readback_alloc | 0.042 | - | removed |
+| readback_copy | 0.042 | 0.038 | -0.004 |
+| readback_wait | 0.489 | 0.582 | **+0.093** |
+| onnx_inference | 1.210 | 1.290 | **+0.080** |
+| detect_image | 1.390 | 1.480 | **+0.090** |
+
+**Rejected: 0.09 ms slower**, repeated across two independent runs (+0.070 and
++0.090 ms) against a +/-0.003 ms control. The same effect as 12 and 13, with
+the sign reversed. Allocating the staging buffers and recording the copies
+costs about 0.084 ms of host time either way. In the existing arrangement that
+work happens after the inference submit, while the GPU is busy, and is free. In
+the merged version it happens before the submit, where it delays the point at
+which the GPU can start, and the wait grows accordingly.
+
+One submission instead of two saved nothing observable in return: the second
+submit was itself inside the free window.
+
+Bit-exact under the fingerprint probe (`0xa116e42f7c2dabdb` in both variants),
+so this is a latency decision, not a correctness one. Reverted.
+
+**Readback group (11-14) conclusion.** Only the ordering change in 11 was kept,
+and it was kept for simplicity rather than speed. The group's shared premise -
+that host-side readback bookkeeping costs whole-path time - does not hold on
+this path: about 0.13 ms of it sits in a window the GPU is busy through. Any
+remaining item in this group that only moves work within that window (15, 16,
+17 in its allocation-cost aspect) should be expected to measure zero, and 18's
+case has to be made on throughput under concurrency rather than latency. The
+recoverable time is before the submit and after the wait.
+
+### 48/49. Threading the source resize - kept
+
+Experiment 5 put CPU preprocessing at 2.65 ms of a 4.68 ms detection on a 10 MP
+image, the largest single cost anywhere in the application. `fast_image_resize`
+already does the resize with SIMD, but runs it on **one core**: its `rayon`
+feature is optional and the workspace did not enable it.
+
+**The measurement had to be fixed first.** Enabling the feature and comparing
+two binaries gave a contradictory answer - 10 MP looked slightly better, 22 MP
+looked 0.6 ms worse - because this machine's CPU throughput moved by **1.6x
+between two builds of identical code** (10 MP preprocessing measured 2.66 ms in
+one state and 4.82 ms in another, stable within each). No cross-build CPU
+comparison on this machine is trustworthy.
+
+`fast_image_resize` reads its thread count from `rayon::current_num_threads()`,
+so both variants can run in one process: a one-thread pool is the
+single-threaded build, the default pool is the threaded one.
+`fcs-core/examples/resize_threading.rs` alternates them, 8 blocks of 10 runs
+each, timing `resize_image` alone - not through `preprocess_dynamic_image`,
+whose BGR/CHW conversion is already rayon-parallel and reacts to the same pool.
+
+**Ungated, feature on** (640x640 output, 32-thread pool):
+
+| Source | Filter | 1 thread | all cores | speedup |
+| --- | --- | ---: | ---: | ---: |
+| 0.1 MP | Bilinear | 0.467 | 0.683 | 0.68x |
+| 0.2 MP | Bilinear | 0.478 | 0.816 | 0.59x |
+| 0.6 MP | Bilinear | 0.530 | 0.669 | 0.79x |
+| 1.1 MP | Bilinear | 0.670 | 0.789 | 0.85x |
+| 2.5 MP | Bilinear | 0.822 | 0.921 | 0.89x |
+| 5.5 MP | Bilinear | 1.450 | 1.143 | **1.27x** |
+| 10.1 MP | Bilinear | 2.080 | 1.317 | **1.58x** |
+| 22.1 MP | Bilinear | 3.487 | 2.995 | **1.16x** |
+| any | Nearest | 0.165-0.218 | 0.291-0.308 | 0.54-0.73x |
+
+Fork and join cost a roughly fixed 0.10-0.17 ms. That is most of a small
+resize and a fraction of a large one, so the crossover sits near **4 MP**.
+Nearest never wins: it gathers one source pixel per output pixel and finishes in
+0.17-0.22 ms even at 22 MP, less than the cost of distributing it.
+
+**Kept: the feature plus a size and filter gate.** `resize_image_fast` runs
+inside a one-thread pool below `RESIZE_THREADING_MIN_PIXELS` (4 MP) or for
+Nearest, and on the default pool above it. Re-measured with the gate in place:
+
+| Source | Filter | 1 thread | all cores | speedup |
+| --- | --- | ---: | ---: | ---: |
+| 0.1-0.2 MP | Bilinear | 0.461-0.489 | 0.456-0.483 | 1.01x |
+| 10.1 MP | Bilinear | 2.106 | 1.497 | **1.41x, -0.609 ms** |
+| 22.1 MP | Bilinear | 3.526 | 2.915 | **1.21x, -0.610 ms** |
+| any | Nearest | 0.170-0.206 | 0.166-0.200 | 1.03x |
+
+So roughly **0.6 ms off every large-image detection** and nothing lost at any
+other size or on the `Speed` setting - which matters, because `Speed` exists for
+batch throughput and ungated threading would have made it 0.55-0.73x.
+
+The gate is one constant for every machine; the crossover is a function of core
+count and memory bandwidth, and the probe re-measures it. Marked `ponytail:` in
+the source.
+
+Quality is unchanged: threading splits the separable convolution by rows, and
+the new `threaded_and_single_threaded_resize_agree` test asserts byte-identical
+output for Triangle, Lanczos3 and Nearest across a 4.3 MP source resized both
+ways. Detections cannot depend on the machine's core count.
+
+Experiment 49 is answered in the same pass: the source path was traced looking
+for redundant conversions and there are none to remove. `resize_image_fast`
+borrows the decoded `RgbImage` when the source is already RGB8 (`as_rgb8`), and
+a JPEG decode produces exactly that, so no full-resolution conversion or copy
+happens before the resize. The 3.0-3.2 ms full-resolution `to_rgba8` that
+`preprocess_cost` reports belongs only to the GPU preprocessing path, which
+declines above 2.5 MP and so never pays it on these images.
+
+**Second pass, after the `Resizer` fix (experiment 19) exposed it: stop zeroing
+the output buffer.** With the resize's own `memset` gone, the remaining one was
+`rgb_to_bgr_chw` allocating `vec![0.0f32; 3 * 640 * 640]` -- 4.9 MB zeroed and
+then completely overwritten by the parallel conversion loop, 3.1% of all CPU in
+the re-taken profile.
+
+The buffer is now `Vec::with_capacity` plus `spare_capacity_mut`, written
+through `MaybeUninit::write`, with one `set_len` afterwards. The traversal was
+pulled into `fill_bgr_planes`, generic over the element type, so the initialised
+and uninitialised paths cannot drift and "every element is written" stays a
+single checkable loop. `f32` has no destructor, so an unwind mid-loop leaves a
+length-0 `Vec` with nothing to drop.
+
+In-process A/B on `FCS_ZEROED_CHW`, 10 MP fixture:
+
+| Run | preprocess, uninit | preprocess, zeroed | delta |
+| --- | ---: | ---: | ---: |
+| 1 | 2.370 | 2.460 | +0.090 |
+| 2 | 2.400 | 2.570 | +0.170 |
+| 3 | 2.520 | 2.900 | +0.380 |
+
+Plus four `detect_image` runs across 10 MP and 22 MP, all favouring the
+uninitialised buffer by 0.07-0.44 ms. Machine state was slow during these runs,
+which inflates a bandwidth-bound cost; call it **0.1-0.2 ms typical**,
+direction unambiguous at 7/7 runs.
+
+This is the one place in the round where `unsafe` was accepted. The existing
+tests spot-checked three of twelve elements, which cannot see a gap in coverage
+that `set_len` would then expose, so
+`rgb_to_bgr_chw_writes_every_element` now compares **every** element against an
+independently computed reference at 37x23 -- a size sharing no factor with any
+chunking the implementation might use.
+
+**Where preprocessing stands now.** At 10 MP the resize is 1.60 ms of a 2.33 ms
+preprocess; the remaining 0.73 ms is the BGR/CHW conversion and is
+size-independent, since it works on the 640x640 result. The next real candidate
+is uploading the 640x640 RGB as 1.2 MB of `u8` and doing the BGR/CHW/f32
+conversion in a shader, which would remove both that CPU work and three
+quarters of the 0.28 ms input upload. Not attempted: it needs a third
+preprocessing path alongside the existing CPU and fully-on-device ones.
+
+Note: `preprocess_cost.rs` reports "0.00 ms" for GPU preprocessing whenever
+`upload_pays_for_source` declines, and then names GPU the winner. Its
+crossover table is wrong for any size above the decline threshold; the numbers
+above come from `resize_threading.rs` instead.
+
+### 9/19. Native CPU profile of warm detection - kept (one finding acted on)
+
+`samply` over the `inference_pipeline` bench, 25 s of warm detection on the
+10 MP fixture, `--main-thread-only`, release with `strip=none` and
+`debug=line-tables-only`. Two profiles: `detect_image/gpu_quality` (GPU
+inference, CPU preprocessing - the path a large image actually takes) and
+`detect_image/quality` (CPU inference) for contrast.
+
+A caveat worth recording: `quality` and `speed` in that bench are **CPU
+inference**; the GPU cases are `gpu`, `gpu_quality` and `gpu_on_device`. The
+first profile taken was of the CPU backend by mistake, and its top entry was
+`fcs_core::cpu::conv2d`, which is not on the shipped GPU path at all.
+
+Leaf self-time alone was not usable - the top entry was `memset_repmovs` at
+8.6% of CPU, which says nothing about who asked for zeroed memory. A small
+companion script walks each sample's stack from the leaf to the nearest named
+frame and aggregates there. Attributed `memset` on the GPU path:
+
+| Blamed frame | CPU | Share |
+| --- | ---: | ---: |
+| `fast_image_resize::Resizer::resample_convolution` | 476 ms | **4.1%** |
+| `fcs_core::preprocess::cpu_preprocess` | 462 ms | **4.0%** |
+| `fcs_core::model::decode_yunet_outputs` | 39 ms | 0.3% |
+| `wgpu_hal::dx12::Device::load_shader` | 34 ms | 0.3% |
+| `GpuYuNet::run_inference` | 29 ms | 0.2% |
+
+**Per-layer host bookkeeping is not the problem.** `run_inference` accounts for
+about 0.9% of CPU in self time, and its `memset` share is 0.2%. Nothing in the
+graph traversal, weight lookup or label handling that experiment 19 proposed
+attacking shows up. The 0.18-0.28 ms of recording measured in experiment 5 is
+real wall time but it is not concentrated anywhere a change could reach; no
+bookkeeping change was made, and 20-25 should not be started on the strength of
+19 alone.
+
+**What the profile did find: a re-zeroed scratch buffer.** A separable
+convolution writes an intermediate image between its horizontal and vertical
+passes, and `fast_image_resize` keeps that buffer inside the `Resizer`, growing
+it on demand and zeroing only the new part. `resize_image_fast` built a
+`Resizer` per call, so the buffer was thrown away and re-zeroed every time - for
+a 10 MP source the intermediate is 640x4240x3 = 8.1 MB.
+
+Kept: one `Resizer` per thread in a `thread_local`, alive between calls.
+In-process A/B on `FCS_FRESH_RESIZER` (per-call `Resizer` restored), five runs:
+
+| Image | preprocess, cached | preprocess, fresh | delta |
+| --- | ---: | ---: | ---: |
+| 10.1 MP | 2.830 | 3.100 | +0.270 |
+| 10.1 MP | 2.280 | 2.430 | +0.150 |
+| 10.1 MP | 1.990 | 2.110 | +0.120 |
+| 10.1 MP | 2.180 | 2.220 | +0.040 |
+| 22.1 MP | 4.810 | 5.070 | +0.260 |
+| 0.17 MP | (GPU preprocess path) | | +0.000 |
+
+Every run favours the cached `Resizer`; the size varies 0.04-0.27 ms because
+CPU throughput on this machine wanders far more than the GPU path does (off
+blocks spread 4.17-6.99 ms on one 10 MP run). Call it **roughly 0.1-0.15 ms
+typical on large images**, direction unambiguous, and exactly zero on small
+images, which never reach the CPU resize.
+
+Cost: one retained scratch buffer per thread that has ever resized, sized to
+the largest source that thread has seen. Thread-local rather than shared
+because `resize` needs `&mut` and a mutex would serialise the batch path.
+
+**Not acted on, but measured:** the other 4.0% of `memset` is inside
+`cpu_preprocess` - `rgb_to_bgr_chw` allocating `vec![0.0f32; 3*640*640]`
+(4.9 MB) and `FirImage::new` allocating the 1.2 MB destination, both zeroed and
+then completely overwritten. Removing that zeroing needs either `unsafe` around
+uninitialised memory or a reusable buffer the output tensor cannot take
+ownership of, since `chw_tensor_from_vec` consumes the `Vec`. Left alone: it is
+a comparable prize to the `Resizer` fix but a materially worse trade in safety
+and API churn.
+
+### 55. Output conversion and decode - partly kept
+
+Two candidates, measured separately by in-process A/B on `FCS_OLD_CONVERT`,
+0.17 MP fixture (the path where conversion is the largest share of detection).
+
+**Kept: stop copying two buffers that were already owned.** `Tensor::from_vec`
+exists precisely to take ownership, and both hot paths were calling
+`Tensor::from_shape`, which copies:
+
+- `build_decode_tensors` copied each of the 12 head buffers that
+  `reorder_hw_major` had just allocated
+- `decode_yunet_outputs` copied the fully written 8400x15 `fused` buffer
+
+Three runs, every one identical to 0.001 ms:
+
+| Phase | from_vec | from_shape (copies) | delta |
+| --- | ---: | ---: | ---: |
+| gpu_convert | 0.087 | 0.097-0.099 | **-0.011** |
+| gpu_decode | 0.166-0.169 | 0.176-0.180 | **-0.010 to -0.013** |
+| onnx_inference | 1.140-1.170 | 1.160-1.200 | **-0.020 to -0.030** |
+| detect_image | 1.300-1.340 | 1.330-1.370 | **-0.020 to -0.030** |
+
+About **0.02-0.03 ms** for deleting two `to_vec` calls, repeatable to within
+0.01 ms across runs and well clear of the +/-0.003 ms control. Raw output is
+bit-identical (`0xa116e42f7c2dabdb`).
+
+**Rejected: reordering the reorder loop.** `reorder_hw_major` walks
+channel-major, so it reads `data` sequentially and writes `out` with a stride of
+`channels` -- for the 10-channel keypoint heads, a fresh cache line per store.
+The obvious rewrite walks pixel-major instead: sequential writes, strided reads,
+`Vec::with_capacity` and `push` rather than a zeroed vector and indexed stores.
+
+It was **slower**, by 0.004-0.011 ms on `gpu_convert` in four consecutive runs.
+The strided stores are not what this loop is limited by, and the `push` bounds
+and capacity checks cost more than the store pattern saves. Reverted, with the
+measurement recorded in a comment so it is not retried blind.
+
+**Kept, and the largest single win in this group: decode straight from CHW.**
+The reorder existed only because `decode_stride_outputs` indexes
+`bbox[cell * 4 + c]`, which is cell-major, while the GPU heads are channel-major
+planes of raw logits. Rather than transposing twelve buffers so the decoder can
+read them the way it likes, the decoder was taught the other layout.
+
+`HeadLayout` has exactly two variants, named for the two producers rather than
+as a general matrix, because layout and activation travel together:
+`CellMajorActivated` (ONNX Runtime, tract, the CPU graph) and
+`ChannelMajorLogits` (the GPU heads). `decode_yunet_outputs` keeps its signature
+and its old behaviour; `decode_yunet_outputs_with` takes the layout. The cell
+loop is shared and monomorphised over an index closure, so the branch is
+resolved once per stride rather than 8400 times. Sigmoid moves into the decoder,
+applied to `cls` and `obj` only - the same two heads the reorder used to
+activate. `reorder_hw_major` is deleted.
+
+In-process A/B on `FCS_OLD_CONVERT`, three runs, 0.17 MP fixture:
+
+| Phase | CHW decode | transpose first | delta |
+| --- | ---: | ---: | ---: |
+| gpu_convert | 0.001-0.002 | 0.086-0.098 | **-0.085 to -0.097** |
+| gpu_decode | 0.072-0.082 | 0.131-0.140 | **-0.058 to -0.059** |
+| onnx_inference | 0.985-1.160 | 1.130-1.330 | **-0.130 to -0.170** |
+| detect_image | 1.150-1.380 | 1.290-1.600 | **-0.140 to -0.220** |
+
+About **0.15-0.2 ms off every detection, roughly 11-15% of a small-image
+detection**, and the largest saving found anywhere outside preprocessing.
+
+Two things were removed, not one. The transpose itself is now essentially free
+(0.001 ms - the guard wraps twelve `Tensor::from_vec` calls and nothing else).
+But **decode also got 0.058 ms faster**, which was not the intent: reading the
+downloaded buffers directly leaves the twelve freshly written transposed buffers
+out of cache entirely, and the decode's gather is no worse for being strided.
+That half of the gain is an observation, not a prediction that would have been
+made in advance.
+
+Validation: the raw fingerprint is unchanged (`0xa116e42f7c2dabdb` in both
+variants), so the decoded rows are bit-identical, not merely within tolerance.
+New `channel_major_logits_decode_like_cell_major_activated` builds the same
+values in both layouts - transposing and activating by hand, independently of
+the implementation - and asserts the two decodes agree, so channel-major
+indexing cannot silently invert. The whole workspace passes under
+`FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4, including ONNX raw parity,
+GPU/CPU parity and concurrent inference.
+
+**This removes the premise of experiment 38.** That item proposed making the
+final layer write HWC so the CPU would not have to reorder. There is no CPU
+reorder left to save, and this cost no GPU time at all, so 38 would now have to
+justify itself on GPU store coalescing alone. It stays unchecked, but its
+stated motivation is gone.
 
 ### Previous work
 

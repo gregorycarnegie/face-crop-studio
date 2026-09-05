@@ -23,6 +23,63 @@ the findings; [experimentation.md](../experimentation.md) retains the sequential
 checklist, individual runs and reproduction commands. Finishing that checklist
 does **not** mean the performance search is exhausted.
 
+### Where warm detection actually spends its time (2026-09-05, later round)
+
+Phase timings from `cargo run --release -p fcs-core --example phase_timings`,
+RTX 4090 / D3D12, warm, single request. Indentation is containment; children
+must not be summed with their parent, and `readback_wait` **contains** the
+forward pass rather than idling beside it.
+
+Two different paths, chosen by source size. `upload_pays_for_source` declines
+above 2.5 MP, so a large photo preprocesses on the CPU and a small one does not.
+
+| Phase | 0.17 MP | 10 MP |
+| --- | ---: | ---: |
+| detect_image | 1.57 | 4.68 |
+| - CPU preprocess (large only) | - | **2.65** |
+| - on-device preprocess (small only) | ~0.21 | - |
+| - inference | 1.35 | 1.97 |
+| - - record (host, before submit) | 0.21 | 0.28 |
+| - - finish + submit | 0.13 | 0.16 |
+| - - readback (incl. GPU execution) | 0.79 | 1.04 |
+| - - CHW to HWC + sigmoid | 0.11 | 0.11 |
+| - - decode | 0.19 | 0.19 |
+
+**Large-image detection is a preprocessing problem, not a shader problem.**
+The ~0.54 ms of profiled GPU compute is a minority of even the small-image
+case, and on a 10 MP source CPU preprocessing alone is 57% of the whole
+detection.
+
+**Host work between the inference submit and the readback wait is free.** The
+GPU is busy through that window, so shortening it does not shorten detection:
+removing the staging allocation shed 0.039 ms and the wait grew by 0.046 ms.
+Moving work *into* that window helps, and moving work out of it hurts -
+encoding the head copies with inference cost 0.09 ms. The recoverable time is
+before the submit, in the GPU work itself, and after the wait.
+
+**Measurement caveats that invalidated earlier attempts.** Cross-process
+comparison cannot resolve anything at this scale: repeated identical GPU runs
+drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
+**1.6x between two builds of identical code**. Both are handled by alternating
+variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
+sits within +/-0.003 ms per phase.
+
+### Changes retained in this round
+
+| Change | Effect | Where |
+| --- | --- | --- |
+| Threaded source resize above 4 MP | **-0.6 ms** on large images | `fcs-utils/src/image_utils.rs` |
+| One `fir::Resizer` per thread | -0.1 to -0.15 ms on large images | `fcs-utils/src/image_utils.rs` |
+| Stop zeroing the BGR/CHW buffer | -0.1 to -0.2 ms on large images | `fcs-utils/src/image_utils.rs` |
+| Decode straight from the GPU's channel-major heads | **-0.15 to -0.2 ms** | `model.rs`, `gpu/runtime.rs` |
+| `Tensor::from_vec` instead of copying | -0.02 to -0.03 ms | `gpu/runtime.rs`, `model.rs` |
+| One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
+
+All are bit-exact: the raw 126000-float output fingerprint is unchanged
+(`readback_parity` probe), resize output is byte-identical between one thread
+and many (`threaded_and_single_threaded_resize_agree`), and the full workspace
+suite passes under `FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4.
+
 ### Historical stage breakdown (before the latest GPU optimizations)
 
 Release build, 640x640, RTX 4090 / Ryzen 9 7950X. The following measurements
@@ -66,9 +123,13 @@ quoting the single-image ratio at anyone.
 - **Batch and interactive work:** CPU parallelism, GPU queue occupancy and
   latency overlap differ. Remeasure the actual export or webcam/preview path;
   a single-image shader result cannot select the fastest batch backend.
-- **Preprocessing and postprocessing:** the old tract-based percentages do not
-  describe today's GPU path. Neither stage has been proved optimal; prioritize
-  them only after measuring their current absolute cost.
+- **Preprocessing and postprocessing:** now measured, not assumed. CPU
+  preprocessing is 2.65 ms of a 4.68 ms detection at 10 MP and is the single
+  largest cost in the application; the resize inside it is now threaded above
+  4 MP. Postprocessing is 0.005-0.010 ms and is not worth attention. Output
+  conversion and decode together are about 0.3 ms and sit on the critical path
+  after the readback wait -- now about 0.08 ms, since the CHW-to-HWC transpose
+  the decoder used to require has been removed rather than optimised.
 
 ---
 
@@ -190,6 +251,16 @@ cargo run --release -p fcs-core --example conv2d_experiment -- fcs-core/src/gpu/
 
 # Paired separate/merged pass encoding costs
 cargo run --release -p fcs-core --example gpu_encode_comparison
+
+# Wall-clock phase breakdown of one detection, and in-process A/B of a flag
+cargo run --release -p fcs-core --example phase_timings [image]
+cargo run --release -p fcs-core --example phase_timings [image] --ab SOME_ENV_FLAG
+
+# Bit-exact fingerprint of the raw head outputs, for readback changes
+cargo run --release -p fcs-core --example readback_parity
+
+# Whether threading the source resize pays, at several megapixel counts
+cargo run --release -p fcs-core --example resize_threading
 
 # Whole detection; keep gpu, gpu_on_device and gpu_quality results separate
 cargo bench -p fcs-core --bench inference_pipeline

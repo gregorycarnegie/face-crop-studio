@@ -202,12 +202,41 @@ impl YuNetModel {
     }
 }
 
+#[inline]
+pub(crate) fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
+
 /// Decode YuNet's twelve raw head tensors into `[N, 15]` detection rows.
 ///
 /// Public because a backend that produces head tensors — including one outside
 /// this crate — still needs the shared decoder; having two decoders is how the
 /// backends would drift apart.
 pub fn decode_yunet_outputs(outputs: &[Tensor], input_size: InputSize) -> Result<Tensor> {
+    decode_yunet_outputs_with(outputs, input_size, HeadLayout::CellMajorActivated)
+}
+
+/// How one stride's four head tensors are laid out, and whether their scores are activated.
+///
+/// The two variants are the two producers, not a general matrix: layout and activation
+/// travel together because each backend fixes both.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeadLayout {
+    /// One row per cell -- `bbox[cell * 4 + channel]` -- with `cls` and `obj` already
+    /// through sigmoid. What ONNX Runtime, tract and the CPU graph produce.
+    CellMajorActivated,
+    /// One plane per channel -- `bbox[channel * cells + cell]` -- with `cls` and `obj`
+    /// still raw logits. What the GPU heads write, so the GPU path decodes straight from
+    /// the downloaded buffers instead of transposing them first.
+    ChannelMajorLogits,
+}
+
+/// [`decode_yunet_outputs`] for a caller whose heads are not cell-major and activated.
+pub fn decode_yunet_outputs_with(
+    outputs: &[Tensor],
+    input_size: InputSize,
+    layout: HeadLayout,
+) -> Result<Tensor> {
     anyhow::ensure!(
         outputs.len() == STRIDES.len() * OUTPUTS_PER_STRIDE,
         "YuNet decode expects {} tensors, got {}",
@@ -215,16 +244,18 @@ pub fn decode_yunet_outputs(outputs: &[Tensor], input_size: InputSize) -> Result
         outputs.len()
     );
 
-    let layout = build_stride_layout(input_size)?;
-    let mut fused = vec![0f32; layout.total_capacity];
+    let strides = build_stride_layout(input_size)?;
+    let mut fused = vec![0f32; strides.total_capacity];
 
-    for meta in layout.metas.iter() {
+    for meta in strides.metas.iter() {
         let dst = &mut fused[meta.offset..meta.offset + meta.cell_count * DETECTION_OUTPUT_COLS];
-        decode_stride_outputs(outputs, meta, dst)?;
+        decode_stride_outputs(outputs, meta, layout, dst)?;
     }
 
     let rows = fused.len() / DETECTION_OUTPUT_COLS;
-    Tensor::from_shape(&[rows, DETECTION_OUTPUT_COLS], &fused)
+    // Every element of `fused` was written above, so hand the buffer over rather than
+    // copying all 8400x15 of it into a second allocation.
+    Tensor::from_vec(&[rows, DETECTION_OUTPUT_COLS], fused)
         .map_err(|e| anyhow::anyhow!("failed to build fused YuNet tensor: {e}"))
 }
 
@@ -363,47 +394,62 @@ fn decode_stride_cell(input: CellDecodeInput) -> [f32; DETECTION_OUTPUT_COLS] {
     row_out
 }
 
-fn decode_stride_outputs(outputs: &[Tensor], meta: &StrideMeta, dst: &mut [f32]) -> Result<()> {
-    let stride_outputs = validate_stride_outputs(outputs, meta)?;
+fn decode_stride_outputs(
+    outputs: &[Tensor],
+    meta: &StrideMeta,
+    layout: HeadLayout,
+    dst: &mut [f32],
+) -> Result<()> {
+    let s = validate_stride_outputs(outputs, meta)?;
+    // Both arms are the same loop over the same cells; only where each channel lives in
+    // the buffer differs, and whether the scores still need sigmoid. Branching here rather
+    // than inside the loop keeps the indexing constant-folded for 8400 cells.
+    match layout {
+        HeadLayout::CellMajorActivated => decode_cells(
+            meta,
+            dst,
+            |c, cell, channels| cell * channels + c,
+            false,
+            &s,
+        ),
+        HeadLayout::ChannelMajorLogits => {
+            decode_cells(meta, dst, |c, cell, _| c * meta.cell_count + cell, true, &s)
+        }
+    }
+    Ok(())
+}
+
+/// Walk every cell of one stride, gathering its channels through `index`.
+///
+/// `index(channel, cell, channels)` is where that channel's value for that cell lives,
+/// which is the only thing the two head layouts disagree about.
+fn decode_cells(
+    meta: &StrideMeta,
+    dst: &mut [f32],
+    index: impl Fn(usize, usize, usize) -> usize,
+    activate: bool,
+    s: &StrideOutputs<'_>,
+) {
     let stride_f = meta.stride as f32;
+    let score = |v: f32| if activate { sigmoid(v) } else { v };
     let mut write = 0;
 
     for row in 0..meta.rows {
         for col in 0..meta.cols {
-            let idx = row * meta.cols + col;
-            let bbox_offset = idx * 4;
-            let kps_offset = idx * 10;
+            let cell = row * meta.cols + col;
             let decoded = decode_stride_cell(CellDecodeInput {
                 row,
                 col,
                 stride_f,
-                cls_score: stride_outputs.cls[idx],
-                obj_score: stride_outputs.obj[idx],
-                bbox: [
-                    stride_outputs.bbox[bbox_offset],
-                    stride_outputs.bbox[bbox_offset + 1],
-                    stride_outputs.bbox[bbox_offset + 2],
-                    stride_outputs.bbox[bbox_offset + 3],
-                ],
-                kps: [
-                    stride_outputs.kps[kps_offset],
-                    stride_outputs.kps[kps_offset + 1],
-                    stride_outputs.kps[kps_offset + 2],
-                    stride_outputs.kps[kps_offset + 3],
-                    stride_outputs.kps[kps_offset + 4],
-                    stride_outputs.kps[kps_offset + 5],
-                    stride_outputs.kps[kps_offset + 6],
-                    stride_outputs.kps[kps_offset + 7],
-                    stride_outputs.kps[kps_offset + 8],
-                    stride_outputs.kps[kps_offset + 9],
-                ],
+                cls_score: score(s.cls[cell]),
+                obj_score: score(s.obj[cell]),
+                bbox: std::array::from_fn(|c| s.bbox[index(c, cell, 4)]),
+                kps: std::array::from_fn(|c| s.kps[index(c, cell, 10)]),
             });
             dst[write..write + DETECTION_OUTPUT_COLS].copy_from_slice(&decoded);
             write += DETECTION_OUTPUT_COLS;
         }
     }
-
-    Ok(())
 }
 
 fn align_to(value: usize, divisor: usize) -> usize {
@@ -479,6 +525,92 @@ mod tests {
         assert_eq!(layout.metas[0].cell_count, 64);
         assert_eq!(layout.metas[1].cell_count, 16);
         assert_eq!(layout.metas[2].cell_count, 4);
+    }
+
+    // --- head layouts ---
+
+    /// The two head layouts must decode to exactly the same rows.
+    ///
+    /// The GPU path decodes straight from channel-major planes with raw logits, where
+    /// every other backend hands over cell-major rows with activated scores. Transposing
+    /// and activating the same data by hand and decoding it the other way is the check
+    /// that the channel-major indexing -- `channel * cells + cell`, easy to get backwards
+    /// and silent when wrong -- still lines up.
+    #[test]
+    fn channel_major_logits_decode_like_cell_major_activated() {
+        let size = InputSize {
+            width: 64,
+            height: 64,
+        };
+        let strides = build_stride_layout(size).expect("build stride layout");
+
+        // Channel-major, raw logits: what the GPU heads produce.
+        let mut chw: Vec<Tensor> = Vec::new();
+        for channels in [1usize, 1, 4, 10] {
+            for meta in strides.metas.iter() {
+                let n = meta.cell_count * channels;
+                // Spread over a range where sigmoid is not saturated, so an activation
+                // applied to the wrong element changes the result.
+                let data: Vec<f32> = (0..n).map(|i| ((i % 23) as f32 * 0.3) - 3.0).collect();
+                chw.push(Tensor::from_vec(&[channels, meta.cell_count], data).expect("chw head"));
+            }
+        }
+
+        // The same values transposed to cell-major, with cls and obj pre-activated.
+        let cell_major: Vec<Tensor> = chw
+            .iter()
+            .enumerate()
+            .map(|(i, plane)| {
+                let channels = plane.shape()[0];
+                let cells = plane.shape()[1];
+                let src = plane.as_slice();
+                let activate = i < STRIDES.len() * 2; // cls and obj come first
+                let mut out = vec![0f32; channels * cells];
+                for c in 0..channels {
+                    for cell in 0..cells {
+                        let v = src[c * cells + cell];
+                        out[cell * channels + c] = if activate { sigmoid(v) } else { v };
+                    }
+                }
+                Tensor::from_vec(&[cells, channels], out).expect("cell-major head")
+            })
+            .collect();
+
+        let from_chw = decode_yunet_outputs_with(&chw, size, HeadLayout::ChannelMajorLogits)
+            .expect("decode channel-major");
+        let from_rows =
+            decode_yunet_outputs_with(&cell_major, size, HeadLayout::CellMajorActivated)
+                .expect("decode cell-major");
+
+        assert_eq!(from_chw.shape(), from_rows.shape());
+        for (i, (a, b)) in from_chw
+            .as_slice()
+            .iter()
+            .zip(from_rows.as_slice())
+            .enumerate()
+        {
+            assert!(
+                (a - b).abs() < 1e-6,
+                "element {i} differs between head layouts: {a} vs {b}"
+            );
+        }
+    }
+
+    // --- sigmoid ---
+
+    #[test]
+    fn sigmoid_zero_is_half() {
+        assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sigmoid_large_positive_approaches_one() {
+        assert!(sigmoid(100.0) > 0.9999);
+    }
+
+    #[test]
+    fn sigmoid_large_negative_approaches_zero() {
+        assert!(sigmoid(-100.0) < 0.0001);
     }
 
     // --- decode_yunet_outputs ---
