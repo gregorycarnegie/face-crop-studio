@@ -72,10 +72,17 @@ that, so experiments 67 and 68 outrank them for folder work. Interactive
 single-image latency is the case where the detection numbers below still
 dominate.
 
-A comparison against libjpeg-turbo is currently **blocked, not resolved**:
-`mozjpeg-sys` falls back to `jsimd_none.c` when NASM is absent, so the local
-build measures scalar C. See experiment 67 for the reproduction steps and for a
-related build-configuration issue affecting released binaries.
+libjpeg-turbo, already linked in through `nokhwa`, decodes the same corpus
+**1.23x faster** (517 ms vs 420 ms over 15 images of 8-22 MP). It is not
+adopted: the two decoders differ by up to 5/255 on a channel, and those pixels
+reach exported crops, so switching is a decision about output stability rather
+than a drop-in win. See experiment 67.
+
+A build issue found along the way and fixed: `mozjpeg-sys` silently compiles
+`jsimd_none.c` when NASM is absent, and the Windows and macOS release legs did
+not install it, so released binaries decoded webcam MJPEG frames ~2.2x slower
+than they should. Both legs now install NASM and the Windows leg fails if it is
+not on `PATH`.
 
 ### The resize is at its floor
 

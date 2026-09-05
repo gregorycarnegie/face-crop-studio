@@ -1293,7 +1293,7 @@ harness is what makes them decidable; the per-call `var_os` lookup is on the
 order of a microsecond against a 1.3 ms resize and did not separate from noise
 in the A/A control.
 
-### 67. Alternative JPEG decoders - blocked, and a build-configuration finding
+### 67. Alternative JPEG decoders - measured, not adopted; build issue fixed
 
 Detection is now about 3.1 ms for a 10 MP photo. Decoding that photo is
 **24.0 ms** (`stage_breakdown`, warm, from memory), so on a folder of images the
@@ -1306,29 +1306,44 @@ new native dependency. `fcs-core/examples/decode_bench.rs` compares it with the
 shipped `image`/zune-jpeg path over the largest fixtures, decoding from memory
 so cold I/O is excluded.
 
-It measured **0.51-0.59x -- roughly half the speed** of zune-jpeg across 15
-images from 8.3 to 22.1 MP.
+The first run measured **0.51-0.59x -- roughly half the speed** of zune-jpeg,
+and that result was void: `mozjpeg-sys` had emitted
+`NASM not installed. Mozjpeg's SIMD won't be enabled` and compiled
+`jsimd_none.c`, so what was timed was libjpeg-turbo's scalar C fallback. NASM
+was in fact installed at `C:\Program Files\NASM` but not on `PATH`, and
+`cargo clean -p mozjpeg-sys` does not invalidate a cached build-script run --
+the stale output had to be deleted outright before the script would re-run.
+With SIMD confirmed present (`nasm-missing=0 jsimd_none=0`):
 
-**That result is void.** `mozjpeg-sys` emits
-`NASM not installed. Mozjpeg's SIMD won't be enabled` and compiles
-`jsimd_none.c`, so what was measured is libjpeg-turbo's scalar C fallback, not
-libjpeg-turbo. No conclusion about the decoder can be drawn from it, in either
-direction. Status: **blocked on a build tool**, not rejected.
+| Source | `image` (zune-jpeg) | libjpeg-turbo | Speedup |
+| --- | ---: | ---: | ---: |
+| 8.3 MP (x7) | 27.1-33.8 ms | 23.6-29.1 ms | 1.10-1.27x |
+| 11.1-12.2 MP (x5) | 29.2-36.6 ms | 23.2-27.1 ms | 1.24-1.35x |
+| 22.1 MP (x3) | 44.1-48.4 ms | 36.2-38.8 ms | 1.22-1.25x |
+| **Total, 15 images** | **517 ms** | **420 ms** | **1.23x** |
 
-To finish: install NASM (`choco install nasm`, then
-`C:\Program Files\NASM` on `PATH`), rebuild so `mozjpeg-sys` picks up SIMD --
-confirm via `target/release/build/mozjpeg-sys-*/output` -- and re-run
-`cargo run --release -p fcs-core --example decode_bench`.
+So libjpeg-turbo is **1.23x faster** -- about 5-10 ms per photo -- and the
+scalar fallback is roughly 2.2x slower than the SIMD build, which is what the
+first run was really measuring.
 
-**Separate finding, worth acting on regardless of this experiment.**
-`CONTRIBUTING.md` lists NASM as a required build tool, but the build only warns
-when it is missing and silently falls back to scalar C. `.github/workflows/release.yml`
-installs `nsis` and `pkgconfiglite` and never installs NASM, so unless the
-hosted runner image happens to ship it, **released binaries decode webcam MJPEG
-frames without SIMD**. That is a shipped-performance question independent of
-which still decoder is chosen, and it is invisible in CI because the build
-succeeds either way. Verify against a release build's log before assuming; the
-local build is confirmed to be missing it.
+**Not adopted yet, because it is not only a speed question.** The two decoders
+disagree: mean absolute channel difference 0.029, worst single channel **5/255**
+over the same 15 images. The JPEG standard leaves IDCT precision open and both
+are valid, but those pixels reach exported crops, so this changes output rather
+than merely producing it faster. It also needs a JPEG-only fast path with a
+fallback for everything `image` handles that `mozjpeg` does not, and EXIF
+orientation still applied afterwards. That is a deliberate product decision
+about output stability, not a drop-in optimisation, and it is left for one.
+
+**Separate finding, acted on.** `CONTRIBUTING.md` lists NASM as a required build
+tool, but a missing NASM only warns and silently degrades -- the build succeeds
+and the binary is quietly ~2.2x slower at JPEG work. The Linux leg already
+installed `nasm` through `.github/actions/linux-build-deps`; the **Windows and
+macOS legs did not**. `nokhwa` decodes webcam MJPEG frames through libjpeg-turbo,
+so this reached shipped behaviour on two of three platforms. Both legs now
+install it, and the Windows leg **verifies `nasm` is on `PATH` and fails if it
+is not** -- a warning that only shows up in a build log is exactly how this got
+missed, so the guard matters more than the install.
 
 Recorded regardless of the decoder outcome: **decode is 24 ms against 3.1 ms of
 detection**, so experiments 67 and 68 outrank anything remaining in the

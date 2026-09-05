@@ -161,6 +161,24 @@ jobs:
         run: |
           choco install pkgconfiglite --no-progress -y
 
+      - name: Install NASM
+        # mozjpeg-sys assembles libjpeg-turbo's SIMD kernels with NASM, and when NASM is
+        # absent it prints a warning, compiles jsimd_none.c and carries on -- so the build
+        # still succeeds and the binary is silently ~2x slower at JPEG work. nokhwa decodes
+        # webcam MJPEG frames through it, so that reaches shipped behaviour. The verify step
+        # is the point: without it this regresses the next time the runner image changes.
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Verify NASM is on PATH
+        shell: pwsh
+        run: |
+          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
+          if (-not $nasm) { throw "nasm not on PATH; libjpeg-turbo would fall back to scalar C" }
+          nasm -v
+
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
@@ -585,7 +603,9 @@ jobs:
           # libheif: HEIC/HEIF decode (brew ships a recent libheif for libheif-rs).
           # librsvg: rsvg-convert for SVG → PNG iconset generation.
           # create-dmg: drag-to-Applications DMG layout.
-          brew install dav1d libheif pkg-config librsvg create-dmg
+          # nasm: mozjpeg-sys assembles libjpeg-turbo's SIMD with it and silently falls
+          # back to scalar C when it is missing (see the Windows leg for why that matters).
+          brew install dav1d libheif pkg-config librsvg create-dmg nasm
 
       - name: Build release binary (aarch64-apple-darwin)
         run: cargo build --release -p fcs-gui --target aarch64-apple-darwin
