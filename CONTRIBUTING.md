@@ -40,7 +40,13 @@ Install the usual Rust and Windows build tools first:
 - Rust toolchain. CI currently uses Rust `1.95.0`.
 - Visual Studio Build Tools with the C++ desktop workload and Windows SDK.
 - Git.
-- NASM on `PATH`; for example `C:\Program Files\NASM`.
+- NASM on `PATH`; for example `C:\Program Files\NASM`. Installing it is not
+  enough: `mozjpeg-sys` only *warns* when NASM is missing and then compiles
+  libjpeg-turbo's scalar fallback, so the build succeeds and JPEG work is about
+  2.2x slower. Check with `nasm -v`, and if a build has already cached the
+  fallback, delete `target/*/build/mozjpeg-sys-*` and
+  `target/*/.fingerprint/mozjpeg-sys-*` -- `cargo clean -p mozjpeg-sys` does not
+  re-run the build script.
 - `pkg-config` and `dav1d` for AVIF support.
 - `libheif` (>= 1.17) for HEIC/HEIF support, located via `pkg-config`.
 
