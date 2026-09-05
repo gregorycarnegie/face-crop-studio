@@ -170,7 +170,7 @@ impl GpuShapeMask {
             let workgroups_y = height.div_ceil(16);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("shape_mask_pass"),
-                timestamp_writes: None,
+                timestamp_writes: self.context.timestamp_writes("shape_mask"),
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

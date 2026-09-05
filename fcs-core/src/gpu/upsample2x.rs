@@ -87,7 +87,7 @@ impl Upsample2xPipeline {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("resize2x_pass"),
-                timestamp_writes: None,
+                timestamp_writes: context.timestamp_writes("resize2x"),
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

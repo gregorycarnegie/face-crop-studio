@@ -32,6 +32,20 @@ pub(crate) fn test_context() -> Option<Arc<GpuContext>> {
     }
 }
 
+/// A context with compute-pass timing on, or `None` when the machine has no usable
+/// adapter. The context still builds when the adapter lacks `TIMESTAMP_QUERY`; it just
+/// records nothing, so callers must handle an empty timing list.
+pub(crate) fn profiling_context() -> Option<Arc<GpuContext>> {
+    let options = GpuContextOptions {
+        profiling: true,
+        ..GpuContextOptions::default()
+    };
+    match GpuContext::init_with_fallback(&options) {
+        GpuAvailability::Available(ctx) => Some(ctx),
+        _ => None,
+    }
+}
+
 /// An image where every pixel differs from its neighbours in all four channels.
 ///
 /// Deliberately not a flat fill: the per-pixel variation is what lets a test

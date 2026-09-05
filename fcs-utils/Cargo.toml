@@ -51,6 +51,11 @@ heic = ["dep:libheif-rs"]
 [dev-dependencies]
 tempfile.workspace = true
 naga.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "gpu_shaders"
+harness = false
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true

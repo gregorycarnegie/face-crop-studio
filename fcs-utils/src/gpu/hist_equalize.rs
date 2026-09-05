@@ -258,7 +258,7 @@ impl GpuHistogramEqualizer {
             let dispatch = pixel_count.div_ceil(256);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("hist_pass"),
-                timestamp_writes: None,
+                timestamp_writes: self.context.timestamp_writes("hist"),
             });
             pass.set_pipeline(&self.histogram_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -267,7 +267,7 @@ impl GpuHistogramEqualizer {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("hist_cdf_pass"),
-                timestamp_writes: None,
+                timestamp_writes: self.context.timestamp_writes("hist_cdf"),
             });
             pass.set_pipeline(&self.cdf_pipeline);
             pass.set_bind_group(0, &cdf_bind_group, &[]);
@@ -328,7 +328,7 @@ impl GpuHistogramEqualizer {
             let dispatch = pixel_count.div_ceil(256);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("hist_apply_pass"),
-                timestamp_writes: None,
+                timestamp_writes: self.context.timestamp_writes("hist_apply"),
             });
             pass.set_pipeline(&self.apply_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

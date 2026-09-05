@@ -139,7 +139,15 @@ impl GpuGaussianBlur {
                 },
             ],
         });
-        dispatch_blur(&mut encoder, &self.pipeline, &horizontal_bg, width, height);
+        dispatch_blur(
+            &mut encoder,
+            &self.context,
+            "gaussian_blur_h",
+            &self.pipeline,
+            &horizontal_bg,
+            width,
+            height,
+        );
 
         // Vertical pass
         let vertical_uniforms = BlurUniforms {
@@ -173,7 +181,15 @@ impl GpuGaussianBlur {
                 },
             ],
         });
-        dispatch_blur(&mut encoder, &self.pipeline, &vertical_bg, width, height);
+        dispatch_blur(
+            &mut encoder,
+            &self.context,
+            "gaussian_blur_v",
+            &self.pipeline,
+            &vertical_bg,
+            width,
+            height,
+        );
 
         encoder.copy_buffer_to_buffer(&input_buffer, 0, &readback, 0, buffer_size);
         queue.submit(std::iter::once(encoder.finish()));
@@ -220,6 +236,8 @@ impl GpuGaussianBlur {
 
 fn dispatch_blur(
     encoder: &mut wgpu::CommandEncoder,
+    context: &GpuContext,
+    label: &str,
     pipeline: &wgpu::ComputePipeline,
     bind_group: &wgpu::BindGroup,
     width: u32,
@@ -229,7 +247,7 @@ fn dispatch_blur(
     let workgroups_y = height.div_ceil(16);
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
         label: Some("gaussian_blur_pass"),
-        timestamp_writes: None,
+        timestamp_writes: context.timestamp_writes(label),
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);

@@ -164,7 +164,7 @@ impl GpuRedEyeRemoval {
             let dispatch = div_ceil(pixel_count as u32, 256);
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("red_eye_pass"),
-                timestamp_writes: None,
+                timestamp_writes: self.context.timestamp_writes("red_eye"),
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

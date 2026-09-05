@@ -41,12 +41,17 @@ pub mod crop_batch;
 pub use crop_batch::{BatchCropRequest, GpuBatchCropper};
 pub mod buffer_pool;
 pub use buffer_pool::{ExecutionScope, GpuBufferPool};
+pub mod profiler;
+pub use profiler::{GpuProfiler, PassTiming, total_by_label};
 pub mod memory;
 pub use memory::get_available_vram;
 #[cfg(test)]
 pub(crate) mod test_support;
 
 use std::sync::Arc;
+
+/// Compute passes one profiler run can hold. A YuNet forward pass is ~62.
+const DEFAULT_PROFILER_PASSES: u32 = 256;
 
 #[derive(Debug, Clone)]
 pub struct GpuReport {
@@ -119,6 +124,9 @@ pub struct GpuContextOptions {
     pub label: Option<String>,
     /// Memory allocation hints forwarded to `wgpu`.
     pub memory_hints: Option<MemoryHints>,
+    /// Record GPU-side timings for each compute pass. Requires adapter support for
+    /// `TIMESTAMP_QUERY`; silently inactive without it.
+    pub profiling: bool,
 }
 
 impl Default for GpuContextOptions {
@@ -136,6 +144,7 @@ impl Default for GpuContextOptions {
             dx12_shader_compiler: Dx12Compiler::default(),
             label: Some("YuNet GPU context".to_string()),
             memory_hints: None,
+            profiling: false,
         }
     }
 }
@@ -366,6 +375,7 @@ pub struct GpuContext {
     info: AdapterInfo,
     features: Features,
     limits: Limits,
+    profiler: Option<GpuProfiler>,
 }
 
 impl GpuContext {
@@ -418,7 +428,13 @@ impl GpuContext {
         }
 
         let mut features = options.required_features;
-        let optional = options.optional_features & supported_features;
+        // Asked for opportunistically: an adapter without it still builds a context, the
+        // profiler just stays absent.
+        let mut wanted_optional = options.optional_features;
+        if options.profiling {
+            wanted_optional |= Features::TIMESTAMP_QUERY;
+        }
+        let optional = wanted_optional & supported_features;
         if !optional.is_empty() {
             debug!(
                 target: "fcs::gpu",
@@ -427,7 +443,7 @@ impl GpuContext {
             features |= optional;
         }
 
-        let missing_optional = options.optional_features & !supported_features;
+        let missing_optional = wanted_optional & !supported_features;
         if !missing_optional.is_empty() {
             debug!(
                 target: "fcs::gpu",
@@ -458,6 +474,18 @@ impl GpuContext {
             info.name, info.backend, info.device_type, features
         );
 
+        let profiler = options
+            .profiling
+            .then(|| GpuProfiler::new(&device, &queue, features, DEFAULT_PROFILER_PASSES))
+            .flatten();
+        if options.profiling && profiler.is_none() {
+            warn!(
+                target: "fcs::gpu",
+                "GPU profiling requested but adapter '{}' has no TIMESTAMP_QUERY support",
+                info.name
+            );
+        }
+
         Ok(Self {
             instance: Some(instance),
             adapter: Some(adapter),
@@ -466,6 +494,7 @@ impl GpuContext {
             info,
             features,
             limits,
+            profiler,
         })
     }
 
@@ -510,6 +539,7 @@ impl GpuContext {
             info,
             features,
             limits,
+            profiler: None,
         }
     }
 
@@ -521,6 +551,27 @@ impl GpuContext {
     /// Returns the shared `wgpu::Queue`.
     pub fn queue(&self) -> &Queue {
         &self.queue
+    }
+
+    /// The compute-pass profiler, present only when profiling was enabled and supported.
+    pub fn profiler(&self) -> Option<&GpuProfiler> {
+        self.profiler.as_ref()
+    }
+
+    /// Timestamp writes for one compute pass, or `None` when profiling is off.
+    ///
+    /// Pass this straight to `ComputePassDescriptor::timestamp_writes` so instrumenting
+    /// a pass stays a one-line change.
+    pub fn timestamp_writes(&self, label: &str) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
+        self.profiler.as_ref()?.timestamp_writes(label)
+    }
+
+    /// Drains the recorded pass timings, if profiling is on.
+    pub fn take_pass_timings(&self) -> anyhow::Result<Vec<PassTiming>> {
+        match self.profiler.as_ref() {
+            Some(profiler) => profiler.take(&self.device, &self.queue),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Adapter metadata handy for GUI display/logging.

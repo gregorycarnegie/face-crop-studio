@@ -107,7 +107,7 @@ impl Conv2dPipeline {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("conv2d_pass"),
-                timestamp_writes: None,
+                timestamp_writes: context.timestamp_writes("conv2d"),
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

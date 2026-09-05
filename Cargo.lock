@@ -2313,6 +2313,7 @@ dependencies = [
  "base64 0.23.1",
  "bytemuck",
  "crc32fast",
+ "criterion",
  "env_logger",
  "fast_image_resize",
  "image",

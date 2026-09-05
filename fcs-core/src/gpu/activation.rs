@@ -78,7 +78,7 @@ impl ActivationPipeline {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("activation_pass"),
-                timestamp_writes: None,
+                timestamp_writes: context.timestamp_writes("activation"),
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
