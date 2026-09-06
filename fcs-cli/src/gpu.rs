@@ -82,6 +82,11 @@ impl CliGpuRuntime {
         if settings.output_width == 0 || settings.output_height == 0 {
             return None;
         }
+        // Experiment 71: FCS_NO_GPU_CROP forces the CPU crop path so the two can be A/B'd
+        // without disabling GPU inference as well, which `--no-gpu` would.
+        if std::env::var_os("FCS_NO_GPU_CROP").is_some() {
+            return None;
+        }
         let cropper = self.cropper.as_ref()?;
         if detections.is_empty() {
             return Some(Vec::new());

@@ -64,6 +64,18 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The biggest saving found is switching cropping off the GPU
+
+`GpuBatchCropper::crop` converts the full-resolution source to RGBA, packs every
+pixel to `u32` and uploads all of it -- 40 MB for a 10 MP photo -- to produce one
+512x512 crop. It accounts for 11% of batch CPU through `memcpy` alone. Forcing
+the CPU path takes a 1239-image folder from a median **17.25 s to 9.8 s, 43%**,
+order-alternated and winning every pair.
+
+Not adopted yet: `crop.wgsl` samples a fixed 2x2 neighbourhood while the CPU uses
+Lanczos3, so 18% of crops change quality label and one image in 171 selects a
+different face. `FCS_NO_GPU_CROP` enables it for comparison; see experiment 71.
+
 ### The batch path is not serialised
 
 Profiled over 1239 real images, all threads: **194.7 s of CPU across 51 threads

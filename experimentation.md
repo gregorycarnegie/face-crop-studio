@@ -390,7 +390,7 @@ implementation or workload.
   assembly first; compare compiler flags or representative profile-guided
   optimization with the current x86-64-v3/autovectorized build. Include portable
   fallbacks and startup/binary-size costs; do not re-add `wide` without evidence.
-- [ ] **71. Keep crop/enhancement intermediates on device.** Trace actual
+- [x] **71. Keep crop/enhancement intermediates on device.** Trace actual
   filters and crop batches, then remove measured intermediate downloads/uploads
   or fuse compatible filter passes. Include final export readback and verify
   pixel quality plus operation ordering at production image sizes.
@@ -1518,6 +1518,60 @@ filenames, so every quality label matched. The change was neutral, not wrong.
 attempted: a 5.5% CPU saving did not move wall time in either configuration
 above, so the case for it is energy and small-machine headroom rather than
 throughput, and it should be measured as such.
+
+### 71. GPU batch cropping - the largest saving in the backlog is deleting it
+
+Following the `memcpy` in the batch profile (11% of all CPU) rather than
+guessing. Two frames own nearly all of it:
+
+| Frame | CPU | Share |
+| --- | ---: | ---: |
+| `GpuBatchCropper::crop` | 10.3 s | 5.4% |
+| `wgpu Queue::write_buffer` | 8.1 s | 4.3% |
+
+Both are the same path. `GpuBatchCropper::crop` calls `to_rgba8()` on the
+**full-resolution source**, packs every pixel into `u32`, and uploads the lot --
+40 MB for a 10 MP photo -- to produce one 512x512 crop. It is the trade
+`upload_pays_for_source` already gates for preprocessing, ungated. The
+`cast_pixels_by_layout` cost elsewhere in the profile is the `to_rgba8` half of
+it.
+
+The workflow tries the GPU cropper first and falls back to the CPU only when it
+declines. Forcing the CPU path, order-alternated, 1239 images:
+
+| Crop path | Runs (s) | Median |
+| --- | --- | ---: |
+| GPU | 17.5, 16.3, 17.0, 18.3 | 17.25 |
+| CPU | 10.4, 9.6, 9.3, 10.0 | **9.8** |
+
+**43% off total batch wall time by not using the GPU**, winning every pair in
+both orders against a roughly 1 s noise band, with the same 901 crops produced.
+This is the largest measured saving anywhere in this backlog, and it comes from
+removing GPU work rather than adding it.
+
+**It changes output, so it is not adopted unilaterally.** `crop.wgsl` samples a
+fixed 2x2 neighbourhood -- four source pixels regardless of how far the crop is
+being downscaled -- while `crop_face_from_image` uses Lanczos3. Over 171 crops:
+
+- pixels differ by up to 18-85 per channel, across 66-84% of each image
+- **18.1% of crops change quality label** (31 of 171): highq to medq 21, medq to
+  lowq 7, and 3 the other way
+- one image of 171 selects a *different face*, because `auto_select_best_face`
+  ranks faces by the same sharpness score
+
+The label shift is almost entirely downward, which is what a fixed 2x2 tap would
+predict: undersampling a large downscale aliases, aliasing adds high-frequency
+detail, and the sharpness metric is Laplacian variance, which rewards it. On
+that reading the GPU path's higher scores are an artefact rather than sharper
+crops -- an interpretation of the mechanism, not a measurement, and the reason
+the crops need a human eye before this becomes the default.
+
+Available as `FCS_NO_GPU_CROP` while that judgement is made. Comparison crops
+from 200 large images are in `~/fcs-crop-comparison/`.
+
+**If adopted, `GpuBatchCropper` should go rather than be left unreachable** --
+roughly 400 lines plus `crop.wgsl` and its pooling, for a path that measured
+slower and lower quality than the CPU it exists to beat.
 
 ### Previous work
 
