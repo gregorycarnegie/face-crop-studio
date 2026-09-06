@@ -472,6 +472,9 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [x] **91. Find what single-image latency is actually made of.** Batch is at its
+  floor, so measure the GUI's path instead: decode, detect, preview texture. Take
+  whatever the measurement points at rather than starting from the GPU backlog.
 - [~] **90. Detect from a scaled JPEG decode.** 86's arithmetic, done properly:
   a 1/2 or 1/4 DCT decode costs less than the full-resolution resize it removes,
   even as a second decode. Rejected on accuracy instead -- see the record.
@@ -1494,6 +1497,59 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 91. Single-image latency, and a 3.2 s preview stall for large images
+
+Batch is at its floor, so this measures the other workload. `phase_timings` on a
+12 MP photo, `detect_image` p50 **3.390 ms**:
+
+| Phase | p50 ms | Share |
+| --- | ---: | ---: |
+| `cpu_resize` | 1.640 | 48% |
+| `readback_wait` (GPU execution) | 0.501 | 15% |
+| `gpu_record` (host command recording) | 0.394 | 12% |
+| `gpu_rgb_to_chw` | 0.289 | 9% |
+| `gpu_submit` | 0.167 | 5% |
+| `gpu_decode` | 0.082 | 2% |
+| `postprocess` | 0.006 | 0.2% |
+
+**This closes the GPU backlog for this workload, before any of it was attempted.**
+`gpu_record` is the interesting entry -- 0.394 ms of pure host work rebuilding
+command buffers and bind groups for an unchanging graph, which is what 22 and 25
+propose caching. But a GUI image selection costs a **27 ms decode** plus this
+3.4 ms detection, so 0.394 ms is 1.3% of the interaction, and the whole 21-22-25
+chain is worth about 3% at best. The shader experiments (26-47) target
+`readback_wait`: an infinitely fast GPU saves 0.5 ms of 3.4 ms, 1.6% of the
+interaction.
+
+**What the measurement found was not on the list.** `clamp_to_texture_limit`
+downscales previews past 8192 per side -- its own comment says camera RAWs
+"routinely exceed it" -- through `DynamicImage::resize_exact`, the pixel-by-pixel
+path replaced everywhere else. `examples/preview_texture_cost.rs`, alternated per
+row, 133 MP source:
+
+| Clamp | Texture | MB | `resize_exact` | fir | Speedup |
+| --- | --- | ---: | ---: | ---: | ---: |
+| **8192 (production)** | 6144x8192 | 201.3 | **3215.25 ms** | **103.11 ms** | **31.2x** |
+| 4096 | 3072x4096 | 50.3 | 1456.55 | 38.81 | 37.5x |
+| 2048 | 1536x2048 | 12.6 | 605.89 | 35.77 | 16.9x |
+
+**Over three seconds of preview stall removed** for exactly the images the clamp
+exists for. On a 12 MP photo the clamp does not fire and both sides measure 6.8
+against 6.8 ms -- an accidental A/A control confirming the change is inert where
+it does not apply.
+
+The `ColorImage` build itself is 6.5-6.8 ms at full 12 MP, which is what I went
+looking for, and it is not a problem. Lowering the 8192 limit to cut the upload
+is *not* done: that would add a resize to every large image to save bandwidth I
+have not measured, and the limit exists for a correctness reason (egui panics
+above the GPU's maximum texture side), not a performance one.
+
+**One bug avoided on the way in.** Routing everything without an explicit RGBA8
+match through `resize_image` returns RGB8, which would silently flatten a LumaA8
+or RGBA16 preview. The gate is `color().has_alpha()` instead.
+`clamp_keeps_alpha_when_the_source_has_it` was checked against the RGBA8-only
+version and fails there with "alpha dropped for La8", so it has teeth.
 
 ### 68. File I/O, warm - hidden, and the experiment's own gate says stop
 

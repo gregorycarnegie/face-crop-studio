@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **Large previews no longer stall for seconds.** Images past 8192 pixels a side
+  -- camera RAWs and panoramas -- are downscaled for the preview texture, and that
+  downscale went through `DynamicImage::resize_exact`, which samples pixel by
+  pixel. On a 133 MP source it took **3215 ms; it now takes 103 ms, 31x faster**.
+  Images under the limit are untouched, and alpha is preserved for every format
+  that carries it.
+
 - **Three dead GUI caches removed, and the `lru` dependency with them.** The
   detection cache was written and cleared but never read, and each entry held a
   full decoded source image plus a texture, so browsing fifty images retained

@@ -182,7 +182,28 @@ fn clamp_to_texture_limit(image: &DynamicImage) -> std::borrow::Cow<'_, DynamicI
     let scale = MAX_PREVIEW_TEXTURE_SIDE as f32 / w.max(h) as f32;
     let nw = ((w as f32 * scale).floor() as u32).max(1);
     let nh = ((h as f32 * scale).floor() as u32).max(1);
-    std::borrow::Cow::Owned(image.resize_exact(nw, nh, image::imageops::FilterType::Triangle))
+    // Through the SIMD resize, not `DynamicImage::resize_exact`, which samples pixel by pixel
+    // through `GenericImageView`. This branch only runs for images past 8192 -- camera RAWs and
+    // panoramas -- so it is exactly the case where the slow path hurts most: measured at 169 ms
+    // to reach 2304x3072 from 12 MP, against a few ms here (experiment 91).
+    //
+    // Anything carrying alpha goes through `resize_rgba_fast` so it keeps it -- `resize_image`
+    // returns RGB8, which would silently flatten a LumaA8 or RGBA16 preview. Everything else
+    // goes out as RGB8, which `color_image_from_dynamic` reads in place anyway. `None` means
+    // fir declined the request, and the original path still has to answer for it.
+    let filter = image::imageops::FilterType::Triangle;
+    let resized = if image.color().has_alpha() {
+        let rgba = match image {
+            DynamicImage::ImageRgba8(rgba) => std::borrow::Cow::Borrowed(rgba),
+            other => std::borrow::Cow::Owned(other.to_rgba8()),
+        };
+        fcs_utils::resize_rgba_fast(&rgba, nw, nh, filter).map(DynamicImage::ImageRgba8)
+    } else {
+        Some(DynamicImage::ImageRgb8(fcs_utils::resize_image(
+            image, nw, nh, filter,
+        )))
+    };
+    std::borrow::Cow::Owned(resized.unwrap_or_else(|| image.resize_exact(nw, nh, filter)))
 }
 
 /// Convert a decoded image into an egui texture image without the
@@ -433,6 +454,45 @@ pub fn spawn_detection_job(
 mod tests {
     use super::*;
     use image::{DynamicImage, RgbImage};
+
+    #[test]
+    fn clamp_keeps_alpha_when_the_source_has_it() {
+        // The fast path returns RGB8 for anything without alpha, so an alpha-carrying source
+        // has to be routed the other way or the preview is silently flattened. LumaA8 is the
+        // awkward case: it has alpha but is not RGBA8 (experiment 91).
+        for src in [
+            DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                9000,
+                600,
+                image::Rgba([10, 20, 30, 40]),
+            )),
+            DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_pixel(
+                9000,
+                600,
+                image::LumaA([90, 40]),
+            )),
+        ] {
+            let out = clamp_to_texture_limit(&src);
+            assert!(
+                out.color().has_alpha(),
+                "alpha dropped for {:?}",
+                src.color()
+            );
+            assert!(out.width() <= MAX_PREVIEW_TEXTURE_SIDE);
+            // A uniform source stays uniform through a downscale, so the value is checkable.
+            let px = out.to_rgba8();
+            assert_eq!(px.get_pixel(0, 0)[3], 40, "alpha value changed");
+        }
+    }
+
+    #[test]
+    fn clamp_without_alpha_still_downscales() {
+        let src =
+            DynamicImage::ImageRgb8(RgbImage::from_pixel(9000, 600, image::Rgb([10, 20, 30])));
+        let out = clamp_to_texture_limit(&src);
+        assert_eq!(out.width(), MAX_PREVIEW_TEXTURE_SIDE);
+        assert!(!out.color().has_alpha());
+    }
 
     #[test]
     fn clamp_leaves_small_images_untouched() {
