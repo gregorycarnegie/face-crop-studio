@@ -324,10 +324,15 @@ implementation or workload.
   traversals and temporary tensors, then fuse one measured redundant pass.
   Compare exact output ordering and established numerical tolerances; avoid
   reproducing the already-rejected fine-grained loop parallelism.
-- [ ] **56. Move score/box decoding to the GPU.** Compare GPU decode plus a
+- [~] **56. Move score/box decoding to the GPU.** Compare GPU decode plus a
   readback against current CPU decoding, including dispatch and map overhead.
   Preserve score calculation, anchors, dimensions and landmark conventions;
-  merely moving tiny CPU work to the GPU can lose.
+  merely moving tiny CPU work to the GPU can lose. **Premise removed by 55:**
+  after the CHW decode change `gpu_decode` is 0.072-0.082 ms, about 2.6% of a
+  3.1 ms detection, so the whole stage is smaller than this experiment's own
+  warning about dispatch overhead -- and 55 already measured moving the adjacent
+  conversion to the GPU as *slower*. Reopen only if decode grows: a much larger
+  detector input or a model with many more anchors.
 - [ ] **57. Compact valid candidates before readback.** Use the existing score
   rule and threshold to reduce output bytes; measure sparse and crowded cases,
   counter/scan overhead and overflow handling. Preserve ordering/tie semantics
@@ -336,10 +341,14 @@ implementation or workload.
   spatial-grid NMS with bounded CPU or GPU alternatives only if it is material.
   Validate overlaps, equal-score ties and dense scenes; GPU transfer/dispatch
   cost belongs in the comparison.
-- [ ] **59. Evaluate approximate candidate pruning separately.** Try top-K,
+- [~] **59. Evaluate approximate candidate pruning separately.** Try top-K,
   alternate thresholds or approximate NMS only against an explicit recall and
   landmark-quality budget. Measure difficult and crowded scenes, not just
   average timing. Q; never substitute these for exact-path optimization.
+  **Premise removed with 56:** this trades recall for time in a stage measured at
+  0.072-0.082 ms. There is no time here worth any recall. 58 stays open, because
+  worst-case candidate counts are a robustness question rather than a throughput
+  one, as is 57, which targets readback bytes rather than decode CPU.
 
 ### Batch and webcam scheduling (P1/P2)
 
@@ -382,7 +391,7 @@ implementation or workload.
   implementations on the actual format corpus, including orientation/colour
   fidelity, cold I/O, warm cache and batch throughput. Preserve full-resolution
   crop pixels; this differs from the rejected reduced-scale decode workflow.
-- [ ] **68. Tune file I/O and bounded decode prefetch.** Measure cold disk,
+- [x] **68. Tune file I/O and bounded decode prefetch.** Measure cold disk,
   cached files and large folders separately. Compare modest prefetch depth and
   reuse of read buffers; include peak RAM and cancellation. Skip if decode or
   inference dominates and I/O is already hidden.
@@ -1485,6 +1494,32 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 68. File I/O, warm - hidden, and the experiment's own gate says stop
+
+This experiment ends with "skip if decode or inference dominates and I/O is
+already hidden", so the whole thing turns on one number.
+`examples/io_cost.rs` reads the corpus at the concurrency the batch uses:
+
+| Pass | Bytes | Serial | At 32 threads |
+| --- | ---: | --- | --- |
+| 1 | 1386.2 MB | 1.29 s (1075 MB/s) | 0.19 s (7470 MB/s) |
+| 2 | 1386.2 MB | 0.35 s (4003 MB/s) | 0.16 s (8597 MB/s) |
+| 3 | 1386.2 MB | 0.34 s (4099 MB/s) | 0.17 s (8297 MB/s) |
+
+**0.17 s of a 7.1 s run, about 2.4%, already spread across the pool.** Prefetch
+depth and read-buffer reuse have nothing to work with: the reads are overlapped
+with decode by the same rayon parallelism that runs everything else, and 8.6 GB/s
+is page-cache speed, not disk speed. Skipped on the experiment's own terms.
+
+**The cold case is not measured, and I could not measure it honestly.** The file
+cache cannot be dropped from inside the process, and every tool that would do it
+from outside (RAMMap, EmptyStandbyList) is not on this machine; copying the
+folder elsewhere leaves the pages warm. The historical 39.8 s cold against 17 s
+warm in 63 is the only figure, it predates most of this backlog, and it was never
+attributed -- on a disk that serves 1.3 GB at these rates, a cold read should be
+well under a second, so that 22 s gap probably was not the disk. Anyone with a
+machine that has not read the corpus can settle it with one run.
 
 ### 52. The GUI's caches, inspected first as instructed - all three were dead
 
