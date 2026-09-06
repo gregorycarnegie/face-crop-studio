@@ -381,16 +381,30 @@ fn resize_image_fast(
     let mut dst = FirImage::new(width, height, fir::PixelType::U8x3);
     let options = fir::ResizeOptions::new().resize_alg(alg);
     let threaded = threading_pays(alg, rgb.width(), rgb.height());
-    let run = |resizer: &mut fir::Resizer| {
-        if threaded {
-            resizer.resize(&src, &mut dst, &options)
-        } else if let Some(pool) = single_thread_pool() {
-            pool.install(|| resizer.resize(&src, &mut dst, &options))
-        } else {
-            resizer.resize(&src, &mut dst, &options)
-        }
+
+    // Taken out of the thread-local for the duration and put back after, rather than held
+    // borrowed across the resize. `resize` spreads itself over rayon, and in batch work
+    // rayon is already busy with other images, so a thread blocked in here steals another
+    // image's task and re-enters this function *on the same thread*. Holding a `RefCell`
+    // borrow across that call panicked with "RefCell already borrowed" -- only ever under
+    // nested parallelism, so single images and the test suite never saw it.
+    //
+    // A re-entrant call finds `None` and builds its own `Resizer`; the buffer reuse this
+    // cache exists for is lost for that call only, and correctness does not depend on it.
+    let mut resizer = RESIZER
+        .with(|slot| slot.borrow_mut().take())
+        .unwrap_or_default();
+
+    let result = if threaded {
+        resizer.resize(&src, &mut dst, &options)
+    } else if let Some(pool) = single_thread_pool() {
+        pool.install(|| resizer.resize(&src, &mut dst, &options))
+    } else {
+        resizer.resize(&src, &mut dst, &options)
     };
-    RESIZER.with_borrow_mut(run).ok()?;
+
+    RESIZER.with(|slot| *slot.borrow_mut() = Some(resizer));
+    result.ok()?;
 
     RgbImage::from_raw(width, height, dst.into_vec())
 }
@@ -408,8 +422,11 @@ thread_local! {
     /// Thread-local rather than shared: `resize` needs `&mut`, and a mutex here would
     /// serialise the batch path. The cost is one retained buffer per thread that has ever
     /// resized, sized to the largest source that thread has seen.
-    static RESIZER: std::cell::RefCell<fir::Resizer> =
-        std::cell::RefCell::new(fir::Resizer::new());
+    ///
+    /// `Option` so a caller can take it out for the length of the resize instead of holding
+    /// a borrow across it -- see `resize_image_fast` for why that distinction is load-bearing.
+    static RESIZER: std::cell::RefCell<Option<fir::Resizer>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Source pixels below which threading the resize costs more than it saves.
@@ -659,6 +676,54 @@ mod tests {
         // A representative positive case, so the test fails if the list breaks
         // rather than passing because everything returns false.
         assert!(is_supported_image_path(Path::new("photo.png")));
+    }
+
+    /// Resizing from inside a rayon parallel iterator must not panic.
+    ///
+    /// `fast_image_resize` spreads a large resize over rayon, so a thread blocked in
+    /// `resize` steals other queued work -- and in batch processing that work is another
+    /// image's resize, re-entering `resize_image_fast` on the same thread. The `Resizer`
+    /// cache originally held a `RefCell` borrow across the resize and panicked with
+    /// "RefCell already borrowed" the moment two levels of parallelism met. A real folder
+    /// of 1239 photos lost two thirds of its output to it while the whole test suite passed.
+    ///
+    /// The pool is deliberately small and the item count well above it: stealing only
+    /// happens when a worker runs out of its own work while blocked inside `resize`, so a
+    /// wide pool with one item per thread -- which is what an earlier version of this test
+    /// did -- never triggers it and passes against the broken code.
+    #[test]
+    fn concurrent_resizes_do_not_re_enter_the_resizer_cache() {
+        // Under RESIZE_THREADING_MIN_PIXELS on purpose. That is the branch handing the
+        // resize to the one-thread pool, and `install` from a rayon worker lets that worker
+        // pick up outer work while it waits -- which is how the re-entry happens. The real
+        // failure was on small images for exactly this reason.
+        let (w, h) = (1200u32, 800u32);
+        assert!(
+            w * h < RESIZE_THREADING_MIN_PIXELS,
+            "must stay under the threading gate"
+        );
+        let sources: Vec<DynamicImage> = (0..64)
+            .map(|i| {
+                DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, y| {
+                    image::Rgb([(x + i) as u8, (y + i) as u8, ((x ^ y) + i) as u8])
+                }))
+            })
+            .collect();
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .expect("build small pool");
+
+        let sizes: Vec<(u32, u32)> = pool.install(|| {
+            sources
+                .par_iter()
+                .map(|image| resize_image(image, 640, 640, FilterType::Triangle).dimensions())
+                .collect()
+        });
+
+        assert_eq!(sizes.len(), sources.len());
+        assert!(sizes.iter().all(|&d| d == (640, 640)));
     }
 
     /// Threading the resize must not change a single pixel.
