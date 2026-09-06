@@ -355,7 +355,7 @@ implementation or workload.
   of 2/4/8 with independent in-flight requests. Validate every kernel, head,
   decode and memory plan for batch indexing; current single-image behavior is
   not evidence that batching already works or improves throughput.
-- [ ] **63. Tune CPU thread budgets alongside GPU work.** Compare rayon and
+- [x] **63. Tune CPU thread budgets alongside GPU work.** Compare rayon and
   runtime thread counts on single/batch workloads; detect oversubscription,
   driver starvation and memory-bandwidth contention. Record CPU-only results
   as well; avoid a global setting chosen from one developer machine.
@@ -1394,6 +1394,48 @@ missed, so the guard matters more than the install.
 Recorded regardless of the decoder outcome: **decode is 24 ms against 3.1 ms of
 detection**, so experiments 67 and 68 outrank anything remaining in the
 detection path for folder work.
+
+### 63. Batch worker budget, refreshed - no change made
+
+First measurement of the thing the application actually does: 1239 real photos
+through `fcs-cli --crop`, rather than one image in a loop. Baseline **39.8 s
+cold, about 17-19 s warm** -- roughly 65 images/s once the file cache is warm.
+
+A cold first run measured 30.9 s at 32 workers against 20.5 s at 16 and looked
+like a 33% win. It was not: the 32-worker run was reading the folder from disk
+for the first time. Warm and with the order alternated between pairs:
+
+| Workers | Runs (s) | Median |
+| --- | --- | ---: |
+| 32 (default) | 18.7, 20.3, 17.0, 21.4, 17.8, 18.4 | 18.55 |
+| 16 (physical cores) | 19.0, 18.5, 17.3, 16.5, 16.8, 16.8 | **17.05** |
+
+**About 8%, favouring 16 in four of six pairs**, and 16 is also steadier (spread
+2.5 s against 4.4 s). That confirms the direction already recorded in
+`fcs-cli/src/main.rs` -- fewer workers than logical processors is better here --
+at a smaller magnitude than the 18% recorded there.
+
+**No default changed.** The existing comment gives a reason that this data does
+not address: "physical cores" counts P and E cores alike, so a rule tuned on a
+symmetric 7950X could be wrong on a hybrid-core machine, and this is one machine.
+`RAYON_NUM_THREADS` already overrides it. The refreshed numbers are added to
+that comment so the next person sees two measurements rather than one.
+
+**Rejected: skipping the inner resize threading when already on a rayon worker.**
+Batch parallelises across images and `fast_image_resize` then splits each resize
+again, which looks like plain oversubscription and became more pronounced when
+experiment 48 turned that threading on. Gating it on
+`rayon::current_thread_index().is_some()` measured **nothing**: over four
+order-alternated pairs the two arrangements averaged 17.8 s and 19.5 s, with
+single runs spanning 16.6-20.7 s *either way*.
+
+An earlier unalternated run of the same comparison showed the gate winning
+three times out of three, by 1.1-2.0 s. That was drift: the six wall times ran
+22.9, 20.9, 20.6, 19.5, 19.5, 18.4 in execution order, monotonically decreasing,
+and the gated variant happened to run second every time. **Batch wall time on
+this machine swings about 10% run to run**, so anything under roughly 2 s here
+needs alternation to mean anything, and the useful comparisons are the ones
+where the same configuration is run in both positions.
 
 ### Previous work
 

@@ -195,6 +195,11 @@ fn main() -> Result<()> {
     // degrades above the physical core count, reaching 14.0 s at the default 32 — the GPU
     // dispatches serialise, but decode/convert/encode around them do not, and the extra workers
     // end up contending. `RAYON_NUM_THREADS` already overrides this, so no pool is built here.
+    //
+    // Re-measured on 1239 images after the decoder and preprocessing changes (experiment 63):
+    // same direction, smaller gap. Warm, order alternated between pairs, medians of six runs
+    // each: 18.55 s at 32 workers against 17.05 s at 16, about 8%. Individual runs span
+    // 16.5-21.4 s, so a single unalternated pair proves nothing here.
     // Capping automatically needs data from a hybrid-core CPU first: "physical cores" counts P
     // and E cores alike, so a rule tuned on symmetric cores could easily be wrong there. See the
     // "Batch worker threads" section in README.md.

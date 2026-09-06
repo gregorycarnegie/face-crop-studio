@@ -448,6 +448,12 @@ fn threading_pays(alg: fir::ResizeAlg, width: u32, height: u32) -> bool {
     if matches!(alg, fir::ResizeAlg::Nearest) {
         return false;
     }
+    // Not gated on whether a rayon worker is already running this. Splitting each resize
+    // again inside a batch that is already parallel across images looks like plain
+    // oversubscription, and skipping it measured nothing: over four order-alternated pairs
+    // of a 1239-image folder the two arrangements were 17.8 s and 19.5 s on average with
+    // single runs spanning 16.6-20.7 s either way. Batch wall time on this machine swings
+    // about 10% run to run, which is wider than the effect (experiment 63).
     width.saturating_mul(height) >= RESIZE_THREADING_MIN_PIXELS
 }
 
