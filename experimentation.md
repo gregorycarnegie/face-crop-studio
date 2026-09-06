@@ -1421,21 +1421,43 @@ symmetric 7950X could be wrong on a hybrid-core machine, and this is one machine
 `RAYON_NUM_THREADS` already overrides it. The refreshed numbers are added to
 that comment so the next person sees two measurements rather than one.
 
-**Rejected: skipping the inner resize threading when already on a rayon worker.**
-Batch parallelises across images and `fast_image_resize` then splits each resize
-again, which looks like plain oversubscription and became more pronounced when
-experiment 48 turned that threading on. Gating it on
-`rayon::current_thread_index().is_some()` measured **nothing**: over four
-order-alternated pairs the two arrangements averaged 17.8 s and 19.5 s, with
-single runs spanning 16.6-20.7 s *either way*.
+**Rejected, and firmly: skipping the inner resize threading when already on a
+rayon worker.** Batch parallelises across images and `fast_image_resize` then
+splits each resize again, which looks like plain oversubscription. Gating it on
+`rayon::current_thread_index().is_some()` is **much worse**, four
+order-alternated pairs at `Quality`, winning every pair in both orders:
 
-An earlier unalternated run of the same comparison showed the gate winning
-three times out of three, by 1.1-2.0 s. That was drift: the six wall times ran
-22.9, 20.9, 20.6, 19.5, 19.5, 18.4 in execution order, monotonically decreasing,
-and the gated variant happened to run second every time. **Batch wall time on
-this machine swings about 10% run to run**, so anything under roughly 2 s here
-needs alternation to mean anything, and the useful comparisons are the ones
-where the same configuration is run in both positions.
+| Variant | Runs (s) | Median |
+| --- | --- | ---: |
+| threading throughout (shipped) | 17.1, 15.3, 14.7, 16.2 | **15.75** |
+| gated on a rayon worker | 23.0, 19.7, 19.2, 24.4 | 21.35 |
+
+About **27% slower gated**. Rayon's work stealing absorbs the nesting, while the
+gate pins each resize to one thread and leaves cores idle on uneven image sizes
+and at the tail of the batch. The intuition that nested parallelism must
+oversubscribe was simply wrong here.
+
+**Two measurement errors on the way to that, both worth recording.** The first
+comparison was unalternated and showed the gate winning three times out of
+three by 1.1-2.0 s; the six wall times in execution order were 22.9, 20.9, 20.6,
+19.5, 19.5, 18.4, monotonically decreasing, with the gated variant second every
+time. Pure drift. **Batch wall time on this machine swings about 10% run to
+run.**
+
+The second is worse and invalidated the conclusion outright. `fcs-cli` loads
+`config/gui_settings.json` **from the working directory** when no `--config` is
+given, and that file sets `resize_quality = speed`. `threading_pays` returns
+`false` for `Nearest` before it ever reaches the gate, so every run from the
+repository root was comparing the gate against itself. The "measured nothing"
+result was structurally guaranteed, not evidence. Redone with an explicit
+`--config` selecting `Quality`, the gate is clearly harmful.
+
+**Anything measuring the batch path must state its configuration.** Run from the
+repository root the CLI finds that settings file and detects 1020 faces at
+`score_threshold` 0.8 with a nearest-neighbour resize; run from anywhere else it
+uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
+binary, same arguments, same images. The worker-count table above was taken from
+the repository root and so describes the `speed` configuration.
 
 ### Previous work
 
