@@ -259,7 +259,6 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
                 }
                 _ => {}
             }
-            app.crop_preview_cache.clear();
         }
 
         // Aspect ratio
@@ -284,7 +283,6 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
                 _ => {} // Free — keep current dimensions
             }
             app.settings.crop.preset = "Custom".to_string();
-            app.crop_preview_cache.clear();
         }
 
         // Face height (stored as 0-100)
@@ -332,7 +330,6 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         if dims_changed {
             app.settings.crop.preset = "Custom".to_string();
             app.aspect_ratio_idx = 0;
-            app.crop_preview_cache.clear();
         }
 
         // Crop overlay toggle

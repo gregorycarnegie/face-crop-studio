@@ -386,23 +386,7 @@ pub fn spawn_detection_job_from_image(
 
     rayon::spawn(move || {
         let payload = match perform_detection_from_image(detector, image, synthetic_path.clone()) {
-            Ok(data) => {
-                let cache_key = CacheKey {
-                    path: synthetic_path,
-                    model_path: None,
-                    input_width: 640,
-                    input_height: 640,
-                    resize_quality: Default::default(),
-                    score_bits: 0,
-                    nms_bits: 0,
-                    top_k: 5000,
-                };
-                JobMessage::DetectionFinished {
-                    job_id,
-                    cache_key,
-                    data,
-                }
-            }
+            Ok(data) => JobMessage::DetectionFinished { job_id, data },
             Err(err) => JobMessage::DetectionFailed {
                 job_id,
                 error: format!("{err:#}"),
@@ -433,23 +417,7 @@ pub fn spawn_detection_job(
     rayon::spawn(move || {
         let payload =
             match perform_detection(detector, path.clone(), rotation_deg, auto_orient_exif) {
-                Ok(data) => {
-                    let cache_key = CacheKey {
-                        path: path.clone(),
-                        model_path: None,
-                        input_width: 640,
-                        input_height: 640,
-                        resize_quality: Default::default(),
-                        score_bits: 0,
-                        nms_bits: 0,
-                        top_k: 5000,
-                    };
-                    JobMessage::DetectionFinished {
-                        job_id,
-                        cache_key,
-                        data,
-                    }
-                }
+                Ok(data) => JobMessage::DetectionFinished { job_id, data },
                 Err(err) => JobMessage::DetectionFailed {
                     job_id,
                     error: format!("{err:#}"),

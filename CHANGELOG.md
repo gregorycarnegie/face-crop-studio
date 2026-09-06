@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **Three dead GUI caches removed, and the `lru` dependency with them.** The
+  detection cache was written and cleared but never read, and each entry held a
+  full decoded source image plus a texture, so browsing fifty images retained
+  around 1.3 GB for lookups that never happened. The crop-preview cache was only
+  ever cleared, and the image cache was never touched. The read was lost in the
+  GUI rewrite; its key had also decayed to a bare path, with every other field
+  hardcoded. Nothing observable changes.
+
 - **Exports stop copying the image to encode it.** `encode_rgba8` called
   `to_rgba8()`, which clones when the image is already RGBA8, and every exported
   crop is. Borrowed instead, along with `encode_jpeg`'s `to_rgb8()`. Output is

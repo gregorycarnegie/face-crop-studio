@@ -12,10 +12,8 @@ use fcs_core::CropSettings as CoreCropSettings;
 use fcs_utils::{config::default_settings_path, configure_telemetry, gpu::GpuContext};
 use image::DynamicImage;
 use log::info;
-use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
-    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
 };
@@ -150,9 +148,6 @@ impl App2 {
             job_tx,
             job_rx,
             preview: PreviewState::default(),
-            cache: LruCache::new(NonZeroUsize::new(50).unwrap()),
-            crop_preview_cache: LruCache::new(NonZeroUsize::new(500).unwrap()),
-            image_cache: LruCache::new(NonZeroUsize::new(20).unwrap()),
             selected_faces: HashSet::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -481,8 +476,6 @@ impl App2 {
                 None
             }
         };
-        self.cache.clear();
-        self.crop_preview_cache.clear();
         if let Some(path) = self.preview.image_path.clone() {
             self.load_image_path(path);
         }
@@ -526,11 +519,7 @@ impl App2 {
     fn handle_job_message(&mut self, ctx: &egui::Context, msg: JobMessage) {
         use egui::TextureOptions;
         match msg {
-            JobMessage::DetectionFinished {
-                job_id,
-                cache_key,
-                data,
-            } => {
+            JobMessage::DetectionFinished { job_id, data } => {
                 if Some(job_id) != self.current_job {
                     return;
                 }
@@ -568,16 +557,6 @@ impl App2 {
 
                 // Auto-select all faces
                 self.selected_faces = (0..n).collect();
-
-                self.cache.put(
-                    cache_key,
-                    crate::types::DetectionCacheEntry {
-                        texture,
-                        detections: data.detections,
-                        original_size: data.original_size,
-                        source_image: data.original_image,
-                    },
-                );
             }
             JobMessage::DetectionFailed { job_id, error } => {
                 if Some(job_id) != self.current_job {
@@ -862,7 +841,6 @@ impl App2 {
     fn restore_snapshot(&mut self, snap: EditSnapshot) {
         self.preview.detections = snap.detections;
         self.selected_faces = snap.selected;
-        self.crop_preview_cache.clear();
     }
 
     /// Capture the current face state before a mutation. Clears the redo stack.
@@ -909,7 +887,6 @@ impl App2 {
             keep
         });
         self.selected_faces.clear();
-        self.crop_preview_cache.clear();
     }
 
     pub fn commit_manual_box(&mut self, bbox: fcs_core::BoundingBox) {
@@ -932,7 +909,6 @@ impl App2 {
         let idx = self.preview.detections.len();
         self.preview.detections.push(det);
         self.selected_faces.insert(idx);
-        self.crop_preview_cache.clear();
     }
 }
 

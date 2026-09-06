@@ -7,13 +7,11 @@ use fcs_mapping::{
     MappingReadOptions, inspect_mapping_sources, load_mapping_entries, load_mapping_preview,
 };
 use fcs_utils::{
-    CropShape, PolygonCornerStyle,
-    config::{AppSettings, CropSettings as ConfigCropSettings, ResizeQuality},
+    config::{AppSettings, CropSettings as ConfigCropSettings},
     gpu::{GpuContext, GpuStatusIndicator},
     quality::Quality,
 };
 use image::DynamicImage;
-use lru::LruCache;
 use std::{
     collections::{HashSet, VecDeque},
     path::PathBuf,
@@ -129,120 +127,6 @@ impl DetectionWithQuality {
 pub struct EditSnapshot {
     pub detections: Vec<DetectionWithQuality>,
     pub selected: HashSet<usize>,
-}
-
-// ── Cache keys ────────────────────────────────────────────────────────────────
-
-#[derive(Hash, PartialEq, Eq, Clone)]
-pub struct CacheKey {
-    pub path: PathBuf,
-    pub model_path: Option<String>,
-    pub input_width: u32,
-    pub input_height: u32,
-    pub resize_quality: ResizeQuality,
-    pub score_bits: u32,
-    pub nms_bits: u32,
-    pub top_k: usize,
-}
-
-pub struct DetectionCacheEntry {
-    pub texture: TextureHandle,
-    pub detections: Vec<DetectionWithQuality>,
-    pub original_size: (u32, u32),
-    pub source_image: Arc<DynamicImage>,
-}
-
-/// Hashable encoding of `CropShape` + vignette settings for cache keying.
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct ShapeKey {
-    pub kind: u8,
-    pub param1_bits: u32,
-    pub param2_bits: u32,
-    pub sides: u8,
-    pub rotation_bits: u32,
-    pub vignette_softness_bits: u32,
-    pub vignette_intensity_bits: u32,
-    pub vignette_r: u8,
-    pub vignette_g: u8,
-    pub vignette_b: u8,
-    pub vignette_a: u8,
-}
-
-impl ShapeKey {
-    pub fn from_crop(crop: &ConfigCropSettings) -> Self {
-        let (kind, param1_bits, param2_bits, sides, rotation_bits) = encode_shape(&crop.shape);
-        Self {
-            kind,
-            param1_bits,
-            param2_bits,
-            sides,
-            rotation_bits,
-            vignette_softness_bits: crop.vignette_softness.to_bits(),
-            vignette_intensity_bits: crop.vignette_intensity.to_bits(),
-            vignette_r: crop.vignette_color.red,
-            vignette_g: crop.vignette_color.green,
-            vignette_b: crop.vignette_color.blue,
-            vignette_a: crop.vignette_color.alpha,
-        }
-    }
-}
-
-fn encode_shape(shape: &CropShape) -> (u8, u32, u32, u8, u32) {
-    match shape {
-        CropShape::Rectangle => (0, 0, 0, 0, 0),
-        CropShape::Ellipse => (1, 0, 0, 0, 0),
-        CropShape::RoundedRectangle { radius_pct } => (2, radius_pct.to_bits(), 0, 0, 0),
-        CropShape::ChamferedRectangle { size_pct } => (3, size_pct.to_bits(), 0, 0, 0),
-        CropShape::Polygon {
-            sides,
-            rotation_deg,
-            corner_style,
-        } => {
-            let (ck, p1) = match corner_style {
-                PolygonCornerStyle::Sharp => (0u8, 0u32),
-                PolygonCornerStyle::Rounded { radius_pct } => (1, radius_pct.to_bits()),
-                PolygonCornerStyle::Chamfered { size_pct } => (2, size_pct.to_bits()),
-                PolygonCornerStyle::Bezier { tension } => (3, tension.to_bits()),
-            };
-            (4 + ck, p1, 0, *sides, rotation_deg.to_bits())
-        }
-        CropShape::Star {
-            points,
-            inner_radius_pct,
-            rotation_deg,
-        } => (
-            8,
-            inner_radius_pct.to_bits(),
-            0,
-            *points,
-            rotation_deg.to_bits(),
-        ),
-        CropShape::KochPolygon {
-            sides,
-            rotation_deg,
-            iterations,
-        } => (9, *iterations as u32, 0, *sides, rotation_deg.to_bits()),
-        CropShape::KochRectangle { iterations } => (10, *iterations as u32, 0, 0, 0),
-    }
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct CropPreviewKey {
-    pub path: PathBuf,
-    pub face_index: usize,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub positioning_mode: u8,
-    pub face_height_bits: u32,
-    pub horizontal_bits: u32,
-    pub vertical_bits: u32,
-    pub fill_color_bits: u32,
-    pub shape: ShapeKey,
-}
-
-pub struct CropPreviewCacheEntry {
-    pub image: Arc<DynamicImage>,
-    pub texture: Option<TextureHandle>,
 }
 
 // ── Preview state ─────────────────────────────────────────────────────────────
@@ -392,7 +276,6 @@ pub struct DetectionJobSuccess {
 pub enum JobMessage {
     DetectionFinished {
         job_id: u64,
-        cache_key: CacheKey,
         data: DetectionJobSuccess,
     },
     DetectionFailed {
@@ -622,9 +505,6 @@ pub struct App2 {
 
     // Preview
     pub preview: PreviewState,
-    pub cache: LruCache<CacheKey, DetectionCacheEntry>,
-    pub crop_preview_cache: LruCache<CropPreviewKey, CropPreviewCacheEntry>,
-    pub image_cache: LruCache<PathBuf, Arc<DynamicImage>>,
 
     // Selection & editing
     pub selected_faces: HashSet<usize>,

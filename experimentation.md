@@ -305,7 +305,7 @@ implementation or workload.
   workgroups and explicit vector loads or texture sampling under the same
   resize contract. Validate borders and CPU/GPU parity; any different filter or
   coordinate convention is a separately assessed Q candidate.
-- [ ] **52. Cache preprocessing for unchanged preview input.** First inspect
+- [x] **52. Cache preprocessing for unchanged preview input.** First inspect
   current GUI caches and invalidation. Test reuse across changes that only affect
   crop presentation/enhancement; invalidate for image, orientation, input-size
   or detector changes. Measure repeated-interaction latency and retained memory.
@@ -1485,6 +1485,43 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 52. The GUI's caches, inspected first as instructed - all three were dead
+
+This experiment says to inspect the current caches and their invalidation before
+proposing anything. There are three, and none of them works:
+
+| Cache | Capacity | What it actually does |
+| --- | ---: | --- |
+| `cache` (detection) | 50 | `put` and `clear`, **never read** |
+| `crop_preview_cache` | 500 | `clear()` in seven places, never written or read |
+| `image_cache` | 20 | declared and constructed, never touched at all |
+
+The detection one is not merely dead, it retains. Each entry holds the decoded
+`source_image` and an egui `TextureHandle`, so browsing fifty images in the GUI
+keeps fifty full-resolution decodes alive -- on this corpus, averaging 8.6 MP,
+about **1.3 GB of RAM** plus the textures -- to serve lookups that never happen.
+
+`git log -S` places it: the previous GUI read the cache in
+`app_impl.rs::start_detection`, and keyed it properly through
+`cache_key_for_path(path, settings)`. The `fcs-gui2` rewrite kept the write and
+dropped the read. The key went with it -- both surviving construction sites
+hardcode every field (`model_path: None`, `input_width: 640`, `score_bits: 0`,
+`top_k: 5000`), so the key is really just the path, and neither `rotation_deg`
+nor `auto_orient_exif` appears in it even though both change the result.
+
+**Deleted, all three, with the `lru` dependency behind them** -- 179 lines and one
+crate. Nothing observable changes, because nothing read them.
+
+**Restoring the detection cache is a smaller prize than it looks and is not done
+here.** A hit would skip a decode and a detection: 20 images single-threaded run
+1.97-1.99 s including startup, so roughly 60 ms per re-selection, which is under
+the threshold where anyone notices a preview appearing. Against that, a hit has
+to reproduce what `DetectionFinished` sets up -- selected faces, edit history,
+canvas rotation, quality rules -- and a key that is wrong in the way the current
+one is wrong would serve stale detections after a settings or rotation change.
+That is a GUI-visible refactor with a correctness failure mode, worth doing only
+with someone watching the GUI, and worth about 60 ms.
 
 ### 60. Worker count - the previous answer reversed, and the default is now right
 
