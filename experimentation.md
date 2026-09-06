@@ -459,6 +459,10 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [x] **89. Retry 87's rejected quality-metric swap on the new RGBA path.**
+  87 measured it neutral and named the reason: no RGBA fast resize existed, so
+  the swap converted the region to RGB and gave back what it saved. 88 built one,
+  and removed the pool hop that was also in the way. Re-measure.
 - [x] **88. Resize crops with SIMD, and stop paying to *avoid* threading.**
   Re-profiling after 71 put `image::imageops::resize` inside
   `crop_face_from_image` at the top of the batch, which 87 had already named as
@@ -1471,6 +1475,67 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 89. The same swap 87 rejected, now worth 9%
+
+Experiment 87 routed `estimate_sharpness`'s downscale through `resize_image` and
+measured nothing, in either thread configuration, order-alternated both ways. It
+recorded why: callers hand it `ImageRgba8`, `resize_image_fast` took RGB8 only,
+so it converted the whole region first and handed back exactly what the faster
+kernel saved. It named the fix -- an RGBA-capable path -- and left it.
+
+88 built that path, and removed the cross-registry pool hop that sat on it too.
+Retrying the swap on those terms:
+
+| Binary | Runs (s) | Median |
+| --- | --- | ---: |
+| baseline (88) | 8.15, 7.41, 7.45, 8.08 | 7.77 |
+| via `resize_rgba_fast` | 7.06, 7.14, 6.90, 7.44 | **7.10** |
+
+**About 9%, winning all four pairs in both orders.** Exported crops are
+byte-identical, 901 of 901 with filenames included.
+
+**The reported scores are not, and I would have missed it.** A snapshot test
+caught `quality_score` moving 111.858 to 112.668 on the fixture, which sent me to
+measure the whole folder rather than call the change neutral:
+
+| Relative change in `quality_score` | |
+| --- | ---: |
+| median | 0.000% |
+| p95 | 2.03% |
+| max | 6.00% |
+| quality label flips, 1032 detections | **0** |
+
+The median is zero because most detections are already under `QUALITY_MAX_DIM`
+and never resize; the 6% worst case is a score of 5.4 against 5.7, where the
+relative figure is large and the absolute one is not.
+
+No label moved here, but **six detections sit within 1% of a 300 or 1000
+threshold**, so this is "no flips on this folder", not "cannot flip". What
+protects the important output is structural rather than lucky: the crop labels in
+filenames and the `auto_select_best_face` ranking both come from
+`build_processed_crop`, which scores the finished 512x512 crop and so never
+reaches the resize at all. Only the JSON report's per-detection score moves.
+
+The call site that pays is `detection_quality`, which cuts the face region out of
+the **full-resolution** source and scores that, so the downscale is real work.
+`build_processed_crop` scores the finished 512x512 crop, which never crosses
+`QUALITY_MAX_DIM` and never resizes at all.
+
+One thing needed care. `DynamicImage::resize` fits inside the box and keeps the
+aspect ratio; `resize_rgba_fast` takes exact dimensions, so the fit is now
+computed at the call site and has to match `image`'s `resize_dimensions` exactly
+-- the smaller of the two ratios, rounded. A dimension out by one pixel changes
+the variance, which changes the label, and `auto_select_best_face` ranks by that
+same score. `quality_downscale_matches_image_crate_dimensions` checks eight
+shapes against what `image` actually returns rather than against my reading of
+its source.
+
+**The general point:** 87's result was correct and its conclusion was correct.
+What made it stale was not new information about the measurement but a change to
+the thing being measured. A rejected experiment whose record names its blocker is
+worth re-running the moment that blocker goes; one that just says "no gain" is
+not.
 
 ### 88. The gate that cost more than the work it was skipping
 

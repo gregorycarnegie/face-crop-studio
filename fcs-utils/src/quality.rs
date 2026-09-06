@@ -130,25 +130,57 @@ impl QualityFilter {
     }
 }
 
+/// The dimensions `DynamicImage::resize` would pick to fit inside the quality box.
+///
+/// Mirrors `image`'s `resize_dimensions` with `fill = false`: the smaller of the two
+/// ratios, rounded, and never zero.
+fn quality_fit(width: u32, height: u32) -> (u32, u32) {
+    let ratio = f64::min(
+        f64::from(QUALITY_MAX_DIM) / f64::from(width),
+        f64::from(QUALITY_MAX_DIM) / f64::from(height),
+    );
+    let scale = |v: u32| ((f64::from(v) * ratio).round() as u32).max(1);
+    (scale(width), scale(height))
+}
+
 /// Compute the Laplacian variance for an image region. Higher values mean
 /// the image is sharper (less blurry).
 pub fn laplacian_variance(img: &DynamicImage) -> f64 {
     // Optimization: Downscale large images to speed up variance calculation.
     //
-    // Still `DynamicImage::resize`, which samples pixel-by-pixel, even though a batch
-    // profile put this one call at 5.5% of all CPU over a 1239-image folder. Routing it
-    // through `resize_image`'s SIMD path measured no wall-time difference at 32 threads or
-    // single-threaded, both order-alternated: callers pass `ImageRgba8`, and
-    // `resize_image_fast` takes RGB8 only, so it converts the whole region first and gives
-    // back what the faster kernel saves. An RGBA-capable fast path would be the real
-    // candidate; the obvious swap is not (experiment 87).
+    // Through `resize_rgba_fast` where the caller has RGBA8 to hand, which both callers do:
+    // `detection_quality` runs this on a face region cut from the full-resolution source.
+    // Experiment 87 measured the obvious swap as worthless -- `resize_image_fast` takes RGB8
+    // only, so it converted the whole region first and handed back what the faster kernel
+    // saved -- and named an RGBA-capable path as the real candidate. Experiment 88 built one
+    // (89).
+    //
+    // `DynamicImage::resize` fits inside the box and keeps the aspect ratio, where
+    // `resize_rgba_fast` takes exact dimensions, so the fit is computed here. It has to agree
+    // with `image` exactly: a dimension out by one pixel changes the variance and so the
+    // quality label. See `quality_downscale_matches_image_crate_dimensions`.
     let (w, h) = img.dimensions();
     let img_to_process = if w > QUALITY_MAX_DIM || h > QUALITY_MAX_DIM {
-        std::borrow::Cow::Owned(img.resize(
-            QUALITY_MAX_DIM,
-            QUALITY_MAX_DIM,
-            image::imageops::FilterType::Triangle,
-        ))
+        let (nw, nh) = quality_fit(w, h);
+        let resized = img
+            .as_rgba8()
+            .and_then(|rgba| {
+                crate::image_utils::resize_rgba_fast(
+                    rgba,
+                    nw,
+                    nh,
+                    image::imageops::FilterType::Triangle,
+                )
+            })
+            .map(DynamicImage::ImageRgba8)
+            .unwrap_or_else(|| {
+                img.resize(
+                    QUALITY_MAX_DIM,
+                    QUALITY_MAX_DIM,
+                    image::imageops::FilterType::Triangle,
+                )
+            });
+        std::borrow::Cow::Owned(resized)
     } else {
         std::borrow::Cow::Borrowed(img)
     };
@@ -206,6 +238,34 @@ pub fn estimate_sharpness(img: &DynamicImage) -> (f64, Quality) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_downscale_matches_image_crate_dimensions() {
+        // `laplacian_variance` now resizes to explicit dimensions instead of asking
+        // `DynamicImage::resize` to fit the box. One pixel of disagreement changes the
+        // variance and so the quality label, and `auto_select_best_face` ranks by that
+        // score, so this has to agree exactly rather than nearly (experiment 89).
+        for (w, h) in [
+            (4000u32, 3000u32),
+            (3000, 4000),
+            (513, 513),
+            (1000, 513),
+            (5000, 517),
+            (517, 5000),
+            (4096, 4096),
+            (1023, 767),
+        ] {
+            let src = DynamicImage::ImageRgba8(image::RgbaImage::new(w, h));
+            let want = src
+                .resize(
+                    QUALITY_MAX_DIM,
+                    QUALITY_MAX_DIM,
+                    image::imageops::FilterType::Triangle,
+                )
+                .dimensions();
+            assert_eq!(quality_fit(w, h), want, "fit disagrees for {w}x{h}");
+        }
+    }
     use image::RgbaImage;
 
     #[test]

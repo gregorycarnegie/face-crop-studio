@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **The quality metric's downscale resizes through `fast_image_resize`.**
+  `estimate_sharpness` scores a face region cut from the full-resolution source,
+  and that downscale was still `DynamicImage::resize`. Worth about **9%** of a
+  folder job on top of the two changes below. Exported crops are byte-identical,
+  filenames included, and face selection is unchanged -- both come from the score
+  of the finished 512x512 crop, which is under the downscale threshold.
+
+  **The JSON report's per-detection `quality_score` does change**, by a median of
+  0.000% and at most 6% over a 1239-image folder, since the two resamplers round
+  differently. No `quality` label moved across 1032 detections, though six sat
+  within 1% of a threshold.
+
 - **Crops resize through `fast_image_resize`.** `crop_face_from_image` works on
   an RGBA canvas and so could not use the existing RGB fast path, leaving it on
   `image::imageops::resize` -- pixel-by-pixel through `GenericImageView`, and
