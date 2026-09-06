@@ -3,21 +3,19 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use fcs_core::{CropSettings, Detection, calculate_crop_region};
 use fcs_utils::{
-    BatchCropRequest, CropShape, EnhancementSettings, GpuAvailability, GpuBatchCropper, GpuContext,
-    GpuContextOptions, WgpuEnhancer, apply_enhancements, apply_shape_mask_dynamic,
+    CropShape, EnhancementSettings, GpuAvailability, GpuContext, GpuContextOptions, WgpuEnhancer,
+    apply_enhancements, apply_shape_mask_dynamic,
     config::AppSettings,
     gpu::{GpuStatusIndicator, GpuStatusMode},
 };
-use image::{DynamicImage, GenericImageView};
+use image::DynamicImage;
 use log::{debug, info, warn};
 
 pub struct CliGpuRuntime {
     context: Option<Arc<GpuContext>>,
     status: GpuStatusIndicator,
     enhancer: Option<Arc<WgpuEnhancer>>,
-    cropper: Option<Arc<GpuBatchCropper>>,
 }
 
 impl CliGpuRuntime {
@@ -71,64 +69,6 @@ impl CliGpuRuntime {
             vignette_color,
         );
         cpu
-    }
-
-    pub fn crop_faces_gpu(
-        &self,
-        image: &DynamicImage,
-        detections: &[Detection],
-        settings: &CropSettings,
-    ) -> Option<Vec<DynamicImage>> {
-        if settings.output_width == 0 || settings.output_height == 0 {
-            return None;
-        }
-        // Experiment 71: FCS_NO_GPU_CROP forces the CPU crop path so the two can be A/B'd
-        // without disabling GPU inference as well, which `--no-gpu` would.
-        if std::env::var_os("FCS_NO_GPU_CROP").is_some() {
-            return None;
-        }
-        let cropper = self.cropper.as_ref()?;
-        if detections.is_empty() {
-            return Some(Vec::new());
-        }
-
-        let (img_w, img_h) = image.dimensions();
-        let mut jobs = Vec::with_capacity(detections.len());
-        for det in detections {
-            let region = calculate_crop_region(img_w, img_h, det.bbox, settings);
-            if region.requires_padding() {
-                return None;
-            }
-            let (source_x, source_y, source_width, source_height) =
-                region.in_bounds_rect(img_w, img_h)?;
-            jobs.push(BatchCropRequest {
-                source_x,
-                source_y,
-                source_width: source_width.max(1),
-                source_height: source_height.max(1),
-                output_width: settings.output_width,
-                output_height: settings.output_height,
-            });
-        }
-
-        match cropper.crop(image, &jobs) {
-            Ok(images) => {
-                if images.len() == detections.len() {
-                    Some(images)
-                } else {
-                    warn!(
-                        "GPU crop count mismatch (expected {}, got {}); reverting to CPU crops.",
-                        detections.len(),
-                        images.len()
-                    );
-                    None
-                }
-            }
-            Err(err) => {
-                warn!("GPU batch cropping failed: {err}; reverting to CPU crops.");
-                None
-            }
-        }
     }
 }
 
@@ -221,29 +161,10 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
         None => None,
     };
 
-    let cropper = match &context {
-        Some(ctx) => match GpuBatchCropper::new(ctx.clone()) {
-            Ok(cropper) => {
-                info!(
-                    "GPU batch cropper ready on '{}' ({:?})",
-                    ctx.adapter_info().name,
-                    ctx.adapter_info().backend
-                );
-                Some(Arc::new(cropper))
-            }
-            Err(err) => {
-                warn!("GPU batch cropper initialization failed: {err}");
-                None
-            }
-        },
-        None => None,
-    };
-
     let runtime = CliGpuRuntime {
         context,
         status,
         enhancer,
-        cropper,
     };
     runtime.log_status();
     Ok(runtime)
@@ -252,7 +173,6 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fcs_core::{CropSettings, FillColor, PositioningMode};
     use fcs_utils::{
         EnhancementSettings,
         config::AppSettings,
@@ -271,7 +191,6 @@ mod tests {
             context: None,
             status,
             enhancer: None,
-            cropper: None,
         }
     }
 
@@ -336,41 +255,6 @@ mod tests {
     fn log_status_does_not_panic() {
         let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
         runtime.log_status();
-    }
-
-    #[test]
-    fn crop_faces_gpu_returns_none_for_zero_output_width() {
-        let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
-        let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 100));
-        let settings = CropSettings {
-            output_width: 0,
-            output_height: 100,
-            face_height_pct: 70.0,
-            positioning_mode: PositioningMode::Center,
-            horizontal_offset: 0.0,
-            vertical_offset: 0.0,
-            fill_color: FillColor::default(),
-            eye_line_align: false,
-        };
-        assert!(runtime.crop_faces_gpu(&img, &[], &settings).is_none());
-    }
-
-    #[test]
-    fn crop_faces_gpu_returns_none_when_cropper_absent() {
-        // GPU disabled → cropper is None → returns None regardless of detections
-        let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
-        let img = DynamicImage::ImageRgba8(RgbaImage::new(100, 100));
-        let settings = CropSettings {
-            output_width: 50,
-            output_height: 50,
-            face_height_pct: 70.0,
-            positioning_mode: PositioningMode::Center,
-            horizontal_offset: 0.0,
-            vertical_offset: 0.0,
-            fill_color: FillColor::default(),
-            eye_line_align: false,
-        };
-        assert!(runtime.crop_faces_gpu(&img, &[], &settings).is_none());
     }
 
     #[test]

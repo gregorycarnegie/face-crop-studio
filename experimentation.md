@@ -1596,9 +1596,19 @@ masked-away area is identical either way: max channel difference 17-51 against
 comparing shaped crops is therefore looking at a weaker signal than the
 rectangles already judged indistinguishable by eye.
 
-**If adopted, `GpuBatchCropper` should go rather than be left unreachable** --
-roughly 400 lines plus `crop.wgsl` and its pooling, for a path that measured
-slower and lower quality than the CPU it exists to beat.
+**Adopted after review of both crop sets, and `GpuBatchCropper` deleted** rather
+than left unreachable: `crop_batch.rs`, `crop.wgsl`, the CLI's cropper plumbing
+and the `BatchCropRequest`/`GpuBatchCropper` exports, about **740 lines removed
+against 14 added**. The folder now completes in 9.5 s where it took 17.25 s,
+with output byte-identical to the flagged CPU path.
+
+`calculate_crop_region` and `pack_rgba_pixels` stay -- the GUI's export and
+canvas use the first, and the blur and bilateral effects use the second.
+
+One thing the release build did not catch: the test helper still constructed the
+removed `cropper` field, and `cargo build` does not compile test code. Only
+`cargo clippy --all-targets` and the test run found it, which is the argument for
+running both before believing a deletion is complete.
 
 ### Previous work
 

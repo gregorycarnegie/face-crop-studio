@@ -22,8 +22,6 @@ pub const RED_EYE_WGSL: &str = include_str!("red_eye.wgsl");
 pub const SHAPE_MASK_WGSL: &str = include_str!("shape_mask.wgsl");
 /// Histogram equalization shader module.
 pub const HIST_EQUALIZE_WGSL: &str = include_str!("hist_equalize.wgsl");
-/// Batched crop-and-resize shader.
-pub const CROP_WGSL: &str = include_str!("crop.wgsl");
 
 pub mod pixel_adjust;
 pub use pixel_adjust::GpuPixelAdjust;
@@ -39,8 +37,6 @@ pub mod shape_mask;
 pub use shape_mask::GpuShapeMask;
 pub mod hist_equalize;
 pub use hist_equalize::GpuHistogramEqualizer;
-pub mod crop_batch;
-pub use crop_batch::{BatchCropRequest, GpuBatchCropper};
 pub mod buffer_pool;
 pub use buffer_pool::{ExecutionScope, GpuBufferPool};
 pub mod profiler;

@@ -364,31 +364,16 @@ fn generate_processed_crops(
 ) -> Vec<ProcessedCrop> {
     let mut processed = Vec::with_capacity(detections.len());
 
-    if let Some(gpu_images) = runtime.crop_faces_gpu(img, detections, core_settings) {
-        for ((idx, det), crop_img) in detections.iter().enumerate().zip(gpu_images) {
-            processed.push(build_processed_crop(
-                idx,
-                det,
-                crop_img,
-                settings,
-                enhancement_settings,
-                runtime,
-            ));
-        }
-    }
-
-    if processed.is_empty() {
-        for (idx, det) in detections.iter().enumerate() {
-            let crop_img = crop_face_from_image(img, det, core_settings);
-            processed.push(build_processed_crop(
-                idx,
-                det,
-                crop_img,
-                settings,
-                enhancement_settings,
-                runtime,
-            ));
-        }
+    for (idx, det) in detections.iter().enumerate() {
+        let crop_img = crop_face_from_image(img, det, core_settings);
+        processed.push(build_processed_crop(
+            idx,
+            det,
+            crop_img,
+            settings,
+            enhancement_settings,
+            runtime,
+        ));
     }
 
     processed
@@ -754,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_processed_crops_falls_back_to_cpu_when_gpu_runtime_has_no_cropper() {
+    fn generate_processed_crops_produces_one_crop_per_detection() {
         let settings = crop_settings_app();
         let runtime = no_gpu_runtime();
         let core_settings: fcs_core::CropSettings = (&settings.crop).into();

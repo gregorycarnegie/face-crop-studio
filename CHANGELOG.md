@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **GPU batch cropping.** `GpuBatchCropper` converted the full-resolution source
+  to RGBA, packed every pixel into a `u32` and uploaded all of it -- 40 MB for a
+  10 MP photo -- to produce one 512x512 crop. Cropping on the CPU instead takes a
+  1239-image folder from a median **17.25 s to 9.8 s, 43% faster**,
+  order-alternated and winning every pair; the saving holds for the shaped crops
+  too (38% rectangle, 47% koch snowflake, 38% star), where the mask costs the
+  same either way and lands on the finished 512x512 image.
+
+  It was also the lower-quality path. `crop.wgsl` sampled a fixed 2x2
+  neighbourhood -- four source pixels however far the crop was being downscaled
+  -- where `crop_face_from_image` uses Lanczos3. **Crops therefore change**: up
+  to 85 per channel on a rectangle, less under a mask, and 18% of them shift
+  quality label. The shift is almost entirely downward, which is what
+  undersampling predicts, since aliasing adds high-frequency detail and the
+  sharpness metric is Laplacian variance. One image in 171 selects a different
+  face, because `auto_select_best_face` ranks by that same score. Crops from both
+  paths were compared before this was removed.
+
+  This deletes about 740 lines: `crop_batch.rs`, `crop.wgsl`, the CLI's cropper
+  plumbing and the `BatchCropRequest`/`GpuBatchCropper` exports.
+
 ### Changed
 
 - **The bundled GUI settings now use the filtered resize.**
