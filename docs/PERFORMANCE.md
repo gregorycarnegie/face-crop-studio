@@ -64,6 +64,22 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The batch path is not serialised
+
+Profiled over 1239 real images, all threads: **194.7 s of CPU across 51 threads
+in about 16 s of wall time**, roughly 12.5 cores busy on a 16-core machine, with
+the top ten workers within 15% of each other. Nothing -- not the GPU queue, not
+the buffer-pool mutex, not export -- serialises the batch, so experiments 60, 61
+and 64 have no contention to fix. Warm throughput is about 65 images/s.
+
+Two hazards for anyone measuring this path. `fcs-cli` loads
+`config/gui_settings.json` **from the working directory**, so the same command
+detects 1020 faces from the repository root and 423 from `target/release`;
+always pass `--config`. And batch wall time swings about 10% run to run, so
+comparisons need their order alternated -- see experiment 63, where an
+unalternated pair produced a confident conclusion that reversed under
+alternation.
+
 ### Decode, not detection, sets what a folder costs
 
 Warm, from memory, 10 MP fixture: **JPEG decode 24.0 ms against 3.1 ms of

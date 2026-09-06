@@ -133,7 +133,15 @@ impl QualityFilter {
 /// Compute the Laplacian variance for an image region. Higher values mean
 /// the image is sharper (less blurry).
 pub fn laplacian_variance(img: &DynamicImage) -> f64 {
-    // Optimization: Downscale large images to speed up variance calculation
+    // Optimization: Downscale large images to speed up variance calculation.
+    //
+    // Still `DynamicImage::resize`, which samples pixel-by-pixel, even though a batch
+    // profile put this one call at 5.5% of all CPU over a 1239-image folder. Routing it
+    // through `resize_image`'s SIMD path measured no wall-time difference at 32 threads or
+    // single-threaded, both order-alternated: callers pass `ImageRgba8`, and
+    // `resize_image_fast` takes RGB8 only, so it converts the whole region first and gives
+    // back what the faster kernel saves. An RGBA-capable fast path would be the real
+    // candidate; the obvious swap is not (experiment 87).
     let (w, h) = img.dimensions();
     let img_to_process = if w > QUALITY_MAX_DIM || h > QUALITY_MAX_DIM {
         std::borrow::Cow::Owned(img.resize(

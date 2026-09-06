@@ -459,7 +459,11 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
-- [ ] **86. Detect from a reduced-scale decode, crop from the full one.**
+- [x] **87. Profile the batch path and cut what it is actually spending.**
+  Where a folder job's CPU goes, and whether anything in it is a serial
+  bottleneck. Distinct from 60/61, which propose scheduling changes; this only
+  measures and takes what the measurement hands over.
+- [~] **86. Detect from a reduced-scale decode, crop from the full one.**
   Experiment 51 showed the resize is bounded below by reading the source once,
   so the only remaining lever on it is fewer source pixels. A JPEG decoded at
   1/2 via DCT scaling is a proper low-pass, not a dropped-pixel approximation,
@@ -468,7 +472,11 @@ implementation or workload.
   the rejected reduced-scale crop workflow. Measure both decodes where a face is
   found, and evaluate recall on small faces with `resize_quality.rs`. Q, and it
   changes the decode stage rather than preprocessing. Distinct from 73, which
-  screens for whether faces exist at all.
+  screens for whether faces exist at all. **Premise weak on the real workload:**
+  1020 of 1239 images in the reference folder contain a face, and every one of
+  those needs the full-resolution decode for its crop anyway, so the reduced
+  decode is added work rather than replacement work for 82% of the folder. Only
+  worth revisiting for detection-only or mostly-faceless input.
 
 ## Result record for each new experiment
 
@@ -1458,6 +1466,58 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 87. Batch profile - one finding, measured, and rejected
+
+`samply` over the whole CLI run, all threads, 1239 images, explicit
+`--config` selecting `Quality` so the configuration is not ambiguous.
+**194.7 s of CPU across 51 threads over about 16 s of wall time** -- roughly
+12.5 cores busy on a 16-core machine, with the top ten worker threads within 15%
+of each other at 6.2-7.2 s each.
+
+**There is no serial bottleneck.** The even thread distribution rules out the
+GPU queue, the buffer-pool mutex or export serialising the batch, which is what
+this experiment was opened to look for. An earlier guess that batch achieved
+only about 1.7x over serial work was arithmetic on a per-image cost taken from a
+different configuration, and is wrong.
+
+Where the CPU goes (self time, summed across the rows each symbol appears in):
+
+| Cost | Share |
+| --- | ---: |
+| `fast_image_resize` vertical convolution (AVX2) | ~14% |
+| `memset` / `memcpy` | ~9% |
+| `image::DynamicImage::resize_exact` | 4.4% |
+| `image::metadata::cicp::CicpRgb::cast_pixels_by_layout` | ~4.8% |
+| `zlib_rs::deflate::longest_match` (PNG export) | ~2.5% |
+| libjpeg `decode_mcu_fast` | ~1% |
+
+**Rejected: routing the quality metric's downscale through the SIMD resize.**
+All 4.4% of `resize_exact` blames to one caller,
+`fcs_utils::quality::estimate_sharpness` (10.7 s, 5.5% of all CPU) -- the same
+pixel-by-pixel `image` resize that `resize_image_fast` was written to replace for
+preprocessing, still in use here.
+
+Swapping it changed nothing, order-alternated in both directions:
+
+| Configuration | `image` resize | SIMD resize |
+| --- | --- | --- |
+| 1239 images, 32 workers | 16.0-17.5 s | 16.7-17.2 s |
+| 200 large images, 1 worker | 20.6-23.3 s | 20.5-23.8 s |
+
+The reason is in the call site: callers pass `DynamicImage::ImageRgba8`, and
+`resize_image_fast` accepts RGB8 only, so it converts the whole region to RGB
+first and hands back exactly what the faster kernel saves. Reverted, with the
+reason recorded at the call site so the swap is not retried.
+
+Outputs were identical while it was in place -- 901 crops, byte-identical
+filenames, so every quality label matched. The change was neutral, not wrong.
+
+**The real candidate is an RGBA-capable fast resize path** (`fir` has
+`PixelType::U8x4`), which would remove the conversion instead of moving it. Not
+attempted: a 5.5% CPU saving did not move wall time in either configuration
+above, so the case for it is energy and small-machine headroom rather than
+throughput, and it should be measured as such.
 
 ### Previous work
 
