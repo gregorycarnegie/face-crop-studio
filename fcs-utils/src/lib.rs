@@ -50,7 +50,7 @@ pub use gpu::{
 };
 pub use image_utils::{
     SUPPORTED_IMAGE_EXTENSIONS, compute_resize_scales, dynamic_to_bgr_chw, is_supported_image_path,
-    load_image, load_image_raw, resize_image, rgb_to_bgr_chw,
+    load_image, load_image_raw, resize_image, resize_rgba_fast, rgb_to_bgr_chw,
 };
 use log::LevelFilter;
 pub use output::{

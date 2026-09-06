@@ -86,12 +86,25 @@ pub fn crop_face_from_image(
         canvas
     };
 
-    let resized = image::imageops::resize(
-        &DynamicImage::ImageRgba8(canvas),
+    // Through `fast_image_resize` rather than `image::imageops::resize`: the latter samples
+    // pixel-by-pixel through `GenericImageView`, and a batch profile put this one call at
+    // 10.9% of all CPU over a 1239-image folder. Same Lanczos3 kernel either side, so output
+    // is equivalent up to rounding (experiment 88). `None` means fir declined the request --
+    // a zero dimension, say -- and the original path still has to answer for it.
+    let resized = fcs_utils::resize_rgba_fast(
+        &canvas,
         settings.output_width,
         settings.output_height,
         FilterType::Lanczos3,
-    );
+    )
+    .unwrap_or_else(|| {
+        image::imageops::resize(
+            &DynamicImage::ImageRgba8(canvas),
+            settings.output_width,
+            settings.output_height,
+            FilterType::Lanczos3,
+        )
+    });
 
     DynamicImage::ImageRgba8(resized)
 }
@@ -417,7 +430,23 @@ mod tests {
             FilterType::Lanczos3,
         );
 
-        assert_eq!(got, want);
+        // Compared with a tolerance rather than for equality: the subject here is the
+        // rotation angle, and the reference scales with `image::imageops` while the
+        // production path scales with `fast_image_resize` (experiment 88). Two Lanczos3
+        // implementations round differently. A wrong angle moves pixels by far more than
+        // this -- the eyes are 30 degrees off level in this fixture.
+        assert_eq!(got.dimensions(), want.dimensions());
+        let worst = got
+            .as_raw()
+            .iter()
+            .zip(want.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .expect("non-empty");
+        assert!(
+            worst <= 4,
+            "max channel difference {worst} is larger than resampling rounding"
+        );
     }
 
     #[test]

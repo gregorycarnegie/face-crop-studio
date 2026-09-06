@@ -102,12 +102,28 @@ Run the full test suite:
 cargo test --workspace --all-features
 ```
 
+`FCS_STRICT_TESTS=1` turns "prerequisite missing, skipping" into a failure, which
+is what CI runs. The ONNX Runtime comparison in `backend_parity` needs the
+library on hand for that, so point `ORT_DYLIB_PATH` at it:
+
+```powershell
+$env:ORT_DYLIB_PATH = "$HOME/.onnxruntime/onnxruntime-win-x64-1.24.4/lib/onnxruntime.dll"
+$env:FCS_STRICT_TESTS = "1"
+cargo test --workspace --release --no-fail-fast
+```
+
+`--no-fail-fast` is worth the habit: `cargo test` stops at the first test binary
+that fails, so a failure in one crate hides every target after it.
+
 Run formatting and lint checks:
 
 ```powershell
 cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+`--all-targets` is not optional. Without it clippy skips test code, and so does
+`cargo build`: a change that breaks only a test helper passes both.
 
 Launch the CLI and GUI:
 

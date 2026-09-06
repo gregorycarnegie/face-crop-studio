@@ -459,6 +459,11 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [x] **88. Resize crops with SIMD, and stop paying to *avoid* threading.**
+  Re-profiling after 71 put `image::imageops::resize` inside
+  `crop_face_from_image` at the top of the batch, which 87 had already named as
+  the remaining candidate. Measure an RGBA `fast_image_resize` path for it, and
+  whatever else the fresh profile hands over.
 - [x] **87. Profile the batch path and cut what it is actually spending.**
   Where a folder job's CPU goes, and whether anything in it is a serial
   bottleneck. Distinct from 60/61, which propose scheduling changes; this only
@@ -1466,6 +1471,101 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 88. The gate that cost more than the work it was skipping
+
+Re-recorded the batch profile after 71, rather than reusing its attribution: the
+deleted cropper was in most of it. **147.0 s of CPU across 50 threads, down from
+194.7 s.** `CicpRgb::cast_pixels_by_layout` had gone entirely, confirming it was
+the cropper's `to_rgba8` and not a cost of its own.
+
+Two things moved to the top:
+
+| Cost | Self | Share |
+| --- | ---: | ---: |
+| `crop_face_from_image` -> `image::imageops::resize` | ~16.0 s | **10.9%** |
+| PNG deflate (`zlib_rs::longest_match` + `deflate_medium`) | ~10.7 s | 7.3% |
+| `DynamicImage::resize_exact` (`estimate_sharpness`) | 5.5 s | 3.7% |
+
+The first is the RGBA fast-resize candidate 87 left open, now the largest single
+cost in the run. `crop_face_from_image` resizes an RGBA canvas -- the fill colour
+carries an alpha and rotation needs somewhere to put the corners -- and
+`resize_image_fast` accepts RGB8 only, so it was still going pixel-by-pixel
+through `GenericImageView`.
+
+**Adding an RGBA path was worth about 2%, and nearly hid the real finding.**
+Measured on its own against separate binaries it first came out *slower*, losing
+four pairs out of four. The cause was not the resize:
+
+```
+26335 ms  17.9%  rayon_core::registry::Registry::in_worker_cross<...
+                   ...image_utils::resize_image_fast...>   (registry.rs:561)
+```
+
+`threading_pays` returning false does not mean "run it here". It means
+`single_thread_pool().install(...)`, and from inside a rayon worker that is a
+**cross-registry hop**, not an ordinary join. The batch pays it on every resize
+under 4 MP, on both the crop path and the preprocessing path. The gate was
+costing more than the threading it existed to avoid.
+
+Four-way matrix in one binary, order-alternated (1239 images, `Quality`,
+rectangle):
+
+| Variant | Runs (s) | Median |
+| --- | --- | ---: |
+| baseline | 9.77, 9.86, 9.50 | 9.77 |
+| RGBA fir crop only | 9.27, 9.58, 9.58 | 9.58 |
+| no threading gate only | 8.03, 7.86, 8.66 | **8.03** |
+| both | 7.55, 7.25, 7.95 | **7.55** |
+
+**The gate is ~18% of batch wall time; the resize is ~2%.** They compose, and
+the ranking held in both directions.
+
+**Not fixed by deleting the gate.** The 4 MP threshold was measured, and it was
+measured correctly -- one image at a time, threading a sub-4 MP resize really is
+0.79-0.89x. Both facts hold; they describe different callers. So the gate now
+yields only where the hop is expensive:
+
+```rust
+if rayon::current_thread_index().is_some() {
+    return true;
+}
+```
+
+Off a worker -- single image, GUI preview, webcam -- nothing changes.
+
+Final A/B, separate binaries, order-alternated: **9.58 s to 8.17 s median**,
+winning all three pairs in both orders, about **15%**.
+
+Output: the threading change is bit-exact, 901 of 901 crops identical. The RGBA
+resize changes pixels at the rounding level, which is what swapping one Lanczos3
+implementation for another should look like -- max channel difference **23**
+across the whole folder against 18-85 for the GPU-crop change in 71, mean 0.13,
+and **one** quality label flips of 901 (0.11%) against 18.1% there.
+
+**Three things this cost me.** The first A/B compared separate binaries and said
+the change was a loss; the four-way matrix in a single binary, with the probe
+switches in the shared helper, is what separated the two effects. I had put the
+probe switch in `resize_pixels_fast` rather than in the RGBA wrapper, so it
+disabled the gate for the preprocessing path too -- the accident is the only
+reason the 18% was visible at all.
+
+And the change broke a test, `eye_line_rotation_matches_an_explicit_rotation`,
+which built its reference with `image::imageops::resize` and asserted byte
+equality. Its subject is the rotation angle, so it was pinning an implementation
+it did not mean to test; it now compares with a tolerance of 4, against a wrong
+angle that would move pixels across a 30-degree tilt. Worth noting how nearly
+this was missed: the run was backgrounded, and the harness reported "exit code
+0" for the *shell*, while `cargo test` had exited 101 four lines up in the
+output. Only reading the log caught it. Neither `cargo build --release` nor
+`cargo clippy --all-targets` fails on this -- it compiles fine and is wrong at
+runtime, the complement of the deletion in 71 that compiled fine and was wrong
+at *link* time for tests only.
+
+**Worth revisiting: 87's rejected `estimate_sharpness` swap.** It measured
+neutral, but it measured neutral *through the gate that has now gone*. Same for
+the `RESIZE_THREADING_MIN_PIXELS` value itself, which was calibrated on the main
+thread and now governs only that.
 
 ### 87. Batch profile - one finding, measured, and rejected
 

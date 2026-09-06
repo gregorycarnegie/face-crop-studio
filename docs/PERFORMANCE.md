@@ -143,13 +143,18 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | --- | --- | --- |
 | Upload resized bytes and convert on the GPU | **-0.6 to -1.0 ms** on large images | `preprocess.rs`, `rgb_to_chw.wgsl` |
 | Threaded source resize above 4 MP | **-0.6 ms** on large images | `fcs-utils/src/image_utils.rs` |
+| No one-thread-pool hop inside a rayon worker | **-18%** of batch wall time | `fcs-utils/src/image_utils.rs` |
+| RGBA fast resize for crops | -2% of batch wall time | `image_utils.rs`, `face_cropper.rs` |
 | One `fir::Resizer` per thread | -0.1 to -0.15 ms on large images | `fcs-utils/src/image_utils.rs` |
 | Stop zeroing the BGR/CHW buffer | -0.1 to -0.2 ms on large images | `fcs-utils/src/image_utils.rs` |
 | Decode straight from the GPU's channel-major heads | **-0.15 to -0.2 ms** | `model.rs`, `gpu/runtime.rs` |
 | `Tensor::from_vec` instead of copying | -0.02 to -0.03 ms | `gpu/runtime.rs`, `model.rs` |
 | One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
 
-All are bit-exact: the raw 126000-float output fingerprint is unchanged
+All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
+implementation for another and so differs by rounding -- at most 23 per channel
+over a 1239-image folder, one crop in 901 shifting quality label (experiment 88).
+The rest: the raw 126000-float output fingerprint is unchanged
 (`readback_parity` probe), resize output is byte-identical between one thread
 and many (`threaded_and_single_threaded_resize_agree`), and the full workspace
 suite passes under `FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4.
@@ -200,7 +205,9 @@ quoting the single-image ratio at anyone.
 - **Preprocessing and postprocessing:** now measured, not assumed. CPU
   preprocessing is 2.65 ms of a 4.68 ms detection at 10 MP and is the single
   largest cost in the application; the resize inside it is now threaded above
-  4 MP. Postprocessing is 0.005-0.010 ms and is not worth attention. Output
+  4 MP, and unconditionally when a rayon worker is already running it -- holding
+  it to one core there means a cross-registry `install()` hop that cost 18% of
+  batch wall time (experiment 88). Postprocessing is 0.005-0.010 ms and is not worth attention. Output
   conversion and decode together are about 0.3 ms and sit on the critical path
   after the readback wait -- now about 0.08 ms, since the CHW-to-HWC transpose
   the decoder used to require has been removed rather than optimised.

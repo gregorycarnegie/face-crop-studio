@@ -32,6 +32,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Batch resizes no longer pay to avoid being threaded.** `threading_pays`
+  holds a small resize to one core by running it inside a one-thread rayon pool,
+  but from *inside* a rayon worker `install()` is a cross-registry hop rather
+  than an ordinary join, and a batch profile put that hop at **17.9% of all
+  CPU**. The gate now yields when a worker is already running the resize;
+  off-worker callers -- single image, GUI preview, webcam -- are unchanged, which
+  is where the 4 MP threshold was measured and where it still holds. Pixel output
+  is identical.
+
+- **Crops resize through `fast_image_resize`.** `crop_face_from_image` works on
+  an RGBA canvas and so could not use the existing RGB fast path, leaving it on
+  `image::imageops::resize` -- pixel-by-pixel through `GenericImageView`, and
+  10.9% of all CPU in a folder job once GPU cropping had gone.
+
+  Together these take a 1239-image folder from a median **9.58 s to 8.17 s**,
+  order-alternated and winning every pair. **Crops change very slightly**: the
+  same Lanczos3 kernel from a different implementation, so differences are
+  rounding -- at most 23 per channel across the folder, mean 0.13, and one crop
+  in 901 shifts quality label. For comparison, removing GPU cropping above moved
+  pixels by up to 85 and shifted 18% of labels.
+
 - **The bundled GUI settings now use the filtered resize.**
   `config/gui_settings.json` had `input.resize_quality` set to `speed`, which
   selects nearest-neighbour sampling when scaling a source down to the detector's

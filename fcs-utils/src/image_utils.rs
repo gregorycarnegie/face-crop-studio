@@ -9,7 +9,8 @@ use fast_image_resize::{
     images::{Image as FirImage, ImageRef as FirImageRef},
 };
 use image::{
-    DynamicImage, ImageDecoder, ImageReader, RgbImage, imageops::FilterType, metadata::Orientation,
+    DynamicImage, ImageDecoder, ImageReader, RgbImage, RgbaImage, imageops::FilterType,
+    metadata::Orientation,
 };
 use rayon::prelude::*;
 use std::{borrow::Cow, path::Path};
@@ -365,17 +366,69 @@ fn resize_image_fast(
         None => Cow::Owned(image.to_rgb8()),
     };
 
-    let src = FirImageRef::new(
+    let out = resize_pixels_fast(
+        rgb.as_raw(),
         rgb.width(),
         rgb.height(),
-        rgb.as_raw(),
         fir::PixelType::U8x3,
-    )
-    .ok()?;
+        width,
+        height,
+        alg,
+    )?;
+    RgbImage::from_raw(width, height, out)
+}
 
-    let mut dst = FirImage::new(width, height, fir::PixelType::U8x3);
-    let options = fir::ResizeOptions::new().resize_alg(alg);
-    let threaded = threading_pays(alg, rgb.width(), rgb.height());
+/// The RGBA counterpart of [`resize_image`], for callers that carry an alpha channel.
+///
+/// `crop_face_from_image` resizes an RGBA canvas -- the fill colour has an alpha, and rotation
+/// needs somewhere to put the corners -- so it could not use the RGB path above and was still
+/// going through `image::imageops::resize`. A batch profile put that one call at 10.9% of all
+/// CPU over a 1239-image folder, the largest single cost left once the GPU cropper had gone
+/// (experiment 88).
+///
+/// Alpha is convolved as a plain fourth channel (`use_alpha(false)`), which is what
+/// `image::imageops::resize` does, so this is a speed change rather than a quality one.
+/// Premultiplying would handle a transparent fill colour better -- colour would stop bleeding
+/// out of fully transparent pixels -- but that is different output and belongs in its own
+/// experiment.
+///
+/// Returns `None` if `fast_image_resize` rejects the request, leaving the caller to fall back.
+pub fn resize_rgba_fast(
+    image: &RgbaImage,
+    width: u32,
+    height: u32,
+    filter: FilterType,
+) -> Option<RgbaImage> {
+    let out = resize_pixels_fast(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        fir::PixelType::U8x4,
+        width,
+        height,
+        fir_alg(filter),
+    )?;
+    RgbaImage::from_raw(width, height, out)
+}
+
+/// Run one `fast_image_resize` convolution over raw interleaved bytes.
+#[allow(clippy::too_many_arguments)]
+fn resize_pixels_fast(
+    src_bytes: &[u8],
+    src_width: u32,
+    src_height: u32,
+    pixel_type: fir::PixelType,
+    width: u32,
+    height: u32,
+    alg: fir::ResizeAlg,
+) -> Option<Vec<u8>> {
+    let src = FirImageRef::new(src_width, src_height, src_bytes, pixel_type).ok()?;
+
+    let mut dst = FirImage::new(width, height, pixel_type);
+    // `use_alpha` defaults on and would premultiply; see `resize_rgba_fast`. It is ignored for
+    // pixel types without an alpha channel, so setting it here is safe for both callers.
+    let options = fir::ResizeOptions::new().resize_alg(alg).use_alpha(false);
+    let threaded = threading_pays(alg, src_width, src_height);
 
     // Taken out of the thread-local for the duration and put back after, rather than held
     // borrowed across the resize. `resize` spreads itself over rayon, and in batch work
@@ -401,7 +454,7 @@ fn resize_image_fast(
     RESIZER.with(|slot| *slot.borrow_mut() = Some(resizer));
     result.ok()?;
 
-    RgbImage::from_raw(width, height, dst.into_vec())
+    Some(dst.into_vec())
 }
 
 thread_local! {
@@ -448,13 +501,23 @@ fn threading_pays(alg: fir::ResizeAlg, width: u32, height: u32) -> bool {
     if matches!(alg, fir::ResizeAlg::Nearest) {
         return false;
     }
-    // Deliberately *not* gated on whether a rayon worker is already running this. Splitting
-    // each resize again inside a batch that is already parallel across images looks like
-    // oversubscription, and skipping it was measured to be much worse: over four
-    // order-alternated pairs of a 1239-image folder at `Quality`, threading throughout ran
-    // 14.7-17.1 s against 19.2-24.4 s gated, winning every pair in both orders. Rayon's
-    // work stealing absorbs the nesting, and the gate leaves cores idle on uneven image
-    // sizes and at the tail of the batch (experiment 63).
+    // Inside a rayon worker, always. Splitting each resize again within a batch that is
+    // already parallel across images looks like oversubscription, and twice now it has
+    // measured better anyway:
+    //
+    //  - Experiment 63: threading throughout ran 14.7-17.1 s against 19.2-24.4 s gated over
+    //    four order-alternated pairs of a 1239-image folder at `Quality`. Rayon's work
+    //    stealing absorbs the nesting, and the gate leaves cores idle on uneven image sizes
+    //    and at the tail of the batch.
+    //  - Experiment 88: saying no is not free. It means `single_thread_pool().install()`,
+    //    and from a worker that is a cross-registry hop (`Registry::in_worker_cross`, 17.9%
+    //    of all CPU in a batch profile) rather than an ordinary join. Yielding here took the
+    //    same folder from a median 9.77 s to 8.03 s, ~18%, winning every pair in both orders.
+    if rayon::current_thread_index().is_some() {
+        return true;
+    }
+    // Off a worker the hop is cheap and the size gate decides, which is the only place it was
+    // ever measured: one image at a time, threading a sub-4 MP resize really is 0.79-0.89x.
     width.saturating_mul(height) >= RESIZE_THREADING_MIN_PIXELS
 }
 
@@ -733,6 +796,64 @@ mod tests {
     /// `resize_image` hands large sources to the rayon pool and keeps small ones on one
     /// thread, so the same image resized either way has to come out identical -- otherwise
     /// detections would depend on how many cores the machine has.
+    #[test]
+    fn threading_gate_yields_inside_a_rayon_worker() {
+        // Off a worker the size gate decides, and a small source is held to one core.
+        let alg = fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3);
+        assert!(
+            !threading_pays(alg, 512, 512),
+            "small source gated off-worker"
+        );
+
+        // On a worker it must not, because saying no there means a cross-registry
+        // `install()` hop that costs more than the threading it avoids (experiment 88).
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .expect("pool");
+        assert!(
+            pool.install(|| threading_pays(alg, 512, 512)),
+            "small source must thread when a worker is already running it"
+        );
+
+        // Nearest is still refused everywhere: one source pixel per output pixel is
+        // cheaper than handing the work to anyone.
+        assert!(!pool.install(|| threading_pays(fir::ResizeAlg::Nearest, 512, 512)));
+    }
+
+    #[test]
+    fn rgba_fast_resize_matches_imageops_within_rounding() {
+        // Smooth, which is what a photograph looks like to a resampler. High-frequency noise
+        // is the wrong fixture here: Lanczos3 has negative lobes, so two implementations
+        // disagree far more at a hard edge without either being wrong -- across a real
+        // 1239-image folder the worst crop still differed by 23 (experiment 88).
+        //
+        // Alpha runs against the colour ramp rather than with it, so a path that
+        // premultiplied would divide colour by a different factor at each end and diverge
+        // by much more than rounding.
+        let source = image::RgbaImage::from_fn(600, 400, |x, y| {
+            image::Rgba([
+                (x / 3) as u8,
+                (y / 2) as u8,
+                ((x + y) / 4) as u8,
+                (255 - x / 3) as u8,
+            ])
+        });
+
+        let fast = resize_rgba_fast(&source, 128, 96, FilterType::Lanczos3).expect("fir resize");
+        let reference = image::imageops::resize(&source, 128, 96, FilterType::Lanczos3);
+
+        assert_eq!(fast.dimensions(), reference.dimensions());
+        let worst = fast
+            .as_raw()
+            .iter()
+            .zip(reference.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .expect("non-empty");
+        assert!(worst <= 2, "max channel difference {worst} is not rounding");
+    }
+
     #[test]
     fn threaded_and_single_threaded_resize_agree() {
         // Over RESIZE_THREADING_MIN_PIXELS, so the default path threads it.
