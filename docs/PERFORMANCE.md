@@ -73,12 +73,11 @@ single-image latency is the case where the detection numbers below still
 dominate.
 
 libjpeg-turbo, already linked in through `nokhwa`, decodes the same corpus
-**1.23x faster** (517 ms vs 420 ms over 15 images of 8-22 MP). It is wired
-up behind `FCS_JPEG_TURBO` (off by default) so the outputs can be judged. It is
-not adopted: decoded pixels differ by up to 5/255, which moves detection boxes
-0.28-1.30 px and shifts exported crops by about a pixel, and
-`cli_json_output_matches_snapshot` fails with it on. Switching is a decision
-about output stability rather than a drop-in win. See experiment 67.
+**1.23x faster** (517 ms vs 420 ms over 15 images of 8-22 MP) and is now the
+default for `.jpg`/`.jpeg`. Decoded pixels differ from the previous decoder by
+up to 5/255, which moves detection boxes 0.28-1.30 px and an exported crop by
+about a pixel; the crops were reviewed before adopting it, and the CLI JSON
+snapshot was updated by at most 0.26 px. See experiment 67.
 
 A build issue found along the way and fixed: `mozjpeg-sys` silently compiles
 `jsimd_none.c` when NASM is absent, and the Windows and macOS release legs did

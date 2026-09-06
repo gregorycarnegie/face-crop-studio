@@ -132,17 +132,13 @@ fn main() -> Result<()> {
     // the wrong shape. Dimensions are checked first for exactly that reason.
     println!(
         "
-via load_image (FCS_JPEG_TURBO off vs on)"
+via load_image, against the decoder it replaced"
     );
     let mut mismatched_dims = 0usize;
     let mut worst_load = 0u8;
     for path in &paths {
-        // SAFETY: single-threaded probe.
-        unsafe { std::env::remove_var("FCS_JPEG_TURBO") };
-        let plain = fcs_utils::load_image(path)?.to_rgb8();
-        unsafe { std::env::set_var("FCS_JPEG_TURBO", "1") };
+        let plain = reference_load(path)?.to_rgb8();
         let turbo = fcs_utils::load_image(path)?.to_rgb8();
-        unsafe { std::env::remove_var("FCS_JPEG_TURBO") };
 
         if plain.dimensions() != turbo.dimensions() {
             mismatched_dims += 1;
@@ -171,4 +167,22 @@ via load_image (FCS_JPEG_TURBO off vs on)"
         "orientation handling differs between the two decode paths"
     );
     Ok(())
+}
+
+/// What `load_image` did before libjpeg-turbo: `image`'s decoder plus EXIF orientation.
+///
+/// Kept here rather than behind a runtime switch in the library. Only this probe wants the
+/// comparison, and a branch in the shipped loader to serve it would be a production cost
+/// paid for a benchmark.
+fn reference_load(path: &std::path::Path) -> Result<image::DynamicImage> {
+    use image::ImageDecoder;
+    let mut decoder = image::ImageReader::open(path)?
+        .with_guessed_format()?
+        .into_decoder()?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut image = image::DynamicImage::from_decoder(decoder)?;
+    image.apply_orientation(orientation);
+    Ok(image)
 }

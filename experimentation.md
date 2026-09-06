@@ -1326,8 +1326,9 @@ So libjpeg-turbo is **1.23x faster** -- about 5-10 ms per photo -- and the
 scalar fallback is roughly 2.2x slower than the SIMD build, which is what the
 first run was really measuring.
 
-**Not adopted, because it is not only a speed question.** It is now wired up
-behind `FCS_JPEG_TURBO` so the outputs can be judged rather than argued about.
+**Adopted**, after the outputs were reviewed in the GUI. It shipped first behind
+`FCS_JPEG_TURBO` so the difference could be judged rather than argued about; the
+flag is gone and JPEG decoding now takes this path by default.
 `load_image` takes the turbo path only for `.jpg`/`.jpeg`, and returns `None`
 into the ordinary path for anything unusual -- CMYK, 16-bit, truncated, a `.jpg`
 that is not a JPEG -- because `image` handles formats `mozjpeg` does not. EXIF
@@ -1357,9 +1358,28 @@ question stated exactly: adopting this means accepting a sub-pixel change to
 recorded detection coordinates and updating that snapshot. Everything passes
 with the flag off, which is the default.
 
-The remaining decision is a product one -- whether ~1.23x on the dominant cost
+The remaining decision was a product one -- whether ~1.23x on the dominant cost
 is worth outputs that are not bit-reproducible against previous releases -- and
-it belongs to a person, not to this backlog.
+it was made by looking at real crops, not by reading this table. Accepted; the
+CLI JSON snapshot moved by at most 0.26 px and was updated with the change.
+
+**A regression found while validating this, and not caused by it.** Running the
+first real folder through the CLI -- 1239 images, which nothing in this session
+had done -- exited 101 with `RefCell already borrowed` and produced 247 crops
+instead of 891. The cause was experiment 19's thread-local `Resizer` holding a
+borrow across the resize: below the threading gate the resize runs inside
+`ThreadPool::install`, and `install` from a rayon worker lets that worker take
+other queued work while it waits, re-entering the same function on the same
+thread. Fixed by taking the `Resizer` out of the thread-local for the duration.
+
+The lesson is about validation, not about the bug. The whole workspace suite,
+every probe in this session and all single-image measurements passed against the
+broken code, because none of them nests rayon. The first regression test written
+for it also passed against the broken code -- large sources and a wide pool never
+force a steal -- and was only found wanting because the fix was temporarily
+reverted to check the test could fail. **A batch run belongs in the validation
+of anything touching a shared cache or a thread-local**, alongside the test
+suite.
 
 **Separate finding, acted on.** `CONTRIBUTING.md` lists NASM as a required build
 tool, but a missing NASM only warns and silently degrades -- the build succeeds

@@ -174,15 +174,15 @@ pub fn is_supported_image_path(path: &Path) -> bool {
 pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
 
-    // Opt-in while the output difference is being judged: libjpeg-turbo decodes the
-    // fixture corpus about 1.23x faster than the default path, but the two disagree by up
-    // to 5/255 on a channel, and those pixels reach exported crops. Speed alone does not
-    // decide that, so it is off unless asked for.
-    if jpeg_turbo_enabled()
-        && path_ref
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
+    // libjpeg-turbo decodes the fixture corpus about 1.23x faster, and decode is the
+    // largest cost in processing a folder. It disagrees with the `image` decoder by up to
+    // 5/255 on a channel -- the JPEG standard leaves IDCT precision open and both are
+    // valid -- which moves detection boxes by about a pixel. That difference was reviewed
+    // against real crops before this became the default.
+    if path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
         && let Some(image) = decode_jpeg_turbo(path_ref, true)
     {
         return Ok(image);
@@ -223,15 +223,11 @@ pub fn load_image<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
 }
 
 /// Load an image from disk without applying EXIF orientation.
-/// Whether to decode JPEGs with libjpeg-turbo instead of the `image` crate's decoder.
-///
-/// A build without NASM compiles libjpeg-turbo's scalar fallback and is *slower* than the
-/// default path, so this is not something to turn on blind -- see CONTRIBUTING.md.
-fn jpeg_turbo_enabled() -> bool {
-    std::env::var_os("FCS_JPEG_TURBO").is_some_and(|v| v != "0")
-}
-
 /// Decode a JPEG with libjpeg-turbo, or `None` to fall back to the ordinary path.
+///
+/// Needs NASM at build time. Without it `mozjpeg-sys` quietly compiles libjpeg-turbo's
+/// scalar C fallback, which is *slower* than the decoder this replaces -- see
+/// CONTRIBUTING.md. The release workflow installs NASM and fails if it is missing.
 ///
 /// Returns `None` rather than an error for anything unusual -- a CMYK or 16-bit file, a
 /// truncated one, a `.jpg` that is not a JPEG at all -- because the caller has a decoder
@@ -275,14 +271,13 @@ fn decode_jpeg_turbo(path: &Path, apply_exif_orientation: bool) -> Option<Dynami
 pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
 
-    // Same opt-in as `load_image`, and it has to be here too: the GUI picks between the
-    // two loaders on the auto-orient setting, so hooking only one would decode a detection
-    // with one decoder and its export with the other inside a single run.
-    if jpeg_turbo_enabled()
-        && path_ref
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
+    // Here as well as in `load_image`: the GUI picks between the two loaders on the
+    // auto-orient setting, so covering only one would decode a detection with one decoder
+    // and its export with the other inside a single run.
+    if path_ref
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
         && let Some(image) = decode_jpeg_turbo(path_ref, false)
     {
         return Ok(image);

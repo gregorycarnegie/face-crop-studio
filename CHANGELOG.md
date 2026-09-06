@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JPEG files now decode with libjpeg-turbo.** Decoding is the largest single
+  cost in processing a folder -- about 24 ms for a 10 MP photo against 3.1 ms of
+  detection -- and libjpeg-turbo decodes the fixture corpus **1.23x faster**
+  (517 ms to 420 ms over 15 images of 8-22 MP). It was already linked into every
+  binary through `nokhwa`, which uses it for webcam frames, so this adds no new
+  native dependency. Only `.jpg`/`.jpeg` take the new path, and anything unusual
+  -- CMYK, 16-bit, truncated, or a `.jpg` that is not a JPEG -- falls back to the
+  previous decoder, which handles more formats. EXIF orientation is unchanged.
+
+  **Output moves slightly.** The JPEG standard leaves IDCT precision open, so the
+  two decoders disagree by up to 5/255 on a channel. That shifts detection boxes
+  by 0.28-1.30 px and landmarks by at most 0.37 px, which moves an exported crop
+  by about a pixel; on one 1239-image folder it changed the number of detected
+  faces from 891 to 892. Crops from both decoders were compared before this
+  became the default. The CLI JSON snapshot moved by at most 0.26 px and has been
+  updated.
+
+  Requires NASM at build time. Without it `mozjpeg-sys` silently compiles a
+  scalar fallback that is *slower* than the decoder this replaces; the Windows
+  and macOS release jobs now install NASM and the Windows job fails if it is
+  missing. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Fixed
+
+- **Batch processing panicked on most images after the resize cache landed.**
+  A thread-local `fast_image_resize::Resizer`, added to stop an 8 MB scratch
+  buffer being reallocated per image, held a `RefCell` borrow across the resize.
+  Below the threading threshold a resize runs inside `ThreadPool::install`, and
+  `install` called from a rayon worker lets that worker take other queued work
+  while it waits -- another image's resize, re-entering the same function on the
+  same thread. A 1239-image folder produced 247 crops instead of 891 and exited
+  with a panic. The `Resizer` is now taken out of the thread-local for the
+  duration and put back afterwards, so no borrow spans the call. Only nested
+  parallelism reaches this, so single-image use was never affected.
+
 - **GPU convolutions now specialize pointwise and depthwise layers.** Eligible
   1x1 convolutions bypass general spatial loops and compute four output channels
   per thread; depthwise 3x3 convolutions reuse six input values per row for four
