@@ -1569,6 +1569,33 @@ the crops need a human eye before this becomes the default.
 Available as `FCS_NO_GPU_CROP` while that judgement is made. Comparison crops
 from 200 large images are in `~/fcs-crop-comparison/`.
 
+**Checked against the non-rectangular crop shapes**, since the first result was
+measured on `rectangle` alone and the shape masks are the app's more interesting
+output. The shape mask is a separate step applied to the finished 512x512 crop,
+so it neither shares the upload nor changes the resampling, and the measurements
+bear that out. Order-alternated over 1239 images:
+
+| Shape | GPU (s) | CPU (s) | Saving |
+| --- | --- | --- | ---: |
+| `rectangle` | 15.8, 18.3 | 10.3, 10.7 | ~38% |
+| `koch_polygon` sides 3, iterations 4 | 19.5, 17.6 | 9.3, 10.3 | **~47%** |
+| `star` 8 points | 17.7, 18.2 | 11.6, 10.6 | ~38% |
+
+Complex shapes are, if anything, the better case: the mask cost is the same on
+both sides and lands on a 512x512 image, so it dilutes the GPU path's
+full-resolution upload rather than the saving.
+
+Quality-label flips are **identical across all three shapes** -- 31 of 171,
+18.1%, same directions -- which follows from where the metric sits:
+`estimate_sharpness` runs on the crop *before* `apply_shape_mask`, so the shape
+cannot reach it.
+
+The visible pixel difference is *smaller* with a mask than without, because the
+masked-away area is identical either way: max channel difference 17-51 against
+18-85 for rectangles, over 17-36% of the image against 66-84%. A reviewer
+comparing shaped crops is therefore looking at a weaker signal than the
+rectangles already judged indistinguishable by eye.
+
 **If adopted, `GpuBatchCropper` should go rather than be left unreachable** --
 roughly 400 lines plus `crop.wgsl` and its pooling, for a path that measured
 slower and lower quality than the CPU it exists to beat.

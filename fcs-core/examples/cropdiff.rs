@@ -11,9 +11,17 @@ fn main() -> anyhow::Result<()> {
         "{:<36} {:>9} {:>10} {:>16}",
         "crop", "max diff", "mean diff", "pixels differing"
     );
+    let mut missing = 0usize;
     for name in names {
+        let b_path = std::path::Path::new(&b_dir).join(&name);
+        if !b_path.exists() {
+            // The quality suffix is part of the filename, so a crop whose label moved has no
+            // counterpart under the same name. Counted rather than treated as a failure.
+            missing += 1;
+            continue;
+        }
         let a = image::open(std::path::Path::new(&a_dir).join(&name))?.to_rgb8();
-        let b = image::open(std::path::Path::new(&b_dir).join(&name))?.to_rgb8();
+        let b = image::open(b_path)?.to_rgb8();
         if a.dimensions() != b.dimensions() {
             println!("{:<36} SIZE MISMATCH", name.to_string_lossy());
             continue;
@@ -37,6 +45,12 @@ fn main() -> anyhow::Result<()> {
             name.to_string_lossy(),
             sum as f64 / (total * 3) as f64,
             100.0 * differing as f64 / total as f64
+        );
+    }
+    if missing > 0 {
+        println!(
+            "
+{missing} file(s) had no same-named counterpart and were skipped"
         );
     }
     Ok(())
