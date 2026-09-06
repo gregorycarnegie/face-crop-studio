@@ -116,6 +116,18 @@ not install it, so released binaries decoded webcam MJPEG frames ~2.2x slower
 than they should. Both legs now install NASM and the Windows leg fails if it is
 not on `PATH`.
 
+### The source resize is now a third of a folder job
+
+After the changes above, a 1239-image folder spends 112 s of CPU, and
+`resize_image` on the way into the detector is 32.3% of it. `detect_image` is the
+same 32.3%, because a GPU inference wait costs no CPU: detection *is* the resize.
+
+Feeding the detector a reduced-scale JPEG decode instead was measured and
+rejected (experiment 90). The arithmetic works -- a 1/2 or 1/4 DCT decode costs
+less than the resize it removes, about 13% off the folder -- but it moves
+landmarks by up to 158 px, and backing off to where nothing moves past 35 px
+leaves about 4%. `examples/scaled_decode.rs` re-runs the cost half.
+
 ### The resize is at its floor
 
 After the changes above, the CPU source resize is the largest single cost in

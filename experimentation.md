@@ -459,6 +459,9 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [~] **90. Detect from a scaled JPEG decode.** 86's arithmetic, done properly:
+  a 1/2 or 1/4 DCT decode costs less than the full-resolution resize it removes,
+  even as a second decode. Rejected on accuracy instead -- see the record.
 - [x] **89. Retry 87's rejected quality-metric swap on the new RGBA path.**
   87 measured it neutral and named the reason: no RGBA fast resize existed, so
   the swap converted the region to RGB and gave back what it saved. 88 built one,
@@ -485,7 +488,10 @@ implementation or workload.
   1020 of 1239 images in the reference folder contain a face, and every one of
   those needs the full-resolution decode for its crop anyway, so the reduced
   decode is added work rather than replacement work for 82% of the folder. Only
-  worth revisiting for detection-only or mostly-faceless input.
+  worth revisiting for detection-only or mostly-faceless input. **Measured anyway
+  in 90**, because "added work" does not settle whether the added work costs less
+  than the resize it removes: it does, and the idea still fails, on detection
+  accuracy rather than on arithmetic.
 
 ## Result record for each new experiment
 
@@ -1475,6 +1481,71 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 90. Scaled decode for detection - the arithmetic works, the accuracy does not
+
+After 88 and 89 the batch profile is 112 s of CPU, down from 194.7 s, and the
+source resize is now the largest single thing in it:
+
+| Cost | Inclusive | Share |
+| --- | ---: | ---: |
+| `resize_pixels_fast`, all callers | 46.1 s | 40.9% |
+| `resize_image` (source -> 640x640) | 36.5 s | **32.3%** |
+| `detect_image` | 36.5 s | 32.3% |
+| PNG deflate | ~10.3 s | 9.2% |
+
+`detect_image` and the resize inside it are the same number, which is what a GPU
+detector should look like: the inference wait costs no CPU, so detection *is* the
+resize.
+
+51 closed the resize itself -- at a fixed source resolution it is bounded below
+by reading the source once -- leaving only fewer source pixels, which is 86. 86
+was dismissed because 82% of the folder has a face and needs the full-resolution
+decode anyway, so a reduced decode is *added* work. True, and not the question.
+The question is whether the added work costs less than the resize it removes.
+
+**It does.** `examples/scaled_decode.rs`, 1239 JPEGs, 10707 MP, two passes in
+opposite orders:
+
+| | pass 1 | pass 2 |
+| --- | ---: | ---: |
+| resize alone, from full | 1.86 s | 1.39 s |
+| scaled decode + its resize | 0.95 s | 0.99 s |
+
+A scaled decode costs about 45% of a full one -- Huffman has to run either way,
+only the IDCT shrinks -- and the resize after it is roughly 6x cheaper.
+
+Wired up behind `FCS_SCALED_DETECT`, picking per image the largest reduction
+leaving both dimensions at or above the detector input, with detections mapped
+back onto the full-resolution image. Order-alternated, winning all four pairs:
+**7.68 s to 6.64 s, about 13%.**
+
+**Then it fails the quality bar this project already set.** 51 rejected
+`Interpolation(Bilinear)` for a 35 px maximum landmark shift, on the grounds that
+it "places a crop visibly wrong". Against production over 1030 matched faces:
+
+| Headroom | Lost | Gained | Landmark p50 | p95 | max | >35 px | IoU min | Wall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1x | 2 | 4 | 1.15 | 8.69 | **158.2** | 13 | 0.6647 | 6.64 s |
+| 2x | 0 | 0 | 0.00 | 1.94 | 76.1 | 3 | 0.7429 | 6.71 s |
+| 3x | 0 | 0 | 0.00 | 0.69 | 21.9 | **0** | 0.9374 | 6.87 s |
+| off | -- | -- | -- | -- | -- | -- | -- | 7.14 s |
+
+The worst offenders are single-face images, so these are real displacements and
+not the matcher pairing the wrong faces in a crowd. libjpeg's scaled IDCT is a
+proper low-pass but not the same low-pass as a convolution downscale, and near
+the limit the difference reaches the landmarks.
+
+**Rejected.** Backing off until the accuracy is acceptable takes the saving with
+it: at 3x headroom nothing is lost or gained and no face moves past 35 px, but
+only the largest images reduce at all and the gain is about 4% -- for a second
+decode path, a coordinate remap between two image spaces, and EXIF applied twice.
+13% was never available at a quality this project accepts.
+
+`examples/scaled_decode.rs` is kept, since it answers the arithmetic half in
+about a minute if the workload assumption changes. Detection-only or
+mostly-faceless input, where the full decode is not needed at all, is still the
+case 86 identified and this does not close it.
 
 ### 72. PNG settings - the current one is right, in both directions
 
