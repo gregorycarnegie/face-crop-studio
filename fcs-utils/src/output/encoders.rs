@@ -13,13 +13,19 @@ use image::{
     },
 };
 use rgb::FromSlice;
-use std::io::Cursor;
+use std::{borrow::Cow, io::Cursor};
 
 fn encode_rgba8<F>(image: &DynamicImage, encode_op: F, context: &str) -> Result<Vec<u8>>
 where
     F: FnOnce(&mut Cursor<Vec<u8>>, &[u8], u32, u32) -> image::ImageResult<()>,
 {
-    let rgba = image.to_rgba8();
+    // Borrowed when it already is RGBA8, which every exported crop is: `crop_face_from_image`
+    // returns `ImageRgba8` and the shape mask keeps it there. `to_rgba8` clones in that case,
+    // so this was copying the whole image per export for nothing (experiment 72).
+    let rgba: Cow<'_, image::RgbaImage> = match image.as_rgba8() {
+        Some(rgba) => Cow::Borrowed(rgba),
+        None => Cow::Owned(image.to_rgba8()),
+    };
     let mut cursor = Cursor::new(Vec::new());
     encode_op(&mut cursor, rgba.as_raw(), rgba.width(), rgba.height())
         .context(context.to_string())?;
@@ -39,7 +45,11 @@ macro_rules! encode_impl {
 }
 
 pub(super) fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>> {
-    let rgb = image.to_rgb8();
+    // Same as `encode_rgba8`: borrow rather than clone when the conversion is a no-op.
+    let rgb: Cow<'_, image::RgbImage> = match image.as_rgb8() {
+        Some(rgb) => Cow::Borrowed(rgb),
+        None => Cow::Owned(image.to_rgb8()),
+    };
     let mut buffer = Vec::new();
     {
         let encoder = JpegEncoder::new_with_quality(&mut buffer, quality);

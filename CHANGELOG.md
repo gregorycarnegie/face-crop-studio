@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **Exports stop copying the image to encode it.** `encode_rgba8` called
+  `to_rgba8()`, which clones when the image is already RGBA8, and every exported
+  crop is. Borrowed instead, along with `encode_jpeg`'s `to_rgb8()`. Output is
+  byte-identical; this is one fewer full-size allocation per concurrent export
+  rather than a measurable speed-up.
+
 - **The quality metric's downscale resizes through `fast_image_resize`.**
   `estimate_sharpness` scores a face region cut from the full-resolution source,
   and that downscale was still `DynamicImage::resize`. Worth about **9%** of a

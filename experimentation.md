@@ -394,7 +394,7 @@ implementation or workload.
   filters and crop batches, then remove measured intermediate downloads/uploads
   or fuse compatible filter passes. Include final export readback and verify
   pixel quality plus operation ordering at production image sizes.
-- [ ] **72. Measure export encoding and concurrency.** Compare encoder settings
+- [x] **72. Measure export encoding and concurrency.** Compare encoder settings
   and bounded encode/write parallelism after detection accelerates. Report total
   export time, output size and peak memory. Compression/quality changes are Q;
   identical settings and pixels are the baseline.
@@ -1475,6 +1475,75 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 72. PNG settings - the current one is right, in both directions
+
+PNG is lossless, so neither the compression level nor the row filter moves a
+decoded pixel. Only encode time and file size change, which makes this a rare
+clean trade. `examples/png_bench.rs` encodes 901 real crops (944.8 MB raw) with
+each combination, twice, in opposite orders:
+
+| Setting | Time (s) | Bytes (MB) | vs default |
+| --- | ---: | ---: | ---: |
+| fast | 0.10-0.23 | 372.0 | +14.1% |
+| fast/paeth | 0.10-0.18 | 371.9 | +14.1% |
+| fast/sub | 0.14-0.32 | 441.9 | +35.5% |
+| fast/nofilter | 0.39-0.54 | 942.6 | +189.1% |
+| **default (current)** | 2.39-2.52 | **326.0** | -- |
+| default/up | 2.27-2.29 | 327.6 | +0.5% |
+| default/paeth | 2.47-2.52 | 327.4 | +0.4% |
+| best | 6.21-6.49 | 319.5 | -2.0% |
+
+The level dominates and the filter barely matters: at `default`, adaptive
+filtering costs about 5% of the encode and buys 0.4-0.5% of size against the best
+fixed filter. `NoFilter` is a trap -- three times the bytes.
+
+**In isolation `fast` is 16x quicker. End to end it is worth nothing**, and that
+is the finding. Order-alternated over the 1239-image folder:
+
+| Setting | Runs (s) | Median | Output |
+| --- | --- | ---: | ---: |
+| default | 6.90, 7.10, 6.75 | 6.90 | 312 MB |
+| fast | 7.00, 7.36, 6.81 | 7.00 | 358 MB |
+
+So export encoding is *not* on the critical path -- except it partly is, because
+the trade is asymmetric. Pushing the other way, in its own alternated batch:
+
+| Setting | Runs (s) | Median | Output |
+| --- | --- | ---: | ---: |
+| default | 8.04, 8.39, 8.14 | 8.14 | 312 MB |
+| best | 10.13, 10.36, 10.27 | **10.27** | 306 MB |
+
+**`best` costs 26% of wall time to save 2% of disk.** Taking encode work away
+gains nothing while adding it costs plenty, which says the parallel schedule has
+enough slack to absorb the encode at `default` and not four times that. The
+current default sits at the point where the slack runs out. Nothing to change,
+in either direction -- and `fast` would have been a bad trade even if it had been
+free, at +14% on disk for output nobody can tell apart, because PNG is lossless.
+
+Note the two batches disagree on `default` itself, 6.90 against 8.14. That is
+drift between batches on this machine, and it is why only within-batch
+alternated pairs are compared here.
+
+**Concurrency: already there, nothing serialising it.** Export runs inside the
+rayon per-image loop, with no mutex on the path and no single writer. 87 already
+established the point from the other side -- CPU spread evenly across 50 threads
+with no serial bottleneck. `load_png_exif_chunks` looked like a per-crop re-read
+of the source, but it checks the extension first and returns empty for the JPEG
+sources here without opening anything.
+
+**One thing was worth removing.** `encode_rgba8` called `image.to_rgba8()`, which
+*clones* when the image is already RGBA8 -- and every exported crop is, since
+`crop_face_from_image` returns `ImageRgba8` and the shape mask keeps it there. So
+each export copied a whole 1 MB image to hand the encoder bytes it already had.
+Borrowed through a `Cow` now, same for `encode_jpeg`'s `to_rgb8`.
+
+Output is byte-identical, 901 of 901. **The speed is not measurable and is not
+claimed:** 7.67 s against 7.33 s median, winning three pairs of four with the
+ranges overlapping, against a predicted saving near 0.09 s and a noise band
+closer to 1 s. It is kept because it is strictly less work and one less
+full-size allocation per concurrent export, which is the peak-memory half of this
+experiment, not because the folder got faster.
 
 ### 89. The same swap 87 rejected, now worth 9%
 

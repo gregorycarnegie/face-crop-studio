@@ -146,6 +146,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | No one-thread-pool hop inside a rayon worker | **-18%** of batch wall time | `fcs-utils/src/image_utils.rs` |
 | RGBA fast resize for crops | -2% of batch wall time | `image_utils.rs`, `face_cropper.rs` |
 | RGBA fast resize for the quality metric | **-9%** of batch wall time | `quality.rs` |
+| Borrow rather than clone to encode an export | below the noise floor; one less copy | `output/encoders.rs` |
 | One `fir::Resizer` per thread | -0.1 to -0.15 ms on large images | `fcs-utils/src/image_utils.rs` |
 | Stop zeroing the BGR/CHW buffer | -0.1 to -0.2 ms on large images | `fcs-utils/src/image_utils.rs` |
 | Decode straight from the GPU's channel-major heads | **-0.15 to -0.2 ms** | `model.rs`, `gpu/runtime.rs` |
