@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bundled GUI settings now use the filtered resize.**
+  `config/gui_settings.json` had `input.resize_quality` set to `speed`, which
+  selects nearest-neighbour sampling when scaling a source down to the detector's
+  640x640 input. On a 1239-image folder that cost **12 detections and 9 crops**
+  (1020 faces against 1032, 892 crops against 901) for no measurable time:
+  16.3 s against 16.0-17.5 s for the same folder on `speed`, within the roughly
+  10% swing batch wall time shows run to run on this machine.
+
+  Nearest sampling reads about four source pixels per output pixel at a large
+  downscale rather than averaging the area it covers, which is the same aliasing
+  that experiment 51 measured moving landmarks by up to 35 px. `speed` remains
+  available for anyone who wants it.
+
 - **JPEG files now decode with libjpeg-turbo.** Decoding is the largest single
   cost in processing a folder -- about 24 ms for a 10 MP photo against 3.1 ms of
   detection -- and libjpeg-turbo decodes the fixture corpus **1.23x faster**

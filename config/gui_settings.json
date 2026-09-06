@@ -3,7 +3,7 @@
   "input": {
     "width": 640,
     "height": 640,
-    "resize_quality": "speed"
+    "resize_quality": "quality"
   },
   "detection": {
     "score_threshold": 0.8,
