@@ -190,19 +190,24 @@ fn main() -> Result<()> {
         counters: &counters,
     };
 
-    // ponytail: Rayon's default pool, one worker per logical processor. Measured on 968 images
-    // (7950X, 16c/32t, RTX 4090) the GPU path is flat from 8 to 16 workers (~11.5 s) and
-    // degrades above the physical core count, reaching 14.0 s at the default 32 — the GPU
-    // dispatches serialise, but decode/convert/encode around them do not, and the extra workers
-    // end up contending. `RAYON_NUM_THREADS` already overrides this, so no pool is built here.
+    // ponytail: Rayon's default pool, one worker per logical processor, and on this machine
+    // that is now the fastest setting rather than an overshoot to be capped.
     //
-    // Re-measured on 1239 images after the decoder and preprocessing changes (experiment 63):
-    // same direction, smaller gap. Warm, order alternated between pairs, medians of six runs
-    // each: 18.55 s at 32 workers against 17.05 s at 16, about 8%. Individual runs span
-    // 16.5-21.4 s, so a single unalternated pair proves nothing here.
-    // Capping automatically needs data from a hybrid-core CPU first: "physical cores" counts P
-    // and E cores alike, so a rule tuned on symmetric cores could easily be wrong there. See the
-    // "Batch worker threads" section in README.md.
+    // Two earlier measurements said the opposite -- 968 images flat from 8 to 16 workers and
+    // 14.0 s at 32, then 1239 images at 18.55 s against 17.05 s at 16, about 8% (experiment
+    // 63). Both were taken when each image cost far more CPU. After the crop, resize and
+    // quality-metric changes the batch is about 2.4x faster and the ranking inverted
+    // (experiment 60), warm and order alternated:
+    //
+    //     8 workers  10.9-14.7 s | 12  ~12.1 s | 16  8.9 s | 32  7.85 s | 48  8.0 s | 64  8.2 s
+    //
+    // The default wins all four alternated pairs against 16. Threads now spend most of their
+    // time blocked on the GPU and on file reads -- 112 s of CPU across a 7.85 s run on 32
+    // threads is about 45% busy each -- so more threads than cores is what keeps the cores fed.
+    //
+    // `RAYON_NUM_THREADS` overrides this, so no pool is built here. Note for anyone tempted to
+    // cap it automatically: this number moved as soon as the work around it changed, and
+    // "physical cores" counts P and E cores alike. See "Batch worker threads" in README.md.
     let results: Vec<ImageDetections> = processing_items
         .par_iter()
         .filter_map(|target| {

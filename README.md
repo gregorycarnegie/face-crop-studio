@@ -73,17 +73,30 @@ Measured on 968 images (Ryzen 9 7950X, 16 cores / 32 threads, RTX 4090):
 |---|---|---|---|---|---|---|---|
 | Wall clock | 15.6 s | 11.5 s | 11.4 s | 11.6 s | 12.8 s | 13.0 s | 14.0 s |
 
-Throughput is flat from 8 to 16 and falls away above the physical core count,
-so Rayon's default of 32 costs about 17% on this machine. `RAYON_NUM_THREADS`
-sets it — `RAYON_NUM_THREADS=16` recovers that.
+Throughput was flat from 8 to 16 and fell away above the physical core count,
+so Rayon's default of 32 cost about 17% on this machine.
 
-This is deliberately not applied automatically. The measurement is one machine
-and one workload: larger source images shift more of the cost into decode and
-encode, which would move the plateau, and "physical cores" is not a meaningful
-figure on hybrid CPUs, where performance and efficiency cores are not
-interchangeable. Encoding a rule from a single symmetric-core CPU would likely
-be wrong on hardware that is not one. Data from a hybrid-core machine would
-settle it.
+**That is no longer true, and the default is now the right setting.** The batch
+path has since got about 2.4x faster, and the balance went with it. Re-measured
+on 1239 images, warm, order alternated, after the crop, resize and quality-metric
+changes (experiment 60):
+
+| Rayon threads | 8 | 12 | 16 | 32 (default) | 48 | 64 |
+|---|---|---|---|---|---|---|
+| Wall clock | 10.9-14.7 s | ~12.1 s | 8.9 s | **7.85 s** | 8.0 s | 8.2 s |
+
+The default wins every alternated pair against 16, by about 12%, and going above
+it is flat to slightly worse. The reversal is not mysterious: the CPU work per
+image shrank, so threads now spend more of their time blocked on the GPU and on
+file reads — about 112 s of CPU across a 7.85 s run on 32 threads is roughly 45%
+busy each — and you need more threads than cores to keep the cores fed. Capping
+at 16 now leaves the machine idle instead of saving it from contention.
+
+`RAYON_NUM_THREADS` still overrides the default if a particular machine wants
+something else. No automatic cap is applied, and the case for one is weaker than
+it was: the figure that looked stable across two measurements moved as soon as
+the surrounding work changed, and "physical cores" is not a meaningful number on
+hybrid CPUs, where performance and efficiency cores are not interchangeable.
 
 For comparison, the same sweep on the CPU path: 40.4 s at 4 threads, 18.4 s at
 8, 14.6 s at 16, 14.4 s at 32 — the GPU path is ahead at every thread count,

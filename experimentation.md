@@ -343,7 +343,7 @@ implementation or workload.
 
 ### Batch and webcam scheduling (P1/P2)
 
-- [ ] **60. Measure bounded GPU concurrency.** Compare 1/2/3/4 in-flight
+- [x] **60. Measure bounded GPU concurrency.** Compare 1/2/3/4 in-flight
   requests with fixed input sets and safe per-request buffers. Record images/s,
   p50/p95 latency, peak memory and queue delay; do not assume more rayon workers
   create useful GPU parallelism.
@@ -359,7 +359,11 @@ implementation or workload.
   runtime thread counts on single/batch workloads; detect oversubscription,
   driver starvation and memory-bandwidth contention. Record CPU-only results
   as well; avoid a global setting chosen from one developer machine.
-- [ ] **64. Compare a GPU submission worker with caller-thread submission.**
+- [~] **64. Compare a GPU submission worker with caller-thread submission.**
+  Gated on 9/24/60 showing contention or idle gaps. 60 shows neither: throughput
+  peaks exactly at one worker per logical processor and falls away above it,
+  which is the shape of a CPU-bound schedule, not a contended queue. No premise
+  left unless a different machine shows one.
   Only if 9/24/60 show contention or idle gaps, test a bounded dispatcher.
   Include handoff latency and fairness; do not introduce a worker/thread solely
   as an abstraction or serialize independent CPU work unnecessarily.
@@ -1481,6 +1485,50 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 60. Worker count - the previous answer reversed, and the default is now right
+
+The in-flight GPU request count is not configured anywhere: it is however many
+rayon workers are inside `detect_image` at once. So the worker sweep *is* the
+concurrency experiment, and it needs redoing, because 63's answer was measured
+when each image cost 2.4x more CPU than it does now.
+
+**A/A first**, six consecutive identical runs: 7.00, 7.17, 6.87, 7.02, 6.86,
+6.92 -- spread **0.31 s**, tighter than at any earlier point in this backlog.
+
+That mattered immediately. A five-way sweep in one batch put the default at 8.74
+and 8.42 s while the A/A block, minutes earlier, had it at 6.86-7.17. Interleaving
+slow configurations moves the fast one's own numbers by nearly a second, so only
+within-pair comparisons from the same batch are used below.
+
+| Workers | Runs (s) | Median |
+| --- | --- | ---: |
+| 8 | 10.93, 14.72 | ~12.8 |
+| 12 | 12.04, 12.11 | 12.08 |
+| 16 | 9.04, 9.06, 8.77, 8.51 | 8.90 |
+| **32 (default)** | 7.92, 7.78, 7.79, 7.85 | **7.82** |
+| 48 | 8.04, 7.46, 8.02 | 8.02 |
+| 64 | 8.27, 8.24, 7.93 | 8.24 |
+
+**The default wins all four alternated pairs against 16, by about 12%**, with a
+spread of 0.14 s across its four runs. Above 32 it is flat to slightly worse.
+
+**This reverses 63, and 63 was not wrong.** It measured 17.05 s at 16 against
+18.55 s at 32 and read it correctly. What changed is the workload: the crop,
+resize and quality-metric work came out, per-image CPU fell by about 2.4x, and
+the balance went with it. 112 s of CPU across a 7.85 s run on 32 threads is
+roughly 45% busy per thread, so more than half of each thread's life is now
+blocked on the GPU or on a file read. Capping at 16 leaves cores idle rather
+than saving them from contention.
+
+Two prior measurements agreed with each other and both are now stale. The
+guidance in `main.rs` and README.md said to cap, and would have made the
+application slower; both now carry all three numbers.
+
+**No bounded dispatcher is justified (64).** Throughput peaking exactly at one
+worker per logical processor and falling away above it is the shape of a
+CPU-bound schedule. A contended or starved GPU queue would keep improving with
+more in-flight requests until the queue filled, and it does not.
 
 ### 90. Scaled decode for detection - the arithmetic works, the accuracy does not
 
