@@ -100,7 +100,7 @@ implementation or workload.
   readback allocation/copy/map/waits, output conversion and decode. Measure GPU
   and wall intervals separately; waiting includes preceding GPU work and must
   not be added to it as an independent cost.
-- [ ] **6. Build a representative workload matrix.** Cover small/large images,
+- [x] **6. Build a representative workload matrix.** Cover small/large images,
   portrait/landscape, supported formats, no/one/many faces, difficult small
   faces, warm preview, first detection, webcam and folder export. Record p50/p95
   latency, images/s, CPU use and peak RAM/VRAM where relevant.
@@ -1497,6 +1497,76 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 6. The workload matrix, and two ways the earlier numbers were flattering
+
+Everything else in this backlog was measured on one folder of large JPEGs.
+`examples/workload_matrix.rs` walks a corpus one image at a time and buckets
+decode and detect by resolution, orientation, format and face count. Run over
+both the 275-image fixture set and the 1239-image folder:
+
+| Resolution | n | dec p50 | det p50 | detect's share |
+| --- | ---: | ---: | ---: | ---: |
+| under 1 MP | 117 | 2.6 ms | 4.54 ms | **64%** |
+| 1-4 MP | 160 | 8.6 | 6.89 | 44% |
+| 4-8 MP | 129 | 18.9 | 7.25 | 28% |
+| 8-16 MP | 745 | 21.0 | 7.62 | 27% |
+| over 16 MP | 88 | 43.8 | 10.09 | 19% |
+
+**Both scale, and decode scales harder, so which one matters flips around 1-2 MP.**
+Above that a photo is mostly decode; below it detection is the larger half.
+Orientation makes no difference beyond the sizes in each bucket (landscape 4.32
+against portrait 3.57 ms), and neither does face count -- 4+ faces measured
+*faster* than 2-3, because those images are smaller, not because counting faces
+is free.
+
+**Container format, on identical pixels.** The buckets suggested WebP and PNG
+were 4-9x JPEG per megapixel, but each format held different images at different
+sizes. `examples/decode_formats.rs` re-encodes one 12.2 MP source into each:
+
+| Format | decode p50 | ms/MP |
+| --- | ---: | ---: |
+| tiff | 9.3 ms | 0.77 |
+| bmp | 23.4 | 1.92 |
+| jpeg (`image` crate) | 47.8 | 3.92 |
+| png | 71.9 | 5.89 |
+| webp | 118.9 | 9.75 |
+
+So the real spread is 2.5x for WebP and 1.5x for PNG, not 4-9x -- and against the
+libjpeg-turbo path production actually uses for JPEG (67), the WebP gap is nearer
+3x. Not acted on: the corpus is 100% JPEG, the fixtures hold nine WebP files out
+of 275, and libwebp would be a new native dependency rather than one already
+linked, which is what made turbo free in 67.
+
+**The first run of this had the wrong detector.** `YuNetDetector::new_gpu` pairs
+GPU inference with the *CPU* preprocessor; the CLI and GUI both build
+`with_gpu_preprocessor`. On the CPU-paired path detection measured 6.00 ms at
+under 1 MP against 4.90 at 1-4 MP -- essentially flat across a 40x range, which
+reads as "detection is fixed-cost overhead" and is not true. With the production
+pairing it scales properly, 2.84 to 10.74 ms. A convenience constructor was
+enough to invert the conclusion.
+
+**Repeating one image understates per-image latency by a quarter to a half.**
+
+| Corpus | 24 distinct images, once each | the first image 24 times |
+| --- | ---: | ---: |
+| fixtures | 7.39 ms | 5.88 ms |
+| 1239 photos | **8.40 ms** | **5.48 ms** |
+
+`phase_timings` repeats one image, which is why it reports 3.39 ms where a stream
+of distinct images costs 7-8. Its *relative* results are unaffected -- both sides
+of an A/B run in the same harness -- but its absolute numbers are a floor, not a
+per-image cost, and that distinction was not previously written down.
+
+**This qualifies 91 without overturning it.** That experiment closed the GPU
+overhead backlog (22, 25, 26-47) by arguing `gpu_record` is 0.394 ms against a
+27 ms decode. That holds for a 12 MP photo. Under 1 MP the balance is different:
+detection is 64% of the per-image cost, so for webcam-sized frames those
+experiments are worth more than 91's arithmetic suggests. Deciding that needs the
+webcam measurement (53, 65), not another photo corpus.
+
+Not measured: peak RAM and VRAM, which this experiment also asks for. That needs
+process-level sampling rather than a timer around a call, and is left open.
 
 ### 74. Input resolution - only one backend can vary it, and a settings footgun
 
