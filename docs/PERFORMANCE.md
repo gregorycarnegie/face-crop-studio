@@ -72,6 +72,37 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The shaders are not compute-bound, so shader arithmetic is the wrong lever
+
+`examples/pass_overhead.rs` records 26 identical dispatches as 26 timestamped
+passes and then as one, and settles two things at once.
+
+A pass boundary costs **0.83 us**, so `gpu_pass_breakdown`'s 61 passes carry
+about 51 us of profiling and its 0.538 ms is really 0.487 ms of work. The
+breakdown is trustworthy (experiment 8).
+
+The per-dispatch floor is **1.85 us**, not the ~12 us most pointwise layers cost,
+so those layers are not paying overhead -- they have no parallelism to hide their
+latency behind:
+
+| Pointwise layer | Arithmetic | Per dispatch | Workgroups |
+| --- | ---: | ---: | ---: |
+| 160x160 64->64 | 1x | 26.3 us | 1600 |
+| 80x80 64->64 | 1/4 | 12.8 us | 480 |
+| 20x20 64->64 | 1/64 | 10.7 us | 48 |
+
+Four pixels and four output channels per thread leaves a 20x20x64 output with 48
+workgroups on a 128-SM adapter: 0.3 TFLOPS on a part that does eighty. **Tuning
+the arithmetic cannot help a kernel that is 0.4% utilised.** The levers are more
+threads doing less each on small layers, and fewer, larger dispatches.
+
+Consistent with that, a sweep of nine workgroup shapes against the production
+8x8 found nothing worth adopting (experiment 26): every variant is level or
+worse on the expensive 160x160 layer, narrow-x shapes lose 26-69%, and the one
+reproducible win is a single 1.024 us tick on one 320x320 dispatch. The harness
+A/A control reads exactly 0.0%, which is what makes a one-tick difference
+readable at all.
+
 ### The biggest saving found is switching cropping off the GPU
 
 `GpuBatchCropper::crop` converts the full-resolution source to RGBA, packs every
@@ -366,6 +397,9 @@ cargo run --release -p fcs-core --example readback_parity
 # Cost of the per-dispatch host objects: uniform buffers and bind groups
 cargo run --release -p fcs-core --example encode_cost
 
+# Pass-boundary cost and the per-dispatch floor, merged vs per-pass timestamps
+cargo run --release -p fcs-core --example pass_overhead
+
 # Whether threading the source resize pays, at several megapixel counts
 cargo run --release -p fcs-core --example resize_threading
 
@@ -487,7 +521,7 @@ below is the shorter priority summary.
 | Priority | Next experiment | Evidence and acceptance condition |
 | --- | --- | --- |
 | 1 | Measure and simplify head readback | `batch_download` still creates 12 staging buffers, submits a second command buffer, waits, starts 12 maps, then waits again. Measure those components; try mapping before the first wait, then pooled/packed staging separately. Require raw-head equality and concurrent-inference safety. |
-| 2 | Sweep small f32 workgroup and tile choices | Only 1/2/4 output-channel register tiles were compared. Sweep a bounded set of workgroup shapes and pixels/channels per thread on the expensive pointwise shapes. Keep a shape-specific variant only if full-graph gain pays for its complexity. |
+| 2 | Sweep tile size *downwards* on small layers | Workgroup shapes were swept and none won (experiment 26). What is untested is fewer outputs per thread: the 4x4 tile leaves a 20x20 layer at 48 workgroups on 128 SMs, so occupancy, not arithmetic, is what a small-layer kernel is short of. Keep a shape-specific variant only if full-graph gain pays for its complexity. |
 | 3 | Reuse inputs/weights across a workgroup or fuse adjacent layers | Cooperative pointwise tiles and depthwise-to-pointwise fusion remain untested. They may save reads and dispatches, but add barriers, storage/register pressure or redundant work. Benchmark one hotspot first; preserve activation boundaries and parity. |
 | 4 | Measure batch and webcam scheduling | Test bounded frames/images in flight and CPU/GPU work overlap against the current path. Preserve per-inference buffer ownership through completion. Report throughput and frame latency separately; more concurrent submissions alone are not a gain. |
 | 5 | Resolve compiler effects, then revisit selective subgroups/precision | Small-layer subgroup gains exist, but DXC regressed the f32 baseline. Test compiler/code-generation and backend variants before introducing optional production kernels. FP16 arithmetic and packed layouts are different, untried candidates with accuracy/deployment costs. |

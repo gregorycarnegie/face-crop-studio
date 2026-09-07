@@ -108,7 +108,7 @@ implementation or workload.
   identical A/A controls, alternating A/B order and independent runs; record
   clocks, power mode, thermals and competing GPU work. Select sample duration
   from observed variance; treat isolated timestamp ticks as inconclusive.
-- [ ] **8. Compare profiled and normal execution costs.** Measure one merged
+- [x] **8. Compare profiled and normal execution costs.** Measure one merged
   graph timestamp where supported versus summed per-op timestamps and normal
   wall time. Separate query resolution/profiler overhead; verify identical raw
   heads. Do not optimize an artifact of the separate-pass profiling path.
@@ -193,14 +193,18 @@ implementation or workload.
 
 ### Shader geometry and memory access (P1)
 
-- [ ] **26. Sweep pointwise workgroup shapes.** Start with a small explicit
+- [x] **26. Sweep pointwise workgroup shapes.** Start with a small explicit
   set such as 8x8, 16x4, 32x2 and 8x4, adjusting dispatch coverage consistently.
   Measure large layers and tiny heads, raw tails and full graph; select per-shape
   kernels only when the gain survives dispatch/selection overhead.
 - [ ] **27. Sweep pixels and output channels per thread.** Extend the existing
   1/2/4-channel comparison to bounded combinations of spatial width and channel
   tiles, including 8 channels where limits permit. Compare register pressure,
-  tail waste and occupancy; do not assume a larger tile wins.
+  tail waste and occupancy; do not assume a larger tile wins. **Now the first
+  shader item to run, on 8's evidence:** the 4x4 tile leaves a 20x20 layer with
+  48 workgroups on a 128-SM adapter, so on small layers the promising direction
+  is a *smaller* tile, and the sweep has to cover both ends rather than only
+  larger ones.
 - [ ] **28. Specialize fixed dimensions at pipeline creation.** Compare runtime
   uniform loops with constants/overrides or generated kernels for recurring
   shapes. Measure compiler unrolling, warm speed, compile time and pipeline
@@ -2405,6 +2409,90 @@ pooled intermediate buffers whose identities change between passes, so the cache
 would need invalidation the uniform cache does not. Less than two thirds of this
 experiment's saving for materially more machinery, against a recording cost this
 experiment has already cut to 0.103 ms. Left unchecked with that as the reason.
+
+### 8. The profiled breakdown is honest, and the dispatches are not compute-bound
+
+Opened because experiment 26's sweep produced a suspicious shape: a 20x20 64->64
+pointwise dispatch measured 12.288 us and a 160x160 one measured 27.648, a 2.2x
+spread over 64x the arithmetic, and the summed profiled total (0.538 ms) is
+larger than the whole `readback_wait` of the unprofiled path (0.457 ms), which
+contains the same forward pass *plus* the head copies. Either the per-pass
+timestamps were measuring the profiler, or the dispatches were not doing what
+their arithmetic suggests.
+
+`examples/pass_overhead.rs` records 26 identical dispatches two ways in one
+process: 26 separately timestamped passes, as the profiled runtime does, then all
+26 inside one pass under a single timestamp pair. Medians of 30 runs after 10
+warm-ups, RTX 4090 / D3D12:
+
+| Case | summed | merged | wall | per pass |
+| --- | ---: | ---: | ---: | ---: |
+| 160x160 64->64 | 705.5 | 684.0 | 801.2 | 0.83 |
+| 80x80 64->64 | 353.3 | 331.8 | 444.3 | 0.83 |
+| 20x20 64->64 | 299.0 | 277.5 | 398.3 | 0.83 |
+| 1x1 4->4 | 68.6 | 48.1 | 164.9 | 0.79 |
+
+**A pass boundary costs 0.83 us, flat.** So `gpu_pass_breakdown`'s 61 passes carry
+about 51 us of profiling, and its 0.538 ms is really 0.487 ms of work -- a 9%
+overstatement, worth knowing but not an artefact. The breakdown can be trusted,
+and experiment 8 closes without a change.
+
+**The 12 us floor is real, and it is occupancy.** Per dispatch, merged:
+
+| Shape | Arithmetic | Time | Workgroups dispatched |
+| --- | ---: | ---: | ---: |
+| 160x160 64->64 | 1x | 26.31 us | 1600 |
+| 80x80 64->64 | 1/4 | 12.76 us | 480 |
+| 20x20 64->64 | 1/64 | 10.67 us | 48 |
+| 1x1 4->4 | ~0 | 1.85 us | 1 |
+
+The true fixed cost of a dispatch is 1.85 us, not 12, so the 20x20 layer is not
+paying overhead -- it is paying **latency it has no parallelism to hide**. The
+production grid is four pixels and four output channels per thread in an 8x8
+workgroup, so a 20x20x64 output is `ceil(20/32) * ceil(20/8) * ceil(64/4)` = 48
+workgroups on a 128-SM adapter, with two thirds of the machine idle and a serial
+64-iteration accumulation loop in each thread. At 3.3 MFLOP in 10.67 us that is
+0.3 TFLOPS on a part that does eighty.
+
+**This redirects the shader backlog.** Arithmetic-level tuning (26, 28, 30, 33,
+41-46) cannot help a kernel that is 0.4% utilised; the levers are more threads
+doing less each on small layers (27), and fewer, larger dispatches (35-37). It
+also explains why experiment 3 chose a four-channel tile: that was measured on
+the layers where the tile has enough work to fill the machine.
+
+### 26. Pointwise workgroup shapes - swept, nothing wins
+
+Nine shapes against the production 8x8, over the ten pointwise configurations in
+`conv2d_experiment`, coverage adjusted per variant so each covers the same
+output: 16x4, 32x2, 4x16, 8x4, 16x8, 8x16, 16x16, 32x4, 64x1.
+
+**The A/A control is exact.** Running the production shader against itself
+reports 0.0% on all ten shapes, in every repetition -- the harness alternates A
+and B inside one command buffer, so between-run clock drift cancels. Timestamps
+quantise to 1.024 us ticks, and a tick is 4-8% of most of these dispatches, so
+that control is what makes a one-tick difference readable at all.
+
+Results, in ticks rather than percentages:
+
+- **Nothing beats 8x8 anywhere it matters.** On the 160x160 64->64 layer, which
+  is the single most expensive pointwise dispatch, every variant is level or
+  worse: 32x2 and 32x4 lose a tick, 8x4 loses 7, 4x16 loses 8.
+- **One reproducible win, and it is worth 1 us.** Every variant with 16 or more
+  threads in x takes 12.288 us on the 320x320 16->16 layer against 8x8's 13.312,
+  reproduced 4 times out of 4 on both 16x4 and 16x8 while A/A stays at 0.0%. That
+  is one tick on one dispatch: 0.2% of the graph's GPU time.
+- **Narrow-x shapes lose badly.** 4x16 costs +69% at 320x320 and +30% at
+  160x160; 8x4 costs +26% at 160x160. Four threads covering 16 pixels leaves too
+  little row per workgroup.
+- **The tiny head shapes are noise.** 17x5 3->7 is 3-4 ticks in total and flips
+  sign between repetitions of the same variant; nothing there is readable.
+
+**Not adopted.** A per-shape kernel selected for one dispatch's single tick
+cannot pay for the pipeline, selection and testing it would need, which is the
+condition this experiment was written with. The sweep's real value is the
+evidence it handed to experiment 8: the dispatches these shapes were being tuned
+for are occupancy-bound, so the geometry that matters is threads per output, not
+threads per workgroup.
 
 ### Previous work
 
