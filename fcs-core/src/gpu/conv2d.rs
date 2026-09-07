@@ -123,6 +123,8 @@ impl Conv2dPipeline {
             ],
         });
 
+        // These three must match `main` in conv2d.wgsl exactly: the shader picks its path
+        // from the uniforms and the host has to size dispatch z for whichever it will pick.
         let pointwise = config.kernel_width == 1
             && config.kernel_height == 1
             && config.stride_x == 1
@@ -130,6 +132,17 @@ impl Conv2dPipeline {
             && config.pad_x == 0
             && config.pad_y == 0
             && config.groups == 1;
+        let depthwise = config.kernel_width == 3
+            && config.kernel_height == 3
+            && config.stride_x == 1
+            && config.stride_y == 1
+            && config.pad_x == 1
+            && config.pad_y == 1
+            && config.groups == config.input_channels
+            && config.output_channels == config.input_channels;
+        // An ungrouped general convolution gathers the same inputs for every output channel,
+        // so it takes the same four-channel tile the pointwise path uses.
+        let channel_tiled = pointwise || (!depthwise && config.groups == 1);
         encoder.record_dispatch(
             context,
             if config.kernel_width == 1 && config.kernel_height == 1 && config.groups == 1 {
@@ -150,7 +163,7 @@ impl Conv2dPipeline {
                 config.output_height.div_ceil(CONV_WORKGROUP_Y),
                 config
                     .output_channels
-                    .div_ceil(if pointwise { POINTWISE_CHANNEL_TILE } else { 1 }),
+                    .div_ceil(if channel_tiled { POINTWISE_CHANNEL_TILE } else { 1 }),
             ],
         );
 

@@ -227,10 +227,11 @@ implementation or workload.
   kernels with an interior fast path or explicit border dispatch for large
   maps. Include extra dispatch cost and safe accesses on small/odd inputs;
   never turn off validation or rely on out-of-bounds behavior.
-- [ ] **34. Specialize the remaining general/stem convolution.** Measure the
+- [x] **34. Specialize the remaining general/stem convolution.** Measure the
   3x3, stride-2, three-input-channel stem separately; try fixed loops and input
   reuse. Its measured roughly 41 us is a small ceiling, so stop if gains do not
-  survive whole-graph measurement.
+  survive whole-graph measurement. The answer was neither loops nor the stem
+  specifically -- see the record.
 
 ### Graph fusion and intermediate traffic (P2)
 
@@ -2647,6 +2648,58 @@ dominates.
 **Kept.** The remaining fusion candidates are 35 (depthwise into pointwise, 34 of
 the 43 surviving dispatches) and 36 (the eight pool/resize/add boundaries, 49 us
 between them).
+
+### 34. The stem was reading the source sixteen times
+
+After 37 the single most expensive dispatch in the graph was `conv2d/general` at
+42 us -- one dispatch, 10.6% of GPU compute. It is the 640x640 3->16 stride-2
+stem, and it was on the fallback path that no specialization had touched.
+
+The problem is not the loops this experiment proposed fixing. It is that the
+general path computes **one output channel per thread**, so each of the 16 output
+channels gathers the same 27 input values independently: the stem reads its
+source sixteen times over. Pointwise has taken four channels per thread since
+experiment 3, and an ungrouped general convolution has exactly the same property
+that makes that work -- every output channel gathers the same inputs.
+
+Adding the same four-channel tile to the ungrouped general path:
+
+| | `conv2d/general` | whole-graph GPU |
+| --- | ---: | ---: |
+| before | 42.0 us | 0.396, 0.399 ms |
+| after | **18.4, 18.4, 19.5 us** | **0.376, 0.376, 0.378 ms** |
+
+**56% off the dispatch**, 5% off the graph, and `readback_wait` falls from
+0.369-0.378 to 0.349-0.366 ms in all five alternated pairs. Whole-detection wall
+time does not resolve it: 20 us is well inside a noise band nearer 0.2 ms on this
+machine, and it is not claimed.
+
+**Bit-exact.** The arithmetic and its order are unchanged -- bias, then ic, ky,
+kx, the same `fma` chain per channel -- so the raw head fingerprint stays
+`0xa116e42f7c2dabdb`. Only how many channels one thread carries changed.
+
+The grouped general path keeps one channel per thread, because there `oc + j` can
+cross a group boundary and the four channels would not share a gather. Nothing in
+YuNet uses it; it is the public `conv2d` API's fallback, and the conv2d tests are
+what cover it.
+
+**The host predicate is the risk in this change, not the shader.** `main` picks
+its path from the uniforms and the host sizes dispatch z for whichever it will
+pick, so the two must agree exactly. Both now spell out all three conditions --
+pointwise, depthwise, ungrouped-general -- next to each other with a comment
+saying they are mirrors. A disagreement would silently compute a quarter of the
+output channels, which is what the parity fingerprint and the GPU/CPU detection
+comparison exist to catch.
+
+Validated the same way as 20 and 37: the whole workspace suite passes under
+`FCS_STRICT_TESTS=1` -- including the conv2d tests, which are the only cover the
+grouped fallback has -- and a 1239-image folder produces 901 byte-identical
+crops (7.57/7.81 s against 8.57/7.98 s, which is noise either way).
+
+**Kept.** 20 us is a small absolute saving, but it is the third-largest single
+item found in the GPU graph, it costs one shader function and a predicate, and it
+compounds with 20 and 37: the graph is now 0.376 ms against the 0.537 ms this
+session started from, **30% less GPU work for the same bits**.
 
 ### Previous work
 

@@ -72,6 +72,22 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The stem was reading its source sixteen times
+
+`conv2d/general` -- the 640x640 3->16 stride-2 stem, one dispatch -- was 42 us,
+10.6% of GPU compute after the head fusion above. The cause was not its loops: the
+general path computes **one output channel per thread**, so all 16 channels
+gathered the same 27 input values independently. An ungrouped general convolution
+has the same property pointwise does, that every output channel gathers the same
+inputs, so it takes the same four-channel tile: **42.0 -> 18.4 us**, 5% off the
+graph, bit-exact. Grouped convolutions keep one channel per thread, where `oc + j`
+can cross a group boundary. See experiment 34.
+
+The host predicate and `main` in `conv2d.wgsl` now spell out all three path
+conditions side by side, because the host sizes dispatch z for whichever path the
+shader will pick and a disagreement silently drops three quarters of the output
+channels.
+
 ### Four head branches are one convolution
 
 Each detection level ran cls, obj, bbox and kps as four separate branches, each a
@@ -234,6 +250,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
 | Cache the eight small-op uniform buffers | **-0.08 ms**, -10% of small-image detection | `gpu/utils.rs`, `max_pool.rs`, `add.rs`, `upsample2x.rs` |
 | Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
+| Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
 implementation for another and so differs by rounding -- at most 23 per channel
