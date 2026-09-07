@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **A bad detector input size now fails immediately and says what to change.**
+  `input.width` and `input.height` accepted any value, and anything other than
+  640x640 failed every image separately -- the bundled model and the GPU graph
+  are both fixed at that size -- before ending with "all detections failed" on a
+  whole folder. The backend is now probed once at construction, so the error
+  arrives before any files are read and names the setting. The built-in CPU graph
+  does support other sizes, and a run configured that way now falls back to it
+  instead of failing outright.
+
 - **CPU inference gets more of the machine when nothing else is using it.**
   ONNX Runtime's intra-op threads were pinned to 1 so the runtime would not fight
   rayon, but that pool belongs to the shared session and is a total rather than a

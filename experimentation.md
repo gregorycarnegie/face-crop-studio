@@ -419,7 +419,7 @@ implementation or workload.
 
 ### Model and algorithm changes (Q/P2)
 
-- [ ] **74. Sweep detector input resolution.** Compare supported smaller/larger
+- [~] **74. Sweep detector input resolution.** Compare supported smaller/larger
   inputs with latency, recall by face size, landmark error and final crop
   quality. Include rescaling/model-shape compatibility; do not silently change
   the quality contract of the current 640x640 detector.
@@ -1497,6 +1497,62 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 74. Input resolution - only one backend can vary it, and a settings footgun
+
+The premise is "compare supported smaller/larger inputs", and the answer is that
+production supports exactly one. `input.width` and `input.height` are settings,
+and setting them to anything but 640 produced this:
+
+| Backend | 320 or 960 |
+| --- | --- |
+| WGSL GPU graph | fails: `stage0 conv` |
+| ONNX Runtime | fails: `InvalidArgument: Got invalid dimensions for input` |
+| built-in `cpu-graph` | **works** |
+
+The bundled `..._640.onnx` declares a fixed input, and `gpu/graph.rs` writes
+`SpatialDims::new(640, 640)` into stage 0 directly, so two of the three are
+locked at 640 by construction. Only the pure-Rust graph derives its dimensions
+from the configured size, and it is the slowest backend by 4x (69), so this is
+not a lever production can pull. Reopening it means a re-exported model and a
+GPU graph that is not hardcoded, which is 78's territory.
+
+**The sweep is still worth having**, measured on `cpu-graph` over all 1239
+images:
+
+| Input | Faces | Crops | Wall |
+| --- | ---: | ---: | ---: |
+| 320 | 907 | 808 | 7.6 s |
+| 480 | 1006 | 882 | 12.1 s |
+| **640** | **1032** | **901** | **18.4 s** |
+| 800 | 1041 | 915 | 31.4 s |
+| 960 | 1070 | 936 | 59.1 s |
+
+Detections rise monotonically with input size and cost rises faster: 960 finds
+3.7% more faces for 3.2x the time, 320 gives up 12% of them for 2.4x the speed.
+**Whether the extra detections at 960 are real faces or false positives is not
+established here** -- there is no ground truth in this corpus, and "more boxes"
+is not "better". 640 is a defensible middle rather than a measured optimum.
+
+A methodological note worth keeping: on a 20-image subset, 960 found *fewer*
+faces than 640 (22 against 23) and the curve looked like it peaked at 640. The
+full corpus inverted that. Twenty images and single-digit differences were noise
+wearing the shape of a result.
+
+**What this experiment actually produced is a fix.** Nothing validated the
+configured size, so a bad value loaded the model, read all 1239 files, failed
+each one separately and ended with "all detections failed". `probe_input_size`
+runs one zeroed tensor through the backend at construction, so the failure
+arrives once, before any work, naming the setting to change. It is deliberately
+not a hardcoded 640 -- a caller may supply their own model, and the backend is
+the thing that knows.
+
+It also made a previously broken configuration work: at 320 the CLI now gets a
+clean GPU-init failure, falls back to the CPU path, and `cpu-graph` runs the job.
+
+Cost is one inference at startup, and it does not show: 6.77, 6.74, 6.88 s
+against an A/A floor of 6.86-7.17 s measured in 60, with 1032 faces and 901
+crops unchanged.
 
 ### 69. CPU backends - the default was right, its thread count was not
 

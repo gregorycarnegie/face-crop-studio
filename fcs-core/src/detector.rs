@@ -7,7 +7,7 @@ use crate::{
     gpu::runtime::GpuYuNet,
     model::YuNetModel,
     postprocess::{Detection, PostprocessConfig, apply_postprocess},
-    preprocess::{CpuPreprocessor, PreprocessConfig, PreprocessOutput, Preprocessor},
+    preprocess::{CpuPreprocessor, InputSize, PreprocessConfig, PreprocessOutput, Preprocessor},
 };
 
 use crate::tensor::Tensor;
@@ -56,6 +56,34 @@ impl DetectorBackend {
             DetectorBackend::Gpu(model) => model.run(tensor),
         }
     }
+
+    /// Run one zeroed tensor through the backend so a bad input size is caught here rather
+    /// than on every image.
+    ///
+    /// The shipped YuNet has a fixed 640x640 input, but `input.width` and `input.height` are
+    /// settings and nothing rejected other values. A folder run then loaded the model, read
+    /// every file, and failed each one separately -- "Got invalid dimensions for input" from
+    /// ONNX Runtime, "stage0 conv" from the WGSL graph -- before ending with "all detections
+    /// failed". Probing once costs a single inference at construction (experiment 74).
+    ///
+    /// Deliberately not a hardcoded 640: a caller may supply a model built for another size,
+    /// and the backend is the thing that knows.
+    fn probe_input_size(&self, input_size: InputSize) -> Result<()> {
+        let elements = 3 * input_size.height as usize * input_size.width as usize;
+        let probe = Tensor::from_vec(
+            &[1, 3, input_size.height as usize, input_size.width as usize],
+            vec![0.0f32; elements],
+        )
+        .context("failed to build the input-size probe tensor")?;
+
+        self.run(probe).with_context(|| {
+            format!(
+                "this backend rejected a {}x{} input; the bundled YuNet model and the GPU graph are both fixed at 640x640, so check `input.width` and `input.height` in your settings",
+                input_size.width, input_size.height
+            )
+        })?;
+        Ok(())
+    }
 }
 
 impl YuNetDetector {
@@ -83,8 +111,10 @@ impl YuNetDetector {
         preprocessor: Arc<dyn Preprocessor>,
     ) -> Result<Self> {
         let model = YuNetModel::load(model_path.as_ref(), preprocess.input_size)?;
+        let backend = DetectorBackend::Cpu(Box::new(model));
+        backend.probe_input_size(preprocess.input_size)?;
         Ok(Self {
-            backend: DetectorBackend::Cpu(Box::new(model)),
+            backend,
             preprocess,
             postprocess,
             preprocessor,
@@ -119,8 +149,10 @@ impl YuNetDetector {
             )?,
             None => GpuYuNet::new(model_path.as_ref(), preprocess.input_size)?,
         };
+        let backend = DetectorBackend::Gpu(model);
+        backend.probe_input_size(preprocess.input_size)?;
         Ok(Self {
-            backend: DetectorBackend::Gpu(model),
+            backend,
             preprocess,
             postprocess,
             preprocessor,
