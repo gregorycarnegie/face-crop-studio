@@ -845,7 +845,10 @@ fn encode_preprocess(
     let device = context.device();
     let queue = context.queue();
 
-    let rgba = image.to_rgba8();
+    let rgba = {
+        let _guard = timing_guard("fcs_core::preprocess_to_rgba", log::Level::Trace);
+        image.to_rgba8()
+    };
     let texture_view = buffers
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
@@ -855,6 +858,7 @@ fn encode_preprocess(
     // only `copy_buffer_to_texture` / `copy_texture_to_buffer` demand it. Padding every row into
     // a staging vec first, as this used to, cost a second full pass over the source (~14 ms on a
     // 2384x4240 image) to satisfy a rule that never applied here.
+    let _upload = timing_guard("fcs_core::preprocess_upload", log::Level::Trace);
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: &buffers.texture,
@@ -875,6 +879,9 @@ fn encode_preprocess(
         },
     );
 
+    drop(_upload);
+
+    let _encode = timing_guard("fcs_core::preprocess_encode", log::Level::Trace);
     let uniforms = PreprocessUniforms {
         src_size: [orig_w, orig_h],
         dst_size: [input_w, input_h],
@@ -916,7 +923,10 @@ fn encode_preprocess(
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(input_w.div_ceil(8), input_h.div_ceil(8), 1);
     }
-    queue.submit(std::iter::once(encoder.finish()));
+    {
+        let _submit = timing_guard("fcs_core::preprocess_submit", log::Level::Trace);
+        queue.submit(std::iter::once(encoder.finish()));
+    }
 
     let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
     Ok(PreprocessScales {
@@ -1069,11 +1079,15 @@ fn gpu_preprocess_to_tensor(
     pool: &Mutex<GpuResourcePool>,
     output: &GpuTensor,
 ) -> Result<Option<PreprocessScales>> {
+    let _guard = timing_guard("fcs_core::gpu_preprocess", log::Level::Trace);
     let Some((src_size, output_size_bytes)) = gpu_preprocess_setup(image, config, context)? else {
         return Ok(None);
     };
 
-    let buffers = lock_pool(pool)?.acquire(context.device(), src_size, output_size_bytes);
+    let buffers = {
+        let _guard = timing_guard("fcs_core::preprocess_acquire", log::Level::Trace);
+        lock_pool(pool)?.acquire(context.device(), src_size, output_size_bytes)
+    };
     let result = encode_preprocess(image, config, context, pipeline, &buffers, output.buffer())?;
     lock_pool(pool)?.recycle(buffers);
     Ok(Some(result))

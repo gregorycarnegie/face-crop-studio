@@ -2712,6 +2712,49 @@ item found in the GPU graph, it costs one shader function and a predicate, and i
 compounds with 20 and 37: the graph is now 0.376 ms against the 0.537 ms this
 session started from, **30% less GPU work for the same bits**.
 
+### 5 (continued). The last unattributed quarter of the small-image path
+
+Reprofiling after 20, 34 and 37 left `detect_on_device` at 1.060 ms with
+`onnx_inference` at 0.842 -- **0.218 ms, a quarter of the detection, with no
+label on it.** Experiment 5 split the inference side into eleven phases and never
+touched the on-device preprocessor, which has no guards at all; only the
+large-image `resize_then_convert` path does.
+
+Seven guards later the path adds up. Warm, 0.17 MP, 30 runs:
+
+| Phase | p50 ms |
+| --- | ---: |
+| detect_image | 0.841 |
+| - allocate_input | 0.000 |
+| - gpu_preprocess | 0.162 |
+| - - preprocess_acquire | 0.000 |
+| - - to_rgba8 | 0.025 |
+| - - write_texture | 0.057 |
+| - - encode | 0.073 |
+| - - - **submit** | **0.055** |
+| - onnx_inference | 0.692 |
+| - - gpu_encode | 0.172 |
+| - - - record | 0.073 |
+| - - - **submit** | **0.093** |
+| - - gpu_readback | 0.446 |
+| - - - wait (contains GPU execution) | 0.354 |
+| - - gpu_decode | 0.072 |
+| - postprocess | 0.005 |
+
+Two things worth acting on, neither of them the shader:
+
+- **A `queue.submit` costs about 0.05 ms before it costs anything per command.**
+  The preprocess submit carries one dispatch and costs 0.055; the inference submit
+  carries 43 and costs 0.093. So the fixed part dominates, and the two submits
+  together are **18% of a detection**. They are on the same queue in a fixed
+  order, so there is no reason for them to be two command buffers.
+- **`allocate_input` and `preprocess_acquire` are free**, which retires the idea
+  that pooled allocation is a per-detection cost on this path.
+
+`to_rgba8` at 0.025 ms is a full copy of the source per frame, and `write_texture`
+at 0.057 ms is 689 KB at roughly 12 GB/s. Both scale with source size, so they
+are the webcam-resolution numbers, not a constant.
+
 ### Previous work
 
 The compute-pass merge is already shipped in the baseline: roughly 0.40 ms saved in paired

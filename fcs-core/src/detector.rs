@@ -217,7 +217,10 @@ impl YuNetDetector {
         }
 
         let _guard = timing_guard("fcs_core::detect_on_device", log::Level::Debug);
-        let input = model.allocate_input(self.preprocess.input_size)?;
+        let input = {
+            let _guard = timing_guard("fcs_core::allocate_input", log::Level::Trace);
+            model.allocate_input(self.preprocess.input_size)?
+        };
         let Some(scales) =
             gpu_preprocessor.preprocess_into_tensor(image, &self.preprocess, &input)?
         else {
