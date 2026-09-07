@@ -151,7 +151,11 @@ fn measure(
         &data(cfg.weight_shape_dims().iter().product()),
         None,
     )?;
-    let bias = ops.upload_tensor(cfg.bias_shape_dims(), &data(cfg.output_channels as usize), None)?;
+    let bias = ops.upload_tensor(
+        cfg.bias_shape_dims(),
+        &data(cfg.output_channels as usize),
+        None,
+    )?;
     let output = GpuTensor::uninitialized(context.clone(), cfg.output_shape_dims(), None)?;
 
     let uniforms = [

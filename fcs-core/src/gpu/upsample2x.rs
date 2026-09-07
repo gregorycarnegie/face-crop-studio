@@ -62,8 +62,7 @@ impl Upsample2xPipeline {
             channels: dims[1] as u32,
             _padding: 0,
         };
-        let uniform_buffer =
-            self.uniforms.buffer(context.device(), uniforms)?;
+        let uniform_buffer = self.uniforms.buffer(context.device(), uniforms)?;
 
         let bind_group = context
             .device()

@@ -6,9 +6,7 @@ use crate::{
         tensor::GpuTensor,
         utils::ComputeDispatch,
     },
-    yunet::{
-        BACKBONE_STAGES, NECK_BLOCKS, StageBlock,
-    },
+    yunet::{BACKBONE_STAGES, NECK_BLOCKS, StageBlock},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -159,20 +157,17 @@ pub fn encode_neck_and_heads(
     let c5 = features[4].clone();
 
     let p5_raw = encode_stage_blocks(encoder, ops, weights, &c5, &NECK_BLOCKS[2..3])?;
-    let level2 =
-        encode_detection_level(encoder, ops, weights, p5_raw.clone(), 2)?;
+    let level2 = encode_detection_level(encoder, ops, weights, p5_raw.clone(), 2)?;
 
     let up_p5 = ops.encode_resize2x_tensor(encoder, &p5_raw)?;
     let merged_p4_input = ops.encode_add_tensors(encoder, &up_p5, &c4)?;
     let p4_raw = encode_stage_blocks(encoder, ops, weights, &merged_p4_input, &NECK_BLOCKS[1..2])?;
-    let level1 =
-        encode_detection_level(encoder, ops, weights, p4_raw.clone(), 1)?;
+    let level1 = encode_detection_level(encoder, ops, weights, p4_raw.clone(), 1)?;
 
     let up_p4 = ops.encode_resize2x_tensor(encoder, &p4_raw)?;
     let merged_p3_input = ops.encode_add_tensors(encoder, &up_p4, &c3)?;
     let p3_raw = encode_stage_blocks(encoder, ops, weights, &merged_p3_input, &NECK_BLOCKS[0..1])?;
-    let level0 =
-        encode_detection_level(encoder, ops, weights, p3_raw.clone(), 0)?;
+    let level0 = encode_detection_level(encoder, ops, weights, p3_raw.clone(), 0)?;
 
     Ok([level0, level1, level2])
 }
@@ -230,7 +225,8 @@ fn encode_detection_level(
         SpatialDims::new(1, 1),
         Conv2dOptions::new(out_channels, None),
     )?;
-    let heads = ops.encode_conv2d_tensor(encoder, &reduced, &depth_weight, &depth_bias, &depth_cfg)?;
+    let heads =
+        ops.encode_conv2d_tensor(encoder, &reduced, &depth_weight, &depth_bias, &depth_cfg)?;
 
     Ok(DetectionLevelOutputs { feature, heads })
 }

@@ -220,7 +220,7 @@ fn main() -> Result<()> {
              fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                  if id.x < 64u { dst[id.x] = src[id.x] + f32(u.x); }
              }"
-                .into(),
+            .into(),
         ),
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -300,7 +300,10 @@ fn main() -> Result<()> {
         ("submit 1 dispatch", submit_one_dispatch),
         ("submit 2 buffers in one call", submit_two_buffers),
         ("submit 2 buffers separately", submit_two_separately),
-        ("submit 1 pass, 2 dispatches", submit_one_pass_two_dispatches),
+        (
+            "submit 1 pass, 2 dispatches",
+            submit_one_pass_two_dispatches,
+        ),
     ] {
         println!("{name:<34} {us:>10.4}");
     }

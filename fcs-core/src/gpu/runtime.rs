@@ -290,30 +290,42 @@ fn fuse_head_weights(loader: &OnnxInitializerMap) -> Result<Vec<FusedWeight>> {
     for (level, head) in DETECTION_HEADS.iter().enumerate() {
         let branches = [&head.cls, &head.obj, &head.bbox, &head.kps];
         let parts = [
-            ("point_weight", [
-                branches[0].conv1_weight,
-                branches[1].conv1_weight,
-                branches[2].conv1_weight,
-                branches[3].conv1_weight,
-            ]),
-            ("point_bias", [
-                branches[0].conv1_bias,
-                branches[1].conv1_bias,
-                branches[2].conv1_bias,
-                branches[3].conv1_bias,
-            ]),
-            ("depth_weight", [
-                branches[0].conv2_weight,
-                branches[1].conv2_weight,
-                branches[2].conv2_weight,
-                branches[3].conv2_weight,
-            ]),
-            ("depth_bias", [
-                branches[0].conv2_bias,
-                branches[1].conv2_bias,
-                branches[2].conv2_bias,
-                branches[3].conv2_bias,
-            ]),
+            (
+                "point_weight",
+                [
+                    branches[0].conv1_weight,
+                    branches[1].conv1_weight,
+                    branches[2].conv1_weight,
+                    branches[3].conv1_weight,
+                ],
+            ),
+            (
+                "point_bias",
+                [
+                    branches[0].conv1_bias,
+                    branches[1].conv1_bias,
+                    branches[2].conv1_bias,
+                    branches[3].conv1_bias,
+                ],
+            ),
+            (
+                "depth_weight",
+                [
+                    branches[0].conv2_weight,
+                    branches[1].conv2_weight,
+                    branches[2].conv2_weight,
+                    branches[3].conv2_weight,
+                ],
+            ),
+            (
+                "depth_bias",
+                [
+                    branches[0].conv2_bias,
+                    branches[1].conv2_bias,
+                    branches[2].conv2_bias,
+                    branches[3].conv2_bias,
+                ],
+            ),
         ];
         if parts
             .iter()

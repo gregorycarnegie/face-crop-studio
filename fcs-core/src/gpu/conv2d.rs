@@ -86,9 +86,7 @@ impl Conv2dPipeline {
             bias,
         } = tensors;
         let device = context.device();
-        let uniform_buffer = self
-            .uniforms
-            .buffer(device, Conv2dUniforms::from(config))?;
+        let uniform_buffer = self.uniforms.buffer(device, Conv2dUniforms::from(config))?;
         let output = GpuTensor::uninitialized_with_pool(
             context.clone(),
             Some(pool.clone()),
@@ -161,9 +159,11 @@ impl Conv2dPipeline {
                     .output_width
                     .div_ceil(CONV_WORKGROUP_X * self.pixels_per_thread),
                 config.output_height.div_ceil(CONV_WORKGROUP_Y),
-                config
-                    .output_channels
-                    .div_ceil(if channel_tiled { POINTWISE_CHANNEL_TILE } else { 1 }),
+                config.output_channels.div_ceil(if channel_tiled {
+                    POINTWISE_CHANNEL_TILE
+                } else {
+                    1
+                }),
             ],
         );
 
