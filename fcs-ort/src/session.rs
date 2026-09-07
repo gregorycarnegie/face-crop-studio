@@ -174,19 +174,43 @@ impl Drop for Environment {
 pub struct SessionOptions {
     /// Threads ONNX Runtime may use *within* one inference.
     ///
-    /// Face Crop Studio runs whole images concurrently through rayon, so the
-    /// useful setting is small. Measured on a 7950X at 640x640: 1 thread
-    /// 8.69 ms, 4 threads 1.94 ms, all 16 threads 3.74 ms — ONNX Runtime
-    /// oversubscribes itself past about 4.
+    /// The pool belongs to the session, and Face Crop Studio shares one session across all
+    /// rayon workers, so this is a total rather than a per-run multiplier. Raising it adds
+    /// threads to that one pool; it does not give each concurrent inference its own.
+    ///
+    /// Re-measured on a 7950X at 640x640, order alternated (experiment 69). One inference at
+    /// a time: **7.27 ms at 1 thread against 4.17 ms at 4**, winning every pair. A 1239-image
+    /// folder export on the same machine: 10.32 s against 10.18 s, which is no difference --
+    /// rayon has already filled the cores there, so the extra threads have nothing to add.
+    ///
+    /// So this buys preview latency on a machine with no GPU and costs nothing in batch, which
+    /// is why [`default_intra_threads`] raises it only where there are spare cores.
+    ///
+    /// An earlier note here recorded 8.69/1.94/3.74 ms for 1/4/16 threads and concluded that
+    /// the runtime "oversubscribes itself past about 4". The 16-thread regression did not
+    /// reproduce (5.64 ms against 5.10 at 8), and neither did the size of the gain. Both
+    /// measurements agree on the direction.
     pub intra_threads: i32,
     /// Graph optimisation level. `All` matches what the `ort` crate defaults to.
     pub optimization: sys::GraphOptimizationLevel,
 }
 
+/// Intra-op threads to use by default: enough to help a lone inference, never enough to
+/// crowd a small machine.
+///
+/// Divided by four rather than taken straight, because the gain was measured on a 16-core
+/// box with cores to spare and the batch path already runs one image per rayon worker. A
+/// machine with four logical processors keeps today's single thread, which is the
+/// configuration this change was *not* able to test.
+fn default_intra_threads() -> i32 {
+    let logical = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    (logical / 4).clamp(1, 4) as i32
+}
+
 impl Default for SessionOptions {
     fn default() -> Self {
         Self {
-            intra_threads: 1,
+            intra_threads: default_intra_threads(),
             optimization: sys::GraphOptimizationLevel::All,
         }
     }
@@ -505,5 +529,29 @@ impl Drop for Session {
         unsafe {
             ((*self.environment.api()).ReleaseSession)(self.session);
         }
+    }
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+
+    #[test]
+    fn default_intra_threads_stays_within_range() {
+        let n = default_intra_threads();
+        assert!(
+            (1..=4).contains(&n),
+            "intra_threads {n} outside the intended 1..=4"
+        );
+    }
+
+    #[test]
+    fn default_session_options_use_full_optimization() {
+        let options = SessionOptions::default();
+        assert_eq!(options.intra_threads, default_intra_threads());
+        assert!(matches!(
+            options.optimization,
+            sys::GraphOptimizationLevel::All
+        ));
     }
 }

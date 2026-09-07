@@ -34,9 +34,18 @@ impl OrtBackend {
         environment: &std::sync::Arc<fcs_ort::Environment>,
         model_path: &std::path::Path,
     ) -> Result<Self> {
-        let session =
-            fcs_ort::Session::new(environment, model_path, fcs_ort::SessionOptions::default())
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        // Experiment 69: FCS_ORT_INTRA_THREADS sweeps the runtime's own thread count so the
+        // batch-versus-latency trade can be measured against production without a rebuild.
+        let mut options = fcs_ort::SessionOptions::default();
+        if let Some(n) = std::env::var("FCS_ORT_INTRA_THREADS")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .filter(|n| *n > 0)
+        {
+            options.intra_threads = n;
+        }
+        let session = fcs_ort::Session::new(environment, model_path, options)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(Self { session })
     }
 

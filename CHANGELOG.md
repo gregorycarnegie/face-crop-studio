@@ -41,6 +41,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **CPU inference gets more of the machine when nothing else is using it.**
+  ONNX Runtime's intra-op threads were pinned to 1 so the runtime would not fight
+  rayon, but that pool belongs to the shared session and is a total rather than a
+  per-inference multiplier. One inference at a time now takes **4.17 ms against
+  7.27 ms**; a folder export is unchanged at 10.2 s, because rayon has already
+  filled the cores there. The new default scales with logical processors and
+  leaves machines with four or fewer exactly as they were.
+
 - **NMS no longer degrades on crowded scenes.** The spatial grid used a fixed
   32x32 resolution, so its cells were sized by the scene bounds -- and a tight
   cluster of faces has small bounds, making each cell far smaller than the boxes

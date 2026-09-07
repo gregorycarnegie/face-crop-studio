@@ -395,7 +395,7 @@ implementation or workload.
   cached files and large folders separately. Compare modest prefetch depth and
   reuse of read buffers; include peak RAM and cancellation. Skip if decode or
   inference dominates and I/O is already hidden.
-- [ ] **69. Compare CPU inference settings and layout costs.** Benchmark the
+- [x] **69. Compare CPU inference settings and layout costs.** Benchmark the
   shipped tract and ONNX Runtime paths with bounded thread/optimization settings,
   warm sessions and real batches. Profile tensor conversion and memory copies;
   a faster isolated runtime is not necessarily a faster application.
@@ -1497,6 +1497,61 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 69. CPU backends - the default was right, its thread count was not
+
+The backlog calls these "the shipped tract and ONNX Runtime paths", but tract is
+gone: the built-in path is `CpuGraph`, a pure-Rust YuNet that needs nothing
+installed. `InferenceBackend::Auto` prefers ONNX Runtime whenever a compatible
+library is present, and that preference had never been measured.
+`examples/cpu_backends.rs` preprocesses once and times inference alone.
+
+| Backend | p50 ms | p95 ms | parallel img/s |
+| --- | ---: | ---: | ---: |
+| `cpu-graph` | 29.70 | 33.90 | 90.8 |
+| `onnxruntime` | 7.03 | 7.70 | 204.7 |
+
+**ONNX Runtime is 4.2x on latency and 2.3x on throughput**, so `Auto` is right.
+Raw outputs agree to 0.000427, which is two implementations of the same graph in
+f32, not a disagreement.
+
+**The interesting part is `intra_threads`.** It was 1, on the reasoning that
+whole images already run concurrently through rayon so the runtime should not
+fight it. But the intra-op pool belongs to the *session*, and Face Crop Studio
+shares one session across all workers, so the setting is a total rather than a
+per-run multiplier. Raising it does not give each concurrent inference its own
+threads.
+
+Order-alternated, one inference at a time, winning every pair:
+
+| `intra_threads` | Runs (ms) | Median |
+| --- | --- | ---: |
+| 1 | 13.03, 6.95, 7.27 | 7.27 |
+| 4 | 4.13, 4.17, 2.70 | **4.17** |
+
+And the check this experiment exists to force -- a faster runtime is not
+necessarily a faster application. A 1239-image folder export, `--no-gpu`,
+alternated:
+
+| `intra_threads` | Runs (s) | Median |
+| --- | --- | ---: |
+| 1 | 10.32, 10.30, 10.45 | 10.32 |
+| 4 | 10.18, 10.08, 10.94 | 10.18 |
+
+**No difference.** Rayon has already filled the cores; the extra threads have
+nothing to add. So the setting buys preview latency on a machine with no GPU and
+costs nothing in batch, which is the shape of a free change -- but only on a
+machine with cores to spare, which is the one I measured on.
+
+`default_intra_threads` therefore divides logical processors by four and clamps
+to 1..=4, so a four-core machine keeps exactly today's single thread. That is
+deliberately the configuration this change could *not* test.
+
+**The comment I replaced recorded 8.69/1.94/3.74 ms for 1/4/16 threads and
+concluded the runtime "oversubscribes itself past about 4".** Neither the size of
+the gain nor the 16-thread regression reproduced here (5.64 ms at 16 against 5.10
+at 8). Both measurements agree on the direction, and both are now in the comment
+rather than one silently replacing the other.
 
 ### 58. NMS worst case - the grid was pessimal exactly where it was needed
 
