@@ -2,8 +2,7 @@
 //!
 //! Experiment 68 says to skip prefetch work if I/O is already hidden. This measures the read
 //! on its own, at the same concurrency the batch uses, so the answer is a number rather than
-//! an assumption. Warm only: the file cache cannot be dropped from inside the process, so a
-//! cold figure has to come from a machine that has not read the folder yet.
+//! an assumption.
 //!
 //!   cargo run --release -p fcs-core --example io_cost -- <dir> [passes]
 
