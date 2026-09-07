@@ -1366,6 +1366,38 @@ fn concurrent_inference_matches_sequential() {
     });
 }
 
+/// The bind-group cache is only worth its lookup if the buffer pool keeps handing the same
+/// intermediates to the same layers. That is a property of the pool's release order, not of
+/// this cache, so a change there would quietly turn the cache into pure overhead. Ten
+/// inferences is well past the point the assignment settles.
+#[test]
+fn conv2d_bind_groups_are_reused_across_inferences() {
+    let Some(model_path) = model_file_path() else {
+        return;
+    };
+    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+        GpuAvailability::Available(ctx) => ctx,
+        other => {
+            eprintln!("Skipping bind cache test: {other:?}");
+            return;
+        }
+    };
+    let model = GpuYuNet::with_context(context, &model_path, crate::InputSize::new(640, 640))
+        .expect("build GPU model");
+    for _ in 0..10 {
+        let input = crate::tensor::Tensor::from_shape(&[1, 3, 640, 640], &synthetic_input())
+            .expect("input shape");
+        model.run(input).expect("inference");
+    }
+    let (hits, misses) = model.bind_cache_stats();
+    let total = hits + misses;
+    assert!(total > 0, "no convolution dispatches were recorded");
+    assert!(
+        hits * 4 > total * 3,
+        "bind group cache hit rate collapsed: {hits} hits, {misses} misses. The buffer pool          is no longer handing the same intermediates to the same layers, which makes the          cache overhead rather than a saving."
+    );
+}
+
 #[test]
 fn profiled_and_merged_inference_match() {
     let Some(model_path) = model_file_path() else {

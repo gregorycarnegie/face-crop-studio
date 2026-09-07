@@ -173,8 +173,15 @@ impl GpuYuNet {
                 }
             };
             {
+                // Split because the two are not the same kind of cost: `finish` is wgpu
+                // turning the recorded pass into backend commands, which scales with what
+                // was recorded, while `submit` is handing the result to the queue.
                 let _submit = timing_guard("fcs_core::gpu_submit", log::Level::Trace);
-                self.ops.context().queue().submit(Some(encoder.finish()));
+                let commands = {
+                    let _finish = timing_guard("fcs_core::gpu_finish", log::Level::Trace);
+                    encoder.finish()
+                };
+                self.ops.context().queue().submit(Some(commands));
             }
             levels
         };
@@ -207,6 +214,12 @@ impl GpuYuNet {
 
     pub fn memory_usage(&self) -> u64 {
         self.ops.memory_usage()
+    }
+
+    /// Convolution bind-group cache hits and misses, for the test that guards the hit rate.
+    #[cfg(test)]
+    pub(crate) fn bind_cache_stats(&self) -> (u64, u64) {
+        self.ops.bind_cache_stats()
     }
 
     /// The device this model runs on.

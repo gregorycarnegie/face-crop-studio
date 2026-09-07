@@ -8,7 +8,13 @@ use fcs_utils::create_gpu_pipeline;
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use fcs_utils::gpu::{GpuBufferPool, GpuContext};
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 const CONV2D_WGSL: &str = include_str!("conv2d.wgsl");
 const CONV_WORKGROUP_X: u32 = 8;
@@ -35,7 +41,28 @@ pub(super) struct Conv2dPipeline {
     /// Creating one 56-byte buffer per dispatch measured at 0.445 ms per forward pass,
     /// substantial overhead beside the ~0.9 ms of GPU compute.
     uniforms: UniformCache<Conv2dUniforms>,
+    /// Bind groups, reused when the same five buffers come back.
+    ///
+    /// Host encoding is 3.1 us per dispatch (`gpu_record` plus `gpu_finish` over 43
+    /// dispatches) and `create_bind_group` is 0.8 us of it. The graph is static, so whether
+    /// this pays at all depends on the buffer pool handing the same intermediates to the
+    /// same layers on every inference -- which is a question about the pool's release order,
+    /// not something to assume. Measured: the pool cycles through about three assignments
+    /// before it settles, so the first few inferences miss and every one after hits.
+    /// `bind_cache_stats` reports it, and a test asserts it stays that way -- a change to
+    /// the pool's ordering would otherwise turn this cache into pure overhead in silence.
+    ///
+    /// Keyed on the buffers themselves, so a miss rebuilds a correct bind group rather than
+    /// binding the wrong one. Cleared wholesale past `BIND_CACHE_LIMIT` so a caller sweeping
+    /// input sizes cannot pin pooled buffers indefinitely.
+    bind_groups: Mutex<HashMap<[wgpu::Buffer; 5], Arc<wgpu::BindGroup>>>,
+    bind_hits: AtomicU64,
+    bind_misses: AtomicU64,
 }
+
+/// Distinct buffer combinations kept before the bind-group cache is dropped and rebuilt.
+/// The static 640x640 graph uses about 34; the headroom is for concurrent inferences.
+const BIND_CACHE_LIMIT: usize = 512;
 
 impl Conv2dPipeline {
     pub(super) fn new(device: &wgpu::Device, pixels_per_thread: u32) -> Result<Self> {
@@ -56,7 +83,19 @@ impl Conv2dPipeline {
             bind_group_layout,
             pixels_per_thread,
             uniforms: UniformCache::new("yunet_conv2d_uniforms"),
+            bind_groups: Mutex::new(HashMap::new()),
+            bind_hits: AtomicU64::new(0),
+            bind_misses: AtomicU64::new(0),
         })
+    }
+
+    /// Bind-group cache hits and misses since this pipeline was built.
+    #[cfg(test)]
+    pub(super) fn bind_cache_stats(&self) -> (u64, u64) {
+        (
+            self.bind_hits.load(Ordering::Relaxed),
+            self.bind_misses.load(Ordering::Relaxed),
+        )
     }
 
     /// Test hook for the uniform cache; the cache itself is an internal detail.
@@ -94,32 +133,59 @@ impl Conv2dPipeline {
             Some("conv2d_output"),
         )?;
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("conv2d_bg"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: weights.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: bias.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: output.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let key = [
+            input.buffer().clone(),
+            weights.buffer().clone(),
+            bias.buffer().clone(),
+            output.buffer().clone(),
+            wgpu::Buffer::clone(&uniform_buffer),
+        ];
+        let bind_group = {
+            let mut cache = self
+                .bind_groups
+                .lock()
+                .map_err(|_| anyhow::anyhow!("conv2d bind group cache poisoned"))?;
+            if cache.len() >= BIND_CACHE_LIMIT {
+                cache.clear();
+            }
+            match cache.get(&key) {
+                Some(existing) => {
+                    self.bind_hits.fetch_add(1, Ordering::Relaxed);
+                    existing.clone()
+                }
+                None => {
+                    self.bind_misses.fetch_add(1, Ordering::Relaxed);
+                    let created = Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("conv2d_bg"),
+                        layout: &self.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: key[0].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: key[1].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: key[2].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: key[3].as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: key[4].as_entire_binding(),
+                            },
+                        ],
+                    }));
+                    cache.insert(key, created.clone());
+                    created
+                }
+            }
+        };
 
         // These three must match `main` in conv2d.wgsl exactly: the shader picks its path
         // from the uniforms and the host has to size dispatch z for whichever it will pick.

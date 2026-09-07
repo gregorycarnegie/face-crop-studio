@@ -72,6 +72,22 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### Host encoding costs 3.1 us per dispatch, and most of it was avoidable
+
+`gpu_submit` turned out to be two different things: splitting it shows
+**`gpu_finish` is 0.059 ms** -- wgpu turning the recorded pass into backend
+commands -- against 0.036 for the submit itself. So host encoding is `record`
+plus `finish`, 0.134 ms over 43 dispatches, **3.1 us each**. That is the number
+that makes dispatch-count reductions worth more than their GPU time alone, and it
+is why experiment 37's wall gain exceeded its GPU saving.
+
+`create_bind_group` is 0.8 us of that, and the convolutions build 34 of them per
+inference. Caching them keyed on the five buffers they bind takes recording from
+0.073 to 0.029 ms and a detection from 0.856 to 0.805 -- five alternated pairs,
+no overlap, bit-exact (experiment 22). It works only because the buffer pool
+settles into handing the same intermediates to the same layers, which nothing in
+the pool promises, so a test asserts the hit rate holds.
+
 ### The stem was reading its source sixteen times
 
 `conv2d/general` -- the 640x640 3->16 stride-2 stem, one dispatch -- was 42 us,
@@ -251,6 +267,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Cache the eight small-op uniform buffers | **-0.08 ms**, -10% of small-image detection | `gpu/utils.rs`, `max_pool.rs`, `add.rs`, `upsample2x.rs` |
 | Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
 | Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
+| Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
 implementation for another and so differs by rounding -- at most 23 per channel
@@ -587,11 +604,12 @@ provides a concrete primary-source implementation using workgroup tiles and
 barriers. Applying it to our pointwise layers is an unmeasured hypothesis; the
 current four-channel register tile does not exhaust that design space.
 
-Bind-group caching was remeasured in experiment 20 and is smaller than the old
-0.107 ms figure: `create_bind_group` is 0.8 us, so all 61 dispatches are 0.049 ms,
-against a recording cost that experiment already cut to 0.103 ms. Unlike the
-uniform buffers it also needs invalidation, because the groups reference pooled
-intermediates. Fixed intermediate buffers would be a larger architectural change. The old unverified "~20 ms CLI map/poll" estimate
+Bind-group caching was dismissed after experiment 20 on the grounds that the
+groups reference pooled intermediates "whose identities change between passes".
+That was an assumption and it was wrong -- the pool cycles through about three
+assignments and then settles, giving 730 hits against 110 misses over 25
+inferences. Cached, recording falls 60% and a detection 6% (experiment 22).
+Fixed intermediate buffers would still be a larger architectural change. The old unverified "~20 ms CLI map/poll" estimate
 has been retired; it is not compatible with using today's roughly 3.5 ms
 single-detection result as the reference workload.
 

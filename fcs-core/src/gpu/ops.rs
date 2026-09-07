@@ -73,6 +73,12 @@ impl GpuInferenceOps {
         &self.context
     }
 
+    /// Convolution bind-group cache hits and misses, for the test that guards the hit rate.
+    #[cfg(test)]
+    pub(crate) fn bind_cache_stats(&self) -> (u64, u64) {
+        self.conv2d.bind_cache_stats()
+    }
+
     /// The buffer pool backing every tensor this instance allocates.
     ///
     /// Exposed so a caller that encodes a whole graph before submitting can wrap that work in

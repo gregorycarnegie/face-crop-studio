@@ -170,14 +170,13 @@ implementation or workload.
   Precompute shapes/lifetimes for the fixed YuNet graph and allocate a bounded
   workspace per in-flight request. Measure recording time and peak memory;
   protect current safe reuse and never share writable intermediates concurrently.
-- [ ] **22. Cache bind groups with stable buffer identities.** Depends on
+- [x] **22. Cache bind groups with stable buffer identities.** Depends on
   evidence from 19/21. Compare construction cost against retained groups per
   workspace, with correct input/output identities and invalidation. The old
-  0.107 ms figure is historical, not an expected current saving. **Sized by 20's
-  probe and not pursued:** `create_bind_group` is 0.8 us, so all 61 are 0.049 ms,
-  and unlike the uniforms they reference pooled intermediates whose identities
-  change between passes. Reopen only if recording matters again after 20 cut it
-  to 0.103 ms.
+  0.107 ms figure is historical, not an expected current saving. Closed once on
+  reasoning -- "the pooled intermediates' identities change between passes" --
+  which was an assumption and was wrong. Reopened and measured: **-60% of
+  recording, -6% of a detection**. See the record.
 - [ ] **23. Test buffer arenas or dynamic offsets.** If 21/22 justify it,
   compare individually bound buffers with aligned suballocations and offsets.
   Account for binding limits, aliasing rules, internal fragmentation and CPU
@@ -2771,6 +2770,58 @@ and they are what made this decidable without guessing. What they say for the
 backlog: **an encoder plus a compute pass is ~30 us and a submit ~26**, so
 merging passes is only worth trying where the merged-away dispatch is not
 currently overlapping something.
+
+### 22. Bind group caching - reopened, and this time measured
+
+**Closed once on reasoning, and the reasoning was wrong.** Experiment 20's probe
+priced `create_bind_group` at 0.8 us and this item was dismissed on two grounds:
+that 61 of them are only 0.049 ms, and that they reference pooled intermediates
+"whose identities change between passes". The first was a fair ranking at the
+time. The second was an assumption, and it is false.
+
+Two things changed the ranking. Experiment 37 cut the graph to 43 dispatches and
+20/34 cut everything around them, so 0.049 ms stopped being small next to what
+was left. Then splitting `gpu_submit` showed **`gpu_finish` is 0.059 ms of it**,
+so host encoding is `record` 0.073 plus `finish` 0.059 -- **3.1 us per dispatch**,
+not the 1.7 that `record` alone suggested.
+
+**The pool does hand the same buffers back.** Keyed on the five buffers a
+convolution binds, over 25 inferences: **730 hits, 110 misses**. The misses are
+the first few passes -- the pool cycles through about three assignments before it
+settles, which is what an execution scope releasing everything at once produces --
+and every inference after that is a full hit. That is the fact the earlier
+rejection guessed at and got backwards.
+
+Alternated between two binaries built from the same tree, 0.17 MP, 30 runs each:
+
+| Variant | `gpu_record` | `detect_image` wall p50 |
+| --- | --- | --- |
+| baseline | 0.075, 0.072, 0.075, 0.072, 0.073 | 0.896, 0.856, 0.856, 0.848, 0.859 |
+| cached | **0.030, 0.029, 0.028, 0.030, 0.029** | **0.828, 0.804, 0.805, 0.830, 0.799** |
+
+**Recording drops 60% and whole detection 6%**, winning all five pairs on both
+measures with no overlap between the distributions. Bit-exact: the raw head
+fingerprint is unchanged.
+
+**The cache is only worth its lookup while the pool keeps its ordering**, and
+nothing in the pool promises that. A change to release order would turn this into
+pure overhead silently, so `conv2d_bind_groups_are_reused_across_inferences`
+asserts the hit rate stays above 75% over ten inferences and says in its failure
+message what the collapse would mean. The counters exist for that test.
+
+Keyed on the buffers rather than on the layer, so a miss rebuilds a correct bind
+group rather than binding a wrong one, and cleared wholesale past 512 entries so a
+caller sweeping input sizes cannot pin pooled buffers indefinitely -- the cache
+holds `Buffer` handles, so an entry keeps its intermediate alive.
+
+**Not extended to the other nine dispatches.** Max-pool, add and resize also build
+a bind group each, but nine of them are about 7 us against the 34 convolutions'
+27, and they would need the key generalised over three different layouts. Worth
+doing only if recording matters again.
+
+**No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
+against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
+of 0.056 s over 1239 images. All 901 crops byte-identical.
 
 ### 5 (continued). The last unattributed quarter of the small-image path
 

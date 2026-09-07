@@ -50,6 +50,7 @@ const DISPLAY: &[(&str, usize)] = &[
     ("fcs_core::gpu_encode", 3),
     ("fcs_core::gpu_record", 4),
     ("fcs_core::gpu_submit", 4),
+    ("fcs_core::gpu_finish", 5),
     ("fcs_core::gpu_readback", 3),
     ("fcs_core::readback_alloc", 4),
     ("fcs_core::readback_copy", 4),
