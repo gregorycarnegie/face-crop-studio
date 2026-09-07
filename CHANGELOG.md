@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is where the 4 MP threshold was measured and where it still holds. Pixel output
   is identical.
 
+- **NMS no longer degrades on crowded scenes.** The spatial grid used a fixed
+  32x32 resolution, so its cells were sized by the scene bounds -- and a tight
+  cluster of faces has small bounds, making each cell far smaller than the boxes
+  and putting every box into hundreds of them. On 5000 clustered candidates that
+  cost **23.1 ms; it is now 0.25 ms**. The post-NMS dedup pass also removed from
+  the middle of a vector inside its inner loop, which on the same input went from
+  6.1 ms to 0.009 ms. Both are pure speed changes; detections are unchanged, and
+  a folder run produced byte-identical crops.
+
 - **Large previews no longer stall for seconds.** Images past 8192 pixels a side
   -- camera RAWs and panoramas -- are downscaled for the preview texture, and that
   downscale went through `DynamicImage::resize_exact`, which samples pixel by

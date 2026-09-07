@@ -337,7 +337,7 @@ implementation or workload.
   rule and threshold to reduce output bytes; measure sparse and crowded cases,
   counter/scan overhead and overflow handling. Preserve ordering/tie semantics
   where observable; no arbitrary top-K cap to manufacture speed.
-- [ ] **58. Reprofile NMS on worst-case candidate counts.** Compare current
+- [x] **58. Reprofile NMS on worst-case candidate counts.** Compare current
   spatial-grid NMS with bounded CPU or GPU alternatives only if it is material.
   Validate overlaps, equal-score ties and dense scenes; GPU transfer/dispatch
   cost belongs in the comparison.
@@ -1497,6 +1497,58 @@ repository root the CLI finds that settings file and detects 1020 faces at
 uses the built-in defaults, 0.9 and a filtered resize, and detects 423. Same
 binary, same arguments, same images. The worker-count table above was taken from
 the repository root and so describes the `speed` configuration.
+
+### 58. NMS worst case - the grid was pessimal exactly where it was needed
+
+Typical postprocessing is 0.006 ms, which is why 56 and 59 were closed. This asks
+the other question: what happens at worst-case candidate counts? `top_k` defaults
+to **5000**, and `apply_nms_in_place` is skipped entirely when `nms_threshold` is
+0 -- a value the GUI slider reaches, since it is clamped to `0.0..=1.0`. So both
+stages can be handed thousands of detections on the interactive path.
+
+Two shapes, benchmarked in-module (`nms::benchmarks`): **separated**, where
+nothing merges and every pair is compared, and **clustered**, where everything
+collapses onto one face.
+
+| n = 5000 | Before | After |
+| --- | ---: | ---: |
+| `apply_nms_in_place`, clustered | **23.138 ms** | **0.248 ms** |
+| `apply_nms_in_place`, separated | 0.214 ms | 0.232 ms |
+| `dedup_close_centers`, clustered | 6.116 ms | **0.009 ms** |
+| `dedup_close_centers`, separated | 14.269 ms | 14.269 ms |
+
+**The spatial grid was 100x slower on clusters than on spread-out boxes**, which
+is backwards: a cluster is what the grid is for. The search was never the
+problem. `NMS_GRID_SIZE` is a fixed 32x32, so cell size is set by the scene
+bounds -- and a tight cluster has *small* bounds. Cells came out around 4 px
+against 80 px boxes, so each box was inserted into roughly 640 cells: 5000 boxes,
+3.2 million insertions, all of it in `build_spatial_grid`. Spread-out scenes have
+large bounds, one cell per box, and were fine, which is why this never showed.
+
+Sizing the grid to the mean box extent instead keeps cells-per-box near 1 either
+way. The grid is only an acceleration structure, so this is a pure speed change,
+and `grid_and_naive_agree_across_scene_shapes` holds it to that across four
+scene shapes -- clustered, spread, mixed scales, and an identical stack where the
+extent collapses to a point. Checked against a deliberately under-covering cell
+range, where it fails with "mixed scales: kept a different count".
+
+`dedup_close_centers` was separately doing `Vec::remove` inside its inner loop,
+O(N) per drop on top of O(N^2) comparisons. Marking a bitmap and compacting once
+is exactly what the shifting loop did, and
+`dedup_bitmap_matches_the_shifting_implementation` runs the old implementation
+alongside the new over pseudo-random scenes at three densities to prove it.
+Checked against dropping the outer-loop skip, where it fails at spread 120.
+
+**What is left, honestly.** `dedup_close_centers` on 5000 *separated* detections
+is still 14.3 ms, and the bitmap cannot help there because nothing is removed --
+it is 12.5 million distance comparisons. Reaching it needs `nms_threshold` at 0
+plus thousands of scattered survivors. A spatial index would fix it, but the
+merge radius scales with the larger of the two boxes, so the query radius depends
+on what it finds, and that is real complexity for a setting that already means
+"suppress nothing". Left as a documented bound.
+
+Production output is unchanged: 1032 faces, 901 crops, 901 of 901 byte-identical
+against the previous verified run.
 
 ### 91. Single-image latency, and a 3.2 s preview stall for large images
 

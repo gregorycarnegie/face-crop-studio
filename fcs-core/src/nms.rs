@@ -86,15 +86,47 @@ fn grid_cell_index(offset: f32, cell_d: f32, grid_size: usize) -> usize {
     (offset / cell_d).floor().clamp(0.0, (grid_size - 1) as f32) as usize
 }
 
+/// Grid resolution for this particular scene, at most [`NMS_GRID_SIZE`].
+///
+/// A box is inserted into every cell it touches, so the build costs
+/// `N * cells_per_box`. With a fixed resolution that term explodes exactly where NMS matters
+/// most: a tight cluster of faces has small scene bounds, so 32x32 cells are far smaller than
+/// the boxes, and each box lands in hundreds of them. Measured on 5000 clustered detections
+/// the build alone was 23 ms, against 0.2 ms for the same count spread out -- the search was
+/// never the problem (experiment 58).
+///
+/// Sizing cells to the typical box instead keeps `cells_per_box` near 1 either way. The grid
+/// is only an acceleration structure, so this changes speed and not results.
+fn grid_size_for(detections: &[Detection], bounds: SceneBounds) -> usize {
+    // Mean rather than median: one pass, and NMS input is one object class at one rough scale,
+    // so the two agree closely enough to size a cell by.
+    let mut total = 0.0f32;
+    for d in detections {
+        total += d.bbox.width.max(d.bbox.height);
+    }
+    let mean_extent = total / detections.len() as f32;
+    // Zero-area or non-finite boxes leave nothing to size a cell by; fall back to the cap.
+    if !mean_extent.is_finite() || mean_extent <= 0.0 {
+        return NMS_GRID_SIZE;
+    }
+    let longest = bounds.width().max(bounds.height());
+    let fitted = (longest / mean_extent).ceil();
+    if !fitted.is_finite() || fitted < 1.0 {
+        return 1;
+    }
+    (fitted as usize).clamp(1, NMS_GRID_SIZE)
+}
+
 fn build_spatial_grid(detections: &[Detection], bounds: SceneBounds) -> SpatialGrid {
-    let mut cells: Vec<Vec<usize>> = (0..NMS_GRID_SIZE * NMS_GRID_SIZE)
-        .map(|_| Vec::with_capacity(detections.len() / (NMS_GRID_SIZE * NMS_GRID_SIZE / 4).max(1)))
+    let grid_size = grid_size_for(detections, bounds);
+    let mut cells: Vec<Vec<usize>> = (0..grid_size * grid_size)
+        .map(|_| Vec::with_capacity(detections.len() / (grid_size * grid_size / 4).max(1)))
         .collect();
 
     for (i, detection) in detections.iter().enumerate() {
-        let range = bounds.cell_range_for_bbox(&detection.bbox, NMS_GRID_SIZE);
+        let range = bounds.cell_range_for_bbox(&detection.bbox, grid_size);
         for row in range.min_row..=range.max_row {
-            let row_offset = row * NMS_GRID_SIZE;
+            let row_offset = row * grid_size;
             for col in range.min_col..=range.max_col {
                 cells[row_offset + col].push(i);
             }
@@ -102,7 +134,7 @@ fn build_spatial_grid(detections: &[Detection], bounds: SceneBounds) -> SpatialG
     }
 
     SpatialGrid {
-        grid_size: NMS_GRID_SIZE,
+        grid_size,
         bounds,
         cells,
     }
@@ -208,13 +240,22 @@ pub(crate) fn dedup_close_centers(
         return;
     }
     let min_abs_sq = min_absolute_distance_px * min_absolute_distance_px;
-    let mut keep_idx = 0;
-    while keep_idx < detections.len() {
+    // Marked and compacted once at the end rather than removed in place. `Vec::remove` shifts
+    // the tail on every drop, so a scene with many merges paid O(N) per removal on top of the
+    // O(N^2) comparisons. Skipping a marked entry is what the shifting loop did anyway, so the
+    // survivors and their order are unchanged (experiment 58).
+    let mut removed = vec![false; detections.len()];
+    for keep_idx in 0..detections.len() {
+        if removed[keep_idx] {
+            continue;
+        }
         let kept = detections[keep_idx].bbox;
         let kept_center = kept.center();
         let kept_longest = kept.longest_edge();
-        let mut probe = keep_idx + 1;
-        while probe < detections.len() {
+        for probe in (keep_idx + 1)..detections.len() {
+            if removed[probe] {
+                continue;
+            }
             let other = detections[probe].bbox;
             let delta = other.center() - kept_center;
             let dist_sq = delta * delta;
@@ -229,13 +270,21 @@ pub(crate) fn dedup_close_centers(
             let rel_threshold_sq = rel_threshold * rel_threshold;
 
             if dist_sq < rel_threshold_sq || dist_sq < min_abs_sq {
-                detections.remove(probe);
-            } else {
-                probe += 1;
+                removed[probe] = true;
             }
         }
-        keep_idx += 1;
     }
+
+    let mut keep = 0;
+    for (i, &is_removed) in removed.iter().enumerate() {
+        if !is_removed {
+            if i != keep {
+                detections.swap(i, keep);
+            }
+            keep += 1;
+        }
+    }
+    detections.truncate(keep);
 }
 
 fn apply_nms_naive(detections: &mut Vec<Detection>, threshold: f32) {
@@ -628,6 +677,213 @@ mod tests {
         assert_eq!(detections.len(), 2);
         assert!((detections[0].score - 0.9).abs() < f32::EPSILON);
         assert!((detections[1].score - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn dedup_bitmap_matches_the_shifting_implementation() {
+        // The bitmap version (experiment 58) must keep exactly what `Vec::remove` kept, in the
+        // same order. This is the implementation it replaced, run against it over pseudo-random
+        // scenes at densities either side of the merge radius.
+        fn dedup_by_shifting(
+            detections: &mut Vec<Detection>,
+            min_relative_distance: f32,
+            min_absolute_distance_px: f32,
+        ) {
+            if detections.len() <= 1 {
+                return;
+            }
+            let min_abs_sq = min_absolute_distance_px * min_absolute_distance_px;
+            let mut keep_idx = 0;
+            while keep_idx < detections.len() {
+                let kept = detections[keep_idx].bbox;
+                let kept_center = kept.center();
+                let kept_longest = kept.longest_edge();
+                let mut probe = keep_idx + 1;
+                while probe < detections.len() {
+                    let other = detections[probe].bbox;
+                    let delta = other.center() - kept_center;
+                    let dist_sq = delta * delta;
+                    let scale = kept_longest.max(other.longest_edge()).max(1.0);
+                    let rel = scale * min_relative_distance;
+                    if dist_sq < rel * rel || dist_sq < min_abs_sq {
+                        detections.remove(probe);
+                    } else {
+                        probe += 1;
+                    }
+                }
+                keep_idx += 1;
+            }
+        }
+
+        // Deterministic LCG, so a failure is reproducible without a rand dependency.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as f32) / (u32::MAX as f32)
+        };
+
+        for spread in [20.0f32, 120.0, 600.0] {
+            let scene: Vec<Detection> = (0..400)
+                .map(|i| {
+                    let size = 20.0 + next() * 60.0;
+                    detection_with_score(
+                        1.0 - i as f32 * 1e-4,
+                        BoundingBox {
+                            x: next() * spread,
+                            y: next() * spread,
+                            width: size,
+                            height: size,
+                        },
+                    )
+                })
+                .collect();
+
+            let mut fast = scene.clone();
+            let mut reference = scene;
+            dedup_close_centers(&mut fast, 0.5, 8.0);
+            dedup_by_shifting(&mut reference, 0.5, 8.0);
+
+            assert_eq!(
+                fast.len(),
+                reference.len(),
+                "spread {spread}: kept a different count"
+            );
+            for (a, b) in fast.iter().zip(&reference) {
+                assert_eq!(a.score, b.score, "spread {spread}: different survivor");
+                assert_eq!(a.bbox, b.bbox, "spread {spread}: different box");
+            }
+        }
+    }
+
+    #[test]
+    fn grid_and_naive_agree_across_scene_shapes() {
+        // The grid is an acceleration structure, so sizing its cells to the scene
+        // (experiment 58) must change speed and nothing else. These four shapes cover the
+        // cases that pick different resolutions: a tight cluster where boxes are large
+        // against the scene bounds, a spread-out scene where they are tiny, one of each
+        // mixed, and identical stacked boxes where the extent collapses to a point.
+        let scenes: Vec<(&str, Vec<Detection>)> = vec![
+            (
+                "clustered",
+                (0..600)
+                    .map(|i| {
+                        detection_with_score(
+                            1.0 - i as f32 * 1e-4,
+                            BoundingBox {
+                                x: 100.0 + i as f32 * 0.1,
+                                y: 100.0,
+                                width: 80.0,
+                                height: 80.0,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            (
+                "spread",
+                (0..600)
+                    .map(|i| {
+                        detection_with_score(
+                            1.0 - i as f32 * 1e-4,
+                            BoundingBox {
+                                x: (i % 30) as f32 * 200.0,
+                                y: (i / 30) as f32 * 200.0,
+                                width: 40.0,
+                                height: 40.0,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            (
+                "mixed scales",
+                (0..600)
+                    .map(|i| {
+                        let big = i % 3 == 0;
+                        detection_with_score(
+                            1.0 - i as f32 * 1e-4,
+                            BoundingBox {
+                                x: (i % 25) as f32 * 37.0,
+                                y: (i / 25) as f32 * 41.0,
+                                width: if big { 300.0 } else { 12.0 },
+                                height: if big { 300.0 } else { 12.0 },
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            (
+                "identical stack",
+                (0..300)
+                    .map(|i| {
+                        detection_with_score(
+                            1.0 - i as f32 * 1e-4,
+                            BoundingBox {
+                                x: 5.0,
+                                y: 5.0,
+                                width: 50.0,
+                                height: 50.0,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+        ];
+
+        for (name, scene) in scenes {
+            let mut fast = scene.clone();
+            let mut naive = scene;
+            apply_nms_in_place(&mut fast, 0.3);
+            apply_nms_naive(&mut naive, 0.3);
+            assert_eq!(fast.len(), naive.len(), "{name}: kept a different count");
+            for (a, b) in fast.iter().zip(&naive) {
+                assert_eq!(a.score, b.score, "{name}: different detection kept");
+                assert_eq!(a.bbox, b.bbox, "{name}: different box kept");
+            }
+        }
+    }
+
+    #[test]
+    fn grid_size_shrinks_for_clustered_scenes_and_stays_valid() {
+        // Boxes larger than the scene bounds must not ask for a zero-sized or oversized grid.
+        let stacked: Vec<_> = (0..10)
+            .map(|i| {
+                detection_with_score(
+                    1.0 - i as f32 * 0.01,
+                    BoundingBox {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 100.0,
+                    },
+                )
+            })
+            .collect();
+        let bounds = compute_scene_bounds(&stacked).expect("bounds");
+        let size = grid_size_for(&stacked, bounds);
+        assert!(
+            (1..=NMS_GRID_SIZE).contains(&size),
+            "grid size {size} out of range"
+        );
+
+        // A scene far wider than its boxes should still reach the cap.
+        let spread: Vec<_> = (0..64)
+            .map(|i| {
+                detection_with_score(
+                    1.0 - i as f32 * 0.001,
+                    BoundingBox {
+                        x: i as f32 * 1000.0,
+                        y: 0.0,
+                        width: 10.0,
+                        height: 10.0,
+                    },
+                )
+            })
+            .collect();
+        let bounds = compute_scene_bounds(&spread).expect("bounds");
+        assert_eq!(grid_size_for(&spread, bounds), NMS_GRID_SIZE);
     }
 
     #[test]
@@ -1038,5 +1294,97 @@ mod benches {
             baseline_total / iterations as u32,
             diff
         );
+    }
+}
+
+#[cfg(test)]
+mod benchmarks {
+    use super::*;
+    use crate::postprocess::Landmark;
+    use std::time::Instant;
+
+    fn detection(x: f32, y: f32, size: f32, score: f32) -> Detection {
+        Detection {
+            bbox: BoundingBox {
+                x,
+                y,
+                width: size,
+                height: size,
+            },
+            landmarks: [Landmark::new(0.0, 0.0); 5],
+            score,
+        }
+    }
+
+    /// Faces spread far enough apart that nothing is merged: every pair is compared and
+    /// every detection survives, which is the pure comparison cost.
+    fn separated(n: usize) -> Vec<Detection> {
+        (0..n)
+            .map(|i| {
+                let col = (i % 64) as f32;
+                let row = (i / 64) as f32;
+                detection(col * 200.0, row * 200.0, 40.0, 1.0 - i as f32 * 1e-6)
+            })
+            .collect()
+    }
+
+    /// Every detection inside one face's radius, so every probe removes. This is the shape
+    /// that makes `Vec::remove` inside the inner loop expensive.
+    fn clustered(n: usize) -> Vec<Detection> {
+        (0..n)
+            .map(|i| detection(100.0 + i as f32 * 0.01, 100.0, 80.0, 1.0 - i as f32 * 1e-6))
+            .collect()
+    }
+
+    #[test]
+    fn bench_dedup_close_centers_scaling() {
+        // `top_k` defaults to 5000 and `apply_nms_in_place` is skipped entirely when
+        // `nms_threshold` is 0, so this can be handed thousands of detections rather than
+        // the "1-10" its doc comment assumes (experiment 58).
+        println!(
+            "{:>7} {:>14} {:>14} {:>14}",
+            "n", "separated ms", "clustered ms", "clustered/n^2"
+        );
+        for n in [10usize, 100, 500, 1000, 2000, 5000] {
+            let mut sep = separated(n);
+            let start = Instant::now();
+            dedup_close_centers(&mut sep, 0.5, 8.0);
+            let sep_ms = start.elapsed().as_secs_f64() * 1e3;
+
+            let mut clu = clustered(n);
+            let start = Instant::now();
+            dedup_close_centers(&mut clu, 0.5, 8.0);
+            let clu_ms = start.elapsed().as_secs_f64() * 1e3;
+
+            println!(
+                "{n:>7} {sep_ms:>14.3} {clu_ms:>14.3} {:>14.3e}",
+                clu_ms / (n as f64 * n as f64)
+            );
+            // The cluster spans n*0.01 px, so past ~8000 items its tail escapes the merge
+            // radius and a second survivor is legitimate. The point is that it collapses.
+            assert!(
+                clu.len() <= 2,
+                "clustered scene should collapse, got {} of {n}",
+                clu.len()
+            );
+        }
+    }
+
+    #[test]
+    fn bench_apply_nms_in_place_scaling() {
+        println!("{:>7} {:>14} {:>14}", "n", "separated ms", "clustered ms");
+        for n in [100usize, 500, 1000, 2000, 5000] {
+            let mut sep = separated(n);
+            let start = Instant::now();
+            apply_nms_in_place(&mut sep, 0.3);
+            let sep_ms = start.elapsed().as_secs_f64() * 1e3;
+
+            let mut clu = clustered(n);
+            let start = Instant::now();
+            apply_nms_in_place(&mut clu, 0.3);
+            let clu_ms = start.elapsed().as_secs_f64() * 1e3;
+
+            println!("{n:>7} {sep_ms:>14.3} {clu_ms:>14.3}");
+        }
     }
 }
