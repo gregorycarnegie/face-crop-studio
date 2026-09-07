@@ -197,14 +197,12 @@ implementation or workload.
   set such as 8x8, 16x4, 32x2 and 8x4, adjusting dispatch coverage consistently.
   Measure large layers and tiny heads, raw tails and full graph; select per-shape
   kernels only when the gain survives dispatch/selection overhead.
-- [ ] **27. Sweep pixels and output channels per thread.** Extend the existing
+- [x] **27. Sweep pixels and output channels per thread.** Extend the existing
   1/2/4-channel comparison to bounded combinations of spatial width and channel
   tiles, including 8 channels where limits permit. Compare register pressure,
-  tail waste and occupancy; do not assume a larger tile wins. **Now the first
-  shader item to run, on 8's evidence:** the 4x4 tile leaves a 20x20 layer with
-  48 workgroups on a 128-SM adapter, so on small layers the promising direction
-  is a *smaller* tile, and the sweep has to cover both ends rather than only
-  larger ones.
+  tail waste and occupancy; do not assume a larger tile wins. 8's occupancy
+  reading suggested a *smaller* tile; the sweep covered both ends and the
+  prediction was wrong -- see the record.
 - [ ] **28. Specialize fixed dimensions at pipeline creation.** Compare runtime
   uniform loops with constants/overrides or generated kernels for recurring
   shapes. Measure compiler unrolling, warm speed, compile time and pipeline
@@ -2455,10 +2453,19 @@ workgroups on a 128-SM adapter, with two thirds of the machine idle and a serial
 0.3 TFLOPS on a part that does eighty.
 
 **This redirects the shader backlog.** Arithmetic-level tuning (26, 28, 30, 33,
-41-46) cannot help a kernel that is 0.4% utilised; the levers are more threads
-doing less each on small layers (27), and fewer, larger dispatches (35-37). It
-also explains why experiment 3 chose a four-channel tile: that was measured on
-the layers where the tile has enough work to fill the machine.
+41-46) cannot help a kernel that is 0.4% utilised. The two candidate levers were
+more threads doing less each on small layers (27), and fewer, larger dispatches
+(35-37).
+
+**The first of those was tested next and does not work.** Experiment 27 cut the
+tile to one output channel per thread, which quadruples the 20x20 layer's
+workgroups to 192 -- and it measured 8% *slower*, because four channels share
+each loaded input vector and dropping to one quadruples the loads per
+multiply-add. So the small layers are not idle for want of workgroups, and the
+0.4% utilisation figure above describes what the machine is doing rather than
+what is holding the kernel back. Read this experiment as "the profiled numbers
+are honest and the dispatches are far from peak", not as "occupancy is the
+lever". That leaves 35-37.
 
 ### 26. Pointwise workgroup shapes - swept, nothing wins
 
@@ -2493,6 +2500,64 @@ condition this experiment was written with. The sweep's real value is the
 evidence it handed to experiment 8: the dispatches these shapes were being tuned
 for are occupancy-bound, so the geometry that matters is threads per output, not
 threads per workgroup.
+
+### 27. The 4x4 tile is a local optimum, and the graph's shape mix is what pins it
+
+Experiment 8 predicted the promising direction was a *smaller* tile: the 4-pixel,
+4-channel grid leaves a 20x20x64 output with 48 workgroups on 128 SMs, and more
+threads doing less each would fill the machine. **That prediction is wrong**, and
+the sweep says why.
+
+Channels per thread, against production's 4, over the ten pointwise
+configurations (`conv2d_experiment`, A/A control 0.0%):
+
+| Shape | 1 ch | 2 ch | 8 ch |
+| --- | ---: | ---: | ---: |
+| 320x320 16->16 | +115% | +46% | **-15%** |
+| 160x160 16->64 | +125% | +50% | **-17%** |
+| 160x160 64->64 | +248% | +96% | **-19%** |
+| 80x80 64->64 | +71% | +14% | +21% |
+| 40x40 64->64 | +8% | 0% | +31% |
+| 20x20 64->64 | +8% | 0% | +31% |
+| 80x80 64->1 | 0% | 0% | +25% |
+| 40x40 64->10 | +8% | +8% | +31% |
+
+**Occupancy is not what these kernels are short of; reuse is.** Cutting to one
+channel per thread quadruples the workgroup count on the 20x20 layer -- 48 to 192,
+exactly the fix experiment 8 suggested -- and it gets 8% *slower*. Four output
+channels share each loaded input vector, so dropping to one quadruples the loads
+per multiply-add, and on the 160x160 layer that costs 248%. The small layers were
+never idle for want of workgroups.
+
+**8 channels is a genuine win on the three largest layers and still loses the
+graph.** It earns 15-19% where the tile has enough work, so it got the full-graph
+trial the acceptance rules require. `POINTWISE_CHANNEL_TILE = 8` with the matching
+shader, over the real 26 pointwise dispatches:
+
+| Variant | pointwise total | whole-graph GPU |
+| --- | ---: | ---: |
+| production, 4 channels | 320.5, 324.6 us | 0.538, 0.537 ms |
+| 8 channels | **397.3 us** | **0.611 ms** |
+
+**23% worse on the graph** while being 15-19% better on the shapes the
+microbenchmark ranks first, because YuNet's pointwise work is mostly the small
+layers where 8 channels costs 21-31%. Reverted. It was bit-exact
+(`0xa116e42f7c2dabdb`) while installed, so this is a speed rejection, not a
+correctness one -- and it is the clearest example in this backlog of why a
+faster microbenchmark earns a full-graph trial rather than adoption.
+
+**Eight pixels per thread loses everywhere**, 15% to 108%, tested with two vec4
+accumulators per channel and coverage doubled to match. A 20-wide output covered
+by 8 threads at 8 pixels each is 64 pixels of grid for 20 of work, and the tail
+waste swamps the extra reuse.
+
+**Not adopted, and the avenue is closed at this altitude.** Both axes are at a
+local optimum, and the only variant that beats production on any shape loses the
+graph by more than it wins. A per-shape kernel would recover 15-19% of the two or
+three largest pointwise dispatches -- single-digit microseconds against 0.487 ms
+of GPU compute and a 1.04 ms detection -- which does not pay for a second
+pipeline and its selection rule. What remains untested on the shader side is not
+geometry but graph structure: fewer, larger dispatches (35-37).
 
 ### Previous work
 

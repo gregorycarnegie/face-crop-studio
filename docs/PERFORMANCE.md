@@ -93,8 +93,16 @@ latency behind:
 
 Four pixels and four output channels per thread leaves a 20x20x64 output with 48
 workgroups on a 128-SM adapter: 0.3 TFLOPS on a part that does eighty. **Tuning
-the arithmetic cannot help a kernel that is 0.4% utilised.** The levers are more
-threads doing less each on small layers, and fewer, larger dispatches.
+the arithmetic cannot help a kernel that is 0.4% utilised.**
+
+The obvious reading -- give it more workgroups -- was then tested and is wrong.
+One output channel per thread quadruples the 20x20 layer's workgroups and runs
+8% slower, because four channels share each loaded input vector and dropping to
+one quadruples the loads per multiply-add (experiment 27). Eight channels wins
+15-19% on the three largest layers and loses the whole graph by 23%, because
+YuNet's pointwise work is mostly small layers. Eight pixels per thread loses
+everywhere. **Both tile axes are at a local optimum**, and the remaining shader
+lever is graph structure -- fewer, larger dispatches -- not geometry.
 
 Consistent with that, a sweep of nine workgroup shapes against the production
 8x8 found nothing worth adopting (experiment 26): every variant is level or
@@ -521,7 +529,7 @@ below is the shorter priority summary.
 | Priority | Next experiment | Evidence and acceptance condition |
 | --- | --- | --- |
 | 1 | Measure and simplify head readback | `batch_download` still creates 12 staging buffers, submits a second command buffer, waits, starts 12 maps, then waits again. Measure those components; try mapping before the first wait, then pooled/packed staging separately. Require raw-head equality and concurrent-inference safety. |
-| 2 | Sweep tile size *downwards* on small layers | Workgroup shapes were swept and none won (experiment 26). What is untested is fewer outputs per thread: the 4x4 tile leaves a 20x20 layer at 48 workgroups on 128 SMs, so occupancy, not arithmetic, is what a small-layer kernel is short of. Keep a shape-specific variant only if full-graph gain pays for its complexity. |
+| 2 | ~~Sweep workgroup and tile choices~~ -- done, nothing to take | Workgroup shapes (26) and both tile axes (27) were swept. Nothing beats the production 8x8 grid with four pixels and four output channels per thread on the graph as a whole; the one variant that wins any shape, 8 channels, loses the full graph by 23%. Reopen only with a per-shape pipeline, which single-digit microseconds do not justify. |
 | 3 | Reuse inputs/weights across a workgroup or fuse adjacent layers | Cooperative pointwise tiles and depthwise-to-pointwise fusion remain untested. They may save reads and dispatches, but add barriers, storage/register pressure or redundant work. Benchmark one hotspot first; preserve activation boundaries and parity. |
 | 4 | Measure batch and webcam scheduling | Test bounded frames/images in flight and CPU/GPU work overlap against the current path. Preserve per-inference buffer ownership through completion. Report throughput and frame latency separately; more concurrent submissions alone are not a gain. |
 | 5 | Resolve compiler effects, then revisit selective subgroups/precision | Small-layer subgroup gains exist, but DXC regressed the f32 baseline. Test compiler/code-generation and backend variants before introducing optional production kernels. FP16 arithmetic and packed layouts are different, untried candidates with accuracy/deployment costs. |
