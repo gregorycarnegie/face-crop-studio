@@ -2627,11 +2627,22 @@ Two things fell out on the way:
   initializers are inside the fused tensors, so uploading them again left
   buffers nothing binds. `upload_gpu_weights` now skips what it superseded.
 - **The readback went from 12 staging buffers to 3**, because each level is one
-  channel-major buffer holding cls, obj, bbox and kps in that order. Splitting it
-  is taking channel ranges off the front, no rearrangement. Experiment 13
-  measured packing the staging buffers as neutral, and this does not contradict
-  that: the saving here is dispatches, and the readback simplification is a side
-  effect that came free.
+  channel-major buffer holding cls, obj, bbox and kps in that order. That is worth
+  about 0.03 ms on its own: `readback_alloc` falls from 0.047-0.063 to
+  0.018-0.026 ms. Experiment 13 measured *packing* the staging buffers as neutral
+  and this does not contradict it -- 13 packed twelve copies into one buffer and
+  still allocated for twelve, where this allocates three because there are three.
+
+**Splitting the fused buffer was not free, and the first version cost more than
+it should have.** `gpu_convert` went from 0.001 ms to 0.058: `Vec::split_off`
+copies the tail it returns, so peeling cls, then obj, then bbox moves everything
+still ahead of the cut each time -- 39 rows of memory movement for 16 rows of
+data. Peeling from the back instead copies each branch once and leaves the first
+in place with no copy at all, which halves the stage (0.022-0.024 to 0.009-0.016
+ms, winning four pairs of four). The remaining ~0.01 ms is the one unavoidable
+copy out of the download buffer; removing it would mean splitting inside
+`batch_download` at the point it already copies, which is not worth the parameter
+it would need.
 
 The hardcoded `HEAD_BRANCH_CHANNELS` is not a new assumption -- `build_decode_tensors`
 already hardcoded the same 1/1/4/10 -- and it is now cross-checked against the

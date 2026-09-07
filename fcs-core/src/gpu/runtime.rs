@@ -403,14 +403,24 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
             flat.len(),
             m.channels * rows
         );
+        // Peel from the back. `Vec::split_off` copies the tail it returns, so taking the
+        // branches front to back re-copies everything still ahead of the cut each time --
+        // 39 rows of movement for 16 rows of data, which measured at 0.058 ms against the
+        // 0.001 ms this stage used to cost. Backwards, each branch's data is copied once
+        // and the first branch is left in place with no copy at all.
         let mut rest = flat;
-        for channels in HEAD_BRANCH_CHANNELS {
-            let tail = rest.split_off(channels * rows);
+        let mut branches: [Option<Vec<f32>>; HEAD_BRANCH_CHANNELS.len()] = Default::default();
+        for idx in (1..HEAD_BRANCH_CHANNELS.len()).rev() {
+            let at = rest.len() - HEAD_BRANCH_CHANNELS[idx] * rows;
+            branches[idx] = Some(rest.split_off(at));
+        }
+        branches[0] = Some(rest);
+        for (channels, branch) in HEAD_BRANCH_CHANNELS.into_iter().zip(branches) {
+            let branch = branch.expect("every branch was filled above");
             outputs.push(
-                Tensor::from_vec(&[channels, rows], rest)
+                Tensor::from_vec(&[channels, rows], branch)
                     .context("failed to build tensor from branch output")?,
             );
-            rest = tail;
         }
     }
 
