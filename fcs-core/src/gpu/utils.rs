@@ -1,5 +1,51 @@
 use anyhow::{Context, Result};
 use bytemuck::{Pod, bytes_of};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    sync::{Arc, Mutex},
+};
+
+/// Uniform buffers for one pipeline, reused across dispatches with identical contents.
+///
+/// `wgpu::Device::create_buffer_init` measured **8.1 us** per 16-byte uniform on
+/// RTX 4090 / D3D12 (`examples/encode_cost.rs`), against a whole forward pass that records
+/// in ~0.19 ms. The YuNet graph is static, so a handful of distinct uniform values covers
+/// every dispatch and after the first pass every lookup hits.
+///
+/// Keyed by contents rather than by layer, so it stays correct if a caller builds an
+/// unexpected config; bounded by the number of distinct shapes, which for YuNet is well
+/// under twenty per pipeline. A caller sweeping many resolutions through one pipeline would
+/// grow it without bound.
+///
+/// Safe to share across concurrent encodes: each buffer is written at creation and only
+/// ever read by the shader afterwards.
+#[derive(Debug)]
+pub(super) struct UniformCache<T> {
+    label: &'static str,
+    entries: Mutex<HashMap<T, Arc<wgpu::Buffer>>>,
+}
+
+impl<T: Pod + Eq + Hash> UniformCache<T> {
+    pub(super) fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The buffer for these contents, created once and shared thereafter.
+    pub(super) fn buffer(&self, device: &wgpu::Device, uniforms: T) -> Result<Arc<wgpu::Buffer>> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| anyhow::anyhow!("{} uniform cache poisoned", self.label))?;
+        Ok(entries
+            .entry(uniforms)
+            .or_insert_with(|| Arc::new(create_uniform_buffer(device, self.label, &uniforms)))
+            .clone())
+    }
+}
 
 /// Records a dispatch in a new profiled pass or an already-open compute pass.
 /// Both paths use the same graph and resource preparation code.

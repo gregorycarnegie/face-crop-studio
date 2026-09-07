@@ -1,4 +1,4 @@
-use super::utils::{ComputeDispatch, buffer_entry, create_uniform_buffer, uniform_entry};
+use super::utils::{ComputeDispatch, UniformCache, buffer_entry, uniform_entry};
 use fcs_utils::create_gpu_pipeline;
 
 use crate::gpu::GpuTensor;
@@ -14,6 +14,7 @@ const UPSAMPLE_WORKGROUP_Y: u32 = 8;
 pub(super) struct Upsample2xPipeline {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    uniforms: UniformCache<UpsampleUniforms>,
 }
 
 impl Upsample2xPipeline {
@@ -31,6 +32,7 @@ impl Upsample2xPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
+            uniforms: UniformCache::new("yunet_resize2x_uniforms"),
         })
     }
 
@@ -61,7 +63,7 @@ impl Upsample2xPipeline {
             _padding: 0,
         };
         let uniform_buffer =
-            create_uniform_buffer(context.device(), "yunet_resize2x_uniforms", &uniforms);
+            self.uniforms.buffer(context.device(), uniforms)?;
 
         let bind_group = context
             .device()
@@ -118,7 +120,7 @@ impl Upsample2xPipeline {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq, Eq, Hash)]
 struct UpsampleUniforms {
     input_width: u32,
     input_height: u32,

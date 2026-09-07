@@ -1,4 +1,4 @@
-use super::utils::{ComputeDispatch, buffer_entry, create_uniform_buffer, uniform_entry};
+use super::utils::{ComputeDispatch, UniformCache, buffer_entry, uniform_entry};
 use crate::gpu::GpuTensor;
 use fcs_utils::create_gpu_pipeline;
 
@@ -13,6 +13,7 @@ const ADD_WORKGROUP_SIZE: u32 = 256;
 pub(super) struct AddPipeline {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    uniforms: UniformCache<AddUniforms>,
 }
 
 impl AddPipeline {
@@ -31,6 +32,7 @@ impl AddPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
+            uniforms: UniformCache::new("yunet_add_uniforms"),
         })
     }
 
@@ -52,8 +54,7 @@ impl AddPipeline {
         let uniforms = AddUniforms {
             len: lhs.shape().elements() as u32,
         };
-        let uniform_buffer =
-            create_uniform_buffer(context.device(), "yunet_add_uniforms", &uniforms);
+        let uniform_buffer = self.uniforms.buffer(context.device(), uniforms)?;
 
         let bind_group = context
             .device()
@@ -111,7 +112,7 @@ impl AddPipeline {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq, Eq, Hash)]
 struct AddUniforms {
     len: u32,
 }

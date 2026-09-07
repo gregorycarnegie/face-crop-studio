@@ -1,8 +1,6 @@
 use super::{
     activation::ActivationKind,
-    utils::{
-        ComputeDispatch, buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry,
-    },
+    utils::{ComputeDispatch, UniformCache, buffer_entry, compute_output_dim, uniform_entry},
 };
 use crate::gpu::GpuTensor;
 use fcs_utils::create_gpu_pipeline;
@@ -10,10 +8,7 @@ use fcs_utils::create_gpu_pipeline;
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use fcs_utils::gpu::{GpuBufferPool, GpuContext};
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::Arc;
 
 const CONV2D_WGSL: &str = include_str!("conv2d.wgsl");
 const CONV_WORKGROUP_X: u32 = 8;
@@ -37,18 +32,9 @@ pub(super) struct Conv2dPipeline {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     pixels_per_thread: u32,
-    /// Uniform buffers, reused across dispatches with identical contents.
-    ///
     /// Creating one 56-byte buffer per dispatch measured at 0.445 ms per forward pass,
-    /// substantial overhead beside the ~0.9 ms of GPU compute. The graph is static,
-    /// so those 53 uniforms take only a handful of distinct values and after the first
-    /// pass every lookup hits.
-    ///
-    /// Keyed by contents rather than by layer, so it stays correct if a caller builds an
-    /// unexpected config; bounded by the number of distinct layer shapes, which for YuNet
-    /// is well under twenty. A caller sweeping many resolutions through one pipeline would
-    /// grow it without bound.
-    uniform_cache: Mutex<HashMap<Conv2dUniforms, Arc<wgpu::Buffer>>>,
+    /// substantial overhead beside the ~0.9 ms of GPU compute.
+    uniforms: UniformCache<Conv2dUniforms>,
 }
 
 impl Conv2dPipeline {
@@ -69,33 +55,8 @@ impl Conv2dPipeline {
             pipeline,
             bind_group_layout,
             pixels_per_thread,
-            uniform_cache: Mutex::new(HashMap::new()),
+            uniforms: UniformCache::new("yunet_conv2d_uniforms"),
         })
-    }
-
-    /// The uniform buffer for these contents, created once and shared thereafter.
-    ///
-    /// Safe to share across concurrent encodes: it is written at creation and only ever
-    /// read by the shader afterwards.
-    fn uniform_buffer(
-        &self,
-        device: &wgpu::Device,
-        uniforms: Conv2dUniforms,
-    ) -> Result<Arc<wgpu::Buffer>> {
-        let mut cache = self
-            .uniform_cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("conv2d uniform cache poisoned"))?;
-        Ok(cache
-            .entry(uniforms)
-            .or_insert_with(|| {
-                Arc::new(create_uniform_buffer(
-                    device,
-                    "yunet_conv2d_uniforms",
-                    &uniforms,
-                ))
-            })
-            .clone())
     }
 
     /// Test hook for the uniform cache; the cache itself is an internal detail.
@@ -105,7 +66,8 @@ impl Conv2dPipeline {
         device: &wgpu::Device,
         config: &Conv2dConfig,
     ) -> Arc<wgpu::Buffer> {
-        self.uniform_buffer(device, Conv2dUniforms::from(config))
+        self.uniforms
+            .buffer(device, Conv2dUniforms::from(config))
             .expect("uniform cache should not be poisoned in a test")
     }
 
@@ -124,7 +86,9 @@ impl Conv2dPipeline {
             bias,
         } = tensors;
         let device = context.device();
-        let uniform_buffer = self.uniform_buffer(device, Conv2dUniforms::from(config))?;
+        let uniform_buffer = self
+            .uniforms
+            .buffer(device, Conv2dUniforms::from(config))?;
         let output = GpuTensor::uninitialized_with_pool(
             context.clone(),
             Some(pool.clone()),

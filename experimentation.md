@@ -162,7 +162,7 @@ implementation or workload.
   validation, graph traversal, weight-name lookup, temporary collections,
   labels and reference counting in warm inference. Pre-resolve only repeated
   immutable data that is a measured cost; keep public input validation.
-- [ ] **20. Cache remaining small-operation uniforms.** Measure max-pool,
+- [x] **20. Cache remaining small-operation uniforms.** Measure max-pool,
   add and resize uniform creation after convolution caching. Reuse immutable
   content-keyed values only if the eight dispatches contribute a repeatable
   cost; include cache growth under varied resolutions.
@@ -173,7 +173,11 @@ implementation or workload.
 - [ ] **22. Cache bind groups with stable buffer identities.** Depends on
   evidence from 19/21. Compare construction cost against retained groups per
   workspace, with correct input/output identities and invalidation. The old
-  0.107 ms figure is historical, not an expected current saving.
+  0.107 ms figure is historical, not an expected current saving. **Sized by 20's
+  probe and not pursued:** `create_bind_group` is 0.8 us, so all 61 are 0.049 ms,
+  and unlike the uniforms they reference pooled intermediates whose identities
+  change between passes. Reopen only if recording matters again after 20 cut it
+  to 0.103 ms.
 - [ ] **23. Test buffer arenas or dynamic offsets.** If 21/22 justify it,
   compare individually bound buffers with aligned suballocations and offsets.
   Account for binding limits, aliasing rules, internal fragmentation and CPU
@@ -2323,6 +2327,84 @@ One thing the release build did not catch: the test helper still constructed the
 removed `cropper` field, and `cargo build` does not compile test code. Only
 `cargo clippy --all-targets` and the test run found it, which is the argument for
 running both before believing a deletion is complete.
+
+### 20. The eight uncached uniforms were a third of the recording cost
+
+Convolution has cached its uniform buffers since an earlier round; the four
+max-pools, two 2x resizes and two adds have not, and created one 4-32 byte
+buffer per dispatch. The experiment asks whether eight dispatches contribute a
+repeatable cost, so the first step was to price the call rather than write the
+cache and hope.
+
+`examples/encode_cost.rs` times the two remaining per-dispatch host objects
+against the cache lookup that would replace them, on the real device, 20000
+iterations each:
+
+| Operation | Median |
+| --- | ---: |
+| `create_buffer_init`, 16-byte uniform | **8.1 us** |
+| cached uniform lookup (mutex + hash + `Arc` clone) | below 0.1 us |
+| `create_bind_group` | 0.8 us |
+| cached bind group lookup | below 0.1 us |
+
+**A uniform buffer costs ten times a bind group**, which was not the expected
+ordering: the bind group binds four storage buffers and a uniform, the uniform
+buffer holds sixteen bytes. It is an allocation on the device, and that is what
+it charges for. Eight of them predicts 0.065 ms per forward pass against a
+`gpu_record` measured at 0.186 ms.
+
+Caching them, order-alternated between two binaries built from the same tree,
+0.17 MP fixture, 30 runs each:
+
+| Variant | `gpu_record` p50 | `detect_image` wall p50 |
+| --- | ---: | ---: |
+| baseline | 0.186, 0.183, 0.179, 0.181 | 1.182, 1.153, 1.172, 1.157 |
+| cached | **0.103, 0.105, 0.103, 0.109** | **1.041, 1.038, 1.033, 1.065** |
+
+**Recording drops 43%, and small-image detection drops 10%** -- 0.078 ms off
+recording, slightly more than the 0.065 ms the probe predicted, the remainder
+being the eight buffers' destruction. Every pair wins in both directions with no
+overlap between the two distributions.
+
+On the 10 MP fixture the recording saving is the same shape -- 0.653-0.753 ms
+down to 0.525-0.619 -- but wall time does not move outside its noise band
+(4.61-5.07 against 4.58-4.84), because that path spends 2.65 ms in CPU
+preprocessing before it records anything. **This is a small-image win**, which is
+the case experiment 6 identified as detection-bound: under 1 MP detection is 64%
+of per-image cost, and webcam frames live there.
+
+The cache is the one convolution already had, moved to
+`utils::UniformCache<T>` and used by all four pipelines, so conv2d's bespoke copy
+was deleted rather than duplicated three more times. Keyed by contents, bounded
+by distinct shapes; the small ops' shapes derive from the 640x640 detector input
+rather than from the source image, so the source resolution cannot grow it at
+all -- a stronger bound than convolution's.
+
+**Bit-exact:** the raw 126000-float head fingerprint is `0xa116e42f7c2dabdb`
+before and after (`readback_parity`), and the whole workspace suite passes under
+`FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4.
+
+**Validated on a batch run**, because 67's regression says a folder is where a
+shared cache or thread-local goes wrong and nothing else nests rayon. This adds
+three mutexes hit eight times per inference across every concurrent worker, so
+contention was the thing to rule out. Order-alternated, 1239 images:
+
+| Variant | Runs (s) |
+| --- | --- |
+| baseline | 7.58, 6.48, 6.88 |
+| cached | 7.44, 6.70, 6.87 |
+
+Neither faster nor slower -- the ranges sit on top of each other, which is the
+expected result for a 0.08 ms per-image saving against a decode-bound folder,
+and the point was the absence of a contention regression. All 901 crops are
+byte-identical with identical filenames.
+
+**Experiment 22 is sized by the same probe and is not worth writing.** Caching
+all 61 bind groups would recover 0.049 ms, and unlike the uniforms they depend on
+pooled intermediate buffers whose identities change between passes, so the cache
+would need invalidation the uniform cache does not. Less than two thirds of this
+experiment's saving for materially more machinery, against a recording cost this
+experiment has already cut to 0.103 ms. Left unchecked with that as the reason.
 
 ### Previous work
 

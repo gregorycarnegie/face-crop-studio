@@ -1,5 +1,5 @@
 use super::utils::{
-    ComputeDispatch, buffer_entry, compute_output_dim, create_uniform_buffer, uniform_entry,
+    ComputeDispatch, UniformCache, buffer_entry, compute_output_dim, uniform_entry,
 };
 use fcs_utils::create_gpu_pipeline;
 
@@ -92,6 +92,7 @@ impl MaxPoolConfig {
 pub(super) struct MaxPoolPipeline {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    uniforms: UniformCache<MaxPoolUniforms>,
 }
 
 impl MaxPoolPipeline {
@@ -109,6 +110,7 @@ impl MaxPoolPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
+            uniforms: UniformCache::new("yunet_max_pool_uniforms"),
         })
     }
 
@@ -138,7 +140,7 @@ impl MaxPoolPipeline {
             stride: config.stride,
             pad: config.pad,
         };
-        let uniform_buffer = create_uniform_buffer(device, "yunet_max_pool_uniforms", &uniforms);
+        let uniform_buffer = self.uniforms.buffer(device, uniforms)?;
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("max_pool_bg"),
@@ -194,7 +196,7 @@ impl MaxPoolPipeline {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq, Eq, Hash)]
 struct MaxPoolUniforms {
     input_width: u32,
     input_height: u32,

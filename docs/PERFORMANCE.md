@@ -39,11 +39,19 @@ above 2.5 MP, so a large photo preprocesses on the CPU and a small one does not.
 | - CPU preprocess (large only) | - | **2.65** |
 | - on-device preprocess (small only) | ~0.21 | - |
 | - inference | 1.35 | 1.97 |
-| - - record (host, before submit) | 0.21 | 0.28 |
+| - - record (host, before submit) | 0.21 -> **0.10** | 0.28 |
 | - - finish + submit | 0.13 | 0.16 |
 | - - readback (incl. GPU execution) | 0.79 | 1.04 |
 | - - CHW to HWC + sigmoid | 0.11 | 0.11 |
 | - - decode | 0.19 | 0.19 |
+
+**Host recording is now 0.10 ms, not 0.21.** The four max-pool, two resize and
+two add dispatches created a fresh uniform buffer each, and
+`create_buffer_init` costs **8.1 us** on this device -- ten times a
+`create_bind_group`, for sixteen bytes. Caching them the way convolution already
+did cut `gpu_record` 43% and small-image `detect_image` 10%, bit-exact
+(experiment 20). `examples/encode_cost.rs` prices both objects, and it is also
+the reason bind-group caching (22) was not written: all 61 of them are 0.049 ms.
 
 **Large-image detection is a preprocessing problem, not a shader problem.**
 The ~0.54 ms of profiled GPU compute is a minority of even the small-image
@@ -164,6 +172,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Decode straight from the GPU's channel-major heads | **-0.15 to -0.2 ms** | `model.rs`, `gpu/runtime.rs` |
 | `Tensor::from_vec` instead of copying | -0.02 to -0.03 ms | `gpu/runtime.rs`, `model.rs` |
 | One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
+| Cache the eight small-op uniform buffers | **-0.08 ms**, -10% of small-image detection | `gpu/utils.rs`, `max_pool.rs`, `add.rs`, `upsample2x.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
 implementation for another and so differs by rounding -- at most 23 per channel
@@ -354,6 +363,9 @@ cargo run --release -p fcs-core --example phase_timings [image] --ab SOME_ENV_FL
 # Bit-exact fingerprint of the raw head outputs, for readback changes
 cargo run --release -p fcs-core --example readback_parity
 
+# Cost of the per-dispatch host objects: uniform buffers and bind groups
+cargo run --release -p fcs-core --example encode_cost
+
 # Whether threading the source resize pays, at several megapixel counts
 cargo run --release -p fcs-core --example resize_threading
 
@@ -494,9 +506,11 @@ provides a concrete primary-source implementation using workgroup tiles and
 barriers. Applying it to our pointwise layers is an unmeasured hypothesis; the
 current four-channel register tile does not exhaust that design space.
 
-Bind-group caching alone previously accounted for only about 0.107 ms of encode
-cost, and fixed intermediate buffers would be a larger architectural change.
-Remeasure before pursuing it. The old unverified "~20 ms CLI map/poll" estimate
+Bind-group caching was remeasured in experiment 20 and is smaller than the old
+0.107 ms figure: `create_bind_group` is 0.8 us, so all 61 dispatches are 0.049 ms,
+against a recording cost that experiment already cut to 0.103 ms. Unlike the
+uniform buffers it also needs invalidation, because the groups reference pooled
+intermediates. Fixed intermediate buffers would be a larger architectural change. The old unverified "~20 ms CLI map/poll" estimate
 has been retired; it is not compatible with using today's roughly 3.5 ms
 single-detection result as the reference workload.
 
