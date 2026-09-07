@@ -255,7 +255,11 @@ implementation or workload.
 - [ ] **39. Fuse compatible preprocessing and stem work.** Prototype only
   after 48 identifies a relevant cost. Account for source texture sampling,
   resize semantics, border handling and source-pixel reuse; keep the exact
-  preprocessor contract unless explicitly evaluating a Q variant.
+  preprocessor contract unless explicitly evaluating a Q variant. **92 tested the
+  cheap half of this** -- sharing the compute pass without fusing the shaders --
+  and it lost, because the preprocess dispatch currently overlaps the recording of
+  inference. A real fusion would remove the dispatch rather than move it, so 39 is
+  not settled by 92, but it inherits the warning.
 - [ ] **40. Reduce intermediate lifetimes and unnecessary traffic.** Use graph
   liveness to find copies or buffers that can be removed or safely reused.
   Compare VRAM and GPU time with the existing pool; avoid assuming every
@@ -479,6 +483,9 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [x] **92. Record preprocessing into the inference compute pass.** Two submits
+  are 18% of a detection (5 continued). Merge them and measure. Rejected: the
+  saving is real on the host and is given back by the GPU/CPU overlap it destroys.
 - [x] **91. Find what single-image latency is actually made of.** Batch is at its
   floor, so measure the GUI's path instead: decode, detect, preview texture. Take
   whatever the measurement points at rather than starting from the GPU backlog.
@@ -2711,6 +2718,59 @@ crops (7.57/7.81 s against 8.57/7.98 s, which is noise either way).
 item found in the GPU graph, it costs one shader function and a predicate, and it
 compounds with 20 and 37: the graph is now 0.376 ms against the 0.537 ms this
 session started from, **30% less GPU work for the same bits**.
+
+### 92. One compute pass for preprocessing and inference - rejected, and the reason is 5's
+
+The 5 (continued) breakdown showed two `queue.submit` calls costing 0.055 and
+0.093 ms, 18% of a detection, on the same queue in a fixed order. `encode_cost.rs`
+priced what merging them would actually buy, 2000 iterations each:
+
+| Configuration | Median |
+| --- | ---: |
+| empty `queue.submit` | 3.5 us |
+| record + finish one dispatch, no submit | 30.3 us |
+| submit one dispatch | 55.7 us |
+| two command buffers, submitted separately | **112.6 us** |
+| two command buffers, one submit call | 99.2 us |
+| **one pass, two dispatches, one submit** | **57.9 us** |
+
+**The cost is not the submit.** An empty one is 3.5 us; it is the encoder and the
+compute pass around the dispatch that cost ~30, and the submit that carries them
+another ~26. Merging the two *submits* alone saves 13.4 us. Putting both
+dispatches in **one pass** saves 54.7 us, which matched the production numbers
+exactly -- so that is what was built.
+
+It works, and it does not help. `PreparedPreprocess` splits preparation (source
+conversion, texture upload, bind group) from recording, so the dispatch can go
+into the inference pass and the "can the GPU take this source" decision still
+happens before any encoder exists. Bit-exact, and the host cost went where it was
+supposed to:
+
+| Phase | two passes | merged |
+| --- | ---: | ---: |
+| gpu_preprocess | 0.162 | **0.102** |
+| - encode (incl. its submit) | 0.073 | 0.016 |
+| readback_wait | 0.354 | **0.397** |
+| detect_image wall p50 | 0.829-0.860 | 0.835-0.889 |
+
+**The 60 us saved on the host is handed straight back by the wait**, and merged
+loses four alternated pairs of five. The preprocess dispatch takes about 0.04 ms
+of GPU time, and in the two-pass arrangement it is submitted early and runs
+*while the host records the 43 inference dispatches*. Merging serialises it
+behind them.
+
+This is the same rule experiment 14 established, in the other direction, and it
+is already written down in PERFORMANCE.md: host work between the inference submit
+and the readback wait is free, so moving work into that window helps and moving
+work out of it hurts. Here the thing moved out of the window was GPU work, and
+55 us of host saving bought about 43 us of lost overlap.
+
+**Reverted.** `examples/encode_cost.rs` keeps the six submit and pass
+measurements, because they are the numbers any future encoding experiment needs
+and they are what made this decidable without guessing. What they say for the
+backlog: **an encoder plus a compute pass is ~30 us and a submit ~26**, so
+merging passes is only worth trying where the merged-away dispatch is not
+currently overlapping something.
 
 ### 5 (continued). The last unattributed quarter of the small-image path
 

@@ -193,6 +193,100 @@ fn main() -> Result<()> {
         bg_cache.lock().unwrap().get(&7).expect("seeded").clone()
     });
 
+    // How much of a `queue.submit` is fixed cost, and how much is per command? Two
+    // production numbers (0.055 ms for one dispatch, 0.093 ms for 43) suggest the fixed
+    // part dominates, which is what makes merging the preprocess and inference submits
+    // worth trying. An empty submit is the third point that settles it.
+    let queue = context.queue();
+    let submit_empty = time_each(2_000, |_| {
+        let encoder = device.create_command_encoder(&Default::default());
+        queue.submit(Some(encoder.finish()));
+    });
+    let submit_encode_only = time_each(2_000, |_| {
+        let encoder = device.create_command_encoder(&Default::default());
+        encoder.finish()
+    });
+
+    // An empty submit says nothing about a submit that carries a compute pass, and the
+    // production numbers are all passes. One trivial dispatch is the case that matters:
+    // it is what the preprocess submit carries.
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("noop"),
+        source: wgpu::ShaderSource::Wgsl(
+            "@group(0) @binding(0) var<storage, read> src: array<f32>;
+             @group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+             @group(0) @binding(2) var<uniform> u: vec4<u32>;
+             @compute @workgroup_size(64)
+             fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                 if id.x < 64u { dst[id.x] = src[id.x] + f32(u.x); }
+             }"
+                .into(),
+        ),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("noop_layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let noop = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("noop"),
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let noop_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("noop_bg"),
+        layout: &layout,
+        entries: &entries(&input, &output, &uniform),
+    });
+    let record_one = |encoder: &mut wgpu::CommandEncoder| {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&noop);
+        pass.set_bind_group(0, &noop_group, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+    };
+    let submit_one_dispatch = time_each(2_000, |_| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        record_one(&mut encoder);
+        queue.submit(Some(encoder.finish()));
+    });
+    let record_and_finish_one = time_each(2_000, |_| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        record_one(&mut encoder);
+        encoder.finish()
+    });
+    // Two command buffers in one submit: what merging the preprocess and inference
+    // submissions would actually cost, against submitting each on its own.
+    let submit_two_buffers = time_each(2_000, |_| {
+        let mut a = device.create_command_encoder(&Default::default());
+        record_one(&mut a);
+        let mut b = device.create_command_encoder(&Default::default());
+        record_one(&mut b);
+        queue.submit([a.finish(), b.finish()]);
+    });
+    // What a merge would actually produce: both dispatches in one pass, one submit.
+    let submit_one_pass_two_dispatches = time_each(2_000, |_| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&noop);
+            pass.set_bind_group(0, &noop_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        queue.submit(Some(encoder.finish()));
+    });
+    let submit_two_separately = time_each(2_000, |_| {
+        let mut a = device.create_command_encoder(&Default::default());
+        record_one(&mut a);
+        queue.submit(Some(a.finish()));
+        let mut b = device.create_command_encoder(&Default::default());
+        record_one(&mut b);
+        queue.submit(Some(b.finish()));
+    });
+
     println!("median per call, {ITERS} iterations");
     println!("{:<34} {:>10}", "operation", "us");
     for (name, us) in [
@@ -200,6 +294,13 @@ fn main() -> Result<()> {
         ("cached uniform lookup", cached_uniform),
         ("create_bind_group", create_bind_group),
         ("cached bind group lookup", cached_bind_group),
+        ("encoder finish, no submit (2k iters)", submit_encode_only),
+        ("empty queue.submit (2k iters)", submit_empty),
+        ("record+finish 1 dispatch", record_and_finish_one),
+        ("submit 1 dispatch", submit_one_dispatch),
+        ("submit 2 buffers in one call", submit_two_buffers),
+        ("submit 2 buffers separately", submit_two_separately),
+        ("submit 1 pass, 2 dispatches", submit_one_pass_two_dispatches),
     ] {
         println!("{name:<34} {us:>10.4}");
     }
