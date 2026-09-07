@@ -41,7 +41,7 @@ above 2.5 MP, so a large photo preprocesses on the CPU and a small one does not.
 | - inference | 1.35 | 1.97 |
 | - - record (host, before submit) | 0.21 -> **0.10** | 0.28 |
 | - - finish + submit | 0.13 | 0.16 |
-| - - readback (incl. GPU execution) | 0.79 | 1.04 |
+| - - readback (incl. GPU execution) | 0.79 -> **0.49** | 1.04 |
 | - - CHW to HWC + sigmoid | 0.11 | 0.11 |
 | - - decode | 0.19 | 0.19 |
 
@@ -71,6 +71,27 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 **1.6x between two builds of identical code**. Both are handled by alternating
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
+
+### Four head branches are one convolution
+
+Each detection level ran cls, obj, bbox and kps as four separate branches, each a
+1x1 convolution from the shared feature map followed by a per-channel 3x3. They
+differ only in output channels -- 1, 1, 4, 10 -- and both halves concatenate
+along that axis: a pointwise output channel depends only on its own row of
+weights, a depthwise channel only on its own 3x3 kernel. Concatenating the four
+sets of weights once at upload turns eight dispatches per level into two.
+
+| | Dispatches | GPU compute | `readback_wait` |
+| --- | ---: | ---: | ---: |
+| before | 61 | 0.537 ms | 0.435-0.469 ms |
+| after | **43** | **0.396 ms** | **0.361-0.375 ms** |
+
+**26% off the graph**, bit-exact (`0xa116e42f7c2dabdb` unchanged), and about
+0.1 ms off small-image `detect_image`. Two side effects: twelve per-model weight
+buffers stopped being uploaded, and head readback went from 12 staging buffers to
+3. A folder job cannot see it -- 0.09 ms per image is 0.11 s over 1239 against a
+1 s spread -- so this lands on interactive and webcam-sized work. See experiment
+37.
 
 ### The shaders are not compute-bound, so shader arithmetic is the wrong lever
 
@@ -212,6 +233,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | `Tensor::from_vec` instead of copying | -0.02 to -0.03 ms | `gpu/runtime.rs`, `model.rs` |
 | One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
 | Cache the eight small-op uniform buffers | **-0.08 ms**, -10% of small-image detection | `gpu/utils.rs`, `max_pool.rs`, `add.rs`, `upsample2x.rs` |
+| Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
 implementation for another and so differs by rounding -- at most 23 per channel

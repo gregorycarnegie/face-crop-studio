@@ -7,7 +7,7 @@ use crate::{
         utils::ComputeDispatch,
     },
     yunet::{
-        BACKBONE_STAGES, DETECTION_HEADS, DetectionHeadConfig, HeadBlock, NECK_BLOCKS, StageBlock,
+        BACKBONE_STAGES, NECK_BLOCKS, StageBlock,
     },
 };
 
@@ -123,10 +123,23 @@ pub fn encode_backbone_features(
 
 pub struct DetectionLevelOutputs {
     pub feature: GpuTensor,
-    pub cls: GpuTensor,
-    pub obj: GpuTensor,
-    pub bbox: GpuTensor,
-    pub kps: GpuTensor,
+    /// cls, obj, bbox and kps concatenated along the channel axis, in that order.
+    ///
+    /// The four branches read the same feature map, are the same 1x1-then-depthwise shape
+    /// and differ only in output channels, so concatenating their weights turns eight
+    /// dispatches per level into two. See [`HEAD_BRANCH_CHANNELS`] for the split.
+    pub heads: GpuTensor,
+}
+
+/// Output channels of the cls, obj, bbox and kps branches, in concatenation order.
+pub const HEAD_BRANCH_CHANNELS: [usize; 4] = [1, 1, 4, 10];
+
+/// Key under which the fused weights for one level are stored in [`GpuWeights`].
+///
+/// Synthetic: these tensors are built by concatenating four ONNX initializers at upload
+/// time, so they have no name in the model.
+pub fn fused_head_key(level: usize, part: &str) -> String {
+    format!("__fused_head{level}_{part}")
 }
 
 pub fn encode_neck_and_heads(
@@ -147,19 +160,19 @@ pub fn encode_neck_and_heads(
 
     let p5_raw = encode_stage_blocks(encoder, ops, weights, &c5, &NECK_BLOCKS[2..3])?;
     let level2 =
-        encode_detection_level(encoder, ops, weights, p5_raw.clone(), &DETECTION_HEADS[2])?;
+        encode_detection_level(encoder, ops, weights, p5_raw.clone(), 2)?;
 
     let up_p5 = ops.encode_resize2x_tensor(encoder, &p5_raw)?;
     let merged_p4_input = ops.encode_add_tensors(encoder, &up_p5, &c4)?;
     let p4_raw = encode_stage_blocks(encoder, ops, weights, &merged_p4_input, &NECK_BLOCKS[1..2])?;
     let level1 =
-        encode_detection_level(encoder, ops, weights, p4_raw.clone(), &DETECTION_HEADS[1])?;
+        encode_detection_level(encoder, ops, weights, p4_raw.clone(), 1)?;
 
     let up_p4 = ops.encode_resize2x_tensor(encoder, &p4_raw)?;
     let merged_p3_input = ops.encode_add_tensors(encoder, &up_p4, &c3)?;
     let p3_raw = encode_stage_blocks(encoder, ops, weights, &merged_p3_input, &NECK_BLOCKS[0..1])?;
     let level0 =
-        encode_detection_level(encoder, ops, weights, p3_raw.clone(), &DETECTION_HEADS[0])?;
+        encode_detection_level(encoder, ops, weights, p3_raw.clone(), 0)?;
 
     Ok([level0, level1, level2])
 }
@@ -169,34 +182,14 @@ fn encode_detection_level(
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
     feature: GpuTensor,
-    head: &DetectionHeadConfig,
+    level: usize,
 ) -> Result<DetectionLevelOutputs> {
-    let cls = encode_head_branch(encoder, ops, weights, &feature, &head.cls)?;
-    let obj = encode_head_branch(encoder, ops, weights, &feature, &head.obj)?;
-    let bbox = encode_head_branch(encoder, ops, weights, &feature, &head.bbox)?;
-    let kps = encode_head_branch(encoder, ops, weights, &feature, &head.kps)?;
-    Ok(DetectionLevelOutputs {
-        feature,
-        cls,
-        obj,
-        bbox,
-        kps,
-    })
-}
+    let point_weight = weight(weights, &fused_head_key(level, "point_weight"))?;
+    let point_bias = weight(weights, &fused_head_key(level, "point_bias"))?;
+    let depth_weight = weight(weights, &fused_head_key(level, "depth_weight"))?;
+    let depth_bias = weight(weights, &fused_head_key(level, "depth_bias"))?;
 
-fn encode_head_branch(
-    encoder: &mut impl ComputeDispatch,
-    ops: &GpuInferenceOps,
-    weights: &GpuWeights,
-    input: &GpuTensor,
-    branch: &HeadBlock,
-) -> Result<GpuTensor> {
-    let point_weight = weight(weights, branch.conv1_weight)?;
-    let point_bias = weight(weights, branch.conv1_bias)?;
-    let depth_weight = weight(weights, branch.conv2_weight)?;
-    let depth_bias = weight(weights, branch.conv2_bias)?;
-
-    let dims = input.shape().dims();
+    let dims = feature.shape().dims();
     anyhow::ensure!(
         dims.len() == 4,
         "head branch expects NCHW tensor (got {:?})",
@@ -206,11 +199,16 @@ fn encode_head_branch(
     let in_channels = dims[1] as u32;
     let height = dims[2] as u32;
     let width = dims[3] as u32;
-    let point_out = point_weight.shape().dims()[0] as u32;
+    let out_channels = point_weight.shape().dims()[0] as u32;
+    anyhow::ensure!(
+        out_channels as usize == HEAD_BRANCH_CHANNELS.iter().sum::<usize>(),
+        "fused head expects {} channels, got {out_channels}",
+        HEAD_BRANCH_CHANNELS.iter().sum::<usize>()
+    );
 
     let point_cfg = Conv2dConfig::new(
         batch,
-        Conv2dChannels::new(in_channels, point_out),
+        Conv2dChannels::new(in_channels, out_channels),
         SpatialDims::new(width, height),
         SpatialDims::new(1, 1),
         SpatialDims::new(1, 1),
@@ -218,25 +216,23 @@ fn encode_head_branch(
         Conv2dOptions::new(1, None),
     )?;
     let reduced =
-        ops.encode_conv2d_tensor(encoder, input, &point_weight, &point_bias, &point_cfg)?;
+        ops.encode_conv2d_tensor(encoder, &feature, &point_weight, &point_bias, &point_cfg)?;
 
-    let depth_out = depth_weight.shape().dims()[0] as u32;
-    anyhow::ensure!(
-        depth_out == point_out,
-        "depthwise conv expects {} channels but got {}",
-        point_out,
-        depth_out
-    );
+    // Depthwise is per-channel, so running one over the concatenation is exactly the four
+    // separate depthwise convolutions provided the kernels were concatenated in the same
+    // order. Nothing crosses a branch boundary.
     let depth_cfg = Conv2dConfig::new(
         batch,
-        Conv2dChannels::new(point_out, depth_out),
+        Conv2dChannels::new(out_channels, out_channels),
         SpatialDims::new(width, height),
         SpatialDims::new(3, 3),
         SpatialDims::new(1, 1),
         SpatialDims::new(1, 1),
-        Conv2dOptions::new(depth_out, None),
+        Conv2dOptions::new(out_channels, None),
     )?;
-    ops.encode_conv2d_tensor(encoder, &reduced, &depth_weight, &depth_bias, &depth_cfg)
+    let heads = ops.encode_conv2d_tensor(encoder, &reduced, &depth_weight, &depth_bias, &depth_cfg)?;
+
+    Ok(DetectionLevelOutputs { feature, heads })
 }
 
 fn encode_stage_block(

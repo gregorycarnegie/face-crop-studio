@@ -90,18 +90,11 @@ fn main() -> Result<()> {
     let (separate, _) = run(&ops, &weights, &input, false)?;
     let (merged, _) = run(&ops, &weights, &input, true)?;
     for (a, b) in separate.iter().zip(&merged) {
-        for (a, b) in [
-            (&a.cls, &b.cls),
-            (&a.obj, &b.obj),
-            (&a.bbox, &b.bbox),
-            (&a.kps, &b.kps),
-        ] {
-            // Dispatch order and arithmetic are unchanged, so every head should match exactly.
-            anyhow::ensure!(
-                a.to_vec()? == b.to_vec()?,
-                "merged pass changed a detection head"
-            );
-        }
+        // Dispatch order and arithmetic are unchanged, so every head should match exactly.
+        anyhow::ensure!(
+            a.heads.to_vec()? == b.heads.to_vec()?,
+            "merged pass changed a detection head"
+        );
     }
     drop((separate, merged));
     println!("all 12 raw detection heads match exactly");

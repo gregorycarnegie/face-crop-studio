@@ -242,7 +242,7 @@ implementation or workload.
   one actual graph pattern with measured traffic/dispatch cost. Preserve
   operation order and fan-out consumers; compare with already-merged passes,
   since eliminating a pass is not a new saving here.
-- [ ] **37. Compute detection head branches together.** Test sharing input
+- [x] **37. Compute detection head branches together.** Test sharing input
   loads across cls/obj/bbox/keypoint outputs at one level. Include small and
   mismatched channel counts, occupancy and output layout; validate all 12 heads.
 - [~] **38. Write head outputs in CPU decode order.** Compare final-layer
@@ -2558,6 +2558,95 @@ three largest pointwise dispatches -- single-digit microseconds against 0.487 ms
 of GPU compute and a 1.04 ms detection -- which does not pay for a second
 pipeline and its selection rule. What remains untested on the shader side is not
 geometry but graph structure: fewer, larger dispatches (35-37).
+
+### 37. Four head branches are one convolution, and that is 26% of the GPU graph
+
+Experiment 8 left two levers: fewer, larger dispatches, or nothing. This is the
+first of them, and it is the largest GPU saving in the backlog.
+
+**The four branches at one detection level are the same computation with
+different weights.** Each is a 1x1 convolution from the shared feature map
+followed by a per-channel 3x3, differing only in output channels: cls 1, obj 1,
+bbox 4, kps 10. So both halves concatenate along the output-channel axis. A
+pointwise output channel depends only on its own row of weights, and a depthwise
+channel only on its own 3x3 kernel, so **nothing crosses a branch boundary** and
+one convolution over the concatenated weights computes all four.
+
+The concatenation happens once, at weight upload, from four ONNX initializers
+into one tensor per part. Eight dispatches per level become two:
+
+| | Dispatches | GPU compute |
+| --- | ---: | ---: |
+| baseline | 61 | 0.537, 0.538 ms |
+| fused heads | **43** | **0.396, 0.399 ms** |
+
+**26% off the graph for removing 18 dispatches**, and the shape of the saving
+confirms experiment 8's diagnosis: the head dispatches were 12 pointwise and 12
+depthwise on 80x80, 40x40 and 20x20 feature maps with 1 to 10 output channels --
+the exact case measured at ~12 us regardless of arithmetic. The fused
+convolutions do the same arithmetic in a quarter of the dispatches and take
+barely longer than one of the originals.
+
+Wall clock, alternated between two binaries built from the same tree, 0.17 MP
+fixture, 30 runs each:
+
+| Phase | baseline | fused |
+| --- | --- | --- |
+| `readback_wait` (contains GPU execution) | 0.435-0.469 | **0.361-0.375** |
+| `gpu_record` | 0.102-0.109 | **0.077-0.088** |
+| `detect_image` wall | 1.038-1.073 | 0.915-1.052 |
+
+`readback_wait` drops in **all 11 pairs with no overlap** -- that is the GPU
+saving arriving. Recording drops because there are 18 fewer dispatches to
+record. Whole-detection wall time moves about 0.1 ms and wins 7 pairs of 8; the
+one loss came from a block whose p95 was 2.8 ms, so the wall number is the
+weakest of the three and is reported as ~0.1 ms rather than a percentage.
+
+**Bit-exact.** The raw 126000-float head fingerprint is `0xa116e42f7c2dabdb`
+before and after, which is the claim the concatenation argument predicts: same
+arithmetic, same order, different grouping.
+
+**The concatenation order has an independent check**, which matters more than the
+fingerprint here: the risk in this change is not arithmetic but putting kps where
+bbox should be, and a fingerprint over the assembled output would not
+necessarily catch a consistent mis-slicing. `cpu/graph.rs` still computes the
+four branches separately, and `gpu_cpu_parity` compares GPU detections against
+it over the fixture corpus. Swapping any two branches moves boxes and landmarks,
+not bits. It passes.
+
+**One test needed updating and it is not a weakened check.**
+`profiled_and_merged_inference_match` asserts the per-label dispatch counts, 61
+with 26 pointwise and 26 depthwise; it now asserts 43 with 17 and 17. The
+output-equality half of that test, which is the parity half, was untouched and
+passed throughout.
+
+Two things fell out on the way:
+
+- **Twelve GPU buffers per model stopped being uploaded.** The per-branch
+  initializers are inside the fused tensors, so uploading them again left
+  buffers nothing binds. `upload_gpu_weights` now skips what it superseded.
+- **The readback went from 12 staging buffers to 3**, because each level is one
+  channel-major buffer holding cls, obj, bbox and kps in that order. Splitting it
+  is taking channel ranges off the front, no rearrangement. Experiment 13
+  measured packing the staging buffers as neutral, and this does not contradict
+  that: the saving here is dispatches, and the readback simplification is a side
+  effect that came free.
+
+The hardcoded `HEAD_BRANCH_CHANNELS` is not a new assumption -- `build_decode_tensors`
+already hardcoded the same 1/1/4/10 -- and it is now cross-checked against the
+concatenated weight tensor at encode time, which the old code did not do.
+
+**No change to a folder job, as expected.** 1239 images, order-alternated:
+6.94/6.50/6.43 s baseline against 7.71/6.43/7.32 s fused, with all 901 crops
+byte-identical. A 0.09 ms per-image saving is 0.11 s over the folder against a
+spread of nearly 1 s within each variant, so batch cannot see this and the run
+was for the shared-weight-map validation rather than the timing. Where it lands
+is interactive and webcam-sized work, which is what experiment 6 said detection
+dominates.
+
+**Kept.** The remaining fusion candidates are 35 (depthwise into pointwise, 34 of
+the 43 surviving dispatches) and 36 (the eight pool/resize/add boundaries, 49 us
+between them).
 
 ### Previous work
 

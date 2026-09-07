@@ -1,6 +1,6 @@
 use crate::{
     gpu::{
-        graph::{self, DetectionLevelOutputs},
+        graph::{self, DetectionLevelOutputs, HEAD_BRANCH_CHANNELS},
         ops::GpuInferenceOps,
         tensor::GpuTensor,
     },
@@ -16,7 +16,7 @@ use anyhow::{Context, Result, anyhow};
 use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
 use fcs_utils::timing_guard;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -244,8 +244,19 @@ fn upload_gpu_weights(
     ops: &GpuInferenceOps,
     loader: OnnxInitializerMap,
 ) -> Result<HashMap<String, GpuTensor>> {
-    let mut map = HashMap::with_capacity(loader.len());
+    let mut map = HashMap::with_capacity(loader.len() + DETECTION_HEADS.len() * 4);
+    let mut superseded: HashSet<&'static str> = HashSet::new();
+    for fused in fuse_head_weights(&loader)? {
+        superseded.extend(fused.sources);
+        let gpu_tensor = ops.upload_tensor(fused.dims, &fused.data, Some(&fused.name))?;
+        map.insert(fused.name, gpu_tensor);
+    }
     for (name, tensor) in loader.into_map() {
+        // The four per-branch head initializers are already in the fused tensor; uploading
+        // them again would leave twelve buffers per level that nothing binds.
+        if superseded.contains(name.as_str()) {
+            continue;
+        }
         let gpu_tensor = ops.upload_tensor(
             tensor.dims().to_vec(),
             tensor.data(),
@@ -254,6 +265,92 @@ fn upload_gpu_weights(
         map.insert(name, gpu_tensor);
     }
     Ok(map)
+}
+
+struct FusedWeight {
+    name: String,
+    dims: Vec<usize>,
+    data: Vec<f32>,
+    /// The initializers this tensor replaces, so they are not uploaded separately.
+    sources: [&'static str; 4],
+}
+
+/// Concatenate each level's four head branches along the output-channel axis.
+///
+/// The cls, obj, bbox and kps branches read the same feature map and are the same
+/// 1x1-then-depthwise shape, so one convolution over the concatenated weights computes all
+/// four. Both halves concatenate: a pointwise output channel depends only on its own row of
+/// weights, and a depthwise channel only on its own 3x3 kernel, so nothing crosses a branch
+/// boundary and the arithmetic per channel is unchanged.
+///
+/// Levels whose initializers were not requested are skipped rather than failing, because
+/// `load_backbone_weights` takes a head-level count and the tests load partial graphs.
+fn fuse_head_weights(loader: &OnnxInitializerMap) -> Result<Vec<FusedWeight>> {
+    let mut fused = Vec::with_capacity(DETECTION_HEADS.len() * 4);
+    for (level, head) in DETECTION_HEADS.iter().enumerate() {
+        let branches = [&head.cls, &head.obj, &head.bbox, &head.kps];
+        let parts = [
+            ("point_weight", [
+                branches[0].conv1_weight,
+                branches[1].conv1_weight,
+                branches[2].conv1_weight,
+                branches[3].conv1_weight,
+            ]),
+            ("point_bias", [
+                branches[0].conv1_bias,
+                branches[1].conv1_bias,
+                branches[2].conv1_bias,
+                branches[3].conv1_bias,
+            ]),
+            ("depth_weight", [
+                branches[0].conv2_weight,
+                branches[1].conv2_weight,
+                branches[2].conv2_weight,
+                branches[3].conv2_weight,
+            ]),
+            ("depth_bias", [
+                branches[0].conv2_bias,
+                branches[1].conv2_bias,
+                branches[2].conv2_bias,
+                branches[3].conv2_bias,
+            ]),
+        ];
+        if parts
+            .iter()
+            .any(|(_, names)| names.iter().any(|n| loader.tensor(n).is_err()))
+        {
+            continue;
+        }
+        for (part, names) in parts {
+            let tensors: Vec<_> = names
+                .iter()
+                .map(|n| loader.tensor(n))
+                .collect::<Result<_>>()?;
+            // Output channels add; every other dimension has to agree, or the branches were
+            // not the same shape and concatenating them would silently compute nonsense.
+            let mut dims = tensors[0].dims().to_vec();
+            for tensor in &tensors[1..] {
+                anyhow::ensure!(
+                    tensor.dims()[1..] == dims[1..],
+                    "head branch {part} shapes differ beyond the channel axis: {:?} vs {:?}",
+                    tensor.dims(),
+                    dims
+                );
+                dims[0] += tensor.dims()[0];
+            }
+            let mut data = Vec::with_capacity(tensors.iter().map(|t| t.data().len()).sum());
+            for tensor in &tensors {
+                data.extend_from_slice(tensor.data());
+            }
+            fused.push(FusedWeight {
+                name: graph::fused_head_key(level, part),
+                dims,
+                data,
+                sources: names,
+            });
+        }
+    }
+    Ok(fused)
 }
 
 fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tensor>> {
@@ -266,8 +363,8 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
         channels: usize,
     }
 
-    let mut gpu_tensors: Vec<&GpuTensor> = Vec::with_capacity(DET_HEAD_OUTPUTS);
-    let mut meta: Vec<BranchMeta> = Vec::with_capacity(DET_HEAD_OUTPUTS);
+    let mut gpu_tensors: Vec<&GpuTensor> = Vec::with_capacity(levels.len());
+    let mut meta: Vec<BranchMeta> = Vec::with_capacity(levels.len());
 
     for level in levels.iter() {
         let shape = level.feature.shape().dims();
@@ -276,28 +373,15 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
             "feature map must be NCHW (got {:?})",
             shape
         );
-        let height = shape[2];
-        let width = shape[3];
-
-        // cls, obj, bbox, kps — interleaved by level so we can split later. Which of
-        // these need sigmoid is the decoder's business: it is told the heads are raw
-        // logits and activates cls and obj itself.
-        for (tensor, channels) in [
-            (&level.cls, 1usize),
-            (&level.obj, 1usize),
-            (&level.bbox, 4usize),
-            (&level.kps, 10usize),
-        ] {
-            gpu_tensors.push(tensor);
-            meta.push(BranchMeta {
-                height,
-                width,
-                channels,
-            });
-        }
+        gpu_tensors.push(&level.heads);
+        meta.push(BranchMeta {
+            height: shape[2],
+            width: shape[3],
+            channels: HEAD_BRANCH_CHANNELS.iter().sum(),
+        });
     }
 
-    // One submit + one poll downloads all 12 tensors simultaneously.
+    // One submit + one poll downloads one buffer per level.
     let raw_data = batch_download(gpu_tensors[0].context(), &gpu_tensors)
         .context("batch download of detection head outputs")?;
 
@@ -305,14 +389,29 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
     // and let the decoder gather from that layout. Experiment 55: transposing all twelve
     // heads to HWC first, only for the decoder to read them cell by cell, was pure
     // rearrangement of data nothing else looked at. FCS_OLD_CONVERT restores it for A/B.
+    //
+    // Each level now arrives as one channel-major buffer holding cls, obj, bbox and kps in
+    // that order, so splitting it is taking the channel ranges off the front in turn -- no
+    // rearrangement, just where each branch starts.
     let _convert = timing_guard("fcs_core::gpu_convert", log::Level::Trace);
     let mut outputs: Vec<Tensor> = Vec::with_capacity(DET_HEAD_OUTPUTS);
     for (flat, m) in raw_data.into_iter().zip(meta.iter()) {
         let rows = m.height * m.width;
-        outputs.push(
-            Tensor::from_vec(&[m.channels, rows], flat)
-                .context("failed to build tensor from branch output")?,
+        anyhow::ensure!(
+            flat.len() == m.channels * rows,
+            "fused head buffer is {} floats, expected {}",
+            flat.len(),
+            m.channels * rows
         );
+        let mut rest = flat;
+        for channels in HEAD_BRANCH_CHANNELS {
+            let tail = rest.split_off(channels * rows);
+            outputs.push(
+                Tensor::from_vec(&[channels, rows], rest)
+                    .context("failed to build tensor from branch output")?,
+            );
+            rest = tail;
+        }
     }
 
     // The original order was cls×3, obj×3, bbox×3, kps×3 (grouped by type).

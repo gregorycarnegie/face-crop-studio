@@ -1400,10 +1400,13 @@ fn profiled_and_merged_inference_match() {
         }
         let timings = context.take_pass_timings().expect("read timestamps");
         if context.profiler().is_some() {
-            assert_eq!(timings.len(), 61, "profiling must retain every operation");
+            // 43, not 61: the four head branches at each level share a feature map and
+            // differ only in output channels, so their weights are concatenated at upload
+            // and one pointwise plus one depthwise covers all four (experiment 37).
+            assert_eq!(timings.len(), 43, "profiling must retain every operation");
             for (label, count) in [
-                ("conv2d/pointwise", 26),
-                ("conv2d/depthwise", 26),
+                ("conv2d/pointwise", 17),
+                ("conv2d/depthwise", 17),
                 ("conv2d/general", 1),
                 ("max_pool", 4),
                 ("add", 2),
