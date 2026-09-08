@@ -72,6 +72,27 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The webcam loop is capture-bound, and the detector is shown a squashed face
+
+A C920 frame costs 35-44 ms of `webcam_grab` -- blocking until the camera
+produces the next frame -- against 0.8-4.3 ms of MJPEG decode and 2.5-3.6 ms of
+detection. Cutting the work from 8.6 ms to 3.3 moved the frame rate by 0.6 fps,
+because the pipeline is idle about 90% of each frame. That retires experiments 53
+and 65 for this hardware: neither can raise a frame rate that the camera sets.
+
+Two defects fell out (experiments 95 and 96):
+
+- **`--webcam-width`/`--webcam-height` did nothing.** The camera was opened with
+  `AbsoluteHighestResolution` and then asked to `set_resolution`, which does not
+  take, so a C920 asked for 640x480 delivered 1920x1080. Now fixed.
+- **The preprocessor stretches to 640x640 rather than letterboxing**, so every
+  non-square source reaches the model distorted, and recall falls with distance
+  from square. Over 400 corpus images, letterboxing finds 75% more faces at 3:2
+  and **four times as many at 16:9, where 28 of 77 images currently find
+  nothing**. Near-square images are unaffected and 4:3 is a wash. Not implemented:
+  it changes every detection this application makes and needs a
+  `resize_quality.rs` evaluation first.
+
 ### Peak memory scales with worker count, and nothing else does
 
 GPU retention is flat: 44.1 MB across 400 sources up to 23.4 MP, largest first
@@ -548,6 +569,16 @@ cargo run --release -p fcs-core --example cold_start
 
 # GPU pool and host RSS as a session goes on, largest source first
 cargo run --release -p fcs-core --example memory_growth -- <dir> [limit]
+
+# Where a webcam frame's time goes (opens the camera)
+cargo run --release -p fcs-cli --example webcam_cost -- [frames] [w] [h] [fps]
+
+# One captured frame detected at several sizes and letterboxed, to separate
+# aspect ratio from resolution
+cargo run --release -p fcs-cli --example webcam_resolution -- x [frames] [outdir]
+
+# Whether squashing to square costs detections on files too, bucketed by aspect
+cargo run --release -p fcs-core --example aspect_recall -- <dir> [limit]
 
 # Adapter selection cost per backend set (one process per configuration)
 cargo run --release -p fcs-core --example adapter_cost -- dx12

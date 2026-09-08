@@ -319,10 +319,13 @@ implementation or workload.
   current GUI caches and invalidation. Test reuse across changes that only affect
   crop presentation/enhancement; invalidate for image, orientation, input-size
   or detector changes. Measure repeated-interaction latency and retained memory.
-- [ ] **53. Keep webcam frames on the GPU where capture permits.** Investigate
+- [~] **53. Keep webcam frames on the GPU where capture permits.** Investigate
   native texture/frame import or fewer colour-conversion copies. Count capture-
   to-result latency, synchronization and format conversion; retain the portable
   fallback and do not assume the capture API exposes compatible device memory.
+  **Premise removed by 95:** the loop is capture-bound at 24 fps and does its work
+  in a seventh of the frame budget, so removing copies cannot raise the frame
+  rate. Re-open for a camera fast enough to saturate the pipeline.
 - [ ] **54. Evaluate adaptive resize/input routing.** Test a measured CPU/GPU
   cutoff by source size/device and, separately, cheaper preview resize quality.
   Include routing overhead. Quality changes require detection/landmark/crop
@@ -386,10 +389,13 @@ implementation or workload.
   Only if 9/24/60 show contention or idle gaps, test a bounded dispatcher.
   Include handoff latency and fairness; do not introduce a worker/thread solely
   as an abstraction or serialize independent CPU work unnecessarily.
-- [ ] **65. Prefer fresh webcam frames under overload.** Compare queued-all
+- [~] **65. Prefer fresh webcam frames under overload.** Compare queued-all
   processing with bounded latest-frame scheduling, skipping stale detections
   when a newer frame supersedes them. Report capture-to-display age, dropped
   frames and detection cadence as well as fps. Q; export must remain complete.
+  **Premise removed by 95:** there is no overload to schedule around -- capture
+  delivers every 42 ms and the pipeline answers in 3-9. Re-open if a faster
+  camera or several at once makes the pipeline the constraint.
 - [ ] **66. Share work across identical preview requests.** Inspect existing
   cancellation/caches, then test coalescing duplicate in-flight detections.
   Measure rapid UI edits and mixed images; prevent stale results from replacing
@@ -507,6 +513,15 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [ ] **96. Letterbox instead of stretching to the model input.** The
+  preprocessor scales x and y independently, so every non-square source is
+  distorted, and recall falls with distance from square: at 16:9, 28 of 77 corpus
+  images find nothing that letterboxing finds. Measured in the record; not
+  implemented, because it changes every detection and the 4:3 bucket trades 10
+  losses for 7 gains. Needs a `resize_quality.rs` evaluation over the full corpus
+  and a look at the crops, to the standard 71 was held to.
+- [x] **95. Measure the webcam path.** Where a frame's time goes, and what the
+  loop is actually limited by. Answered 53 and 65 and turned up two defects.
 - [x] **93. Skip decoding cells that cannot reach the score threshold.** The
   decode runs on all 8400 cells and postprocessing discards nearly all of them.
   Kept: 82% off the decode, exact rather than approximate.
@@ -2850,6 +2865,107 @@ doing only if recording matters again.
 **No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
+
+### 96. Squashing to a square costs detections, and not only on webcams
+
+95's webcam split was a performance measurement that turned into a recall one, so
+this is the recall half, on files rather than frames.
+
+**The preprocessor stretches; it does not letterbox.** `preprocess.wgsl` computes
+`ratio = src_size / dst_size` and samples `(pixel + offset) * ratio`, scaling x
+and y independently, so a source is squashed to 640x640 whatever its shape. A
+16:9 frame is distorted by 1.78:1, a 3:2 photo by 1.50, a 4:3 photo by 1.33. The
+box mapping back out is consistent -- `compute_resize_scales` returns separate
+`scale_x` and `scale_y` -- so nothing is *wrong* downstream. What is wrong is the
+face the model is shown.
+
+**The isolating control.** One webcam frame, sixteen times, every candidate
+derived from the same capture so the subject cannot move between them:
+
+| Detected on | Faces per frame |
+| --- | ---: |
+| 16:9 at 2.07, 0.92, 0.52, 0.23 MP | **0.00** |
+| 4:3 centre crop at 1.56, 0.48, 0.31 MP | 1.00 |
+| **16:9 letterboxed into 640x640** | **1.00** |
+
+The 4:3 rows crop, so they also enlarge the face and cannot separate aspect from
+face size. The letterbox row can: same content, no crop, same face, aspect
+preserved and the remainder padded. It finds the face every time. **So the cause
+is the stretch, not resolution, not the camera mode, not how big the face is.**
+
+**It is not a webcam bug.** `examples/aspect_recall.rs` detects each photo twice,
+as production does it and letterboxed, over 400 images of the reference folder:
+
+| Aspect bucket | Images | Faces now | Faces letterboxed | 0 -> found | found -> 0 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| near square (<1.05) | 8 | 6 | 6 | 0 | 0 |
+| 1.05-1.25 | 8 | 6 | 5 | 0 | 1 |
+| 1.25-1.45 (4:3) | 266 | 99 | 95 | 7 | 10 |
+| 1.45-1.70 (3:2) | 41 | 16 | **28** | **10** | 1 |
+| over 1.70 (16:9) | 77 | 9 | **37** | **28** | 0 |
+
+**The loss scales with distance from square, exactly as the mechanism predicts.**
+Near-square images are identical. 4:3 is a wash -- 7 images gain a face, 10 lose
+one -- which is why the corpus works at all, since 266 of 400 sit there. At 3:2
+letterboxing finds 75% more faces. **At 16:9 it finds four times as many, and 28
+of 77 images go from finding nothing to finding a face, with none lost.**
+
+**Not implemented, because it changes every detection this application makes.**
+Letterboxing means an aspect-preserving scale plus an offset in the shader, the
+same in `resize_then_convert`, the offset subtracted in postprocess, and the CPU
+graph changed to match or GPU/CPU parity breaks. More importantly it is a Q
+change: the 4:3 bucket loses 10 images to gain 7, so "strictly better" is not
+what the data says, and the crops for those images want a human eye before this
+becomes the default -- the same standard experiment 71 was held to. What it needs
+is an evaluation with `examples/resize_quality.rs`, which already reports landmark
+displacement, box IoU and score deltas against an A/A control, over the whole
+corpus rather than 400 images.
+
+Recorded here with the numbers so the decision is a product one taken on evidence
+rather than a refactor taken on a hunch.
+
+### 95. What a webcam frame costs, and two defects found by measuring it
+
+Experiment 6 said the GPU-overhead backlog could not be ranked without "the
+webcam measurement (53, 65)". Nothing had measured it: every number in this
+backlog came from files on disk.
+
+`examples/webcam_cost.rs` times capture, MJPEG decode, the buffer wrap and
+detection over a warm loop. C920, 120 frames:
+
+| Phase | 1920x1080 | 640x480 |
+| --- | ---: | ---: |
+| `webcam_grab` | 35.18 ms | 43.69 ms |
+| `webcam_decode` | 4.34 | 0.76 |
+| `webcam_wrap` | 0.69 | 0.12 |
+| `detect_image` | 3.59 | 2.45 |
+| whole frame p50 | 46.05 | 47.45 |
+| achieved | 24.6 fps | 24.0 fps |
+
+**The loop is capture-bound and nothing else.** `webcam_grab` is not work, it is
+blocking until the camera produces the next frame, and it absorbs whatever slack
+the rest leaves: cutting the other three stages from 8.6 ms to 3.3 changed the
+frame rate by 0.6 fps. At 24 fps the pipeline is idle roughly 90% of each frame.
+
+**That answers 53 and 65 without implementing either.** Keeping frames on the GPU
+(53) and dropping stale frames under overload (65) both spend complexity to
+finish work sooner, and there is no overload: the work is already done in a
+seventh of the frame budget. Neither can raise the frame rate on this hardware.
+They become interesting only where capture is fast enough to saturate the
+pipeline -- a 60 fps camera at low resolution, or several cameras at once -- and
+that is the condition to re-open them under, not fps in general.
+
+**Defect found: `--webcam-width` and `--webcam-height` did nothing.**
+`WebcamCapture::with_device_index` opened the camera with
+`RequestedFormatType::AbsoluteHighestResolution` and then called
+`set_resolution`, which does not take -- a C920 asked for 640x480 delivered
+1920x1080. Every webcam user was decoding and detecting 6.75x the pixels they
+asked for. Fixed: the open now requests `Closest` to the caller's format and
+falls back to the old behaviour if that cannot be satisfied, which is the
+portable fallback item 53 asks for.
+
+That fix matters more than its cost, because of what 96 found: the camera's
+highest mode is 16:9, and 16:9 is the shape the detector handles worst.
 
 ### 6 (continued) / 84. Peak memory, which nothing had measured
 
