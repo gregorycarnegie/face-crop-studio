@@ -33,6 +33,9 @@ fn main() -> Result<()> {
     let options = GpuContextOptions {
         backends,
         respect_env: false,
+        // Asked for opportunistically so the report below is about what the adapter
+        // supports, not about what the default options happened to enable.
+        optional_features: wgpu::Features::PIPELINE_CACHE,
         ..GpuContextOptions::default()
     };
 
@@ -45,6 +48,13 @@ fn main() -> Result<()> {
         }
     };
     let ms = started.elapsed().as_secs_f64() * 1e3;
+    // Experiment 82 wants to know whether compiled pipelines can be persisted. wgpu exposes
+    // that as an adapter feature, so the answer is a capability question before it is a
+    // design question.
+    println!(
+        "{which:<8} PIPELINE_CACHE supported: {}",
+        context.features().contains(wgpu::Features::PIPELINE_CACHE)
+    );
     println!(
         "{which:<8} {ms:>8.1} ms   {} ({:?})",
         context.adapter_info().name,

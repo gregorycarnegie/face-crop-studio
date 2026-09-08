@@ -72,6 +72,24 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### One entry point per kernel halves shader compilation
+
+`conv2d.wgsl` carried four kernels behind one `main` that branches on the
+uniforms, so every launch compiled all four: ~197 ms. Compilation is superlinear
+in what a single entry point can reach -- the three kernels YuNet dispatches cost
+about 120 ms apart and 205 ms together -- and naga and FXC emit only what each
+entry point reaches, so **one module with four entry points** gets the win without
+splitting the file.
+
+`compile_conv2d` falls to **~120 ms**, runtime is unchanged (GPU compute 0.372 ms,
+detection wall unchanged) and output is bit-exact. `main` remains as the grouped
+fallback and is built on first use, so production never compiles it
+(experiment 82).
+
+`Features::PIPELINE_CACHE` -- the obvious way to persist compiled pipelines --
+is exposed on Vulkan but not D3D12 (`examples/adapter_cost.rs`), so it is not
+available on the backend the app ships on for Windows.
+
 ### Cold start is 900 ms, and model loading is 0.15% of it
 
 Launch to first face is 850-1213 ms on RTX 4090 / D3D12, and two stages own 94%
@@ -507,6 +525,10 @@ cargo run --release -p fcs-core --example cold_start
 
 # Adapter selection cost per backend set (one process per configuration)
 cargo run --release -p fcs-core --example adapter_cost -- dx12
+
+# What each WGSL file or entry point costs to compile (order matters: the first
+# pipeline in a process carries ~180 ms of one-off warm-up)
+cargo run --release -p fcs-core --example shader_compile_cost -- fcs-core/src/gpu/conv2d.wgsl
 
 # Cost of the per-dispatch host objects: uniform buffers and bind groups
 cargo run --release -p fcs-core --example encode_cost

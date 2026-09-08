@@ -469,10 +469,12 @@ implementation or workload.
   `build_detector` runs synchronously in `App::new`, putting ~235 ms of shader
   compilation ahead of the first frame. Include device loss, switching models and shutting down;
   longer lifetime must not produce unbounded retained GPU memory.
-- [ ] **82. Evaluate supported pipeline caches or controlled prewarming.**
+- [x] **82. Evaluate supported pipeline caches or controlled prewarming.**
   **Sized by 80:** the target is one shader, `conv2d.wgsl` at 197 ms of FXC; the
-  other four are 20 ms together, so parallel compilation is not the answer and a
-  cache or a background thread is.
+  other four are 20 ms together, so parallel compilation is not the answer.
+  `PIPELINE_CACHE` turned out to be Vulkan-only, so the answer was one entry point
+  per kernel instead: ~197 ms to ~120, and the grouped fallback is never compiled
+  in production.
   Feature-check the active backend, compare cold/warm startup and first-frame
   latency, and invalidate persisted data by compatible device/driver/shader
   identity. Include cache size and total work; moving compilation earlier is
@@ -485,6 +487,15 @@ implementation or workload.
   retention with bounded high-water marks or idle trimming across large images,
   smaller follow-up runs and concurrent exports. Measure allocation churn,
   p95 latency, VRAM pressure and device failures; memory savings may trade speed.
+- [ ] **94. Give the readback poll a timeout.** Every `device.poll` passes
+  `PollType::Wait { timeout: None }`, so a submission that never completes blocks
+  the calling thread forever instead of returning an error the caller can report
+  or retry. Observed once during 82's validation: a test binary sat for ten hours
+  on 35 seconds of CPU across a long idle window and had to be killed. Not
+  reproducible on demand, which is the difficulty -- the experiment is to find a
+  timeout long enough never to fire on real work, decide what the caller does when
+  it fires, and check that a timed-out wait leaves the buffer pool and execution
+  scope in a state the next inference can use.
 - [ ] **85. Validate sustained operation and power efficiency.** Run the best
   candidates through long webcam sessions and large exports, including VRAM
   pressure and background GPU work. Track drift, thermals, memory growth,
@@ -2833,6 +2844,71 @@ doing only if recording matters again.
 **No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
+
+### 82. One entry point per kernel, and two wrong turns on the way
+
+Experiment 80 put `conv2d.wgsl` at 197 ms of a ~900 ms cold start: 90% of all
+shader compilation and 22% of the whole start. This is what to do about it.
+
+**The obvious answer is unavailable.** Persisting compiled pipelines is
+`Features::PIPELINE_CACHE`, and `examples/adapter_cost.rs` asks the adapter for it
+opportunistically: **Vulkan yes, D3D12 no**. So on the backend the app actually
+ships on Windows there is nothing to cache into.
+
+**The first measurement said splitting was worthless, and it was wrong.**
+Compiling the full shader in one process and the split paths in another gave
+296.7 ms against 293.7 -- no difference. That comparison is invalid: the first
+pipeline built in a process carries about 180 ms of one-off FXC and D3D12
+warm-up, and each run was paying it on whichever shader came first. Ordered
+inside one process the picture inverts. Two runs, splits first:
+
+| Compiled | run 1 | run 2 |
+| --- | ---: | ---: |
+| `only_pointwise` | 28.1 | 32.8 |
+| `only_depthwise` | 25.8 | 28.1 |
+| `only_general` | 63.6 | 61.1 |
+| `grouped_only` | 43.8 | 41.4 |
+| **`conv2d.wgsl`, all four behind one entry** | **203.2** | **208.5** |
+
+**Compilation is superlinear in what one entry point can reach.** The three
+kernels YuNet dispatches cost ~120 ms apart and ~205 ms together.
+
+**The second wrong turn was reaching for four files.** Separate `.wgsl` files
+would duplicate `write_output` and the whole header, and WGSL has no include. The
+same win is available from **one module with four entry points**, because naga and
+FXC only emit what each entry can reach: 25.3 + 46.9 + 52.5 ms for three entry
+points of a single module against 183 ms for the branching `main` in the same
+process.
+
+So `conv2d.wgsl` gains `main_pointwise`, `main_depthwise` and `main_general`, and
+`Conv2dPipeline` builds one pipeline per kernel from one module against one shared
+bind group layout -- which is what keeps the bind-group cache from experiment 22
+shared rather than split four ways. `main` stays as the grouped fallback and is
+built **on first use**, because nothing in YuNet is a grouped convolution, so
+production never compiles the expensive branching entry at all.
+
+| | before | after |
+| --- | ---: | ---: |
+| `compile_conv2d` | 190-197 ms | **99-166 ms**, median ~120 |
+| launch to first face | 850-1213 ms | 720-1119 ms |
+| GPU compute | 0.376 ms | 0.372, 0.374 ms |
+| `detect_image` wall p50 | 0.745-0.875 ms | 0.79 ms |
+
+**Runtime is unchanged**, which was the risk worth checking: specialising the
+entry points removes a branch on the uniforms but could have cost register
+pressure. It did neither measurably. Bit-exact (`0xa116e42f7c2dabdb`), the
+workspace suite passes under `FCS_STRICT_TESTS=1` -- which is what exercises the
+lazily built grouped pipeline, since nothing else reaches it -- and 1239 real
+images produce 901 byte-identical crops.
+
+**A ten-hour hang during this experiment, which was not this experiment.** The
+first validation run of the suite blocked for ten hours on 35 seconds of CPU and
+had to be killed. It does not reproduce: the same binary passes 187 tests in 5.3 s
+in parallel and 38 s single-threaded, before and after the change. What it points
+at is real though, and pre-existing: every `device.poll` in this codebase passes
+`PollType::Wait { timeout: None }`, so a submission that never completes -- a lost
+or reset device, which a machine idling for hours can produce -- blocks forever
+rather than failing. See 94.
 
 ### 80. Cold start, and the two things it is not
 

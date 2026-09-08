@@ -304,3 +304,48 @@ fn depthwise(ox_start: u32, oy: u32, oc: u32) {
     }
     write_output(ox_start, oy, oc, acc);
 }
+
+// One entry point per kernel, so a launch compiles only the kernels it will dispatch.
+//
+// `main` above branches on the uniforms and therefore carries all four kernels into every
+// compilation: FXC charges about 185 ms for it, against 25 + 21 + 53 for these three
+// separately out of the same module (`examples/shader_compile_cost.rs`). Compilation is
+// superlinear in what one entry point can reach, so splitting the entry points -- not the
+// files -- is what makes a cold start cheaper. `main` stays as the grouped fallback, and is
+// only compiled if something actually asks for a grouped convolution.
+//
+// Each of these repeats the grid arithmetic rather than sharing it with `main`, because the
+// tile differs per kernel and the whole point is that nothing here reaches the others.
+
+@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1u)
+fn main_pointwise(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let ox_start = global_id.x * 4u;
+    let oy = global_id.y;
+    let oc = global_id.z * CHANNEL_TILE;
+    if ox_start >= params.output_width || oy >= params.output_height || oc >= params.output_channels {
+        return;
+    }
+    pointwise(ox_start, oy, oc);
+}
+
+@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1u)
+fn main_depthwise(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let ox_start = global_id.x * 4u;
+    let oy = global_id.y;
+    let oc = global_id.z;
+    if ox_start >= params.output_width || oy >= params.output_height || oc >= params.output_channels {
+        return;
+    }
+    depthwise(ox_start, oy, oc);
+}
+
+@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_Y, 1u)
+fn main_general(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let ox_start = global_id.x * 4u;
+    let oy = global_id.y;
+    let oc = global_id.z * CHANNEL_TILE;
+    if ox_start >= params.output_width || oy >= params.output_height || oc >= params.output_channels {
+        return;
+    }
+    general_ungrouped(ox_start, oy, oc);
+}

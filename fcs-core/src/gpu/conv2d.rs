@@ -3,7 +3,6 @@ use super::{
     utils::{ComputeDispatch, UniformCache, buffer_entry, compute_output_dim, uniform_entry},
 };
 use crate::gpu::GpuTensor;
-use fcs_utils::create_gpu_pipeline;
 
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
@@ -11,7 +10,7 @@ use fcs_utils::gpu::{GpuBufferPool, GpuContext};
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -33,9 +32,39 @@ pub(super) struct Conv2dTensors<'a> {
     pub(super) bias: &'a GpuTensor,
 }
 
+/// Which specialized kernel a configuration dispatches.
+///
+/// The host has to know this anyway to size dispatch z, so selecting a pipeline by it costs
+/// nothing extra. Mirrors the conditions in `conv2d.wgsl`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kernel {
+    Pointwise,
+    Depthwise,
+    /// Ungrouped, anything else: the 640x640 3->16 stride-2 stem.
+    General,
+    /// Grouped and not depthwise. Nothing in YuNet reaches it; it is the public
+    /// `conv2d` API's fallback, which is why its pipeline is built on first use.
+    Grouped,
+}
+
 #[derive(Debug)]
 pub(super) struct Conv2dPipeline {
-    pipeline: wgpu::ComputePipeline,
+    /// One pipeline per kernel, from one shader module.
+    ///
+    /// `main` in the shader branches on the uniforms, so compiling it drags all four kernels
+    /// through FXC: about 185 ms, which experiment 80 found to be 90% of all shader
+    /// compilation and 22% of a cold start. Compiled per entry point instead, the three
+    /// kernels YuNet dispatches cost about 25 + 21 + 53 ms, because compilation is
+    /// superlinear in what one entry point can reach
+    /// (`examples/shader_compile_cost.rs`).
+    pointwise_pipeline: wgpu::ComputePipeline,
+    depthwise_pipeline: wgpu::ComputePipeline,
+    general_pipeline: wgpu::ComputePipeline,
+    /// Built on first use, because nothing in YuNet is a grouped convolution and compiling
+    /// the branching entry point is the expensive half of the whole thing.
+    grouped_pipeline: OnceLock<wgpu::ComputePipeline>,
+    module: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
     bind_group_layout: wgpu::BindGroupLayout,
     pixels_per_thread: u32,
     /// Creating one 56-byte buffer per dispatch measured at 0.445 ms per forward pass,
@@ -66,20 +95,44 @@ const BIND_CACHE_LIMIT: usize = 512;
 
 impl Conv2dPipeline {
     pub(super) fn new(device: &wgpu::Device, pixels_per_thread: u32) -> Result<Self> {
-        let (pipeline, bind_group_layout) = create_gpu_pipeline!(
-            device,
-            "conv2d",
-            CONV2D_WGSL,
-            [
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("conv2d.wgsl shader"),
+            source: wgpu::ShaderSource::Wgsl(CONV2D_WGSL.into()),
+        });
+        // All four entry points bind the same five resources, so one layout serves them and
+        // the bind-group cache stays shared rather than one per pipeline.
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("yunet_conv2d_bgl"),
+            entries: &[
                 buffer_entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
                 buffer_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
                 buffer_entry(2, wgpu::BufferBindingType::Storage { read_only: true }),
                 buffer_entry(3, wgpu::BufferBindingType::Storage { read_only: false }),
                 uniform_entry(4),
-            ]
-        );
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("yunet_conv2d_layout"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let build = |entry: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+        };
         Ok(Self {
-            pipeline,
+            pointwise_pipeline: build("main_pointwise"),
+            depthwise_pipeline: build("main_depthwise"),
+            general_pipeline: build("main_general"),
+            grouped_pipeline: OnceLock::new(),
+            module,
+            pipeline_layout,
             bind_group_layout,
             pixels_per_thread,
             uniforms: UniformCache::new("yunet_conv2d_uniforms"),
@@ -87,6 +140,27 @@ impl Conv2dPipeline {
             bind_hits: AtomicU64::new(0),
             bind_misses: AtomicU64::new(0),
         })
+    }
+
+    /// The pipeline for one kernel, compiling the grouped fallback on first use.
+    fn pipeline_for(&self, device: &wgpu::Device, kernel: Kernel) -> &wgpu::ComputePipeline {
+        match kernel {
+            Kernel::Pointwise => &self.pointwise_pipeline,
+            Kernel::Depthwise => &self.depthwise_pipeline,
+            Kernel::General => &self.general_pipeline,
+            Kernel::Grouped => self.grouped_pipeline.get_or_init(|| {
+                // `main` is the branching entry point, and the only one that reaches the
+                // grouped path. Nothing in YuNet gets here.
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("main"),
+                    layout: Some(&self.pipeline_layout),
+                    module: &self.module,
+                    entry_point: Some("main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+            }),
+        }
     }
 
     /// Bind-group cache hits and misses since this pipeline was built.
@@ -187,8 +261,8 @@ impl Conv2dPipeline {
             }
         };
 
-        // These three must match `main` in conv2d.wgsl exactly: the shader picks its path
-        // from the uniforms and the host has to size dispatch z for whichever it will pick.
+        // The selection order must match `main` in conv2d.wgsl, which is still the grouped
+        // fallback's entry point: pointwise, then depthwise, then ungrouped-general.
         let pointwise = config.kernel_width == 1
             && config.kernel_height == 1
             && config.stride_x == 1
@@ -204,21 +278,26 @@ impl Conv2dPipeline {
             && config.pad_y == 1
             && config.groups == config.input_channels
             && config.output_channels == config.input_channels;
-        // An ungrouped general convolution gathers the same inputs for every output channel,
-        // so it takes the same four-channel tile the pointwise path uses.
-        let channel_tiled = pointwise || (!depthwise && config.groups == 1);
+        let kernel = if pointwise {
+            Kernel::Pointwise
+        } else if depthwise {
+            Kernel::Depthwise
+        } else if config.groups == 1 {
+            Kernel::General
+        } else {
+            Kernel::Grouped
+        };
+        // Pointwise and ungrouped-general gather the same inputs for every output channel,
+        // so both take the four-channel tile; the other two take one channel per thread.
+        let channel_tiled = matches!(kernel, Kernel::Pointwise | Kernel::General);
         encoder.record_dispatch(
             context,
-            if config.kernel_width == 1 && config.kernel_height == 1 && config.groups == 1 {
-                "conv2d/pointwise"
-            } else if config.groups == config.input_channels
-                && config.output_channels == config.input_channels
-            {
-                "conv2d/depthwise"
-            } else {
-                "conv2d/general"
+            match kernel {
+                Kernel::Pointwise => "conv2d/pointwise",
+                Kernel::Depthwise => "conv2d/depthwise",
+                Kernel::General | Kernel::Grouped => "conv2d/general",
             },
-            &self.pipeline,
+            self.pipeline_for(device, kernel),
             &bind_group,
             [
                 config
