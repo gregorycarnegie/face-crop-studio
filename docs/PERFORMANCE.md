@@ -86,12 +86,15 @@ Two defects fell out (experiments 95 and 96):
   `AbsoluteHighestResolution` and then asked to `set_resolution`, which does not
   take, so a C920 asked for 640x480 delivered 1920x1080. Now fixed.
 - **The preprocessor stretches to 640x640 rather than letterboxing**, so every
-  non-square source reaches the model distorted, and recall falls with distance
-  from square. Over 400 corpus images, letterboxing finds 75% more faces at 3:2
-  and **four times as many at 16:9, where 28 of 77 images currently find
-  nothing**. Near-square images are unaffected and 4:3 is a wash. Not implemented:
-  it changes every detection this application makes and needs a
-  `resize_quality.rs` evaluation first.
+  non-square source reaches the model distorted and scores lower. Over all 1239
+  corpus images at production's 0.8 threshold, letterboxing takes 1030 faces to
+  1129: **77 images gain a detection, 18 lose one**, concentrated on 16:9. Every
+  box on a non-square source also moves -- median IoU 0.76-0.87, landmarks 34-46
+  source pixels -- and which set is more correct is not decidable from counts,
+  since the current path shows the model a distorted face. Not implemented; it
+  needs the crops looked at. An earlier version of this note quoted much larger
+  gains taken at the library default threshold of 0.9 rather than production's
+  0.8; those measured a configuration nobody runs.
 
 ### Peak memory scales with worker count, and nothing else does
 

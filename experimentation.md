@@ -514,12 +514,11 @@ implementation or workload.
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
 - [ ] **96. Letterbox instead of stretching to the model input.** The
-  preprocessor scales x and y independently, so every non-square source is
-  distorted, and recall falls with distance from square: at 16:9, 28 of 77 corpus
-  images find nothing that letterboxing finds. Measured in the record; not
-  implemented, because it changes every detection and the 4:3 bucket trades 10
-  losses for 7 gains. Needs a `resize_quality.rs` evaluation over the full corpus
-  and a look at the crops, to the standard 71 was held to.
+  preprocessor scales x and y independently, so every non-square source reaches
+  the model distorted and its score falls. Measured over all 1239 images at
+  production's threshold: 77 images gain a detection, 18 lose one, and every box
+  on a non-square source moves (median IoU 0.76-0.87, landmarks 34-46 px). Not
+  implemented; the decision needs the crops, to the standard 71 was held to.
 - [x] **95. Measure the webcam path.** Where a frame's time goes, and what the
   loop is actually limited by. Answered 53 and 65 and turned up two defects.
 - [x] **93. Skip decoding cells that cannot reach the score threshold.** The
@@ -2866,63 +2865,79 @@ doing only if recording matters again.
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
 
-### 96. Squashing to a square costs detections, and not only on webcams
+### 96. Squashing to a square costs recall, and the first numbers overstated it
 
-95's webcam split was a performance measurement that turned into a recall one, so
-this is the recall half, on files rather than frames.
+**Correction first.** The version of this record committed with 95 said 16:9
+webcam detection "fails almost completely" and that letterboxing finds four times
+as many faces at 16:9, with 28 of 77 corpus images finding nothing. Those runs
+used `PostprocessConfig::default()`, whose score threshold is **0.9**.
+Production reads **0.8** from `config/gui_settings.json`. At the threshold the
+application actually uses, 16:9 detection does not fail -- the effect is a
+smaller score margin, not a missing detection. The corrected numbers are below;
+the earlier ones measured a configuration nobody runs.
 
-**The preprocessor stretches; it does not letterbox.** `preprocess.wgsl` computes
-`ratio = src_size / dst_size` and samples `(pixel + offset) * ratio`, scaling x
-and y independently, so a source is squashed to 640x640 whatever its shape. A
-16:9 frame is distorted by 1.78:1, a 3:2 photo by 1.50, a 4:3 photo by 1.33. The
-box mapping back out is consistent -- `compute_resize_scales` returns separate
-`scale_x` and `scale_y` -- so nothing is *wrong* downstream. What is wrong is the
-face the model is shown.
+**The mechanism is real.** `preprocess.wgsl` computes `ratio = src_size /
+dst_size` and samples `(pixel + offset) * ratio`, scaling x and y independently,
+so a source is squashed to 640x640 whatever its shape: 1.78:1 for 16:9, 1.50 for
+3:2, 1.33 for 4:3. The box mapping back out is consistent, so nothing downstream
+is wrong. What is distorted is the face the model is shown, and that costs
+confidence.
 
-**The isolating control.** One webcam frame, sixteen times, every candidate
-derived from the same capture so the subject cannot move between them:
+**One webcam frame, sixteen times, everything derived from the same capture** so
+the subject cannot move between candidates, at production's 0.8:
 
 | Detected on | Faces per frame |
 | --- | ---: |
-| 16:9 at 2.07, 0.92, 0.52, 0.23 MP | **0.00** |
-| 4:3 centre crop at 1.56, 0.48, 0.31 MP | 1.00 |
+| 16:9 2.07 MP (as captured) | 1.00 |
+| 16:9 0.92 MP | 0.94 |
+| 16:9 0.52 MP | 0.88 |
+| 16:9 0.23 MP | 0.69 |
+| 4:3 centre crop, 1.56 / 0.48 / 0.31 MP | 1.00 |
 | **16:9 letterboxed into 640x640** | **1.00** |
 
-The 4:3 rows crop, so they also enlarge the face and cannot separate aspect from
-face size. The letterbox row can: same content, no crop, same face, aspect
-preserved and the remainder padded. It finds the face every time. **So the cause
-is the stretch, not resolution, not the camera mode, not how big the face is.**
+At 0.9 every 16:9 row read 0.00 and every 4:3 and letterboxed row 1.00, which is
+what produced the overstated claim. The truthful reading of both is the same
+mechanism at different strengths: **distortion pushes scores down**, and whether
+that crosses the threshold depends on the threshold and on how much else the
+frame has going for it. Small 16:9 frames still degrade at 0.8 -- 0.69 at
+0.23 MP -- because they are short of both resolution and shape.
 
-**It is not a webcam bug.** `examples/aspect_recall.rs` detects each photo twice,
-as production does it and letterboxed, over 400 images of the reference folder:
+**On the corpus, at production's threshold.** `examples/aspect_recall.rs` detects
+each image twice, as production does it and letterboxed, mapping the letterboxed
+detections back to source pixels so boxes and landmarks are comparable. All 1239
+images:
 
-| Aspect bucket | Images | Faces now | Faces letterboxed | 0 -> found | found -> 0 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| near square (<1.05) | 8 | 6 | 6 | 0 | 0 |
-| 1.05-1.25 | 8 | 6 | 5 | 0 | 1 |
-| 1.25-1.45 (4:3) | 266 | 99 | 95 | 7 | 10 |
-| 1.45-1.70 (3:2) | 41 | 16 | **28** | **10** | 1 |
-| over 1.70 (16:9) | 77 | 9 | **37** | **28** | 0 |
+| Aspect | Images | Faces now | Faces boxed | 0 -> found | found -> 0 | med IoU | med landmark px |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| near square (<1.05) | 11 | 10 | 10 | 0 | 0 | 0.998 | 0.33 |
+| 1.05-1.25 | 22 | 19 | 20 | 1 | 0 | 0.910 | 10.1 |
+| 1.25-1.45 (4:3) | 510 | 345 | 354 | 11 | 6 | 0.868 | 34.2 |
+| 1.45-1.70 (3:2) | 301 | 302 | 320 | 12 | 6 | 0.811 | 46.0 |
+| over 1.70 (16:9) | 395 | 354 | 425 | **53** | 6 | 0.760 | 34.8 |
 
-**The loss scales with distance from square, exactly as the mechanism predicts.**
-Near-square images are identical. 4:3 is a wash -- 7 images gain a face, 10 lose
-one -- which is why the corpus works at all, since 266 of 400 sit there. At 3:2
-letterboxing finds 75% more faces. **At 16:9 it finds four times as many, and 28
-of 77 images go from finding nothing to finding a face, with none lost.**
+**1030 faces become 1129, and 77 images gain a detection against 18 that lose
+one** -- a net 59 of 1239, about 5%, concentrated where the mechanism predicts.
+Near-square images are untouched, which is the control: 0.998 IoU and 0.33 px of
+landmark movement is the noise floor of the comparison itself.
 
-**Not implemented, because it changes every detection this application makes.**
-Letterboxing means an aspect-preserving scale plus an offset in the shader, the
-same in `resize_then_convert`, the offset subtracted in postprocess, and the CPU
-graph changed to match or GPU/CPU parity breaks. More importantly it is a Q
-change: the 4:3 bucket loses 10 images to gain 7, so "strictly better" is not
-what the data says, and the crops for those images want a human eye before this
-becomes the default -- the same standard experiment 71 was held to. What it needs
-is an evaluation with `examples/resize_quality.rs`, which already reports landmark
-displacement, box IoU and score deltas against an A/A control, over the whole
-corpus rather than 400 images.
+**The geometry moves, and that is the real cost.** Median IoU 0.76-0.87 on
+non-square sources and median landmark displacement 34-46 source pixels. For
+scale, experiment 90 rejected a 13% speed win because it moved landmarks up to
+158 px and even a backed-off version moved 35. This moves them by a comparable
+amount on the median image, not the worst one.
 
-Recorded here with the numbers so the decision is a product one taken on evidence
-rather than a refactor taken on a hunch.
+**Which set is more correct cannot be settled from these numbers.** The current
+path shows the model a distorted face, so its landmarks may well be the wrong
+ones and letterboxing may be *correcting* them rather than moving them. Nothing
+here distinguishes those, and the crops are what would.
+
+**Not implemented.** Letterboxing means an aspect-preserving scale plus an offset
+in the shader, the same in `resize_then_convert`, the offset removed in
+postprocess, and the CPU graph changed to match or GPU/CPU parity breaks. Against
+that: ~5% more images detected, 18 images losing their only detection, and every
+box on a non-square source moving. It is a Q change of the kind experiment 71 was
+held to -- decided by looking at crops, not by a table. Padding colour does not
+matter (black and 114 differ by 4 faces in 1239).
 
 ### 95. What a webcam frame costs, and two defects found by measuring it
 
@@ -2964,8 +2979,10 @@ asked for. Fixed: the open now requests `Closest` to the caller's format and
 falls back to the old behaviour if that cannot be satisfied, which is the
 portable fallback item 53 asks for.
 
-That fix matters more than its cost, because of what 96 found: the camera's
-highest mode is 16:9, and 16:9 is the shape the detector handles worst.
+That fix matters for more than the pixels, because of what 96 found while it was
+being isolated: the camera's highest mode is 16:9, and 16:9 is the shape the
+detector scores worst. Not the shape it fails on -- an earlier version of this
+record said so, using a threshold production does not use. See 96.
 
 ### 6 (continued) / 84. Peak memory, which nothing had measured
 

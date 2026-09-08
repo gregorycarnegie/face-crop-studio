@@ -132,7 +132,14 @@ fn main() -> Result<()> {
             input_size: INPUT,
             resize_quality: ResizeQuality::Quality,
         },
-        PostprocessConfig::default(),
+        // The app's configured threshold, not the library default of 0.9: production reads
+        // 0.8 from config/gui_settings.json, and the gap between them changes what this
+        // measures.
+        PostprocessConfig {
+            score_threshold: 0.8,
+            nms_threshold: 0.2,
+            top_k: 5000,
+        },
         preprocessor,
     )?;
 
