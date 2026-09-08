@@ -519,6 +519,10 @@ implementation or workload.
   production's threshold: 77 images gain a detection, 18 lose one, and every box
   on a non-square source moves (median IoU 0.76-0.87, landmarks 34-46 px). Not
   implemented; the decision needs the crops, to the standard 71 was held to.
+- [x] **97. Detect on every webcam frame in the GUI.** 95 showed the headroom;
+  this spends it, and measures the two things a CLI probe could not: the GUI's
+  per-frame texture cost (1.8 us, free) and detection under contention with the
+  renderer (6.89 ms against 3.5 standalone). 95% of frames tracked at 15 fps.
 - [x] **95. Measure the webcam path.** Where a frame's time goes, and what the
   loop is actually limited by. Answered 53 and 65 and turned up two defects.
 - [x] **93. Skip decoding cells that cannot reach the score threshold.** The
@@ -2864,6 +2868,64 @@ doing only if recording matters again.
 **No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
+
+### 97. Live webcam detection in the GUI, and what it actually costs
+
+95 established the loop is capture-bound, with detection answering in a seventh
+of the frame budget. This is the wiring that spends that headroom, and the two
+measurements 95 could not make from a CLI probe: the GUI's own per-frame cost,
+and what detection costs when it shares a device with the renderer.
+
+**The GUI had scaffolding and no implementation.** `JobMessage::WebcamFrame`
+existed with a `detections` field and was never constructed or handled anywhere.
+`detect_webcam_faces` was a one-shot button, and its `DetectionFinished` path
+uploads a preview texture, rebuilds every face thumbnail, clears the edit
+history, resets rotation and the manual box tool and re-selects every face --
+right for one deliberate detection, impossible at frame rate. So live detection
+needed its own message and its own handling, not a faster call to that one.
+
+**Measured live, in the running application:**
+
+| | CLI probe (95) | in the GUI |
+| --- | ---: | ---: |
+| texture upload per frame | not measurable | **1.8 us** p50 |
+| `detect_image` | 2.45-3.59 ms | **6.89 ms** p50, 7.58 p95 |
+| frames displayed | 24 fps @ 640x480 | 15.0 /s @ 1280x720 |
+| detections | -- | 14.3 /s |
+| **frames tracked** | -- | **95%** |
+
+**The texture upload was the risk and is a non-issue.** `color_image_from_dynamic`
+plus `ctx.load_texture` measured 1.8 us because egui queues the upload rather
+than performing it; the real transfer is absorbed into the frame it is drawn in.
+
+**Contention roughly doubles detection.** 6.89 ms against 3.5 standalone, because
+the GUI shares eframe's device and detection now competes with rendering. That
+was the second thing 95 could not measure and it is the larger of the two
+effects -- but 6.89 ms against a 69 ms interval is 10%, so it changes the margin
+rather than the answer.
+
+**One detection in flight at a time.** A frame arriving while one is running is
+counted and dropped rather than queued: an overlay that queues falls further
+behind the picture the longer it runs, and the frames are already drained-to-latest
+by `poll_webcam_frames`. That drain, which predates this work, is what experiment
+65 proposed building; it was already there.
+
+**A measurement mistake worth recording.** The first reading of the session log
+said 0.56 detections per frame, which looked like the loop failing to keep up.
+It was counting frames from before the toggle was switched on. Over the window
+where live detection was actually running the figure is 0.95, and the 15 fps is
+capture and repaint bound, not detection bound. The lesson is the same one the
+threshold error in 96 taught: a rate is only meaningful over the interval the
+thing was running.
+
+Not touched: the crop, quality and thumbnail work stays on the deliberate button,
+because none of it is wanted twenty-four times a second. Live results carry
+`Quality::Low` and no thumbnail, which nothing reads for an overlay.
+
+Note for 96: the GUI's camera default is 1280x720, the 16:9 case that scores
+worst under the stretch-to-square preprocessing. Faces track fine at production's
+threshold, which is consistent with 96's corrected numbers rather than its first
+ones.
 
 ### 96. Squashing to a square costs recall, and the first numbers overstated it
 

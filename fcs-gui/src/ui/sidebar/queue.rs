@@ -69,7 +69,22 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
         P::INK,
     );
     let subtitle = if is_live {
-        format!("Live · {} frames", app.webcam_state.frames_captured)
+        match (
+            app.webcam_state.live_detect,
+            app.webcam_state.last_detect_ms,
+        ) {
+            // The detection latency is the number worth surfacing: it is what says whether
+            // the overlay is keeping up, and it is a fraction of the frame interval.
+            (true, Some(ms)) => format!(
+                "Live · {} frames · detect {ms:.1} ms · {} skipped",
+                app.webcam_state.frames_captured, app.webcam_state.frames_skipped
+            ),
+            (true, None) => format!(
+                "Live · {} frames · detecting…",
+                app.webcam_state.frames_captured
+            ),
+            _ => format!("Live · {} frames", app.webcam_state.frames_captured),
+        }
     } else {
         "Default camera".to_string()
     };
@@ -87,6 +102,7 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
         let detect_w = 90.0_f32;
         let detect_h = 24.0_f32;
         let close_w = 24.0_f32;
+        let live_w = 44.0_f32;
         let close_rect = egui::Rect::from_center_size(
             egui::pos2(row_rect.max.x - close_w / 2.0 - 4.0, row_rect.center().y),
             Vec2::new(close_w, detect_h),
@@ -95,6 +111,39 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
             egui::pos2(close_rect.min.x - detect_w / 2.0 - 4.0, row_rect.center().y),
             Vec2::new(detect_w, detect_h),
         );
+        let live_rect = egui::Rect::from_center_size(
+            egui::pos2(detect_rect.min.x - live_w / 2.0 - 4.0, row_rect.center().y),
+            Vec2::new(live_w, detect_h),
+        );
+
+        // Live toggle: detect every frame rather than on demand.
+        let live_resp = ui
+            .interact(live_rect, resp.id.with("live_btn"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        let live_on = app.webcam_state.live_detect;
+        let live_bg = if live_on {
+            P::lime_alpha(60)
+        } else if live_resp.hovered() {
+            P::white_alpha(20)
+        } else {
+            P::white_alpha(12)
+        };
+        painter.rect_filled(live_rect, 6.0, live_bg);
+        painter.text(
+            live_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Live",
+            egui::FontId::monospace(9.5),
+            if live_on { P::LIME } else { P::INK3 },
+        );
+        if live_resp.clicked() {
+            app.toggle_live_detection();
+        }
+        live_resp.on_hover_text(if live_on {
+            "Detecting every frame — click to stop"
+        } else {
+            "Detect faces on every frame"
+        });
 
         // Detect button
         let detect_resp = ui

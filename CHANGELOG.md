@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Live face detection on the webcam preview.** A `Live` toggle next to the
+  camera's `Detect faces` button runs detection on every frame instead of only on
+  demand, drawing boxes that follow the subject. Measured in the running
+  application: **95% of frames tracked at 15 fps**, detection 6.9 ms against a
+  69 ms frame interval. One detection runs at a time and frames arriving during
+  one are dropped rather than queued, so the overlay tracks the picture rather
+  than trailing it. The sidebar shows detection latency and the dropped-frame
+  count while it is on.
+
+  Live results carry boxes only. Crop thumbnails, quality scores and the edit
+  history stay on the deliberate `Detect faces` button, which is the only thing
+  that wants them.
+
+### Fixed
+
+- **`--webcam-width` and `--webcam-height` had no effect.** The camera was opened
+  with `AbsoluteHighestResolution` and then asked to change resolution, which
+  cameras ignore, so a request for 640x480 delivered 1920x1080 on a C920 and
+  every frame carried 6.75x the pixels asked for -- 4.3 ms of MJPEG decode per
+  frame instead of 0.8. The camera is now opened with the format closest to what
+  the caller asked for, falling back to the previous behaviour if that cannot be
+  satisfied.
+
 ### Removed
 
 - **GPU batch cropping.** `GpuBatchCropper` converted the full-resolution source

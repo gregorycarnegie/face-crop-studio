@@ -72,6 +72,20 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### Live webcam detection, and the cost of sharing a device with the renderer
+
+Detection now runs on every webcam frame in the GUI, tracking **95% of frames at
+15 fps** with detection at 6.9 ms against a 69 ms interval.
+
+Two numbers a CLI probe could not produce (experiment 97). The per-frame texture
+upload is **1.8 us**, because egui queues it rather than performing it -- that was
+the risk and it is free. And detection costs **6.89 ms in the GUI against 3.5 ms
+standalone**: sharing eframe's device with the renderer roughly doubles it. Still
+10% of the frame interval, so it moves the margin rather than the answer.
+
+One detection is in flight at a time; a frame arriving during one is dropped
+rather than queued, so the overlay tracks the picture instead of trailing it.
+
 ### The webcam loop is capture-bound, and the detector is shown a squashed face
 
 A C920 frame costs 35-44 ms of `webcam_grab` -- blocking until the camera

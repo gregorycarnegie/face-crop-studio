@@ -173,6 +173,20 @@ pub struct WebcamState {
     pub error_message: Option<String>,
     pub stop_flag: Option<Arc<AtomicBool>>,
     pub frame_rx: Option<mpsc::Receiver<(egui::ColorImage, Arc<DynamicImage>)>>,
+    /// Detect on every frame rather than only when the button is pressed.
+    ///
+    /// Affordable because the loop is capture-bound: a frame arrives every ~42 ms and
+    /// detection answers in 2.5-3.6 ms, so the pipeline is idle most of each frame
+    /// (experiment 95).
+    pub live_detect: bool,
+    /// One detection in flight at a time. Without this a slow frame would queue work behind
+    /// itself and the overlay would fall further behind the picture the longer it ran.
+    pub detect_inflight: bool,
+    /// Detection latency of the last completed live frame, for the sidebar readout.
+    pub last_detect_ms: Option<f64>,
+    /// Frames that arrived while a detection was already running, so the cost of live
+    /// detection is visible rather than inferred.
+    pub frames_skipped: u32,
 }
 impl Default for WebcamState {
     fn default() -> Self {
@@ -184,6 +198,10 @@ impl Default for WebcamState {
             fps: 30,
             frames_captured: 0,
             error_message: None,
+            live_detect: false,
+            detect_inflight: false,
+            last_detect_ms: None,
+            frames_skipped: 0,
             stop_flag: None,
             frame_rx: None,
         }
@@ -282,10 +300,15 @@ pub enum JobMessage {
         job_id: u64,
         error: String,
     },
-    WebcamFrame {
-        image: DynamicImage,
+    /// A live webcam frame's detections.
+    ///
+    /// Deliberately not `DetectionFinished`: that path uploads a preview texture, rebuilds
+    /// every thumbnail, clears the edit history and resets the selection, which is right for
+    /// one deliberate detection and impossible twenty-four times a second.
+    WebcamDetections {
         frame_number: u32,
         detections: Vec<DetectionWithQuality>,
+        detect_ms: f64,
     },
     WebcamError(String),
     WebcamStopped,

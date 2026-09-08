@@ -498,10 +498,37 @@ impl App2 {
             self.texture_seq += 1;
             let w = color_image.size[0] as u32;
             let h = color_image.size[1] as u32;
-            let texture = ctx.load_texture(&tex_name, color_image, egui::TextureOptions::default());
-            self.preview.texture = Some(texture);
+            {
+                let _guard = fcs_utils::telemetry::timing_guard(
+                    "fcs_gui::webcam_texture",
+                    log::Level::Trace,
+                );
+                let texture =
+                    ctx.load_texture(&tex_name, color_image, egui::TextureOptions::default());
+                self.preview.texture = Some(texture);
+            }
             self.preview.image_size = Some((w, h));
-            self.preview.source_image = Some(raw);
+            self.preview.source_image = Some(raw.clone());
+
+            // Live detection: one in flight at a time, and only while the camera is open.
+            // A frame arriving during a detection is counted and dropped rather than queued
+            // -- the overlay should track the picture, not trail it.
+            if self.webcam_state.live_detect
+                && self.webcam_state.status == WebcamStatus::Active
+                && let Some(detector) = self.detector.clone()
+            {
+                if self.webcam_state.detect_inflight {
+                    self.webcam_state.frames_skipped += 1;
+                } else {
+                    self.webcam_state.detect_inflight = true;
+                    crate::core::detection::spawn_webcam_detection(
+                        self.webcam_state.frames_captured,
+                        raw,
+                        detector,
+                        self.job_tx.clone(),
+                    );
+                }
+            }
         }
     }
 
@@ -557,6 +584,24 @@ impl App2 {
 
                 // Auto-select all faces
                 self.selected_faces = (0..n).collect();
+            }
+            JobMessage::WebcamDetections {
+                frame_number,
+                detections,
+                detect_ms,
+            } => {
+                self.webcam_state.detect_inflight = false;
+                // A result that outlived its camera, or arrived after the user turned live
+                // detection off, must not paint boxes over whatever is on screen now.
+                if self.webcam_state.status != WebcamStatus::Active
+                    || !self.webcam_state.live_detect
+                {
+                    return;
+                }
+                self.webcam_state.last_detect_ms = Some(detect_ms);
+                let _ = frame_number;
+                self.preview.detections = detections;
+                self.selected_faces.clear();
             }
             JobMessage::DetectionFailed { job_id, error } => {
                 if Some(job_id) != self.current_job {
@@ -714,6 +759,23 @@ impl App2 {
         self.push_log("Webcam opened".into(), LogKind::Info);
     }
 
+    /// Turn per-frame detection on or off.
+    ///
+    /// Turning it off clears the overlay: the boxes belong to a frame that is already gone,
+    /// and leaving them on screen would make a frozen overlay look like a live one.
+    pub fn toggle_live_detection(&mut self) {
+        self.webcam_state.live_detect = !self.webcam_state.live_detect;
+        if self.webcam_state.live_detect {
+            self.webcam_state.frames_skipped = 0;
+            self.webcam_state.last_detect_ms = None;
+            self.push_log("Live detection on".into(), LogKind::Info);
+        } else {
+            self.preview.detections.clear();
+            self.selected_faces.clear();
+            self.push_log("Live detection off".into(), LogKind::Info);
+        }
+    }
+
     pub fn close_webcam(&mut self) {
         use std::sync::atomic::Ordering;
         if let Some(flag) = &self.webcam_state.stop_flag {
@@ -722,6 +784,9 @@ impl App2 {
         self.webcam_state.stop_flag = None;
         self.webcam_state.frame_rx = None;
         self.webcam_state.status = WebcamStatus::Inactive;
+        self.webcam_state.live_detect = false;
+        self.webcam_state.detect_inflight = false;
+        self.preview.detections.clear();
         self.push_log("Webcam closed".into(), LogKind::Info);
     }
 

@@ -390,6 +390,51 @@ pub fn spawn_webcam_stream(
 
 /// Runs face detection on an already-captured `DynamicImage` in a rayon thread,
 /// sending the result back through `job_tx`.
+/// Detect on a live webcam frame, cheaply enough to do it on every frame.
+///
+/// Everything the one-shot path does around the detection -- preview texture, per-face
+/// thumbnails, quality scoring, edit history -- is skipped. What comes back is boxes to draw
+/// over a texture the frame poller has already uploaded. Quality is left at its default
+/// because nothing reads it for a live overlay, and computing it would mean cropping and
+/// scoring every face at frame rate.
+pub fn spawn_webcam_detection(
+    frame_number: u32,
+    image: Arc<DynamicImage>,
+    detector: Arc<YuNetDetector>,
+    job_tx: mpsc::Sender<JobMessage>,
+) {
+    rayon::spawn(move || {
+        let started = std::time::Instant::now();
+        let detections = match detector.detect_image(&image) {
+            Ok(output) => output.detections,
+            Err(err) => {
+                // A live overlay reports failures once, not at frame rate; the next frame
+                // will try again on its own.
+                warn!("Live webcam detection failed: {err:#}");
+                return;
+            }
+        };
+        let detect_ms = started.elapsed().as_secs_f64() * 1e3;
+        let detections = detections
+            .into_iter()
+            .map(|detection| DetectionWithQuality {
+                current_bbox: detection.bbox,
+                original_bbox: detection.bbox,
+                detection,
+                quality_score: 0.0,
+                quality: fcs_utils::Quality::Low,
+                thumbnail: None,
+                origin: DetectionOrigin::Detector,
+            })
+            .collect();
+        let _ = job_tx.send(JobMessage::WebcamDetections {
+            frame_number,
+            detections,
+            detect_ms,
+        });
+    });
+}
+
 pub fn spawn_detection_job_from_image(
     job_id: u64,
     image: Arc<DynamicImage>,
