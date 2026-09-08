@@ -456,15 +456,23 @@ implementation or workload.
 
 ### Startup, caching and resource lifetime (P1/P2)
 
-- [ ] **80. Split cold start into adapter, model and pipeline costs.** Measure
+- [x] **80. Split cold start into adapter, model and pipeline costs.** Measure
   process launch, device selection, model read/parse/weight upload, shader compile
   and first detection separately from steady state. Compare cached and clean
   runs; prevent lazy initialization from hiding cost in the first user action.
+  Answered: `request_adapter` 60%, one shader 22%, model loading 0.15%, nothing
+  deferred into the first detection.
 - [ ] **81. Reuse device/model/pipelines across real UI lifetimes.** Check
   existing sharing, then eliminate measured accidental recreation across preview,
-  webcam and export. Include device loss, switching models and shutting down;
+  webcam and export. **Half-answered by 80:** the GUI already shares eframe's
+  device, so it never pays the 546 ms adapter bring-up. What remains is that
+  `build_detector` runs synchronously in `App::new`, putting ~235 ms of shader
+  compilation ahead of the first frame. Include device loss, switching models and shutting down;
   longer lifetime must not produce unbounded retained GPU memory.
 - [ ] **82. Evaluate supported pipeline caches or controlled prewarming.**
+  **Sized by 80:** the target is one shader, `conv2d.wgsl` at 197 ms of FXC; the
+  other four are 20 ms together, so parallel compilation is not the answer and a
+  cache or a background thread is.
   Feature-check the active backend, compare cold/warm startup and first-frame
   latency, and invalidate persisted data by compatible device/driver/shader
   identity. Include cache size and total work; moving compilation earlier is
@@ -2825,6 +2833,79 @@ doing only if recording matters again.
 **No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
+
+### 80. Cold start, and the two things it is not
+
+Every other measurement in this backlog is warm. Nothing had measured the path a
+user actually waits for -- process launch to the first face -- so
+`examples/cold_start.rs` times each stage once per process, because one process is
+one cold start and averaging them would measure something else.
+
+Five runs, RTX 4090 / D3D12, release. Launch to first face **850-1213 ms**,
+median around 900. One representative run, fully split:
+
+| Stage | ms | share |
+| --- | ---: | ---: |
+| adapter + device | 659.8 | **72.9%** |
+| - instance creation | 21.3 | 2.4% |
+| - **`request_adapter`** | **546.4** | **60.3%** |
+| - `request_device` | 92.0 | 10.2% |
+| preprocessor pipelines | 16.5 | 1.8% |
+| detector construction | 226.9 | 25.1% |
+| - ONNX parse | 0.5 | 0.1% |
+| - **compile `conv2d.wgsl`** | **197.4** | **21.8%** |
+| - compile the other four shaders | 19.9 | 2.2% |
+| - weight upload | 0.9 | 0.1% |
+| decode the first image | 0.8 | 0.1% |
+| first detection | 1.6 | 0.2% |
+| = launch to first face | 905.6 | |
+| steady-state detection p50 | 0.74 | |
+
+**It is not model loading.** Parsing the ONNX and uploading every weight is
+**1.4 ms, 0.15%** of a cold start. `examples/benchmark_model_load.rs` measures
+that number and it has never been the startup cost; two shader-and-driver stages
+are 94% of it.
+
+**It is not deferred work either.** The first detection is 1.6 ms against a steady
+0.74 -- about 0.9 ms of excess on a 900 ms start. Nothing meaningful hides in the
+first user action, which is the specific thing this experiment was asked to rule
+out.
+
+**Two stages own it, and neither is our code.** `request_adapter` is 546 ms of
+D3D12 runtime and driver bring-up inside one wgpu call, and `conv2d.wgsl` is
+197 ms of FXC. The other four shaders together are 20 ms, so **compiling them in
+parallel would win almost nothing** -- it is one shader, not five.
+
+**The Vulkan number, measured and deliberately not acted on.**
+`examples/adapter_cost.rs` times adapter selection per backend set, one process
+each, four runs:
+
+| Backends | Adapter init | Selected |
+| --- | ---: | --- |
+| `PRIMARY` (raw) | 762-1562 ms | Vulkan |
+| `DX12` | 578-668 ms | Dx12 |
+| `VULKAN` | **278-312 ms** | Vulkan |
+
+Vulkan comes up in **less than half** the time D3D12 does here. Production does
+not use it, and should not: `platform_safe_backends` removes Vulkan on Windows
+because Intel's ICD (`igvk64.dll` 30.0.101.x) dies with an access violation
+during adapter bring-up, which crashed the GUI on two laptops during Store
+certification. The comment there already says so. This measures the price of that
+decision -- roughly 300 ms of every CLI start -- rather than proposing to reverse
+it. Reopen only with evidence about that driver, not about speed.
+
+**The GUI pays a different bill from the CLI**, which the numbers above hide.
+`App::new` calls `share_gpu_from_eframe`, so the GUI reuses the device eframe
+already built to draw its window and never issues the 546 ms `request_adapter` of
+its own. Its marginal cold-start cost is the compilation: about **235 ms**, and
+`build_detector` is called synchronously at `app.rs:119`, before the first frame.
+
+So the actionable item is not making anything faster; it is that ~235 ms of
+shader compilation sits on the GUI's critical path and does not need to. Moving
+it off means the UI can paint while the pipelines build, which is experiment 81's
+territory and a change to how the app handles a not-yet-ready detector -- not
+something to write blind, and not measurable from here without running the GUI.
+Recorded as the finding, left unimplemented.
 
 ### 93. Decoding cells that cannot survive - and the reasoning that nearly skipped it
 

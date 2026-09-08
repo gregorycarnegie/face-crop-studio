@@ -32,12 +32,43 @@ impl GpuInferenceOps {
     pub fn new(context: Arc<GpuContext>, memory_limit: Option<u64>) -> Result<Self> {
         let device = context.device();
         let buffer_pool = Arc::new(GpuBufferPool::new(context.clone(), memory_limit));
+        // Individually timed: shader compilation is about a fifth of a cold start
+        // (experiment 80), and whether that is worth attacking depends on whether it is one
+        // large shader or five comparable ones.
+        let conv2d = {
+            let _g =
+                fcs_utils::telemetry::timing_guard("fcs_core::compile_conv2d", log::Level::Trace);
+            Conv2dPipeline::new(device, 4)?
+        };
+        let activation = {
+            let _g = fcs_utils::telemetry::timing_guard(
+                "fcs_core::compile_activation",
+                log::Level::Trace,
+            );
+            ActivationPipeline::new(device)?
+        };
+        let max_pool = {
+            let _g =
+                fcs_utils::telemetry::timing_guard("fcs_core::compile_max_pool", log::Level::Trace);
+            MaxPoolPipeline::new(device)?
+        };
+        let add = {
+            let _g = fcs_utils::telemetry::timing_guard("fcs_core::compile_add", log::Level::Trace);
+            AddPipeline::new(device)?
+        };
+        let upsample2x = {
+            let _g = fcs_utils::telemetry::timing_guard(
+                "fcs_core::compile_upsample2x",
+                log::Level::Trace,
+            );
+            Upsample2xPipeline::new(device)?
+        };
         Ok(Self {
-            conv2d: Conv2dPipeline::new(device, 4)?,
-            activation: ActivationPipeline::new(device)?,
-            max_pool: MaxPoolPipeline::new(device)?,
-            add: AddPipeline::new(device)?,
-            upsample2x: Upsample2xPipeline::new(device)?,
+            conv2d,
+            activation,
+            max_pool,
+            add,
+            upsample2x,
             buffer_pool,
             context,
         })

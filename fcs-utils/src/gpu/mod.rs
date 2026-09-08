@@ -403,7 +403,12 @@ impl GpuContext {
         };
         instance_desc.backend_options.dx12.shader_compiler = options.dx12_shader_compiler.clone();
 
-        let instance = Instance::new(instance_desc);
+        let instance = {
+            let _g = crate::telemetry::timing_guard("fcs_utils::gpu_instance", log::Level::Trace);
+            Instance::new(instance_desc)
+        };
+        let _adapter_guard =
+            crate::telemetry::timing_guard("fcs_utils::gpu_request_adapter", log::Level::Trace);
         let adapter = block_on(instance.request_adapter(&RequestAdapterOptions {
             power_preference: options.power_preference,
             force_fallback_adapter: options.force_fallback_adapter,
@@ -415,6 +420,7 @@ impl GpuContext {
         }))
         .map_err(|source| GpuInitError::Adapter { backends, source })?;
 
+        drop(_adapter_guard);
         let info = adapter.get_info();
         let supported_features = adapter.features();
 
@@ -463,8 +469,11 @@ impl GpuContext {
             trace: Trace::default(),
         };
 
-        let (device, queue) =
-            block_on(adapter.request_device(&device_desc)).map_err(GpuInitError::from)?;
+        let (device, queue) = {
+            let _g =
+                crate::telemetry::timing_guard("fcs_utils::gpu_request_device", log::Level::Trace);
+            block_on(adapter.request_device(&device_desc)).map_err(GpuInitError::from)?
+        };
 
         info!(
             target: "fcs::gpu",

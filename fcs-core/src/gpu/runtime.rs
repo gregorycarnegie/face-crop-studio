@@ -62,16 +62,25 @@ impl GpuYuNet {
         input_size: InputSize,
     ) -> Result<Self> {
         let model_path = model_path.as_ref();
-        let loader = crate::yunet::load_backbone_weights(
-            model_path,
-            BACKBONE_STAGES.len(),
-            true,
-            DETECTION_HEADS.len(),
-        )?;
+        let loader = {
+            let _guard = timing_guard("fcs_core::load_onnx_weights", log::Level::Trace);
+            crate::yunet::load_backbone_weights(
+                model_path,
+                BACKBONE_STAGES.len(),
+                true,
+                DETECTION_HEADS.len(),
+            )?
+        };
 
         let memory_limit = estimate_inference_memory(&loader, input_size);
-        let ops = Arc::new(GpuInferenceOps::new(context, Some(memory_limit))?);
-        let weight_map = upload_gpu_weights(&ops, loader)?;
+        let ops = {
+            let _guard = timing_guard("fcs_core::compile_pipelines", log::Level::Trace);
+            Arc::new(GpuInferenceOps::new(context, Some(memory_limit))?)
+        };
+        let weight_map = {
+            let _guard = timing_guard("fcs_core::upload_weights", log::Level::Trace);
+            upload_gpu_weights(&ops, loader)?
+        };
         Ok(Self {
             ops,
             weights: weight_map,

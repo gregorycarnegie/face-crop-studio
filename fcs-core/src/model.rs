@@ -789,10 +789,9 @@ mod tests {
             assert_eq!(full.len(), gated.len());
 
             let mut kept = 0usize;
-            for (a, b) in full
-                .chunks_exact(DETECTION_OUTPUT_COLS)
-                .zip(gated.chunks_exact(DETECTION_OUTPUT_COLS))
-            {
+            let (full_rows, _) = full.as_chunks::<DETECTION_OUTPUT_COLS>();
+            let (gated_rows, _) = gated.as_chunks::<DETECTION_OUTPUT_COLS>();
+            for (a, b) in full_rows.iter().zip(gated_rows) {
                 if a[DETECTION_SCORE_INDEX] >= threshold {
                     kept += 1;
                     assert_eq!(a, b, "gate changed a row that would have been kept");

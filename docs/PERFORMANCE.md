@@ -72,6 +72,27 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### Cold start is 900 ms, and model loading is 0.15% of it
+
+Launch to first face is 850-1213 ms on RTX 4090 / D3D12, and two stages own 94%
+of it: `request_adapter` at 546 ms and compiling `conv2d.wgsl` at 197 ms. Parsing
+the ONNX and uploading every weight is **1.4 ms** -- `benchmark_model_load.rs`
+measures a number that has never been the startup cost. The first detection is
+1.6 ms against a steady 0.74, so nothing meaningful is deferred into it
+(experiment 80, `examples/cold_start.rs`).
+
+The other four shaders compile in 20 ms together, so compiling in parallel would
+win almost nothing; it is one shader.
+
+Vulkan brings an adapter up in 278-312 ms against D3D12's 578-668
+(`examples/adapter_cost.rs`), but `platform_safe_backends` excludes it on Windows
+because Intel's ICD crashes during bring-up. That is a stability decision with a
+measured price, not an oversight.
+
+**The GUI pays a different bill.** It shares eframe's device, so it never issues
+that 546 ms call; its cold-start cost is the ~235 ms of shader compilation, and
+`build_detector` runs synchronously in `App::new` before the first frame.
+
 ### The decode was three-quarters exponentials
 
 `decode_yunet_outputs_with` decoded all 8400 cells at 0.077 ms, and
@@ -480,6 +501,12 @@ cargo run --release -p fcs-core --example readback_parity
 
 # Where the decode spends its time: transcendentals against gathers and writes
 cargo run --release -p fcs-core --example decode_cost
+
+# Cold start, stage by stage: adapter, shader compile, model parse, first detection
+cargo run --release -p fcs-core --example cold_start
+
+# Adapter selection cost per backend set (one process per configuration)
+cargo run --release -p fcs-core --example adapter_cost -- dx12
 
 # Cost of the per-dispatch host objects: uniform buffers and bind groups
 cargo run --release -p fcs-core --example encode_cost
