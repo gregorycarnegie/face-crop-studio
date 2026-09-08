@@ -118,7 +118,7 @@ impl GpuYuNet {
         // Ensure the tensor is returned to the pool when we are done, even if we panic/error.
         // We use a guard struct or just a clean 'finally' block structure.
         // Since we return `Result`, we wrap execution.
-        let result = self.run_inference(&input_gpu);
+        let result = self.run_inference(&input_gpu, None);
 
         // 3. Return tensor to pool
         {
@@ -132,7 +132,7 @@ impl GpuYuNet {
         result
     }
 
-    fn run_inference(&self, input_gpu: &GpuTensor) -> Result<Tensor> {
+    fn run_inference(&self, input_gpu: &GpuTensor, min_score: Option<f32>) -> Result<Tensor> {
         // Hold an execution scope for the whole encode/submit/readback cycle. Intermediates are
         // dropped while the encoder is still being built — before anything is submitted — so
         // without this they would return to the shared pool and a concurrently encoding thread
@@ -194,7 +194,12 @@ impl GpuYuNet {
         };
 
         let _guard = timing_guard("fcs_core::gpu_decode", log::Level::Trace);
-        decode_yunet_outputs_with(&outputs, self.input_size, HeadLayout::ChannelMajorLogits)
+        decode_yunet_outputs_with(
+            &outputs,
+            self.input_size,
+            HeadLayout::ChannelMajorLogits,
+            min_score,
+        )
     }
 
     fn encode_inference(
@@ -245,11 +250,26 @@ impl GpuYuNet {
     /// guaranteed to have written `input` by the time the graph reads it -- no host
     /// synchronisation, no round trip.
     pub fn run_on_device(&self, input: &GpuTensor) -> Result<Tensor> {
+        self.run_on_device_filtered(input, None)
+    }
+
+    /// Run on a device-resident tensor, skipping the decode of cells that cannot reach
+    /// `min_score`.
+    ///
+    /// Every skipped row is zeroed, so postprocessing drops it on either the score or the
+    /// zero width -- identical detections, four fewer exponentials and a square root for the
+    /// cells that were never going to survive. `None` decodes everything, which is what the
+    /// parity probes and tests use so their fingerprints stay a full check of the decode.
+    pub fn run_on_device_filtered(
+        &self,
+        input: &GpuTensor,
+        min_score: Option<f32>,
+    ) -> Result<Tensor> {
         anyhow::ensure!(
             Arc::ptr_eq(input.context(), self.ops.context()),
             "input tensor belongs to a different GPU context than the model"
         );
-        self.run_inference(input)
+        self.run_inference(input, min_score)
     }
 }
 

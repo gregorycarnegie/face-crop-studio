@@ -213,7 +213,50 @@ pub(crate) fn sigmoid(x: f32) -> f32 {
 /// this crate — still needs the shared decoder; having two decoders is how the
 /// backends would drift apart.
 pub fn decode_yunet_outputs(outputs: &[Tensor], input_size: InputSize) -> Result<Tensor> {
-    decode_yunet_outputs_with(outputs, input_size, HeadLayout::CellMajorActivated)
+    decode_yunet_outputs_with(outputs, input_size, HeadLayout::CellMajorActivated, None)
+}
+
+/// The score below which a cell cannot survive postprocessing, if the caller knows it.
+///
+/// Decoding one cell costs four exponentials and a square root, and
+/// `examples/decode_cost.rs` puts that at 0.053 ms of the decode's 0.074 -- it is
+/// arithmetic-bound, not traffic-bound, so skipping the arithmetic for cells that cannot
+/// survive is most of the stage. `apply_postprocess` then discards them anyway.
+///
+/// The test is exact rather than approximate. Both scores pass through a sigmoid and the
+/// pair through a square root, all monotonic, and `score^2 = s(cls) * s(obj) <=
+/// min(s(cls), s(obj))` because neither factor exceeds one. So a cell whose *smaller* logit
+/// is below `logit(threshold^2)` cannot reach the threshold, whatever the other one is.
+/// A `NaN` fails the comparison and takes the full path, which is where the existing
+/// non-finite handling lives.
+#[derive(Clone, Copy, Debug)]
+struct ScoreGate {
+    /// Compared against whichever of cls/obj is smaller, in the units of that layout.
+    floor: f32,
+}
+
+impl ScoreGate {
+    /// `None` when no threshold can prune anything: outside `(0, 1)` the bound is vacuous
+    /// or rejects everything, and neither is worth a special case here.
+    fn new(min_score: Option<f32>, layout: HeadLayout) -> Option<Self> {
+        let threshold = min_score?;
+        if !(threshold > 0.0 && threshold < 1.0) {
+            return None;
+        }
+        let squared = threshold * threshold;
+        Some(Self {
+            floor: match layout {
+                // Already through sigmoid, so compare probabilities directly.
+                HeadLayout::CellMajorActivated => squared,
+                // Raw logits, so compare against the logit of the squared threshold.
+                HeadLayout::ChannelMajorLogits => (squared / (1.0 - squared)).ln(),
+            },
+        })
+    }
+
+    fn rejects(&self, cls: f32, obj: f32) -> bool {
+        cls < self.floor || obj < self.floor
+    }
 }
 
 /// How one stride's four head tensors are laid out, and whether their scores are activated.
@@ -236,6 +279,7 @@ pub fn decode_yunet_outputs_with(
     outputs: &[Tensor],
     input_size: InputSize,
     layout: HeadLayout,
+    min_score: Option<f32>,
 ) -> Result<Tensor> {
     anyhow::ensure!(
         outputs.len() == STRIDES.len() * OUTPUTS_PER_STRIDE,
@@ -247,9 +291,10 @@ pub fn decode_yunet_outputs_with(
     let strides = build_stride_layout(input_size)?;
     let mut fused = vec![0f32; strides.total_capacity];
 
+    let gate = ScoreGate::new(min_score, layout);
     for meta in strides.metas.iter() {
         let dst = &mut fused[meta.offset..meta.offset + meta.cell_count * DETECTION_OUTPUT_COLS];
-        decode_stride_outputs(outputs, meta, layout, dst)?;
+        decode_stride_outputs(outputs, meta, layout, gate, dst)?;
     }
 
     let rows = fused.len() / DETECTION_OUTPUT_COLS;
@@ -398,6 +443,7 @@ fn decode_stride_outputs(
     outputs: &[Tensor],
     meta: &StrideMeta,
     layout: HeadLayout,
+    gate: Option<ScoreGate>,
     dst: &mut [f32],
 ) -> Result<()> {
     let s = validate_stride_outputs(outputs, meta)?;
@@ -410,11 +456,17 @@ fn decode_stride_outputs(
             dst,
             |c, cell, channels| cell * channels + c,
             false,
+            gate,
             &s,
         ),
-        HeadLayout::ChannelMajorLogits => {
-            decode_cells(meta, dst, |c, cell, _| c * meta.cell_count + cell, true, &s)
-        }
+        HeadLayout::ChannelMajorLogits => decode_cells(
+            meta,
+            dst,
+            |c, cell, _| c * meta.cell_count + cell,
+            true,
+            gate,
+            &s,
+        ),
     }
     Ok(())
 }
@@ -428,6 +480,7 @@ fn decode_cells(
     dst: &mut [f32],
     index: impl Fn(usize, usize, usize) -> usize,
     activate: bool,
+    gate: Option<ScoreGate>,
     s: &StrideOutputs<'_>,
 ) {
     let stride_f = meta.stride as f32;
@@ -437,6 +490,13 @@ fn decode_cells(
     for row in 0..meta.rows {
         for col in 0..meta.cols {
             let cell = row * meta.cols + col;
+            // A rejected cell leaves its row zeroed: score 0 fails the threshold and a
+            // zero width fails the size check, so postprocessing drops it on either.
+            if gate.is_some_and(|g| g.rejects(s.cls[cell], s.obj[cell])) {
+                dst[write..write + DETECTION_OUTPUT_COLS].fill(0.0);
+                write += DETECTION_OUTPUT_COLS;
+                continue;
+            }
             let decoded = decode_stride_cell(CellDecodeInput {
                 row,
                 col,
@@ -576,10 +636,10 @@ mod tests {
             })
             .collect();
 
-        let from_chw = decode_yunet_outputs_with(&chw, size, HeadLayout::ChannelMajorLogits)
+        let from_chw = decode_yunet_outputs_with(&chw, size, HeadLayout::ChannelMajorLogits, None)
             .expect("decode channel-major");
         let from_rows =
-            decode_yunet_outputs_with(&cell_major, size, HeadLayout::CellMajorActivated)
+            decode_yunet_outputs_with(&cell_major, size, HeadLayout::CellMajorActivated, None)
                 .expect("decode cell-major");
 
         assert_eq!(from_chw.shape(), from_rows.shape());
@@ -704,6 +764,75 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("cls length mismatch"));
+    }
+
+    /// The gate must never change a row that postprocessing would have kept. It is allowed
+    /// to zero rows below the threshold -- that is the whole point -- so this asserts the
+    /// exact invariant rather than equality of the whole tensor.
+    #[test]
+    fn score_gate_preserves_every_row_above_the_threshold() {
+        let size = InputSize {
+            width: 640,
+            height: 640,
+        };
+        let threshold = 0.6f32;
+        for layout in [
+            HeadLayout::ChannelMajorLogits,
+            HeadLayout::CellMajorActivated,
+        ] {
+            let outputs = gate_test_outputs(size, layout);
+            let full = decode_yunet_outputs_with(&outputs, size, layout, None).expect("full");
+            let gated =
+                decode_yunet_outputs_with(&outputs, size, layout, Some(threshold)).expect("gated");
+            let full = full.as_slice();
+            let gated = gated.as_slice();
+            assert_eq!(full.len(), gated.len());
+
+            let mut kept = 0usize;
+            for (a, b) in full
+                .chunks_exact(DETECTION_OUTPUT_COLS)
+                .zip(gated.chunks_exact(DETECTION_OUTPUT_COLS))
+            {
+                if a[DETECTION_SCORE_INDEX] >= threshold {
+                    kept += 1;
+                    assert_eq!(a, b, "gate changed a row that would have been kept");
+                } else {
+                    assert!(
+                        b[DETECTION_SCORE_INDEX] < threshold,
+                        "gate produced a keepable row where the full decode had none"
+                    );
+                }
+            }
+            assert!(
+                kept > 0,
+                "{layout:?}: no row cleared the threshold, so the test proved nothing"
+            );
+        }
+    }
+
+    /// Scores spread either side of the threshold so the test sees both branches of the gate.
+    fn gate_test_outputs(size: InputSize, layout: HeadLayout) -> Vec<Tensor> {
+        let strides = build_stride_layout(size).expect("layout");
+        let mut outputs = Vec::with_capacity(STRIDES.len() * OUTPUTS_PER_STRIDE);
+        for channels in [1usize, 1, 4, 10] {
+            for meta in strides.metas.iter() {
+                let n = meta.cell_count;
+                let values: Vec<f32> = (0..channels * n)
+                    .map(|i| {
+                        let spread = ((i * 61 % 97) as f32 - 40.0) / 12.0;
+                        match layout {
+                            // Probabilities for the activated layout, logits for the other.
+                            HeadLayout::CellMajorActivated if channels == 1 => sigmoid(spread),
+                            _ => spread,
+                        }
+                    })
+                    .collect();
+                outputs.push(
+                    Tensor::from_vec(&[channels, n], values).expect("build gate test tensor"),
+                );
+            }
+        }
+        outputs
     }
 
     #[test]

@@ -482,6 +482,9 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
+- [x] **93. Skip decoding cells that cannot reach the score threshold.** The
+  decode runs on all 8400 cells and postprocessing discards nearly all of them.
+  Kept: 82% off the decode, exact rather than approximate.
 - [x] **92. Record preprocessing into the inference compute pass.** Two submits
   are 18% of a detection (5 continued). Merge them and measure. Rejected: the
   saving is real on the host and is given back by the GPU/CPU overlap it destroys.
@@ -2389,7 +2392,7 @@ by distinct shapes; the small ops' shapes derive from the 640x640 detector input
 rather than from the source image, so the source resolution cannot grow it at
 all -- a stronger bound than convolution's.
 
-**Bit-exact:** the raw 126000-float head fingerprint is `0xa116e42f7c2dabdb`
+**Bit-exact:** the 126000-float output fingerprint is `0xa116e42f7c2dabdb`
 before and after (`readback_parity`), and the whole workspace suite passes under
 `FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4.
 
@@ -2609,7 +2612,7 @@ record. Whole-detection wall time moves about 0.1 ms and wins 7 pairs of 8; the
 one loss came from a block whose p95 was 2.8 ms, so the wall number is the
 weakest of the three and is reported as ~0.1 ms rather than a percentage.
 
-**Bit-exact.** The raw 126000-float head fingerprint is `0xa116e42f7c2dabdb`
+**Bit-exact.** The 126000-float output fingerprint is `0xa116e42f7c2dabdb`
 before and after, which is the claim the concatenation argument predicts: same
 arithmetic, same order, different grouping.
 
@@ -2692,7 +2695,7 @@ time does not resolve it: 20 us is well inside a noise band nearer 0.2 ms on thi
 machine, and it is not claimed.
 
 **Bit-exact.** The arithmetic and its order are unchanged -- bias, then ic, ky,
-kx, the same `fma` chain per channel -- so the raw head fingerprint stays
+kx, the same `fma` chain per channel -- so the output fingerprint stays
 `0xa116e42f7c2dabdb`. Only how many channels one thread carries changed.
 
 The grouped general path keeps one channel per thread, because there `oc + j` can
@@ -2822,6 +2825,79 @@ doing only if recording matters again.
 **No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
+
+### 93. Decoding cells that cannot survive - and the reasoning that nearly skipped it
+
+`gpu_decode` was 0.077 ms, 9% of a warm small-image detection, and it decodes all
+8400 cells even though `apply_postprocess` immediately discards every one below
+the score threshold. The obvious fix is an early-out. The obvious objection is
+that it cannot help: the decode moves a megabyte -- 126000 floats gathered
+through 14 strided reads per cell, 126000 written -- and a rejected cell still
+occupies a row, so the writes stay whichever way.
+
+**That objection is wrong, and only a probe said so.**
+`examples/decode_cost.rs`, over the same synthetic heads:
+
+| Variant | Median |
+| --- | ---: |
+| full decode, no threshold | 0.0980 ms |
+| gated at 0.6 | **0.0527 ms** |
+| same gathers and writes, no transcendentals | 0.0208 ms |
+| writes only | 0.0090 ms |
+
+The traffic is 0.021 ms of it. **The other three quarters are four exponentials
+and a square root per cell**, which is exactly what an early-out removes. The
+back-of-envelope that said "memory-bound, not worth it" was the third time this
+round that arithmetic pointed the wrong way, after 27 and 92.
+
+**The gate is exact, not a heuristic.** `score = sqrt(s(cls) * s(obj))` with both
+factors in (0, 1], so `score^2` is at most `min(s(cls), s(obj))`; sigmoid and sqrt
+are monotonic, so a cell whose *smaller* logit is below `logit(threshold^2)`
+cannot reach the threshold whatever the other one is. One comparison, no
+transcendental. A `NaN` fails the comparison and falls through to the full path,
+where the existing non-finite handling already lives.
+
+On a real image almost every cell is far below the threshold, so the gate does far
+better than the synthetic corpus above suggests:
+
+| Phase | before | after |
+| --- | ---: | ---: |
+| `gpu_decode` | 0.077 ms | **0.014 ms** |
+| `detect_image` wall p50 | 0.875 ms | **0.753 ms** |
+
+**82% off the decode.**
+
+**The parity fingerprint is deliberately untouched.** `readback_parity` covers the
+*decoded* output (see the correction below), so gating it would have weakened the
+one probe this whole round leaned on. Instead the existing entry points still
+decode everything, and only `run_on_device_filtered` gates -- called only by the
+detector, because that is the thing that knows the threshold. The fingerprint is
+unchanged at `0xa116e42f7c2dabdb` and still checks the full decode arithmetic.
+
+What guards the gate instead is the invariant that matters:
+`score_gate_preserves_every_row_above_the_threshold` asserts, for both head
+layouts, that no row postprocessing would have kept is changed, and that the gate
+never manufactures a keepable row. Whole-tensor equality would have been the wrong
+assertion -- zeroing sub-threshold rows is the point.
+
+End to end: the workspace suite passes under `FCS_STRICT_TESTS=1`, and 1239 real
+images produce 901 byte-identical crops. A folder job does not move (8.08 s
+against 8.09), because it is bound by JPEG decode rather than head decode; this
+lands on interactive and webcam work like the rest of the round.
+
+### Correction: what `readback_parity` actually fingerprints
+
+Several records in this round call its 126000 floats "the raw head fingerprint".
+They are not the raw heads. `run_on_device` returns the **decoded** fused tensor,
+so the fingerprint covers the readback *and* `decode_yunet_outputs_with` --
+8400 cells by 15 columns, which is where the 126000 comes from. The probe's own
+header says "raw inference output", which is what misled the wording.
+
+This makes every bit-exactness claim in this round *stronger* than stated, not
+weaker: 20, 34, 37 and 22 were all checked against the decoded output rather than
+the buffers behind it. It also means any future experiment that changes what
+decode writes -- compacting sub-threshold rows, for instance -- changes this
+fingerprint by design, and cannot be waved through as a readback regression.
 
 ### 5 (continued). The last unattributed quarter of the small-image path
 

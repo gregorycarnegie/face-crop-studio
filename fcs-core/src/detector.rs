@@ -229,7 +229,7 @@ impl YuNetDetector {
 
         let raw = {
             let _guard = timing_guard("fcs_core::onnx_inference", log::Level::Debug);
-            model.run_on_device(&input)?
+            model.run_on_device_filtered(&input, Some(self.postprocess.score_threshold))?
         };
         let detections = {
             let _guard = timing_guard("fcs_core::postprocess", log::Level::Debug);

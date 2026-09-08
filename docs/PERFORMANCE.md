@@ -72,6 +72,25 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### The decode was three-quarters exponentials
+
+`decode_yunet_outputs_with` decoded all 8400 cells at 0.077 ms, and
+`apply_postprocess` then discarded nearly every one. `examples/decode_cost.rs`
+shows why an early-out pays: the gathers and writes are 0.021 ms of it and the
+rest is four exponentials and a square root per cell.
+
+The test is exact. `score^2` equals `s(cls) * s(obj)`, which is at most
+`min(s(cls), s(obj))`, and both sigmoid and sqrt are monotonic, so a cell whose
+smaller logit is below `logit(threshold^2)` cannot reach the threshold.
+**`gpu_decode` 0.077 to 0.014 ms**, whole detection 0.875 to 0.753
+(experiment 93).
+
+Only `run_on_device_filtered` gates, and only the detector calls it, because it is
+what knows the threshold. Everything else still decodes in full, which keeps
+`readback_parity` a complete check of the decode arithmetic rather than of the
+threshold. The invariant is guarded by a test instead: no row above the threshold
+may change, and the gate may not manufacture one.
+
 ### Host encoding costs 3.1 us per dispatch, and most of it was avoidable
 
 `gpu_submit` turned out to be two different things: splitting it shows
@@ -268,6 +287,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
 | Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
+| Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
 implementation for another and so differs by rounding -- at most 23 per channel
@@ -455,8 +475,11 @@ cargo run --release -p fcs-core --example gpu_encode_comparison
 cargo run --release -p fcs-core --example phase_timings [image]
 cargo run --release -p fcs-core --example phase_timings [image] --ab SOME_ENV_FLAG
 
-# Bit-exact fingerprint of the raw head outputs, for readback changes
+# Bit-exact fingerprint of the decoded output, for readback and decode changes
 cargo run --release -p fcs-core --example readback_parity
+
+# Where the decode spends its time: transcendentals against gathers and writes
+cargo run --release -p fcs-core --example decode_cost
 
 # Cost of the per-dispatch host objects: uniform buffers and bind groups
 cargo run --release -p fcs-core --example encode_cost
