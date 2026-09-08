@@ -275,9 +275,26 @@ impl std::fmt::Debug for WgpuPreprocessor {
 /// Source pixels above which GPU preprocessing costs more than it saves on a discrete GPU.
 ///
 /// A tuning constant, not a law: PCIe bandwidth, CPU resize speed and decode all move the
-/// crossover, so re-run `examples/preprocess_cost.rs` on the target hardware rather than
-/// assuming 1.5 MP transfers. It sits inside the 1.1-2.5 MP band measured on an RTX 4090.
-const MAX_GPU_PREPROCESS_PIXELS: u32 = 1_500_000;
+/// crossover, so re-measure on the target hardware rather than assuming 1.75 MP transfers.
+/// Experiment 54 found the crossover by running both routes at one source size inside one
+/// process (`phase_timings --mp N --ab FCS_MAX_GPU_PREPROCESS_PIXELS=...`): on an RTX 4090
+/// the GPU route wins by 0.25-0.29 ms at 1.55 MP, ties within noise at 1.75-1.85 MP and
+/// loses by 0.06-0.16 ms from 1.9 MP up. The earlier 1.5 MP came from a comparison against
+/// a route experiment 50 has since replaced.
+const MAX_GPU_PREPROCESS_PIXELS: u32 = 1_750_000;
+
+/// The cutoff, with `FCS_MAX_GPU_PREPROCESS_PIXELS` overriding it.
+///
+/// Experiment 54 has to run both routes at one source size inside one process, because
+/// across processes the GPU clock ramp is larger than the difference being measured. The
+/// lookup is deliberately not cached: the A/B harness flips the variable between blocks,
+/// and a `var_os` costs about a microsecond against a resize measured in milliseconds.
+fn max_gpu_preprocess_pixels() -> u32 {
+    std::env::var("FCS_MAX_GPU_PREPROCESS_PIXELS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(MAX_GPU_PREPROCESS_PIXELS)
+}
 
 impl WgpuPreprocessor {
     /// The device this preprocessor renders on.
@@ -403,7 +420,7 @@ impl WgpuPreprocessor {
             return true;
         }
         let (width, height) = image.dimensions();
-        width.saturating_mul(height) <= MAX_GPU_PREPROCESS_PIXELS
+        width.saturating_mul(height) <= max_gpu_preprocess_pixels()
     }
 
     /// Create a GPU preprocessor from an existing `GpuContext`.

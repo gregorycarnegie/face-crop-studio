@@ -20,9 +20,17 @@
 //! corpus rather than in the alternating harness `phase_timings --ab` uses, so treat it as
 //! an order of magnitude rather than a precise delta.
 //!
+//! The candidate is selected through an environment variable, `FCS_RESIZE_ALG` by default.
+//! Naming another one compares anything else the detector reads per call -- experiment 54
+//! used `FCS_MAX_GPU_PREPROCESS_PIXELS` to ask whether moving the preprocessing route
+//! boundary moves detections. `--mp N` rescales every image first, so the corpus can be put
+//! in the size band a candidate actually affects.
+//!
 //! Run with:
 //!   cargo run --release -p fcs-core --example resize_quality -- super2
 //!   cargo run --release -p fcs-core --example resize_quality -- interp [image-count]
+//!   cargo run --release -p fcs-core --example resize_quality -- 1500000 60 \
+//!       FCS_MAX_GPU_PREPROCESS_PIXELS --mp 1.6
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -73,13 +81,24 @@ fn build(preprocessor: Arc<dyn Preprocessor>, model: &std::path::Path) -> Result
         .context("build detector")
 }
 
+/// The argument after `name`, if it is present.
+fn flag_value(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let index = args.iter().position(|a| a == name)?;
+    args.get(index + 1).cloned()
+}
+
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args()
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"));
     let candidate = args.next().unwrap_or_else(|| "super2".into());
     let limit: usize = args
         .next()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_IMAGES);
+    let var = args.next().unwrap_or_else(|| "FCS_RESIZE_ALG".into());
+    let mp = flag_value("--mp").and_then(|v| v.parse::<f64>().ok());
 
     let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
         GpuAvailability::Available(ctx) => ctx,
@@ -102,10 +121,13 @@ fn main() -> Result<()> {
     paths.truncate(limit);
     anyhow::ensure!(!paths.is_empty(), "no .jpg fixtures under fixtures/images");
 
-    println!(
-        "candidate FCS_RESIZE_ALG={candidate}, {} images\n",
-        paths.len()
-    );
+    match mp {
+        Some(mp) => println!(
+            "candidate {var}={candidate}, {} images at {mp} MP\n",
+            paths.len()
+        ),
+        None => println!("candidate {var}={candidate}, {} images\n", paths.len()),
+    }
 
     let mut lost = 0usize;
     let mut gained = 0usize;
@@ -117,28 +139,36 @@ fn main() -> Result<()> {
     let (mut base_ms, mut cand_ms) = (0.0f64, 0.0f64);
 
     for path in &paths {
-        let image = match image::open(path) {
+        let mut image = match image::open(path) {
             Ok(image) => image,
             Err(err) => {
                 eprintln!("skipping {}: {err}", path.display());
                 continue;
             }
         };
+        if let Some(mp) = mp {
+            let scale = (mp * 1e6 / (f64::from(image.width()) * f64::from(image.height()))).sqrt();
+            let (w, h) = (
+                (f64::from(image.width()) * scale).round().max(1.0) as u32,
+                (f64::from(image.height()) * scale).round().max(1.0) as u32,
+            );
+            image = image.resize_exact(w, h, image::imageops::FilterType::Lanczos3);
+        }
 
         // SAFETY of the env writes: single-threaded probe, and the detector reads the
         // variable inside the call below, not across threads.
-        unsafe { std::env::remove_var("FCS_RESIZE_ALG") };
+        unsafe { std::env::remove_var(&var) };
         detector.detect_image(&image).context("warm-up")?;
         let started = Instant::now();
         let base = detector.detect_image(&image).context("baseline detect")?;
         base_ms += started.elapsed().as_secs_f64() * 1e3;
 
-        unsafe { std::env::set_var("FCS_RESIZE_ALG", &candidate) };
+        unsafe { std::env::set_var(&var, &candidate) };
         detector.detect_image(&image).context("warm-up")?;
         let started = Instant::now();
         let cand = detector.detect_image(&image).context("candidate detect")?;
         cand_ms += started.elapsed().as_secs_f64() * 1e3;
-        unsafe { std::env::remove_var("FCS_RESIZE_ALG") };
+        unsafe { std::env::remove_var(&var) };
 
         let mut taken = vec![false; cand.detections.len()];
         for a in &base.detections {

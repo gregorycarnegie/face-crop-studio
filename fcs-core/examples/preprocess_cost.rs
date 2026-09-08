@@ -6,6 +6,12 @@
 //! while the CPU path resizes first and uploads the 640x640 tensor. This prints both
 //! sides so the trade can be judged per image size rather than assumed.
 //!
+//! The CPU side here is `CpuPreprocessor`, which is the route experiment 50 replaced with
+//! `resize_then_convert`; the crossover this prints is therefore the *old* one. What
+//! decides the routing cutoff now is `phase_timings --mp N --ab
+//! FCS_MAX_GPU_PREPROCESS_PIXELS=...`, which alternates the two routes production actually
+//! chooses between, inside one process (experiment 54).
+//!
 //! Run with: cargo run --release --example preprocess_cost
 
 use std::time::Instant;

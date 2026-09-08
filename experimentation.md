@@ -326,7 +326,7 @@ implementation or workload.
   **Premise removed by 95:** the loop is capture-bound at 24 fps and does its work
   in a seventh of the frame budget, so removing copies cannot raise the frame
   rate. Re-open for a camera fast enough to saturate the pipeline.
-- [ ] **54. Evaluate adaptive resize/input routing.** Test a measured CPU/GPU
+- [x] **54. Evaluate adaptive resize/input routing.** Test a measured CPU/GPU
   cutoff by source size/device and, separately, cheaper preview resize quality.
   Include routing overhead. Quality changes require detection/landmark/crop
   evaluation and distinct settings; smaller input is also covered by 74. Q.
@@ -346,7 +346,7 @@ implementation or workload.
   warning about dispatch overhead -- and 55 already measured moving the adjacent
   conversion to the GPU as *slower*. Reopen only if decode grows: a much larger
   detector input or a model with many more anchors.
-- [ ] **57. Compact valid candidates before readback.** Use the existing score
+- [x] **57. Compact valid candidates before readback.** Use the existing score
   rule and threshold to reduce output bytes; measure sparse and crowded cases,
   counter/scan overhead and overflow handling. Preserve ordering/tie semantics
   where observable; no arbitrary top-K cap to manufacture speed.
@@ -403,7 +403,7 @@ implementation or workload.
 
 ### Decode, CPU execution and export (P1/P2)
 
-- [ ] **67. Benchmark alternative full-resolution decoders.** Compare available
+- [x] **67. Benchmark alternative full-resolution decoders.** Compare available
   implementations on the actual format corpus, including orientation/colour
   fidelity, cold I/O, warm cache and batch throughput. Preserve full-resolution
   crop pixels; this differs from the rejected reduced-scale decode workflow.
@@ -513,7 +513,7 @@ implementation or workload.
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
-- [ ] **96. Letterbox instead of stretching to the model input.** The
+- [x] **96. Letterbox instead of stretching to the model input.** The
   preprocessor scales x and y independently, so every non-square source reaches
   the model distorted and its score falls. Measured over all 1239 images at
   production's threshold: 77 images gain a detection, 18 lose one, and every box
@@ -3356,6 +3356,160 @@ Two things worth acting on, neither of them the shader:
 `to_rgba8` at 0.025 ms is a full copy of the source per frame, and `write_texture`
 at 0.057 ms is 689 KB at roughly 12 GB/s. Both scale with source size, so they
 are the webcam-resolution numbers, not a constant.
+
+### 54. The routing cutoff was set against a route that no longer exists
+
+`upload_pays_for_source` sends sources above 1.5 MP down the CPU resize path and
+everything below it up to the GPU whole-source path. That number was measured
+before experiment 50, when the losing side was "resize on the CPU *and* convert
+on the CPU *and* upload 4.9 MB of floats". 50 replaced that with
+`resize_then_convert`, which uploads 1.2 MB of bytes -- so the opponent got
+cheaper and nobody re-ran the comparison.
+
+**The measurement needs both routes at one source size in one process.** Across
+processes `cpu_resize` alone moved 0.83 to 2.23 ms on this machine depending on
+what else was running, an order of magnitude more than the difference being
+measured. `FCS_MAX_GPU_PREPROCESS_PIXELS` overrides the constant, so
+`phase_timings --mp N --ab FCS_MAX_GPU_PREPROCESS_PIXELS=...` alternates the two
+routes in 8 blocks each on one image, and `--mp N` rescales one fixture so a
+size sweep needs no corpus.
+
+`detect_image` p50 delta, **positive means the GPU whole-source route is slower**:
+
+| Source | delta ms | Source | delta ms |
+| --- | ---: | --- | ---: |
+| 0.50 MP | -1.370 | 1.75 MP | -0.010, -0.090 |
+| 0.80 MP | -0.460 | 1.85 MP | +0.050, +0.000 |
+| 1.20 MP | -0.230 | 1.90 MP | +0.130, +0.130 |
+| 1.50 MP | -0.130 | 2.00 MP | +0.110, +0.160, +0.060 |
+| 1.55 MP | -0.290, -0.250 | 2.50 MP | +0.480, +0.470 |
+| 1.65 MP | -0.110, +0.020 | 3.00 MP | +1.010, +0.820, +0.870 |
+
+Three A/A controls, because the override is a no-op wherever both variants
+already choose the same route: +0.070 at 0.80 MP and +0.010 at 1.50 MP (forcing
+GPU where GPU is already chosen), -0.040 at 2.00 MP (forcing CPU where CPU is
+already chosen). **The noise floor on this delta is about +/-0.07 ms**, so
+everything from 1.65 to 1.85 MP is a tie and the ends are not.
+
+**The crossover is 1.75-1.85 MP, and the constant is now 1_750_000.** Sources
+between 1.5 and 1.75 MP get 0.25-0.29 ms back; nothing else moves.
+
+Two things the phase table says that the wall clock does not. `gpu_preprocess`
+is *cheaper* than `cpu_resize + gpu_rgb_to_chw` at every size up to 1.85 MP
+(0.99 against 1.19 at 1.85 MP), yet `detect_image` is a tie there -- the GPU
+route's full-resolution texture upload costs something outside its own guard,
+and only the wall clock sees it. And `cpu_resize` is not monotonic in source
+size: 1.13 ms at 0.50 MP against 0.98 ms at 2.00 MP, because a 530x943 source is
+*upscaled* to 640 wide. The cutoff is a proxy for a ratio, not for a size.
+
+**Under CPU contention the crossover moves up.** One block of runs taken while
+the machine was otherwise busy (`cpu_resize` at 1.73-2.23 ms rather than
+1.07-1.29) had the GPU route winning by 0.47-0.61 ms at 1.6-1.9 MP. The resize
+is threaded, so a batch job with 32 rayon workers is the contended case; raising
+the cutoff is the robust direction as well as the measured one. Routing overhead
+itself is `image.dimensions()`, one multiply and one compare.
+
+**The second half -- a cheaper preview resize -- is already a shipped setting,
+and it costs faces.** `ResizeQuality::Speed` is `Nearest`. Through 51's harness
+(`resize_quality nearest`, 120 fixtures, 49 matched faces):
+
+| | Speed / Nearest |
+| --- | ---: |
+| faces lost / gained | **2** / 0 |
+| landmark shift p50 / p95 / max | 1.87 / 10.68 / **33.55 px** |
+| box IoU min | 0.9276 |
+| detect_image over the corpus | **1.76x faster** |
+
+That is the failure `Interpolation` was rejected for in 51, at the same
+magnitude (35.39 px there, 33.55 px here), and it is reachable from a menu. The
+default is `Quality` and stays there; the measurement is now recorded on the
+enum variant so the trade is visible where the setting is. No adaptive *quality*
+routing was built: switching filters by source size would make detections depend
+on image size, which is a worse property than being slow.
+
+**Moving the boundary moves detections, because the two routes were never
+identical.** This is a routing change, so it had to go through the same harness
+as any other quality candidate. `resize_quality` now takes the variable name and
+a `--mp` rescale, so it can put the whole corpus in the band the change actually
+affects. 120 fixtures rescaled to 1.6 MP, old cutoff against new:
+
+| At | faces lost / gained | landmark p50 / p95 / max | IoU min |
+| --- | ---: | ---: | ---: |
+| 1.6 MP, 1.5 MP cutoff vs 1.75 | 0 / 0 | 0.65 / 1.84 / **11.09 px** | 0.9798 |
+| 1.4 MP, both routes forced | 0 / **1** | 0.66 / 1.80 / 3.04 px | 0.9807 |
+| A/A control (same cutoff twice) | 0 / 0 | 0.00 / 0.00 / **0.00 px** | 1.0000 |
+
+The second row is the point. At 1.4 MP -- a size the *old* cutoff already sent to
+the GPU route -- forcing the CPU route instead disagrees by the same p50 and p95,
+and gains a face. **The seam is a standing property of shipping two routes, not
+something this change introduced**; all it does is move where the seam sits by
+0.25 MP. Neither route is a reference: one resizes with `fast_image_resize`
+Bilinear on the CPU, the other with the adaptive kernel in `preprocess.wgsl`, and
+nothing here says which is closer to the truth.
+
+**Kept, with the trade stated:** sources between 1.5 and 1.75 MP are 0.25-0.29 ms
+faster (0.47-0.61 ms when the CPU is busy) and get detections that differ from
+their old ones by 0.65 px at p50 and 11 px at worst on one fixture. If that seam
+matters more than the milliseconds, it is one constant to put back.
+
+Also kept as evaluation scaffolding, since experiment 10 needs all of it on other
+hardware: the `FCS_MAX_GPU_PREPROCESS_PIXELS` override, `phase_timings --mp`,
+`resize_quality`'s variable-name and `--mp` arguments, and `nearest` as an
+`FCS_RESIZE_ALG` candidate.
+
+### 57. Compacting the heads cannot win more than the whole download costs
+
+The head readback moves 525 KB per detection and the decode discards almost all
+of it, so compacting survivors on the GPU first is the obvious next move. In
+production the copies hide inside `readback_wait`, which also contains the
+forward pass, so the phase table cannot price them. `examples/readback_bytes.rs`
+runs the same allocate / copy / map / wait / collect sequence `batch_download`
+runs, with no inference in flight, over buffers of decreasing size -- 200 runs
+after 10 warm, medians in ms:
+
+| Case | KB | alloc | copy | map | wait | collect | total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| production, 3 heads, 8400 cells | 525.0 | 0.024 | 0.061 | 0.001 | 0.086 | 0.036 | **0.208** |
+| compacted to 2048 cells | 128.0 | 0.010 | 0.042 | 0.000 | 0.058 | 0.006 | **0.116** |
+| compacted to 512 cells | 32.0 | 0.011 | 0.045 | 0.000 | 0.059 | 0.002 | 0.117 |
+| compacted to 128 cells | 8.0 | 0.010 | 0.046 | 0.000 | 0.051 | 0.001 | 0.109 |
+| compacted to 16 cells | 1.0 | 0.013 | 0.055 | 0.001 | 0.053 | 0.001 | 0.123 |
+
+**The whole ceiling is 0.09 ms, and it is reached at 2048 cells.** From 128 KB
+down to 1 KB -- 128x fewer bytes -- nothing changes at all. A download costs
+about 0.11 ms before it costs a single byte, so this is not a bandwidth problem,
+and compacting tighter than a few thousand rows buys exactly nothing.
+
+**Most of that 0.09 ms is in the window experiments 12, 13 and 14 established is
+free.** `alloc` (-0.014) and `copy` (-0.019) happen after the inference submit,
+while the GPU is busy, and the wait absorbs them; 13's conclusion was precisely
+that. What is left on the critical path is the DMA inside the wait (0.086 to
+0.058, so **~0.028 ms**) and `readback_collect` (0.036 to 0.006, **~0.030 ms**),
+plus the `gpu_convert` split that compaction would also remove (0.021 ms at
+0.8 MP, 0.051 at 10 MP). **Production ceiling: 0.08-0.11 ms** of a 1.3 ms
+small-image detection.
+
+What that would have to pay for:
+
+- **Ordering.** An `atomicAdd` append returns rows in nondeterministic order, so
+  equal-score NMS ties stop being reproducible -- against a standard of 901
+  byte-identical crops over 1239 images. Preserving order needs a prefix scan
+  and a scatter: two more dispatches over 8400 cells, not one gate.
+- **Overflow.** A fixed capacity needs a full-heads fallback download when it is
+  exceeded, which is a second round trip -- five times the ceiling, and it lands
+  on the crowded scenes this was meant to help.
+- Every compacted row must carry its cell index, since the prior for a box comes
+  from level, x and y.
+- `readback_parity` fingerprints the decoded output (see the correction above),
+  so the probe every result in this round leaned on has to be re-established in
+  the same change.
+
+**Rejected.** And the two largest components -- `readback_collect`'s copy out of
+the mapped range, and `gpu_convert`'s split into twelve tensors -- are host work
+on 525 KB *after* the wait, which needs no GPU pass at all to attack. That is
+experiment 17, which already names "decoding from a mapped view". It is a
+hypothesis and not a saving: reads from a mapped readback allocation can be far
+slower per access than reads from a `Vec`, which is why the copy is there.
 
 ### Previous work
 

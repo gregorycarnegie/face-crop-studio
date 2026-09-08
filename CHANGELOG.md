@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   history stay on the deliberate `Detect faces` button, which is the only thing
   that wants them.
 
+### Changed
+
+- **Sources up to 1.75 MP are preprocessed on the GPU, up from 1.5 MP.** The old
+  cutoff was measured against a route that no longer exists: preprocessing used to
+  fall back to a CPU resize *and* a CPU conversion *and* a 4.9 MB float upload, and
+  that fallback is now a CPU resize plus a 1.2 MB byte upload. Alternating the two
+  routes at a fixed source size in one process puts the crossover at 1.75-1.85 MP,
+  so sources in the band this opens are **0.25-0.29 ms faster** -- 0.47-0.61 ms when
+  the CPU is busy, which is what a folder export with 32 workers looks like. The two
+  routes do not agree exactly (landmarks move 0.65 px at p50, 11 px at worst over
+  120 fixtures, no faces lost or gained), but they disagree by the same amount at
+  sizes either cutoff routes the same way: the seam comes from having two routes,
+  not from where the boundary sits.
+
 ### Fixed
 
 - **`--webcam-width` and `--webcam-height` had no effect.** The camera was opened

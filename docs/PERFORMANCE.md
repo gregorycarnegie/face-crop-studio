@@ -115,7 +115,7 @@ Two defects fell out (experiments 95 and 96):
 GPU retention is flat: 44.1 MB across 400 sources up to 23.4 MP, largest first
 (`examples/memory_growth.rs`). The buffer pool has an idle ceiling, the conv
 caches are keyed by a graph fixed at 640x640, and the preprocessor's texture is
-bounded by the 1.5 MP upload gate -- except on integrated adapters, where that
+bounded by the 1.75 MP upload gate -- except on integrated adapters, where that
 gate always passes and the texture takes the largest source seen.
 
 Host memory is the one that moves. Peak working set over the 1239-image folder:
@@ -346,6 +346,57 @@ rejected (experiment 90). The arithmetic works -- a 1/2 or 1/4 DCT decode costs
 less than the resize it removes, about 13% off the folder -- but it moves
 landmarks by up to 158 px, and backing off to where nothing moves past 35 px
 leaves about 4%. `examples/scaled_decode.rs` re-runs the cost half.
+
+### The preprocessing route crosses over at 1.75 MP, not 1.5
+
+Sources above the gate are resized on the CPU and converted on the GPU; below it
+the whole source goes up and the GPU does both. The 1.5 MP gate was measured
+against the route experiment 50 has since replaced, so the losing side had got
+cheaper and nobody re-ran it. Alternating the two routes in one process at a
+fixed source size (`phase_timings --mp N --ab FCS_MAX_GPU_PREPROCESS_PIXELS=...`,
+noise floor +/-0.07 ms from three A/A controls): the GPU route wins by 1.37 ms at
+0.5 MP, 0.29 ms at 1.55 MP, ties from 1.65 to 1.85 MP, and loses by 0.13 ms at
+1.9 MP and 0.87 ms at 3 MP. The gate is now 1.75 MP, worth 0.25-0.29 ms on
+sources in the band it opened.
+
+Under CPU contention the crossover moves up -- with the machine otherwise busy
+the GPU route won by 0.47-0.61 ms at 1.6-1.9 MP -- so a batch job with 32 rayon
+workers is the case that most wants the higher gate.
+
+The two routes are not identical, so moving the gate moves detections: over 120
+fixtures rescaled to 1.6 MP, 0 faces lost or gained, landmarks 0.65 px at p50 and
+11.09 px at worst, IoU no lower than 0.98 (A/A control: 0.00 px, IoU 1.0000).
+Forcing the two routes against each other at 1.4 MP -- a size the old gate already
+sent to the GPU -- disagrees by the same p50 and p95 and gains a face, so the
+seam is a standing property of shipping two routes rather than something the new
+gate introduced. Neither route is a reference for the other.
+
+### The `Speed` resize setting costs faces, not just quality
+
+`ResizeQuality::Speed` is a `Nearest` filter, and nothing had measured what it
+does to detections. Over 120 fixtures against production's `Quality`
+(`resize_quality nearest`): **2 of 51 faces lost**, landmarks moved 10.7 px at
+p95 and 33.6 px at worst, box IoU down to 0.93, in exchange for 1.76x. That is
+the same failure the `Interpolation` candidate was rejected for below. The
+default is `Quality`; the numbers now sit on the enum variant.
+
+### The head readback is not paying for its bytes
+
+525 KB comes back per detection and the decode throws almost all of it away, so
+compacting survivors on the GPU looks obvious. Timing the real allocate / copy /
+map / wait / collect sequence with no inference in flight
+(`examples/readback_bytes.rs`) prices it: 0.208 ms for production's three
+buffers, 0.116 ms compacted to 2048 cells -- and then **nothing at all** for the
+128x reduction from there down to 1 KB. A download costs ~0.11 ms before its
+first byte.
+
+Of the 0.09 ms ceiling, the allocation and copy halves land in the post-submit
+window experiments 12-14 showed is free. What is actually recoverable is the DMA
+inside the wait (~0.028 ms) and the host copy out of the mapped range
+(~0.030 ms) -- and the second of those needs no GPU pass, only a decode that
+reads the mapped view. Compaction was rejected: an atomic append also makes NMS
+tie-breaking nondeterministic, and keeping the order needs a prefix scan and a
+scatter.
 
 ### The resize is at its floor
 
@@ -580,6 +631,15 @@ cargo run --release -p fcs-core --example readback_parity
 
 # Where the decode spends its time: transcendentals against gathers and writes
 cargo run --release -p fcs-core --example decode_cost
+
+# What a head download costs per byte, with no inference hiding the copies
+cargo run --release -p fcs-core --example readback_bytes
+
+# Both preprocessing routes at one source size, in one process
+cargo run --release -p fcs-core --example phase_timings -- --mp 1.8 --ab FCS_MAX_GPU_PREPROCESS_PIXELS=99000000
+
+# What a cheaper resize costs in detections (super2 | super3 | interp | nearest)
+cargo run --release -p fcs-core --example resize_quality -- nearest [image-count]
 
 # Cold start, stage by stage: adapter, shader compile, model parse, first detection
 cargo run --release -p fcs-core --example cold_start

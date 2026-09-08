@@ -123,6 +123,7 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
 fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
+        .filter(|a| !a.starts_with("--"))
         .unwrap_or_else(|| "fixtures/images/006.jpg".into());
 
     log::set_boxed_logger(Box::new(Collector))?;
@@ -158,8 +159,24 @@ fn main() -> Result<()> {
     .context("build GPU detector")?;
     println!("backend: {}", detector.inference_backend());
 
-    let image = image::open(&path).with_context(|| format!("open {path}"))?;
-    println!("image:   {path} {}x{}", image.width(), image.height());
+    let mut image = image::open(&path).with_context(|| format!("open {path}"))?;
+    // `--mp N` rescales the source before timing, so one fixture covers a size sweep. The
+    // routing cutoff in `upload_pays_for_source` is a source-size decision, and finding
+    // where it belongs needs sources on both sides of it (experiment 54).
+    if let Some(mp) = flag_value("--mp").and_then(|v| v.parse::<f64>().ok()) {
+        let scale = (mp * 1e6 / (f64::from(image.width()) * f64::from(image.height()))).sqrt();
+        let (w, h) = (
+            (f64::from(image.width()) * scale).round().max(1.0) as u32,
+            (f64::from(image.height()) * scale).round().max(1.0) as u32,
+        );
+        image = image.resize_exact(w, h, image::imageops::FilterType::Lanczos3);
+    }
+    println!(
+        "image:   {path} {}x{} ({:.2} MP)",
+        image.width(),
+        image.height(),
+        f64::from(image.width()) * f64::from(image.height()) / 1e6
+    );
 
     for _ in 0..5 {
         detector.detect_image(&image).context("warm-up")?;
@@ -240,13 +257,18 @@ fn main() -> Result<()> {
 /// `--ab VAR` toggles a flag on and off; `--ab VAR=VALUE` sets it to that value, for
 /// candidates selected by content rather than by presence.
 fn ab_variable() -> Option<(String, String)> {
-    let args: Vec<String> = std::env::args().collect();
-    let index = args.iter().position(|a| a == "--ab")?;
-    let spec = args.get(index + 1)?;
+    let spec = flag_value("--ab")?;
     Some(match spec.split_once('=') {
         Some((name, value)) => (name.to_string(), value.to_string()),
         None => (spec.clone(), "1".to_string()),
     })
+}
+
+/// The argument after `name`, if it is present.
+fn flag_value(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let index = args.iter().position(|a| a == name)?;
+    args.get(index + 1).cloned()
 }
 
 /// Blocks per variant, alternated so a drifting clock lands on both equally.

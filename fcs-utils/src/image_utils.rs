@@ -345,6 +345,11 @@ fn fir_alg(filter: FilterType) -> fir::ResizeAlg {
         if alg == "interp" {
             return fir::ResizeAlg::Interpolation(fir::FilterType::Bilinear);
         }
+        // The `Speed` setting the application already exposes, reachable from the same
+        // harness so experiment 54 could measure what that setting costs a detection.
+        if alg == "nearest" {
+            return fir::ResizeAlg::Nearest;
+        }
     }
     match filter {
         FilterType::Nearest => fir::ResizeAlg::Nearest,

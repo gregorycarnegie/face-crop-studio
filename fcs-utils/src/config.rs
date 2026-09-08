@@ -86,6 +86,12 @@ pub enum ResizeQuality {
     #[default]
     Quality,
     /// Prioritize throughput for batch inference (Nearest filter).
+    ///
+    /// Measured (experiment 54, `examples/resize_quality.rs nearest`, 120 fixtures): 1.76x
+    /// faster end to end, and it loses 2 of 51 faces, shifts landmarks by 10.7 px at p95
+    /// and 33.6 px at worst, and drops box IoU to 0.93. That is the same failure mode as
+    /// the `Interpolation` candidate experiment 51 rejected, so this is a recall setting
+    /// rather than a quality dial.
     Speed,
 }
 
