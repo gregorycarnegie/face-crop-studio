@@ -72,6 +72,29 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+### Peak memory scales with worker count, and nothing else does
+
+GPU retention is flat: 44.1 MB across 400 sources up to 23.4 MP, largest first
+(`examples/memory_growth.rs`). The buffer pool has an idle ceiling, the conv
+caches are keyed by a graph fixed at 640x640, and the preprocessor's texture is
+bounded by the 1.5 MP upload gate -- except on integrated adapters, where that
+gate always passes and the texture takes the largest source seen.
+
+Host memory is the one that moves. Peak working set over the 1239-image folder:
+
+| Workers | Wall s | Peak RSS |
+| ---: | ---: | ---: |
+| 8 | 10.61 | 1.06 GB |
+| 16 | 7.84 | 1.79 GB |
+| 32 (default here) | **7.36** | **3.18 GB** |
+| 64 | 8.02 | 5.43 GB |
+
+About **85 MB per worker**, while wall time flattens after 16: 16 to 32 buys 6%
+for 78% more memory. The default is one worker per logical processor, so the bill
+is set by core count. This adds the axis experiment 60 did not measure rather
+than overturning it -- 60's speed ranking still holds. No cap has been applied;
+see experiment 84 for why.
+
 ### One entry point per kernel halves shader compilation
 
 `conv2d.wgsl` carried four kernels behind one `main` that branches on the
@@ -522,6 +545,9 @@ cargo run --release -p fcs-core --example decode_cost
 
 # Cold start, stage by stage: adapter, shader compile, model parse, first detection
 cargo run --release -p fcs-core --example cold_start
+
+# GPU pool and host RSS as a session goes on, largest source first
+cargo run --release -p fcs-core --example memory_growth -- <dir> [limit]
 
 # Adapter selection cost per backend set (one process per configuration)
 cargo run --release -p fcs-core --example adapter_cost -- dx12

@@ -479,14 +479,20 @@ implementation or workload.
   latency, and invalidate persisted data by compatible device/driver/shader
   identity. Include cache size and total work; moving compilation earlier is
   not the same as making startup cheaper.
-- [ ] **83. Bound specialization and uniform-cache growth.** Sweep many input
+- [~] **83. Bound specialization and uniform-cache growth.** Sweep many input
   resolutions/configurations and compare memory, hit rate and eviction cost.
   Test a bounded cache or known-model prepopulation only if growth matters;
-  keep content-based correctness and concurrent access safety.
-- [ ] **84. Tune pool retention under mixed workloads.** Compare current
+  keep content-based correctness and concurrent access safety. **Premise removed
+  by 74 and 84:** production supports exactly one detector input (640x640), so
+  the conv caches cannot grow from a resolution sweep, and 84 measured the pools
+  flat at 44.1 MB over 400 sources up to 23.4 MP. Reopen if a second input size
+  ever becomes reachable.
+- [x] **84. Tune pool retention under mixed workloads.** Compare current
   retention with bounded high-water marks or idle trimming across large images,
   smaller follow-up runs and concurrent exports. Measure allocation churn,
   p95 latency, VRAM pressure and device failures; memory savings may trade speed.
+  Measured: GPU retention is already flat and bounded; the memory that scales is
+  host RSS with worker count, ~85 MB each. No change made -- see the record.
 - [ ] **94. Give the readback poll a timeout.** Every `device.poll` passes
   `PollType::Wait { timeout: None }`, so a submission that never completes blocks
   the calling thread forever instead of returning an error the caller can report
@@ -2844,6 +2850,63 @@ doing only if recording matters again.
 **No measurable change to a folder job**, which is decode-bound: 8.00 and 7.55 s
 against 8.90 and 7.89, winning both pairs but well inside the noise for a saving
 of 0.056 s over 1239 images. All 901 crops byte-identical.
+
+### 6 (continued) / 84. Peak memory, which nothing had measured
+
+Experiment 6 asked for peak RAM and VRAM and left both open: "that needs
+process-level sampling rather than a timer around a call". 83 and 84 ask whether
+the caches and pools grow without bound. Both are answerable without a profiler.
+
+**Nothing on the GPU side grows.** `examples/memory_growth.rs` walks a corpus
+largest-source-first -- so anything that only ever enlarges reaches its worst case
+immediately and then plateaus visibly -- and reports the pool and the working set
+as it goes. 400 images, up to 23.4 MP:
+
+| Images | GPU pool MB | host RSS MB |
+| ---: | ---: | ---: |
+| 1 | 44.1 | 275.9 |
+| 100 | 44.1 | 328.7 |
+| 200 | 44.1 | 328.6 |
+| 400 | 44.1 | 300.4 |
+
+**Flat at 44.1 MB throughout**, and host RSS plateaus rather than climbing. The
+buffer pool already has an idle ceiling (`max_idle_bytes`), the conv uniform and
+bind-group caches are keyed by a graph fixed at 640x640 whatever the source is,
+and the preprocessor's texture pool is bounded by `MAX_GPU_PREPROCESS_PIXELS`
+(1.5 MP, so 6 MB of RGBA) because `upload_pays_for_source` declines anything
+larger. **One exception, unmeasured:** that gate returns true unconditionally on
+integrated and CPU adapters, so on an iGPU the texture is sized to the largest
+source ever seen instead. Worth checking when such hardware is available (10).
+
+**The batch is a different story, and the number is large.** Peak working set
+over the 1239-image folder, sampled every 50 ms, `RAYON_NUM_THREADS` swept:
+
+| Workers | Wall s | Peak RSS MB | Crops |
+| ---: | ---: | ---: | ---: |
+| 8 | 10.61 | 1,057 | 901 |
+| 16 | 7.84 | 1,791 | 901 |
+| 32 (this machine's default) | **7.36** | **3,181** | 901 |
+| 64 | 8.02 | 5,433 | 901 |
+
+**Memory scales almost linearly with workers -- about 85 MB each -- while wall
+time flattens after 16.** Going 16 to 32 buys **6% speed for 78% more memory**.
+The default is one worker per logical processor, so the bill is set by the core
+count and nothing else: this 32-thread machine peaks at 3.2 GB, and the unpinned
+default run measured 4.3 GB.
+
+**This does not overturn experiment 60, it adds the axis 60 did not measure.**
+60 compared worker counts on speed and concluded the default wins; that still
+holds on speed. What it could not see is that the winning margin is 6% and the
+price is 1.4 GB.
+
+**No change made, and the 64-worker row is not evidence for a cap.** Those 64
+workers ran on 32 logical processors, which is oversubscription, not what a
+64-core machine would do -- so it says nothing about the default there. Whether to
+cap needs a RAM budget and hardware this session does not have, and `main.rs`
+already warns against capping automatically because the number moved as soon as
+the work around it changed. What is now on record is the trade: the default is
+tuned for throughput on a machine with memory to spare, and a user with 8 GB and
+a 32-thread CPU is the case to check before shipping a cap.
 
 ### 82. One entry point per kernel, and two wrong turns on the way
 
