@@ -435,21 +435,23 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
         });
     }
 
-    // One submit + one poll downloads one buffer per level.
-    let raw_data = batch_download(gpu_tensors[0].context(), &gpu_tensors)
-        .context("batch download of detection head outputs")?;
-
-    // Wrap each downloaded buffer as it already is -- channel-major, scores still raw --
-    // and let the decoder gather from that layout. Experiment 55: transposing all twelve
-    // heads to HWC first, only for the decoder to read them cell by cell, was pure
-    // rearrangement of data nothing else looked at. FCS_OLD_CONVERT restores it for A/B.
+    // One submit + one poll downloads one buffer per level, and each level's four
+    // branches are taken straight off the mapped view. Experiment 55: transposing all
+    // twelve heads to HWC first, only for the decoder to read them cell by cell, was pure
+    // rearrangement of data nothing else looked at, so each level arrives channel-major
+    // with cls, obj, bbox and kps in that order and splitting it is taking the channel
+    // ranges off the front in turn.
     //
-    // Each level now arrives as one channel-major buffer holding cls, obj, bbox and kps in
-    // that order, so splitting it is taking the channel ranges off the front in turn -- no
-    // rearrangement, just where each branch starts.
-    let _convert = timing_guard("fcs_core::gpu_convert", log::Level::Trace);
-    let mut outputs: Vec<Tensor> = Vec::with_capacity(DET_HEAD_OUTPUTS);
-    for (flat, m) in raw_data.into_iter().zip(meta.iter()) {
+    // Experiment 17: the branches used to be cut out of a `Vec` that `readback_collect`
+    // had already copied out of the mapped range, so 525 KB was copied once to own it and
+    // most of it again to divide it. The ranges are contiguous and disjoint, so copying
+    // each branch directly out of the mapped view does the whole job in one pass, worth
+    // 0.011 ms at 0.8 MP and 0.021 at 10. Not copying at all -- decoding from the mapping
+    // -- loses: reads out of a mapped allocation measured 55% slower per access than the
+    // same reads out of a `Vec`, which is more than the copy costs. `readback_bytes
+    // --reads` is that measurement.
+    let per_level = batch_download_with(gpu_tensors[0].context(), &gpu_tensors, |i, flat| {
+        let m = &meta[i];
         let rows = m.height * m.width;
         anyhow::ensure!(
             flat.len() == m.channels * rows,
@@ -457,26 +459,21 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
             flat.len(),
             m.channels * rows
         );
-        // Peel from the back. `Vec::split_off` copies the tail it returns, so taking the
-        // branches front to back re-copies everything still ahead of the cut each time --
-        // 39 rows of movement for 16 rows of data, which measured at 0.058 ms against the
-        // 0.001 ms this stage used to cost. Backwards, each branch's data is copied once
-        // and the first branch is left in place with no copy at all.
-        let mut rest = flat;
-        let mut branches: [Option<Vec<f32>>; HEAD_BRANCH_CHANNELS.len()] = Default::default();
-        for idx in (1..HEAD_BRANCH_CHANNELS.len()).rev() {
-            let at = rest.len() - HEAD_BRANCH_CHANNELS[idx] * rows;
-            branches[idx] = Some(rest.split_off(at));
-        }
-        branches[0] = Some(rest);
-        for (channels, branch) in HEAD_BRANCH_CHANNELS.into_iter().zip(branches) {
-            let branch = branch.expect("every branch was filled above");
-            outputs.push(
-                Tensor::from_vec(&[channels, rows], branch)
+        let mut start = 0;
+        let mut branches = Vec::with_capacity(HEAD_BRANCH_CHANNELS.len());
+        for channels in HEAD_BRANCH_CHANNELS {
+            let end = start + channels * rows;
+            branches.push(
+                Tensor::from_vec(&[channels, rows], flat[start..end].to_vec())
                     .context("failed to build tensor from branch output")?,
             );
+            start = end;
         }
-    }
+        Ok(branches)
+    })
+    .context("batch download of detection head outputs")?;
+
+    let outputs: Vec<Tensor> = per_level.into_iter().flatten().collect();
 
     // The original order was cls×3, obj×3, bbox×3, kps×3 (grouped by type).
     // Currently outputs are interleaved as [cls0, obj0, bbox0, kps0, cls1, ...].
@@ -495,12 +492,23 @@ fn build_decode_tensors(levels: &[DetectionLevelOutputs; 3]) -> Result<Vec<Tenso
 
 const DET_HEAD_OUTPUTS: usize = 12;
 
-/// Download multiple GPU tensors in a single submit + single poll.
+/// Download multiple GPU tensors in a single submit + single poll, calling `split`
+/// on each one's mapped view.
 ///
 /// All buffer copies are recorded into one `CommandEncoder` and submitted
 /// together. The GPU DMA engine can pipeline them, and we block exactly
 /// once instead of once per tensor.
-fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<Vec<Vec<f32>>> {
+///
+/// `split` runs while the buffer is still mapped, so a caller that only wants part of a
+/// download -- or wants it cut up -- copies once instead of owning the whole buffer
+/// first and dividing it afterwards (experiment 17). It must not keep the slice: the
+/// buffer is unmapped as soon as it returns. Passing `|_, f| Ok(f.to_vec())` recovers
+/// the plain "give me the buffer" download.
+fn batch_download_with<T>(
+    context: &Arc<GpuContext>,
+    tensors: &[&GpuTensor],
+    split: impl Fn(usize, &[f32]) -> Result<T>,
+) -> Result<Vec<T>> {
     if tensors.is_empty() {
         return Ok(vec![]);
     }
@@ -558,12 +566,7 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
         // absorbs the forward pass itself, so this is GPU execution plus the copies,
         // not idle cost, and must not be added to a GPU timestamp total.
         let _guard = timing_guard("fcs_core::readback_wait", log::Level::Trace);
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .map_err(|e| anyhow!("batch readback poll failed: {e}"))?;
+        fcs_utils::gpu::wait_for_gpu(device, "batch readback")?;
     }
 
     // Collect data from all mapped buffers and unmap.
@@ -580,17 +583,22 @@ fn batch_download(context: &Arc<GpuContext>, tensors: &[&GpuTensor]) -> Result<V
             .slice(0..size_bytes)
             .get_mapped_range()
             .map_err(|e| anyhow!("batch readback mapped range failed for tensor {i}: {e}"))?;
-        let floats: Vec<f32> = cast_slice(&mapped).to_vec();
+        let floats: &[f32] = cast_slice(&mapped);
+        // Checked before `split` sees it, so a caller indexing by its own shape cannot
+        // read past a buffer that came back short.
+        let checked = if floats.len() == elements {
+            split(i, floats)
+        } else {
+            Err(anyhow!(
+                "batch readback tensor {i}: got {} elements, expected {elements}",
+                floats.len()
+            ))
+        };
+        // Unmap before propagating: a buffer left mapped by an early return cannot be
+        // reused or dropped cleanly.
         drop(mapped);
         buf.unmap();
-
-        anyhow::ensure!(
-            floats.len() == elements,
-            "batch readback tensor {i}: got {} elements, expected {}",
-            floats.len(),
-            elements
-        );
-        results.push(floats);
+        results.push(checked?);
     }
 
     Ok(results)

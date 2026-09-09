@@ -419,10 +419,18 @@ first byte.
 Of the 0.09 ms ceiling, the allocation and copy halves land in the post-submit
 window experiments 12-14 showed is free. What is actually recoverable is the DMA
 inside the wait (~0.028 ms) and the host copy out of the mapped range
-(~0.030 ms) -- and the second of those needs no GPU pass, only a decode that
-reads the mapped view. Compaction was rejected: an atomic append also makes NMS
+(~0.030 ms). Compaction was rejected: an atomic append also makes NMS
 tie-breaking nondeterministic, and keeping the order needs a prefix scan and a
 scatter.
+
+**About a third of that host half was real** (experiment 17). The heads were
+copied out of the mapping to own them and then cut into their four branches,
+which copied most of them again; the branches now come off the mapping directly,
+worth 0.011 ms at 0.8 MP and 0.021 at 10. Removing the surviving copy as well --
+decoding straight from the mapped view -- was measured and **loses**:
+`readback_bytes --reads` puts a decode-shaped read at 0.020 ms out of a `Vec`
+against 0.031 ms out of the mapping, and that 0.011 ms penalty is larger than the
+0.009 ms copy it would remove. The copy is load-bearing.
 
 ### The resize is at its floor
 
@@ -465,6 +473,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 | Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |
+| Branch the heads off the mapped view, not a copy of it | -0.011 to -0.021 ms | `gpu/runtime.rs` |
 | Letterbox instead of stretching to the model input | **+100 faces over 1239 images**, -0.38 ms at 2 MP | `image_utils.rs`, both preprocess shaders, `detector.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
@@ -661,6 +670,9 @@ cargo run --release -p fcs-core --example decode_cost
 
 # What a head download costs per byte, with no inference hiding the copies
 cargo run --release -p fcs-core --example readback_bytes
+
+# Whether the decode should read the mapped range or a copy of it
+cargo run --release -p fcs-core --example readback_bytes -- --reads
 
 # Both preprocessing routes at one source size, in one process
 cargo run --release -p fcs-core --example phase_timings -- --mp 1.8 --ab FCS_MAX_GPU_PREPROCESS_PIXELS=99000000

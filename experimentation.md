@@ -147,10 +147,15 @@ implementation or workload.
   or mapping completion with a device-wide wait under other in-flight work.
   Measure unrelated-work interference; no buffer may be read or recycled
   before its own submission completes.
-- [ ] **17. Reuse CPU output storage.** Compare new vectors/channels/temporary
+- [x] **17. Reuse CPU output storage.** Compare new vectors/channels/temporary
   tensors per detection with appropriately scoped reuse or decoding from a
   mapped view. Measure copies and allocation cost; release mapped memory
-  promptly and preserve error handling and concurrent callers.
+  promptly and preserve error handling and concurrent callers. Handed over by
+  57. Half kept: the head buffer was copied out of the mapping and then cut into
+  branches, and the branches now come straight off the mapping instead
+  (-0.011 to -0.021 ms). Decoding from the mapping was measured and **rejected**
+  -- reads there are 55% dearer than reads out of a `Vec`, more than the copy
+  they would remove.
 - [ ] **18. Overlap readback with the next input.** After 11-17, test a bounded
   two/three-slot staging ring if throughput warrants it. Measure frame latency,
   throughput and VRAM, including slow consumers and cancellation. Depends on
@@ -508,6 +513,7 @@ implementation or workload.
   timeout long enough never to fire on real work, decide what the caller does when
   it fires, and check that a timed-out wait leaves the buffer pool and execution
   scope in a state the next inference can use.
+
 - [ ] **85. Validate sustained operation and power efficiency.** Run the best
   candidates through long webcam sessions and large exports, including VRAM
   pressure and background GPU work. Track drift, thermals, memory growth,
@@ -3584,6 +3590,59 @@ on 525 KB *after* the wait, which needs no GPU pass at all to attack. That is
 experiment 17, which already names "decoding from a mapped view". It is a
 hypothesis and not a saving: reads from a mapped readback allocation can be far
 slower per access than reads from a `Vec`, which is why the copy is there.
+
+### 17. The second copy, and why the first one stays
+
+`readback_collect` copied each level's fused head buffer out of the mapped range
+into a `Vec`, and `gpu_convert` then cut the four branches out of that `Vec`
+afterwards. 57 handed this over as the last part of the download nothing had
+attacked: host work on 525 KB, after the wait, needing no GPU pass to remove.
+The branch ranges are contiguous and disjoint, so the second copy only existed
+because the first one had happened -- taking each branch straight off the mapped
+view does the whole job in one pass.
+
+In-process A/B, `phase_timings --ab FCS_COPY_THEN_SPLIT=1`, 8 blocks of 15 runs
+per variant, alternated. Both variants now split inside `readback_collect`, so
+that one label holds the entire comparison and `gpu_convert` no longer exists:
+
+| Source | collect, two passes | collect, one pass | delta | `detect_image` block spread |
+| --- | ---: | ---: | ---: | --- |
+| 0.8 MP | 0.031 | 0.020 | **-0.011** | 0.912-0.954 ms |
+| 10.11 MP | 0.053 | 0.032 | **-0.021** | 1.996-2.198 ms |
+
+The wall delta is inside that spread at both sizes, which is what a 0.011-0.021 ms
+change on a 0.93-2.10 ms path has to be; the phase is the measurement. The size
+dependence is the cache rather than the work -- the same 525 KB is copied either
+way, but after a 10 MP resize has walked the caches the surviving copy costs
+more, so removing the other one is worth more.
+
+Bit-identical: `readback_parity` returns `0xa116e42f7c2dabdb` over five runs
+under both variants, and the whole 1239-image folder was run through the CLI
+both ways -- **1129 faces, 959 crops, 959 of 959 byte-identical**, which is the
+first record of the post-96 counts and the standard 71 established. **Kept**,
+and `split_off` and the comment explaining why it had to peel backwards go with
+it. Folder wall time is unchanged and cannot show this: 0.02 ms per detection
+over 1129 detections is 0.02 s of a 7.1-7.4 s job.
+
+**Not copying at all loses, which is the other half of the question.** 57 raised
+it and called it a hypothesis rather than a saving: reads out of a mapped
+allocation can be far slower per access than reads out of a `Vec`. Measured
+directly by `readback_bytes --reads`, over the three production head buffers,
+200 runs after 10 warm, in-place read taken first so the copy cannot be what
+warms the cache for it. The access pattern is the one 93 left behind: both score
+channels for every cell, the other fourteen for one cell in six.
+
+| Over 525 KB of production heads | ms |
+| --- | ---: |
+| copy out of the mapping | 0.009 |
+| decode-shaped read of the copy | 0.020 |
+| the same read, in the mapping | **0.031** |
+
+Reading the mapped allocation is ~55% more expensive per access, and that
+penalty (0.011) is larger than the copy it would remove (0.009): 0.029 for
+copy-then-read against 0.031 in place. **The remaining copy is load-bearing and
+stays.** What 17 removed was the one that was redundant, and the ceiling 57
+priced at 0.05-0.08 ms was never all available: about a third of it was.
 
 ### Previous work
 

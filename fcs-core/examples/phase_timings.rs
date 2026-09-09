@@ -57,7 +57,6 @@ const DISPLAY: &[(&str, usize)] = &[
     ("fcs_core::readback_map", 4),
     ("fcs_core::readback_wait", 4),
     ("fcs_core::readback_collect", 4),
-    ("fcs_core::gpu_convert", 4),
     ("fcs_core::gpu_decode", 3),
     ("fcs_core::postprocess", 2),
     ("fcs_core::gpu_upload", 2),
