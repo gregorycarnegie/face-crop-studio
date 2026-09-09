@@ -18,32 +18,55 @@
 
 use super::{GpuAvailability, GpuContext, GpuContextOptions};
 use image::{DynamicImage, GenericImageView, RgbaImage};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// A GPU context, or `None` when the machine has no usable adapter.
 ///
 /// Tests self-skip rather than fail so the suite still runs on hosted CI
 /// runners without a GPU. `FCS_STRICT_TESTS` does not apply here: absence of an
 /// adapter is a property of the machine, not a broken fixture.
+///
+/// **Built once for the whole binary.** Every GPU test used to bring up its own D3D12
+/// device, and `cargo test` starts them 32 at a time, so a run opened dozens of devices
+/// within a few milliseconds of each other. About one run in seven then wedged inside the
+/// NVIDIA usermode driver -- every thread parked in `NtGdiDdDDICreateAllocation`,
+/// `NtGdiDdDDIDestroyAllocation2` or a contended driver critical section, with nothing of
+/// ours on the stack -- and stayed there indefinitely. That is the ten-hour hang
+/// experiment 94 was opened for. One device removes the pile-up, and the suite drops from
+/// ~4 s to under 2. Sharing is safe: `Device` and `Queue` are `Sync`, and the caches and
+/// pools these tests assert on belong to the operation objects, not to the context.
 pub(crate) fn test_context() -> Option<Arc<GpuContext>> {
-    match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(ctx) => Some(ctx),
-        _ => None,
-    }
+    static CONTEXT: OnceLock<Option<Arc<GpuContext>>> = OnceLock::new();
+    CONTEXT
+        .get_or_init(
+            || match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+                GpuAvailability::Available(ctx) => Some(ctx),
+                _ => None,
+            },
+        )
+        .clone()
 }
 
 /// A context with compute-pass timing on, or `None` when the machine has no usable
 /// adapter. The context still builds when the adapter lacks `TIMESTAMP_QUERY`; it just
 /// records nothing, so callers must handle an empty timing list.
+///
+/// Separate from [`test_context`] because profiling is a device-creation option, and
+/// cached for the same reason.
 pub(crate) fn profiling_context() -> Option<Arc<GpuContext>> {
-    let options = GpuContextOptions {
-        profiling: true,
-        ..GpuContextOptions::default()
-    };
-    match GpuContext::init_with_fallback(&options) {
-        GpuAvailability::Available(ctx) => Some(ctx),
-        _ => None,
-    }
+    static CONTEXT: OnceLock<Option<Arc<GpuContext>>> = OnceLock::new();
+    CONTEXT
+        .get_or_init(|| {
+            let options = GpuContextOptions {
+                profiling: true,
+                ..GpuContextOptions::default()
+            };
+            match GpuContext::init_with_fallback(&options) {
+                GpuAvailability::Available(ctx) => Some(ctx),
+                _ => None,
+            }
+        })
+        .clone()
 }
 
 /// An image where every pixel differs from its neighbours in all four channels.

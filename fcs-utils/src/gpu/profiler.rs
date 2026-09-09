@@ -177,12 +177,7 @@ impl GpuProfiler {
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = sender.send(res);
         });
-        device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .map_err(|err| anyhow!("device poll failed during profiler readback: {err}"))?;
+        crate::gpu::wait_for_gpu(device, "profiler readback")?;
         receiver
             .recv()
             .map_err(|_| anyhow!("GPU profiler map callback dropped"))?

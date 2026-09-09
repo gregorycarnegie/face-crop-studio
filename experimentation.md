@@ -504,15 +504,17 @@ implementation or workload.
   p95 latency, VRAM pressure and device failures; memory savings may trade speed.
   Measured: GPU retention is already flat and bounded; the memory that scales is
   host RSS with worker count, ~85 MB each. No change made -- see the record.
-- [ ] **94. Give the readback poll a timeout.** Every `device.poll` passes
-  `PollType::Wait { timeout: None }`, so a submission that never completes blocks
+- [x] **94. Give the readback poll a timeout.** Every `device.poll` passed
+  `PollType::Wait { timeout: None }`, so a submission that never completes blocked
   the calling thread forever instead of returning an error the caller can report
   or retry. Observed once during 82's validation: a test binary sat for ten hours
-  on 35 seconds of CPU across a long idle window and had to be killed. Not
-  reproducible on demand, which is the difficulty -- the experiment is to find a
-  timeout long enough never to fire on real work, decide what the caller does when
-  it fires, and check that a timed-out wait leaves the buffer pool and execution
-  scope in a state the next inference can use.
+  on 35 seconds of CPU across a long idle window and had to be killed. Answered,
+  and the premise turned out to be wrong. The deadline is 30 seconds and the five
+  duplicated wait sites are now one `wait_for_gpu` -- but the hang reproduced
+  under `cdb` and no thread was in a wait at all: they were all inside the NVIDIA
+  driver creating D3D12 resources, because the test harness built one device per
+  test and ran 32 at once. One shared context fixed that and made the `fcs-utils`
+  suite 2.6x faster.
 
 - [ ] **85. Validate sustained operation and power efficiency.** Run the best
   candidates through long webcam sessions and large exports, including VRAM
@@ -3643,6 +3645,86 @@ penalty (0.011) is larger than the copy it would remove (0.009): 0.029 for
 copy-then-read against 0.031 in place. **The remaining copy is load-bearing and
 stays.** What 17 removed was the one that was redundant, and the ceiling 57
 priced at 0.05-0.08 ms was never all available: about a third of it was.
+
+### 94. The deadline was the easy half; the hang was not what it looked like
+
+Every blocking wait in the pipeline passed `PollType::Wait { timeout: None }`,
+so a submission that never completes parks the calling thread forever with
+nothing to report. Observed once during 82's validation -- a test binary sat for
+ten hours on 35 seconds of CPU and had to be killed -- and not reproducible on
+demand, which is what made it an experiment rather than a fix.
+
+**The deadline, which is the part that was straightforward.** Five copies of the
+same twelve lines: the head readback in `gpu/runtime.rs`, `read_buffer` in
+`gpu/tensor.rs`, the preprocessing readback in `preprocess.rs`, the timestamp
+resolve in `gpu/profiler.rs`, and the `gpu_readback!` macro that every image
+operation in `fcs-utils` expands. All five now call one
+`fcs_utils::gpu::wait_for_gpu`, and there is exactly one `device.poll` left in
+the production tree.
+
+Thirty seconds. Every wait here covers a single submission -- a forward pass, a
+preprocessing dispatch, a filter, a timestamp resolve -- and those are
+single-digit milliseconds on the slowest hardware the app targets; Windows
+already resets a GPU that stops responding for two seconds. Three orders of
+magnitude above the largest real wait measured anywhere in this file. The error
+names the operation and the deadline, because a missed deadline is the one poll
+failure that means "still running" rather than "broken". A wait that expires
+leaves the buffer unmapped -- its map callback never fired -- and every site
+propagates before `get_mapped_range`; `preprocess.rs` recycles its pooled
+buffers only on the success path, so a buffer with an outstanding map request
+is dropped rather than handed to the next caller.
+
+**Then the hang reproduced, and it was not a poll.** `cargo test --workspace
+--release` wedged for 25 minutes on 4.75 seconds of CPU. Attaching `cdb` to the
+`fcs_utils` test binary and walking all 81 threads:
+
+```text
+1  Id: ... "enhance::gpu::tests::each_enhancement_changes_the_image..."
+   ntdll!RtlpEnterCriticalSectionContended
+   nvwgf2umx!NVAPI_DirectMethods+0x621e5
+   D3D12Core!CCommandList<...>::VersionedResetCommandList
+3  Id: ... "enhance::gpu::tests::negative_exposure_is_active_too"
+   win32u!NtGdiDdDDICreateAllocation
+   D3D12Core!CResource::FinalConstruct
+39 Id: ... "gpu::background_blur::tests::blend_clamps_the_mask_size..."
+   win32u!NtGdiDdDDIDestroyAllocation2
+```
+
+**Not one thread was in a wait of ours.** Every stuck test was inside the NVIDIA
+usermode driver, creating or destroying D3D12 resources, several of them parked
+on the driver's own critical section. `wait_for_gpu`'s deadline would never have
+fired, because nothing had reached a wait.
+
+The cause is in the test harness, not the pipeline. `test_context()` built a
+fresh `GpuContext` -- a fresh D3D12 device -- per test, and six modules had their
+own copy of it despite `test_support` existing. `cargo test` runs 32 threads, so
+a run opened dozens of devices within a few milliseconds of each other, and the
+driver occasionally did not survive it. **One cached context per test binary**,
+with the six duplicates deleted:
+
+| | Suite wall time | Hangs |
+| --- | ---: | ---: |
+| A device per test | 3.8-4.2 s | 1 in the 3 runs after the first sighting; 0 in 15 on master |
+| One shared device | **1.5 s** | **0 in 70 consecutive runs** |
+
+The before-rate is not something these numbers pin down -- the hang is rare and
+its trigger is timing, so a 15-run block of zeroes proves very little, and 2 of
+15 on a candidate that cannot reach the driver's allocator proves less. What is
+established is the mechanism, from the stacks, and that 70 consecutive runs
+under one device produced nothing. The 2.6x on suite wall time needs no
+statistics: it is one `request_adapter` instead of forty, and 80 measured that
+at 546 ms.
+
+**Kept, both parts, for different reasons.** The deadline because a wait that
+cannot fail is wrong regardless of what caused this particular hang, and the
+shared context because it is faster, is less code, and removes the pile-up the
+stacks actually blamed. **94's original premise is wrong and is recorded as
+wrong:** the ten-hour hang was almost certainly this, and a poll timeout would
+not have caught it.
+
+Validated with the full workspace suite under `FCS_STRICT_TESTS=1` (0 failures)
+and a 1239-image folder job, which is where 71's lesson says a change to a
+shared helper belongs: 959 of 959 crops byte-identical against master.
 
 ### Previous work
 

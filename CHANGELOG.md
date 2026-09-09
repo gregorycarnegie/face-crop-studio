@@ -52,6 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every wait for the GPU now has a deadline.** All five blocking `device.poll`
+  calls asked to wait indefinitely, so a submission that never completed would
+  park the calling thread forever with nothing to report. They are now one shared
+  `wait_for_gpu` with a 30-second limit -- three orders of magnitude above any
+  real wait, and past the two seconds at which Windows resets an unresponsive GPU
+  by itself -- which reports the operation and the deadline instead of hanging.
+  An expired wait leaves nothing mapped and returns no buffer to a pool.
+
 - **A fresh install detected with the nearest-neighbour resize.**
   `InputDimensions::default()` said `Speed` while `ResizeQuality::default()` and
   the shipped `config/gui_settings.json` both said `Quality`, so anyone starting

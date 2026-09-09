@@ -180,12 +180,7 @@ macro_rules! gpu_readback {
             let _ = sender.send(res);
         });
 
-        $device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            })
-            .map_err(|err| anyhow::anyhow!("device poll failed during {}: {err}", $operation))?;
+        $crate::gpu::wait_for_gpu($device, $operation)?;
 
         receiver
             .recv()

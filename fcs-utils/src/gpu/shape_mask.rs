@@ -194,18 +194,10 @@ impl GpuShapeMask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        color::RgbaColor,
-        gpu::{GpuAvailability, GpuContextOptions},
-    };
+    use crate::color::RgbaColor;
     use image::RgbaImage;
 
-    fn test_context() -> Option<Arc<GpuContext>> {
-        match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => Some(ctx),
-            _ => None,
-        }
-    }
+    use crate::gpu::test_support::test_context;
 
     #[test]
     fn rectangle_variant_returns_none() {

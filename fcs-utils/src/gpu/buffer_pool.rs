@@ -439,14 +439,8 @@ impl fmt::Debug for GpuBufferPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::{GpuAvailability, GpuContextOptions};
 
-    fn test_context() -> Option<Arc<GpuContext>> {
-        match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => Some(ctx),
-            _ => None,
-        }
-    }
+    use crate::gpu::test_support::test_context;
 
     #[test]
     fn debug_impl_does_not_panic() {

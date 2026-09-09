@@ -51,6 +51,63 @@ use std::sync::Arc;
 /// Compute passes one profiler run can hold. A YuNet forward pass is ~62.
 const DEFAULT_PROFILER_PASSES: u32 = 256;
 
+/// How long a blocking wait for the GPU may take before it is treated as a fault.
+///
+/// Every wait in this codebase covers one submission -- a forward pass, a preprocessing
+/// dispatch, a filter or a timestamp resolve -- and those are single-digit milliseconds
+/// even on the slowest hardware the app runs on. Windows resets a GPU that stops
+/// responding for two seconds, so a wait still running after thirty is not slow work; it
+/// is work that is never going to finish, and the caller is better off being told than
+/// blocked. Observed once during experiment 82's validation: a test binary sat for ten
+/// hours on 35 seconds of CPU and had to be killed, because every `poll` in the pipeline
+/// passed `timeout: None` (experiment 94).
+pub const GPU_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Block until the device's submitted work completes, or fail after [`GPU_WAIT_TIMEOUT`].
+///
+/// The one place any of this code waits on the GPU. A timed-out wait leaves the buffer
+/// unmapped and its map callback outstanding, so every caller must propagate the error
+/// rather than reading the buffer or returning it to a pool -- which is what `?` on this
+/// already does.
+pub fn wait_for_gpu(device: &Device, operation: &str) -> anyhow::Result<()> {
+    wait_for_gpu_until(device, operation, GPU_WAIT_TIMEOUT)
+}
+
+/// [`wait_for_gpu`] with the deadline supplied, so a test can force the timeout branch
+/// without waiting thirty seconds for a device that is working perfectly well.
+fn wait_for_gpu_until(
+    device: &Device,
+    operation: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<()> {
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(timeout),
+        })
+        .map_err(|err| wait_error(&err, operation, timeout))?;
+    Ok(())
+}
+
+/// What a failed wait tells the caller.
+///
+/// Split out because a missed deadline is the one poll failure the caller may want to
+/// retry rather than give up on, and it has to be distinguishable from a wgpu error to
+/// be acted on. Nothing else in the crate can construct a `PollError`, so this is also
+/// the only place the message can be checked.
+fn wait_error(
+    err: &wgpu::PollError,
+    operation: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Error {
+    match err {
+        wgpu::PollError::Timeout => anyhow::anyhow!(
+            "GPU wait during {operation} timed out after {timeout:?}:              the device has not completed its submitted work"
+        ),
+        other => anyhow::anyhow!("device poll failed during {operation}: {other}"),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GpuReport {
     pub summary: String,
@@ -890,5 +947,90 @@ mod tests {
             assert!(indicator.adapter_name.is_none());
             assert!(indicator.backend.is_none());
         }
+    }
+
+    /// Experiment 94's other half: that a wait which does not get what it wanted leaves
+    /// the device usable. A zero-length deadline is as close as a test can get to a
+    /// missed one on a working GPU -- on this hardware the copy has usually already
+    /// landed, so the poll returns `Ok` and the branch is exercised by
+    /// [`a_missed_deadline_is_named_as_one`] instead. What this pins is that whatever
+    /// the short wait returned, the data still arrives on the next one.
+    #[test]
+    fn a_short_wait_leaves_the_device_usable() {
+        let Some(ctx) = test_support::test_context() else {
+            return;
+        };
+        let (device, queue) = (ctx.device(), ctx.queue());
+        let payload: Vec<u32> = (0..4096u32).collect();
+        let src = wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("wait_probe_src"),
+                contents: bytemuck::cast_slice(&payload),
+                usage: wgpu::BufferUsages::COPY_SRC,
+            },
+        );
+        let bytes = std::mem::size_of_val(payload.as_slice()) as wgpu::BufferAddress;
+        let dst = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wait_probe_dst"),
+            size: bytes,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("wait_probe"),
+        });
+        encoder.copy_buffer_to_buffer(&src, 0, &dst, 0, bytes);
+        queue.submit(Some(encoder.finish()));
+
+        let _ = wait_for_gpu_until(device, "wait probe", std::time::Duration::ZERO);
+
+        // The point of the experiment: a wait that returned early must not poison the
+        // device, and the work it was waiting for must still arrive.
+        let (tx, rx) = std::sync::mpsc::channel();
+        dst.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        wait_for_gpu(device, "wait probe retry").expect("the device is still usable");
+        rx.recv().expect("callback").expect("map");
+        let mapped = dst.slice(..).get_mapped_range().expect("mapped range");
+        let read: Vec<u32> = bytemuck::cast_slice(&mapped).to_vec();
+        drop(mapped);
+        dst.unmap();
+        assert_eq!(
+            read, payload,
+            "the copy still lands after a missed deadline"
+        );
+    }
+
+    /// A missed deadline has to be distinguishable from any other poll failure, because
+    /// it is the only one that says "still running" rather than "broken".
+    #[test]
+    fn a_missed_deadline_is_named_as_one() {
+        let timed_out = wait_error(
+            &wgpu::PollError::Timeout,
+            "batch readback",
+            std::time::Duration::from_secs(30),
+        )
+        .to_string();
+        assert!(
+            timed_out.contains("timed out") && timed_out.contains("batch readback"),
+            "{timed_out}"
+        );
+        assert!(
+            timed_out.contains("30s"),
+            "the deadline belongs in the message: {timed_out}"
+        );
+
+        let other = wait_error(
+            &wgpu::PollError::WrongSubmissionIndex(4, 2),
+            "batch readback",
+            std::time::Duration::from_secs(30),
+        )
+        .to_string();
+        assert!(
+            !other.contains("timed out"),
+            "a wgpu fault must not be reported as a slow device: {other}"
+        );
     }
 }

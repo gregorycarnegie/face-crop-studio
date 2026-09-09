@@ -192,15 +192,9 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::{GpuAvailability, GpuContextOptions};
     use image::RgbaImage;
 
-    fn test_context() -> Option<Arc<GpuContext>> {
-        match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => Some(ctx),
-            _ => None,
-        }
-    }
+    use crate::gpu::test_support::test_context;
 
     #[test]
     fn div_ceil_basic() {

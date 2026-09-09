@@ -350,12 +350,7 @@ fn read_buffer(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .map_err(|e| anyhow!("device poll failed during {label}: {e}"))?;
+    fcs_utils::gpu::wait_for_gpu(device, label)?;
     receiver
         .recv()
         .with_context(|| format!("{label} callback dropped"))?

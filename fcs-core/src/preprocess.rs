@@ -1073,12 +1073,7 @@ fn gpu_preprocess(
     buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = sender.send(res);
     });
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .map_err(|e| anyhow::anyhow!("device poll failed during preprocessing: {e}"))?;
+    fcs_utils::gpu::wait_for_gpu(device, "preprocessing")?;
     receiver
         .recv()
         .map_err(|_| anyhow::anyhow!("GPU map callback was dropped"))?
