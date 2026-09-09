@@ -49,8 +49,9 @@ pub use gpu::{
     GpuAvailability, GpuContext, GpuContextOptions, GpuInitError, RedEye, platform_safe_backends,
 };
 pub use image_utils::{
-    SUPPORTED_IMAGE_EXTENSIONS, compute_resize_scales, dynamic_to_bgr_chw, is_supported_image_path,
-    load_image, load_image_raw, resize_image, resize_rgba_fast, rgb_to_bgr_chw,
+    InputFit, LETTERBOX_PAD, SUPPORTED_IMAGE_EXTENSIONS, dynamic_to_bgr_chw, fit_input,
+    is_supported_image_path, load_image, load_image_raw, resize_image, resize_rgba_fast,
+    rgb_to_bgr_chw, rgb_to_bgr_chw_letterboxed,
 };
 use log::LevelFilter;
 pub use output::{

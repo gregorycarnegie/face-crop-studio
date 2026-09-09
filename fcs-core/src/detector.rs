@@ -12,7 +12,7 @@ use crate::{
 
 use crate::tensor::Tensor;
 use anyhow::{Context, Result};
-use fcs_utils::{load_image, timing_guard};
+use fcs_utils::{InputFit, load_image, timing_guard};
 use image::DynamicImage;
 use std::{path::Path, sync::Arc};
 
@@ -83,6 +83,30 @@ impl DetectorBackend {
             )
         })?;
         Ok(())
+    }
+}
+
+/// Take the letterbox bars back off, turning model coordinates into source pixels.
+///
+/// The source is fitted into the model input rather than stretched to it, so a detection
+/// comes out offset by however wide the bars were. `apply_postprocess` has already
+/// multiplied by the scale, and subtracting `origin * scale` afterwards is the same as
+/// subtracting `origin` before it -- which keeps the decode, and its sixteen call sites,
+/// unaware that letterboxing exists.
+///
+/// Box sizes are untouched: a bar shifts a face, it does not resize one.
+fn remove_letterbox_offset(detections: &mut [Detection], fit: &InputFit) {
+    let (offset_x, offset_y) = fit.source_offset();
+    if offset_x == 0.0 && offset_y == 0.0 {
+        return;
+    }
+    for detection in detections {
+        detection.bbox.x -= offset_x;
+        detection.bbox.y -= offset_y;
+        for landmark in &mut detection.landmarks {
+            landmark.x -= offset_x;
+            landmark.y -= offset_y;
+        }
     }
 }
 
@@ -233,7 +257,10 @@ impl YuNetDetector {
         };
         let detections = {
             let _guard = timing_guard("fcs_core::postprocess", log::Level::Debug);
-            apply_postprocess(&raw, scales.scale_x, scales.scale_y, &self.postprocess)?
+            let mut detections =
+                apply_postprocess(&raw, scales.scale_x, scales.scale_y, &self.postprocess)?;
+            remove_letterbox_offset(&mut detections, &scales.fit);
+            detections
         };
 
         Ok(Some(DetectionOutput {
@@ -282,6 +309,7 @@ impl YuNetDetector {
             tensor,
             scale_x,
             scale_y,
+            fit,
             original_size,
         } = prep;
 
@@ -292,7 +320,9 @@ impl YuNetDetector {
 
         let detections = {
             let _guard = timing_guard("fcs_core::postprocess", log::Level::Debug);
-            apply_postprocess(&raw, scale_x, scale_y, &self.postprocess)?
+            let mut detections = apply_postprocess(&raw, scale_x, scale_y, &self.postprocess)?;
+            remove_letterbox_offset(&mut detections, &fit);
+            detections
         };
 
         Ok(DetectionOutput {
@@ -301,5 +331,60 @@ impl YuNetDetector {
             scale_y,
             original_size,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::postprocess::{BoundingBox, Landmark};
+    use fcs_utils::fit_input;
+
+    fn detection(x: f32, y: f32) -> Detection {
+        Detection {
+            bbox: BoundingBox {
+                x,
+                y,
+                width: 40.0,
+                height: 50.0,
+            },
+            landmarks: [Landmark { x, y }; 5],
+            score: 0.9,
+        }
+    }
+
+    /// The one thing here that can go wrong silently: a detection that is still found, and
+    /// still the right size, but placed by however wide the bars were. Every crop would be
+    /// off and nothing would fail.
+    #[test]
+    fn removing_the_offset_lands_a_corner_detection_on_the_source_corner() {
+        // 16:9 into a square: bars top and bottom, so only y moves.
+        let fit = fit_input((1920, 1080), (640, 640)).expect("fit");
+        assert_eq!(fit.origin, (0, 140));
+
+        // A detection sitting exactly on the top-left of the drawn region, already scaled to
+        // source pixels by `apply_postprocess`.
+        let mut detections = vec![detection(0.0, fit.origin.1 as f32 * fit.scale)];
+        remove_letterbox_offset(&mut detections, &fit);
+
+        assert!((detections[0].bbox.x - 0.0).abs() < 0.01);
+        assert!(
+            detections[0].bbox.y.abs() < 0.01,
+            "top of the drawn region should be y=0 in the source, got {}",
+            detections[0].bbox.y
+        );
+        assert!((detections[0].landmarks[0].y).abs() < 0.01);
+        // A bar shifts a face; it does not resize one.
+        assert_eq!(detections[0].bbox.width, 40.0);
+        assert_eq!(detections[0].bbox.height, 50.0);
+    }
+
+    #[test]
+    fn a_source_that_needs_no_bars_is_left_alone() {
+        let fit = fit_input((640, 640), (640, 640)).expect("fit");
+        let mut detections = vec![detection(11.0, 22.0)];
+        remove_letterbox_offset(&mut detections, &fit);
+        assert_eq!(detections[0].bbox.x, 11.0);
+        assert_eq!(detections[0].bbox.y, 22.0);
     }
 }

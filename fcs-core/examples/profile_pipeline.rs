@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
         tensor,
         scale_x,
         scale_y,
+        fit: _,
         original_size: _,
     } = preprocessed;
 

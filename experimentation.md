@@ -514,11 +514,12 @@ implementation or workload.
   responsiveness and energy/image where measurable; short warm microbenchmarks
   can miss production regressions.
 - [x] **96. Letterbox instead of stretching to the model input.** The
-  preprocessor scales x and y independently, so every non-square source reaches
-  the model distorted and its score falls. Measured over all 1239 images at
-  production's threshold: 77 images gain a detection, 18 lose one, and every box
-  on a non-square source moves (median IoU 0.76-0.87, landmarks 34-46 px). Not
-  implemented; the decision needs the crops, to the standard 71 was held to.
+  preprocessor scaled x and y independently, so every non-square source reached
+  the model distorted and its score fell. Measured over all 1239 images at
+  production's threshold: 77 images gain a detection, 19 lose one, and every box
+  on a non-square source moves (median IoU 0.76-0.87, landmarks 34-46 px). The
+  crops were compared both ways on a real folder, which is the standard 71 was
+  held to; **adopted**, and the corpus goes from 1030 detections to 1130.
 - [x] **97. Detect on every webcam frame in the GUI.** 95 showed the headroom;
   this spends it, and measures the two things a CLI probe could not: the GUI's
   per-frame texture cost (1.8 us, free) and detection under contention with the
@@ -2993,13 +2994,86 @@ path shows the model a distorted face, so its landmarks may well be the wrong
 ones and letterboxing may be *correcting* them rather than moving them. Nothing
 here distinguishes those, and the crops are what would.
 
-**Not implemented.** Letterboxing means an aspect-preserving scale plus an offset
-in the shader, the same in `resize_then_convert`, the offset removed in
-postprocess, and the CPU graph changed to match or GPU/CPU parity breaks. Against
-that: ~5% more images detected, 18 images losing their only detection, and every
-box on a non-square source moving. It is a Q change of the kind experiment 71 was
-held to -- decided by looking at crops, not by a table. Padding colour does not
-matter (black and 114 differ by 4 faces in 1239).
+**The crops decided it, which is what the record above asked for.** A temporary
+switch went into the GUI so a real folder could be cropped both ways. The verdict
+was that the crops were not visibly different and the run produced 57 more of
+them, so letterboxing is now what the preprocessor does -- no setting, no branch,
+and the switch deleted. Padding is black; 96 measured black against 114 at four
+faces in 1239.
+
+**The shape of it.** `fit_input` returns one scale for both axes, the size the
+source is drawn at, and a centred origin. All three preprocessing paths take it:
+`preprocess.wgsl` samples the drawn region and writes bars outside it,
+`rgb_to_chw.wgsl` does the same for the bytes the CPU resize hands it, and
+`rgb_to_bgr_chw_letterboxed` writes the bars on the CPU path rather than clearing
+a buffer first. Postprocessing does not know about any of it:
+`remove_letterbox_offset` subtracts `origin * scale` from the finished detections,
+which is the same as subtracting `origin` before the multiply and leaves
+`apply_postprocess` and its sixteen call sites alone.
+
+**It is not slower; on a non-square source it is faster.** The resize target is
+now the drawn region rather than the full square, which is 44% fewer output pixels
+for a 16:9 source, and the byte upload shrinks with it. `phase_timings --mp N`,
+medians of three runs on each build, against `bcee920`:
+
+| Source | stretched | letterboxed | delta |
+| --- | ---: | ---: | ---: |
+| 0.5 MP (whole-source GPU path) | 0.935 | 0.914 | -0.02 |
+| 2.0 MP | 1.860 | **1.480** | **-0.38** |
+| 6.0 MP | 1.900 | 1.820 | -0.08 |
+
+`cpu_resize` 0.947 -> 0.669 at 2 MP and 0.929 -> 0.863 at 6 MP; `gpu_rgb_to_chw`
+0.182 -> 0.149 and 0.211 -> 0.193. The gain shrinks as the source grows because
+the resize is bounded below by reading the source once (experiment 51), and only
+the writing side got smaller. The 0.5 and 6.0 MP rows are inside the run-to-run
+spread, which was 0.834-1.090 ms on the 0.5 MP point; the 2.0 MP row is not.
+
+**The one thing that had to get more expensive did not.** `preprocess.wgsl`'s tap
+rule was `ceil(ratio * 0.5)`, a *coverage* criterion -- taps spaced `ratio / n`
+apart, each spanning about 2 texels, leave no gaps once `n >= ratio / 2`. Covering
+the box is not the same as weighting it the way the CPU resize does, and the
+difference had been invisible because the short axis of a stretched non-square
+source was an *upscale*, where a bilinear tap and a triangle kernel are the same
+thing. Letterboxing makes that axis a downscale too, and the gap appeared as a
+CPU/GPU detection mismatch: **0.0010 of score and 0.80 px of box, where the two
+paths had previously agreed exactly.** `ceil(ratio)` brings it to 0.0004 and
+0.23 px, inside the tolerance the test already had. It is four times the samples
+and it did not move `gpu_preprocess` at all (0.269 -> 0.270 ms), because that
+phase is host-side RGBA conversion and texture upload, not shader time --
+experiment 8's finding that these dispatches are not compute-bound, arriving again.
+
+**The corpus, through the shipped implementation** (`aspect_recall`, which no
+longer letterboxes on its own and is 40 lines shorter for it):
+
+| Aspect | Images | Faces before | Faces now | Images with no face |
+| --- | ---: | ---: | ---: | ---: |
+| near square (<1.05) | 11 | 10 | 10 | 2 |
+| 1.05-1.25 | 22 | 19 | 20 | 2 |
+| 1.25-1.45 (4:3) | 510 | 345 | 355 | 179 |
+| 1.45-1.70 (3:2) | 301 | 302 | 320 | 39 |
+| over 1.70 (16:9) | 395 | 354 | 425 | 57 |
+| **total** | **1239** | **1030** | **1130** | |
+
+1130 against the 1129 the temporary switch produced -- one 4:3 borderline face,
+which is the denser sampling rather than the letterboxing.
+
+**Two parity tests had to change what they claim, and that is worth stating
+plainly.** The OpenCV fixtures were produced by a pipeline that stretches. Against
+them this detector now differs by up to 0.0175 of score and 144 px of box, with
+IoU 0.765-0.994 -- the same 0.76-0.87 band the table above predicted. Coordinate
+equality with a differently-preprocessed reference is not a property this code has
+any more, so both tests now assert the same count, box IoU >= 0.70, and landmark
+movement within 15% of the face (measured worst: 9.6%), with the measurements
+written into the constants. They also pair faces by overlap rather than by score
+rank, because a 0.0175 score shift is enough to swap two similar faces and report
+the wrong pair.
+
+**One fixture legitimately gains a face, and it was looked at rather than waved
+through.** `258_o.webp` is a man holding a mask over his nose and mouth with his
+eyes clear above it. OpenCV finds nothing there at 0.9; this detector finds the
+face at 0.912 with the box and all five landmarks on it. The count is pinned per
+fixture in the test, so a *new* divergence fails and has to be inspected instead of
+being absorbed by the allowance. The other four negative fixtures gained nothing.
 
 ### 95. What a webcam frame costs, and two defects found by measuring it
 

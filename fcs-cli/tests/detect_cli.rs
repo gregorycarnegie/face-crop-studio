@@ -111,19 +111,28 @@ fn cli_detections_match_opencv_parity_samples() -> Result<(), Box<dyn Error>> {
         eprintln!("skipping: fixture images not available in this environment");
         return Ok(());
     }
+    // The third field is how many faces this detector finds that the OpenCV fixture does
+    // not. It is not slack: every entry is a face that was looked at. Letterboxing shows the
+    // model an undistorted face and so finds some that a squashed one hid (experiment 96
+    // counted 77 such images in 1239), and the count is pinned per fixture so that a *new*
+    // divergence fails here and has to be looked at rather than absorbed.
     let cases = [
-        ("images/006.jpg", "opencv/006.json"),
-        ("images/190_g.jpg", "opencv/190_g.json"),
-        ("images/002_n.jpg", "opencv/002_n.json"),
-        ("images/168_o.jpg", "opencv/168_o.json"),
-        ("images/169_o.jpg", "opencv/169_o.json"),
-        ("images/250_o.jpg", "opencv/250_o.json"),
-        ("images/253_o.jpg", "opencv/253_o.json"),
-        ("images/255_o.jpg", "opencv/255_o.json"),
-        ("images/258_o.webp", "opencv/258_o.json"),
+        ("images/006.jpg", "opencv/006.json", 0),
+        ("images/190_g.jpg", "opencv/190_g.json", 0),
+        ("images/002_n.jpg", "opencv/002_n.json", 0),
+        ("images/168_o.jpg", "opencv/168_o.json", 0),
+        ("images/169_o.jpg", "opencv/169_o.json", 0),
+        ("images/250_o.jpg", "opencv/250_o.json", 0),
+        ("images/253_o.jpg", "opencv/253_o.json", 0),
+        ("images/255_o.jpg", "opencv/255_o.json", 0),
+        // A man holding a mask over his nose and mouth, eyes clear above it. OpenCV finds
+        // nothing here at 0.9; this detector finds the face at 0.912, and the annotated
+        // output puts the box and all five landmarks on it. A true positive the distortion
+        // was costing, not a hallucination.
+        ("images/258_o.webp", "opencv/258_o.json", 1),
     ];
 
-    for (image_rel, fixture_rel) in cases {
+    for (image_rel, fixture_rel, extra_faces) in cases {
         let image_path = fixture_path(image_rel)?;
         let fixture: FixtureFile = load_fixture_json(fixture_rel)?;
         let work_dir = tempdir()?;
@@ -156,7 +165,7 @@ fn cli_detections_match_opencv_parity_samples() -> Result<(), Box<dyn Error>> {
         );
 
         let actual_list = &detections[0].detections;
-        assert_detections_close(actual_list, &fixture.detections, 40.0);
+        assert_detections_close(actual_list, &fixture.detections, extra_faces, image_rel);
     }
 
     Ok(())
@@ -202,47 +211,83 @@ fn run_cli_detection(
     Ok(parsed)
 }
 
-fn assert_detections_close(actual: &[Detection], expected: &[Detection], tol: f64) {
+/// Limits against the OpenCV fixtures, matching `fcs-core/tests/parity.rs`.
+///
+/// The fixtures come from OpenCV's YuNet, which stretches a source to the model input; this
+/// detector letterboxes it instead (experiment 96), so the answers differ by more than
+/// rounding and coordinate equality is no longer the property to assert. The core parity
+/// test carries the measurements these numbers come from. Note that the old form passed the
+/// same `40.0` for the score as for pixels, so scores were not really being checked at all.
+const MAX_SCORE_DELTA: f64 = 0.03;
+const MIN_BOX_IOU: f64 = 0.70;
+const MAX_LANDMARK_FRACTION: f64 = 0.15;
+
+/// `[x, y, width, height]` overlap, as both sides store boxes.
+fn box_iou(a: &[f64], b: &[f64]) -> f64 {
+    let ix = (a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0]);
+    let iy = (a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1]);
+    let inter = ix.max(0.0) * iy.max(0.0);
+    let union = a[2] * a[3] + b[2] * b[3] - inter;
+    if union <= 0.0 { 0.0 } else { inter / union }
+}
+
+fn assert_detections_close(
+    actual: &[Detection],
+    expected: &[Detection],
+    extra_faces: usize,
+    image: &str,
+) {
     assert_eq!(
         actual.len(),
-        expected.len(),
-        "detection count mismatch (actual={}, expected={})",
+        expected.len() + extra_faces,
+        "detection count mismatch for {image} (actual={}, fixture={} plus {extra_faces} known extra)",
         actual.len(),
         expected.len()
     );
 
-    let mut actual_sorted = actual.to_vec();
-    actual_sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-    let mut expected_sorted = expected.to_vec();
-    expected_sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-
-    for (a, e) in actual_sorted.iter().zip(expected_sorted.iter()) {
+    // Pair each fixture face with the actual face that overlaps it most, rather than by
+    // score rank: the two pipelines' scores differ by up to 0.0175, which is enough to swap
+    // the order of two similar faces and produce a confusing failure about the wrong pair.
+    let mut taken = vec![false; actual.len()];
+    for e in expected {
+        let best = actual
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !taken[*i])
+            .map(|(i, a)| (i, box_iou(&a.bbox, &e.bbox)))
+            .max_by(|x, y| x.1.total_cmp(&y.1));
+        let Some((idx, iou)) = best else {
+            panic!(
+                "no detection left to pair with fixture face {:?} in {image}",
+                e.bbox
+            );
+        };
         assert!(
-            (a.score - e.score).abs() <= tol,
-            "score mismatch: actual={}, expected={}",
+            iou >= MIN_BOX_IOU,
+            "box overlap {iou:.4} below {MIN_BOX_IOU} for {image}: {:?} against fixture {:?}",
+            actual[idx].bbox,
+            e.bbox
+        );
+        taken[idx] = true;
+        let a = &actual[idx];
+        let score_delta = (a.score - e.score).abs();
+        assert!(
+            score_delta <= MAX_SCORE_DELTA,
+            "score {} against fixture {} for {image} (delta {score_delta}, limit {MAX_SCORE_DELTA})",
             a.score,
             e.score
         );
-        for (idx, (av, ev)) in a.bbox.iter().zip(e.bbox.iter()).enumerate() {
-            assert!(
-                (av - ev).abs() <= tol,
-                "bbox component {} mismatch: actual={}, expected={}",
-                idx,
-                av,
-                ev
-            );
-        }
+
+        let face = a.bbox[2].max(a.bbox[3]);
         for (landmark_idx, (al, el)) in a.landmarks.iter().zip(e.landmarks.iter()).enumerate() {
-            for (coord_idx, (av, ev)) in al.iter().zip(el.iter()).enumerate() {
-                assert!(
-                    (av - ev).abs() <= tol,
-                    "landmark {} coord {} mismatch: actual={}, expected={}",
-                    landmark_idx,
-                    coord_idx,
-                    av,
-                    ev
-                );
-            }
+            let delta = (al[0] - el[0]).abs().max((al[1] - el[1]).abs());
+            assert!(
+                delta <= face * MAX_LANDMARK_FRACTION,
+                "landmark {landmark_idx} moved {delta:.2} px on a {face:.0} px face in \
+                 {image} ({:.1}%, limit {:.0}%)",
+                100.0 * delta / face,
+                100.0 * MAX_LANDMARK_FRACTION
+            );
         }
     }
 }

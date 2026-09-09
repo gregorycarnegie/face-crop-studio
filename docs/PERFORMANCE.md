@@ -99,16 +99,16 @@ Two defects fell out (experiments 95 and 96):
 - **`--webcam-width`/`--webcam-height` did nothing.** The camera was opened with
   `AbsoluteHighestResolution` and then asked to `set_resolution`, which does not
   take, so a C920 asked for 640x480 delivered 1920x1080. Now fixed.
-- **The preprocessor stretches to 640x640 rather than letterboxing**, so every
-  non-square source reaches the model distorted and scores lower. Over all 1239
+- **The preprocessor stretched to 640x640 rather than letterboxing**, so every
+  non-square source reached the model distorted and scored lower. Over all 1239
   corpus images at production's 0.8 threshold, letterboxing takes 1030 faces to
-  1129: **77 images gain a detection, 18 lose one**, concentrated on 16:9. Every
+  1130: **77 images gain a detection, 19 lose one**, concentrated on 16:9. Every
   box on a non-square source also moves -- median IoU 0.76-0.87, landmarks 34-46
-  source pixels -- and which set is more correct is not decidable from counts,
-  since the current path shows the model a distorted face. Not implemented; it
-  needs the crops looked at. An earlier version of this note quoted much larger
-  gains taken at the library default threshold of 0.9 rather than production's
-  0.8; those measured a configuration nobody runs.
+  source pixels -- and which set is more correct is not decidable from counts, so
+  a folder was cropped both ways and the crops compared. **Adopted**; see below.
+  An earlier version of this note quoted much larger gains taken at the library
+  default threshold of 0.9 rather than production's 0.8; those measured a
+  configuration nobody runs.
 
 ### Peak memory scales with worker count, and nothing else does
 
@@ -347,6 +347,32 @@ less than the resize it removes, about 13% off the folder -- but it moves
 landmarks by up to 158 px, and backing off to where nothing moves past 35 px
 leaves about 4%. `examples/scaled_decode.rs` re-runs the cost half.
 
+### Letterboxing is free, and on a non-square source it is faster
+
+Fitting the source into the model input instead of stretching it to fill it costs
+nothing per detection and usually saves. The resize target is now the drawn region
+rather than the full square -- 44% fewer output pixels for a 16:9 source -- and the
+byte upload shrinks with it. Medians of three `phase_timings --mp N` runs on each
+build:
+
+| Source | stretched | letterboxed | delta |
+| --- | ---: | ---: | ---: |
+| 0.5 MP | 0.935 ms | 0.914 ms | -0.02 (inside the spread) |
+| 2.0 MP | 1.860 ms | **1.480 ms** | **-0.38** |
+| 6.0 MP | 1.900 ms | 1.820 ms | -0.08 |
+
+`cpu_resize` goes 0.947 -> 0.669 ms at 2 MP and 0.929 -> 0.863 at 6 MP. The gain
+shrinks as the source grows, because the resize is bounded below by reading the
+source once and only the writing side got smaller.
+
+The one cost it did add is invisible. `preprocess.wgsl` had to sample twice as
+densely: its old tap rule guaranteed *coverage* of the source box rather than the
+weighting the CPU resize uses, which stayed hidden while the short axis of a
+stretched source was an upscale, and showed up as a CPU/GPU detection mismatch
+once letterboxing made that axis a downscale. Four times the samples moved
+`gpu_preprocess` from 0.269 to 0.270 ms, because that phase is host-side RGBA
+conversion and texture upload rather than shader time.
+
 ### The preprocessing route crosses over at 1.75 MP, not 1.5
 
 Sources above the gate are resized on the CPU and converted on the GPU; below it
@@ -439,6 +465,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 | Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |
+| Letterbox instead of stretching to the model input | **+100 faces over 1239 images**, -0.38 ms at 2 MP | `image_utils.rs`, both preprocess shaders, `detector.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
 implementation for another and so differs by rounding -- at most 23 per channel

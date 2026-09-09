@@ -145,7 +145,12 @@ impl Default for InputDimensions {
         Self {
             width: DEFAULT_INPUT_WIDTH,
             height: DEFAULT_INPUT_HEIGHT,
-            resize_quality: ResizeQuality::Speed,
+            // `Quality`, matching `ResizeQuality::default()` and the shipped
+            // `config/gui_settings.json`, which both already said quality. This default was
+            // the one place that disagreed, so anyone starting without a settings file got
+            // the nearest-neighbour resize -- and experiment 54 measured that at 2 faces
+            // lost in 51 over the fixture corpus.
+            resize_quality: ResizeQuality::Quality,
         }
     }
 }
@@ -629,7 +634,10 @@ mod tests {
             InputDimensions {
                 width: 640,
                 height: 640,
-                resize_quality: ResizeQuality::Speed,
+                // A settings file that omits `resize_quality` gets `Quality`. It used to get
+                // `Speed`, which loses 2 faces in 51 over the fixture corpus and which nobody
+                // had asked for -- see the note on the variant.
+                resize_quality: ResizeQuality::Quality,
             }
         );
         assert_eq!(loaded.detection.top_k, 123);

@@ -590,6 +590,84 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Vec<f32> {
     data
 }
 
+/// The same conversion, writing the image into a larger canvas and padding the rest.
+///
+/// The letterboxed counterpart of [`rgb_to_bgr_chw`]: `image` is the already-resized drawn
+/// region, `fit` says where it sits inside the model input. Padding is written here rather
+/// than by clearing the buffer first, which keeps the "every element is written exactly
+/// once" property the uninitialised allocation depends on.
+///
+/// Kept bit-identical to what `rgb_to_chw.wgsl` produces for the same inputs -- each output
+/// float is either an exact source byte or the pad value, with no arithmetic in between --
+/// because the CPU and GPU preprocessors are compared against each other by test.
+pub fn rgb_to_bgr_chw_letterboxed(
+    image: &RgbImage,
+    target: (u32, u32),
+    fit: &InputFit,
+) -> Vec<f32> {
+    let (target_w, target_h) = (target.0 as usize, target.1 as usize);
+    let (drawn_w, drawn_h) = (fit.drawn.0 as usize, fit.drawn.1 as usize);
+    let (origin_x, origin_y) = (fit.origin.0 as usize, fit.origin.1 as usize);
+    debug_assert_eq!(
+        (image.width() as usize, image.height() as usize),
+        (drawn_w, drawn_h),
+        "the drawn region must already be resized to the fit"
+    );
+
+    let channel_len = target_w * target_h;
+    let row_stride = drawn_w * 3;
+    let pixels = image.as_raw();
+    let total = 3 * channel_len;
+
+    let mut data: Vec<f32> = Vec::with_capacity(total);
+    {
+        let spare = &mut data.spare_capacity_mut()[..total];
+        let (b_slice, rest) = spare.split_at_mut(channel_len);
+        let (g_slice, r_slice) = rest.split_at_mut(channel_len);
+
+        b_slice
+            .par_chunks_mut(target_w)
+            .zip(g_slice.par_chunks_mut(target_w))
+            .zip(r_slice.par_chunks_mut(target_w))
+            .enumerate()
+            .for_each(|(y, ((b_row, g_row), r_row))| {
+                let src_y = y.wrapping_sub(origin_y);
+                if src_y >= drawn_h {
+                    for x in 0..target_w {
+                        b_row[x].write(LETTERBOX_PAD);
+                        g_row[x].write(LETTERBOX_PAD);
+                        r_row[x].write(LETTERBOX_PAD);
+                    }
+                    return;
+                }
+                let src_row = &pixels[src_y * row_stride..(src_y + 1) * row_stride];
+                for x in 0..target_w {
+                    let src_x = x.wrapping_sub(origin_x);
+                    if src_x >= drawn_w {
+                        b_row[x].write(LETTERBOX_PAD);
+                        g_row[x].write(LETTERBOX_PAD);
+                        r_row[x].write(LETTERBOX_PAD);
+                        continue;
+                    }
+                    let src = (src_x << 1) + src_x;
+                    b_row[x].write(f32::from(src_row[src + 2]));
+                    g_row[x].write(f32::from(src_row[src + 1]));
+                    r_row[x].write(f32::from(src_row[src]));
+                }
+            });
+    }
+    // SAFETY: as in `rgb_to_bgr_chw` -- the three planes partition all `total` elements,
+    // every row is covered once, and each branch above writes all `target_w` of its row.
+    unsafe { data.set_len(total) };
+    data
+}
+
+/// The value the letterbox bars are filled with, on every path.
+///
+/// Black. Experiment 96 measured black against YOLO's 114 at four faces in 1239, so this is
+/// a choice with no measured consequence rather than a tuned constant.
+pub const LETTERBOX_PAD: f32 = 0.0;
+
 /// Convert any dynamic image into a BGR CHW array by first converting to RGB.
 ///
 /// # Arguments
@@ -602,15 +680,47 @@ pub fn dynamic_to_bgr_chw(image: &DynamicImage) -> Vec<f32> {
     }
 }
 
-/// Compute scale factors used to reproject detections from model space to original space.
+/// How a source image is laid onto the model's fixed input.
 ///
-/// This is necessary when the model runs on a resized version of the original image.
+/// One scale for both axes, centred, with the remainder padded -- letterboxing. The
+/// preprocessor used to scale x and y independently, which showed the model a face squashed
+/// in proportion to how far the source was from square: over 1239 images that cost 77
+/// detections outright and moved every box on a non-square source (experiment 96).
+///
+/// `scale` is what maps a model coordinate back to a source pixel, and `origin` is what has
+/// to come off it first. Both axes share one scale, so a detection cannot be distorted by
+/// the mapping alone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputFit {
+    /// Source pixels per model pixel, the same on both axes.
+    pub scale: f32,
+    /// Size of the drawn region inside the model input, in model pixels.
+    pub drawn: (u32, u32),
+    /// Where the drawn region starts inside the model input, in model pixels.
+    pub origin: (u32, u32),
+}
+
+impl InputFit {
+    /// The padding offset expressed in source pixels.
+    ///
+    /// Postprocessing multiplies a model coordinate by `scale`; subtracting this from the
+    /// result is the same as subtracting `origin` before the multiply, and does not need the
+    /// decode to know about letterboxing at all.
+    pub fn source_offset(&self) -> (f32, f32) {
+        (
+            self.origin.0 as f32 * self.scale,
+            self.origin.1 as f32 * self.scale,
+        )
+    }
+}
+
+/// Fit a source image inside the model input without distorting it.
 ///
 /// # Arguments
 ///
 /// * `original` - A tuple of the original image's (width, height).
-/// * `target` - A tuple of the resized image's (width, height).
-pub fn compute_resize_scales(original: (u32, u32), target: (u32, u32)) -> Result<(f32, f32)> {
+/// * `target` - A tuple of the model input's (width, height).
+pub fn fit_input(original: (u32, u32), target: (u32, u32)) -> Result<InputFit> {
     let (orig_w, orig_h) = original;
     let (target_w, target_h) = target;
     anyhow::ensure!(
@@ -621,10 +731,18 @@ pub fn compute_resize_scales(original: (u32, u32), target: (u32, u32)) -> Result
         orig_w > 0 && orig_h > 0,
         "original dimensions must be non-zero"
     );
-    Ok((
-        orig_w as f32 / target_w as f32,
-        orig_h as f32 / target_h as f32,
-    ))
+    // The larger of the two ratios: whichever axis is tightest decides, and the other one
+    // gets bars. `max` rather than `min` because this is source pixels per model pixel.
+    let scale = (orig_w as f32 / target_w as f32).max(orig_h as f32 / target_h as f32);
+    let drawn = (
+        ((orig_w as f32 / scale).round() as u32).clamp(1, target_w),
+        ((orig_h as f32 / scale).round() as u32).clamp(1, target_h),
+    );
+    Ok(InputFit {
+        scale,
+        drawn,
+        origin: ((target_w - drawn.0) / 2, (target_h - drawn.1) / 2),
+    })
 }
 
 #[cfg(test)]
@@ -893,16 +1011,75 @@ mod tests {
     }
 
     #[test]
-    fn compute_resize_scales_returns_expected_values() {
-        let (sx, sy) = compute_resize_scales((640, 480), (320, 240)).unwrap();
-        assert_eq!(sx, 2.0);
-        assert_eq!(sy, 2.0);
+    fn a_square_target_letterboxes_the_wider_axis() {
+        // 16:9 into a square: full width, bars top and bottom, one scale for both axes.
+        let fit = fit_input((1920, 1080), (640, 640)).unwrap();
+        assert_eq!(fit.drawn, (640, 360));
+        assert_eq!(fit.origin, (0, 140));
+        assert!((fit.scale - 3.0).abs() < 1e-6);
+        // 1080 / 3.0 = 360, and the bars are (640 - 360) / 2 either side.
+        assert_eq!(fit.origin.1 * 2 + fit.drawn.1, 640);
     }
 
     #[test]
-    fn compute_resize_scales_rejects_zero() {
-        assert!(compute_resize_scales((0, 480), (320, 240)).is_err());
-        assert!(compute_resize_scales((640, 480), (0, 240)).is_err());
+    fn a_source_matching_the_target_aspect_gets_no_bars() {
+        for source in [(640, 640), (1280, 1280), (320, 320)] {
+            let fit = fit_input(source, (640, 640)).unwrap();
+            assert_eq!(fit.drawn, (640, 640), "{source:?}");
+            assert_eq!(fit.origin, (0, 0), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn the_fit_maps_a_model_coordinate_back_to_the_source() {
+        for source in [(1920u32, 1080u32), (1080, 1920), (4000, 3000), (640, 640)] {
+            let fit = fit_input(source, (640, 640)).unwrap();
+            let (ox, oy) = fit.source_offset();
+            for corner in [(0.0f32, 0.0f32), (source.0 as f32, source.1 as f32)] {
+                // Source -> model, the way every preprocessor lays the image down.
+                let model_x = corner.0 / fit.scale + fit.origin.0 as f32;
+                let model_y = corner.1 / fit.scale + fit.origin.1 as f32;
+                // Model -> source, the way postprocessing reads it back.
+                let back_x = model_x * fit.scale - ox;
+                let back_y = model_y * fit.scale - oy;
+                assert!(
+                    (back_x - corner.0).abs() < 0.01 && (back_y - corner.1).abs() < 0.01,
+                    "{source:?}: {corner:?} came back as ({back_x}, {back_y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fit_input_rejects_zero() {
+        assert!(fit_input((0, 480), (320, 240)).is_err());
+        assert!(fit_input((640, 480), (0, 240)).is_err());
+    }
+
+    #[test]
+    fn letterboxed_conversion_pads_the_bars_and_keeps_the_pixels() {
+        // A 16:9 source drawn into a square: rows outside the drawn band are pad, and rows
+        // inside carry the exact source bytes with the channels swapped.
+        let fit = fit_input((1920, 1080), (64, 64)).unwrap();
+        assert_eq!(fit.drawn, (64, 36));
+        let drawn = RgbImage::from_fn(fit.drawn.0, fit.drawn.1, |x, y| {
+            image::Rgb([x as u8, y as u8, 200])
+        });
+        let data = rgb_to_bgr_chw_letterboxed(&drawn, (64, 64), &fit);
+        assert_eq!(data.len(), 3 * 64 * 64);
+
+        let plane = 64 * 64;
+        let at = |x: usize, y: usize, c: usize| data[c * plane + y * 64 + x];
+        let (ox, oy) = (fit.origin.0 as usize, fit.origin.1 as usize);
+        // A row above the drawn band.
+        assert_eq!(at(10, oy - 1, 0), LETTERBOX_PAD);
+        assert_eq!(at(10, oy - 1, 2), LETTERBOX_PAD);
+        // A pixel inside it: BGR order, so plane 0 is blue.
+        assert_eq!(at(10 + ox, 5 + oy, 0), 200.0);
+        assert_eq!(at(10 + ox, 5 + oy, 1), 5.0);
+        assert_eq!(at(10 + ox, 5 + oy, 2), 10.0);
+        // And a row below.
+        assert_eq!(at(10, oy + fit.drawn.1 as usize, 1), LETTERBOX_PAD);
     }
 
     #[test]

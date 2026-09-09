@@ -179,7 +179,6 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                     if app.settings.input.resize_quality != old_rq {
                         app.needs_detector_rebuild = true;
                     }
-
                     // ── GPU ────────────────────────────────────────────────────
                     ui.separator();
                     section_label(ui, "GPU");

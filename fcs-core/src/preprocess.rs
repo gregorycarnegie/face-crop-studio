@@ -8,10 +8,11 @@ use crate::tensor::Tensor;
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable, bytes_of};
 use fcs_utils::{
-    compute_resize_scales,
+    InputFit,
     config::{InputDimensions, ResizeQuality},
+    fit_input,
     gpu::{GpuContext, PREPROCESS_WGSL, RGB_TO_CHW_WGSL},
-    load_image, resize_image, rgb_to_bgr_chw,
+    load_image, resize_image, rgb_to_bgr_chw_letterboxed,
     telemetry::timing_guard,
 };
 use image::{DynamicImage, GenericImageView, RgbImage, imageops::FilterType};
@@ -73,6 +74,9 @@ pub struct PreprocessOutput {
     pub scale_x: f32,
     /// The vertical scale factor to convert detection coordinates to the original image space.
     pub scale_y: f32,
+    /// How the source was laid onto the model input, which is what carries the letterbox
+    /// offset a detection has to have removed before it means a source pixel.
+    pub fit: InputFit,
     /// The original dimensions of the input image.
     pub original_size: (u32, u32),
 }
@@ -211,7 +215,10 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
         orig_w > 0 && orig_h > 0,
         "source image dimensions must be greater than zero"
     );
-    let resized_rgb: Cow<'_, RgbImage> = if orig_w == input_w && orig_h == input_h {
+    // The source is fitted rather than stretched, so the resize target is the drawn region
+    // and the bars are written by the conversion below (experiment 96).
+    let fit = fit_input((orig_w, orig_h), (input_w, input_h))?;
+    let resized_rgb: Cow<'_, RgbImage> = if (orig_w, orig_h) == fit.drawn {
         match image.as_rgb8() {
             Some(rgb) => Cow::Borrowed(rgb),
             None => Cow::Owned(image.to_rgb8()),
@@ -220,8 +227,8 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
         let _guard = timing_guard("fcs_core::cpu_resize", log::Level::Trace);
         Cow::Owned(resize_image(
             image,
-            input_w,
-            input_h,
+            fit.drawn.0,
+            fit.drawn.1,
             config.resize_filter(),
         ))
     };
@@ -230,16 +237,15 @@ fn cpu_preprocess(image: &DynamicImage, config: &PreprocessConfig) -> Result<Pre
     // problems with separate fixes.
     let data = {
         let _guard = timing_guard("fcs_core::bgr_chw", log::Level::Trace);
-        rgb_to_bgr_chw(&resized_rgb)
+        rgb_to_bgr_chw_letterboxed(&resized_rgb, (input_w, input_h), &fit)
     };
     let tensor = chw_tensor_from_vec(data, input_w, input_h)?;
 
-    let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
-
     Ok(PreprocessOutput {
         tensor,
-        scale_x,
-        scale_y,
+        scale_x: fit.scale,
+        scale_y: fit.scale,
+        fit,
         original_size: (orig_w, orig_h),
     })
 }
@@ -251,6 +257,8 @@ pub struct PreprocessScales {
     pub scale_x: f32,
     /// Vertical factor mapping detection coordinates back to the source image.
     pub scale_y: f32,
+    /// How the source was laid onto the model input. See [`PreprocessOutput::fit`].
+    pub fit: InputFit,
     /// Dimensions of the source image.
     pub original_size: (u32, u32),
 }
@@ -372,7 +380,8 @@ impl WgpuPreprocessor {
         let input_h = config.input_size.height;
         let (orig_w, orig_h) = image.dimensions();
 
-        let resized: Cow<'_, RgbImage> = if orig_w == input_w && orig_h == input_h {
+        let fit = fit_input((orig_w, orig_h), (input_w, input_h))?;
+        let resized: Cow<'_, RgbImage> = if (orig_w, orig_h) == fit.drawn {
             match image.as_rgb8() {
                 Some(rgb) => Cow::Borrowed(rgb),
                 None => Cow::Owned(image.to_rgb8()),
@@ -381,21 +390,28 @@ impl WgpuPreprocessor {
             let _guard = timing_guard("fcs_core::cpu_resize", log::Level::Trace);
             Cow::Owned(resize_image(
                 image,
-                input_w,
-                input_h,
+                fit.drawn.0,
+                fit.drawn.1,
                 config.resize_filter(),
             ))
         };
 
         {
             let _guard = timing_guard("fcs_core::gpu_rgb_to_chw", log::Level::Trace);
-            encode_rgb_to_tensor(self.context.as_ref(), &self.rgb_to_chw, &resized, output)?;
+            encode_rgb_to_tensor(
+                self.context.as_ref(),
+                &self.rgb_to_chw,
+                &resized,
+                config.input_size,
+                &fit,
+                output,
+            )?;
         }
 
-        let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
         Ok(PreprocessScales {
-            scale_x,
-            scale_y,
+            scale_x: fit.scale,
+            scale_y: fit.scale,
+            fit,
             original_size: (orig_w, orig_h),
         })
     }
@@ -537,6 +553,8 @@ fn encode_rgb_to_tensor(
     context: &GpuContext,
     pipeline: &RgbToChwPipeline,
     rgb: &RgbImage,
+    dst: InputSize,
+    fit: &InputFit,
     output: &GpuTensor,
 ) -> Result<()> {
     let (width, height) = rgb.dimensions();
@@ -566,10 +584,7 @@ fn encode_rgb_to_tensor(
         queue.write_buffer(&source, aligned as u64, &tail);
     }
 
-    let uniforms = PreprocessUniforms {
-        src_size: [width, height],
-        dst_size: [width, height],
-    };
+    let uniforms = PreprocessUniforms::new((width, height), dst, fit);
     let uniform = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("rgb_to_chw_uniform"),
         size: UNIFORM_BUFFER_SIZE,
@@ -607,7 +622,9 @@ fn encode_rgb_to_tensor(
         });
         pass.set_pipeline(&pipeline.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups((width * height).div_ceil(64), 1, 1);
+        // One thread per *destination* pixel, not per source pixel: the bars outside the
+        // drawn region have to be written too, and they are not in the source.
+        pass.dispatch_workgroups((dst.width * dst.height).div_ceil(64), 1, 1);
     }
     queue.submit(std::iter::once(encoder.finish()));
     Ok(())
@@ -709,6 +726,21 @@ impl WgpuPreprocessPipeline {
 struct PreprocessUniforms {
     src_size: [u32; 2],
     dst_size: [u32; 2],
+    /// Where the source is drawn inside the destination, in destination pixels.
+    origin: [u32; 2],
+    /// How large it is drawn. Keeps the source aspect, so the rest is padding.
+    drawn: [u32; 2],
+}
+
+impl PreprocessUniforms {
+    fn new(src: (u32, u32), dst: InputSize, fit: &InputFit) -> Self {
+        Self {
+            src_size: [src.0, src.1],
+            dst_size: [dst.width, dst.height],
+            origin: [fit.origin.0, fit.origin.1],
+            drawn: [fit.drawn.0, fit.drawn.1],
+        }
+    }
 }
 
 #[derive(Default)]
@@ -899,10 +931,8 @@ fn encode_preprocess(
     drop(_upload);
 
     let _encode = timing_guard("fcs_core::preprocess_encode", log::Level::Trace);
-    let uniforms = PreprocessUniforms {
-        src_size: [orig_w, orig_h],
-        dst_size: [input_w, input_h],
-    };
+    let fit = fit_input((orig_w, orig_h), (input_w, input_h))?;
+    let uniforms = PreprocessUniforms::new((orig_w, orig_h), config.input_size, &fit);
     queue.write_buffer(buffers.uniform_buffer(), 0, bytes_of(&uniforms));
 
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -945,10 +975,10 @@ fn encode_preprocess(
         queue.submit(std::iter::once(encoder.finish()));
     }
 
-    let (scale_x, scale_y) = compute_resize_scales((orig_w, orig_h), (input_w, input_h))?;
     Ok(PreprocessScales {
-        scale_x,
-        scale_y,
+        scale_x: fit.scale,
+        scale_y: fit.scale,
+        fit,
         original_size: (orig_w, orig_h),
     })
 }
@@ -1075,6 +1105,7 @@ fn gpu_preprocess(
         tensor,
         scale_x: scales.scale_x,
         scale_y: scales.scale_y,
+        fit: scales.fit,
         original_size: scales.original_size,
     })
 }
@@ -1253,8 +1284,14 @@ mod tests {
         let out = preprocess_dynamic_image(&img, &config).expect("preprocess should succeed");
 
         assert_eq!(out.original_size, (30, 8));
+        // One scale for both axes -- the tighter one, here the width at 30/4. Independent
+        // per-axis scales are what experiment 96 removed: they would have squashed this
+        // source by 15x. The height is drawn at 8/7.5 = 1.07 -> 1 row of the 16, centred,
+        // and the remaining 15 rows are bars.
         assert_eq!(out.scale_x, 7.5);
-        assert_eq!(out.scale_y, 0.5);
+        assert_eq!(out.scale_y, 7.5);
+        assert_eq!(out.fit.drawn, (4, 1));
+        assert_eq!(out.fit.origin, (0, 7));
         assert_eq!(out.tensor.shape(), &[1, 3, 16, 4]);
     }
 

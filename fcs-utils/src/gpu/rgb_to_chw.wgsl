@@ -15,11 +15,18 @@
 // than merely close.
 
 // Same layout as preprocess.wgsl's uniforms so both shaders can share one buffer and one
-// host-side struct. Here the source is already at the destination size, so the two match.
+// host-side struct. Here the source has already been resized to `drawn`, so `src_size` and
+// `drawn` match and `dst_size` is the larger canvas the bars are written into.
 struct Dims {
     src_size : vec2<u32>,
     dst_size : vec2<u32>,
+    origin : vec2<u32>,
+    drawn : vec2<u32>,
 };
+
+// Fill value for the letterbox bars. Must match `fcs_utils::LETTERBOX_PAD` and the constant
+// in preprocess.wgsl; the three paths are compared against each other by test.
+const PAD : f32 = 0.0;
 
 // Packed as u32 words because WGSL has no u8: byte `i` lives in word `i / 4`, at bit
 // `(i % 4) * 8`. Little-endian, matching how the bytes were written on the host.
@@ -46,8 +53,23 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
         return;
     }
 
+    // The source covers only the drawn region of the destination; the rest is bars. One
+    // thread per destination pixel either way, so the bars cost a comparison rather than a
+    // separate clear of the tensor.
+    let x = pixel % uniforms.dst_size.x;
+    let y = pixel / uniforms.dst_size.x;
+    let sx = x - uniforms.origin.x;
+    let sy = y - uniforms.origin.y;
+    if (x < uniforms.origin.x || y < uniforms.origin.y
+        || sx >= uniforms.drawn.x || sy >= uniforms.drawn.y) {
+        output_buffer[pixel] = PAD;
+        output_buffer[pixel + plane_size] = PAD;
+        output_buffer[pixel + plane_size * 2u] = PAD;
+        return;
+    }
+
     // Three interleaved source bytes per pixel, one per plane on the way out.
-    let base = pixel * 3u;
+    let base = (sy * uniforms.drawn.x + sx) * 3u;
     output_buffer[pixel] = byte_at(base + 2u);
     output_buffer[pixel + plane_size] = byte_at(base + 1u);
     output_buffer[pixel + plane_size * 2u] = byte_at(base);

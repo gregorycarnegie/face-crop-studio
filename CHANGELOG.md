@@ -24,6 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Non-square images are letterboxed into the detector rather than squashed.**
+  The preprocessor scaled x and y independently, so a 16:9 photo reached the model
+  stretched to a square and the face it was shown was distorted in proportion to
+  how far the source was from 1:1. It now scales both axes by the same factor,
+  centres the result and pads the rest. Over a 1239-image folder that is **1130
+  faces found instead of 1030** -- 77 images gain a detection and 19 lose one --
+  concentrated on the widest sources, and detections on non-square images move
+  accordingly (median box IoU 0.76-0.87, landmarks 34-46 source pixels). Square
+  images are unaffected.
+
+  It is not slower: the resize target is now the drawn region rather than the full
+  square, which is 44% fewer output pixels for a 16:9 source, and a 2 MP detection
+  went from 1.86 ms to 1.48 ms.
+
 - **Sources up to 1.75 MP are preprocessed on the GPU, up from 1.5 MP.** The old
   cutoff was measured against a route that no longer exists: preprocessing used to
   fall back to a CPU resize *and* a CPU conversion *and* a 4.9 MB float upload, and
@@ -37,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not from where the boundary sits.
 
 ### Fixed
+
+- **A fresh install detected with the nearest-neighbour resize.**
+  `InputDimensions::default()` said `Speed` while `ResizeQuality::default()` and
+  the shipped `config/gui_settings.json` both said `Quality`, so anyone starting
+  without a settings file got the fast resize without choosing it. Measured over
+  120 fixtures, that setting loses 2 of 51 faces and moves landmarks by 33.6 px at
+  worst. The default is now `Quality` everywhere; an explicit `Speed` in a config
+  file or on the command line is unchanged.
 
 - **`--webcam-width` and `--webcam-height` had no effect.** The camera was opened
   with `AbsoluteHighestResolution` and then asked to change resolution, which
