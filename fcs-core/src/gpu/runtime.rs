@@ -18,7 +18,7 @@ use fcs_utils::timing_guard;
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
 };
 
 use crate::yunet::{BACKBONE_STAGES, DETECTION_HEADS, onnx::OnnxInitializerMap};
@@ -28,12 +28,67 @@ struct GpuYuNetWorkspace {
     input_tensors: Vec<GpuTensor>, // Pool of available tensors
 }
 
+/// Inferences allowed to hold intermediates on one model at the same time (experiment 21).
+///
+/// Every in-flight inference parks its intermediates in its own execution scope, so the pool
+/// grows about 36 MB per concurrent caller: 42 MB at one, 1.2 GB at 32 rayon workers, on the
+/// 4090 and on the Radeon iGPU alike. On the iGPU the extra callers also cost throughput --
+/// 80.7 detections/s at one in flight, 57 at sixteen -- while on the 4090 four in flight already
+/// reach 945/s, far past what a folder job's CPU work can feed. `FCS_MAX_IN_FLIGHT` overrides it.
+// ponytail: one constant for every adapter; size it from the device if a GPU ever wants more.
+const MAX_IN_FLIGHT: usize = 4;
+
+fn max_in_flight() -> usize {
+    std::env::var("FCS_MAX_IN_FLIGHT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n: &usize| *n > 0)
+        .unwrap_or(MAX_IN_FLIGHT)
+}
+
+/// A counting gate: `enter` blocks while the limit is reached, the guard leaves on drop.
+#[derive(Debug, Default)]
+struct InFlight {
+    count: Mutex<usize>,
+    freed: Condvar,
+}
+
+struct InFlightSlot<'a>(&'a InFlight);
+
+impl InFlight {
+    fn enter(&self) -> Result<InFlightSlot<'_>> {
+        let limit = max_in_flight();
+        let mut count = self
+            .count
+            .lock()
+            .map_err(|_| anyhow!("in-flight gate poisoned"))?;
+        while *count >= limit {
+            count = self
+                .freed
+                .wait(count)
+                .map_err(|_| anyhow!("in-flight gate poisoned"))?;
+        }
+        *count += 1;
+        Ok(InFlightSlot(self))
+    }
+}
+
+impl Drop for InFlightSlot<'_> {
+    fn drop(&mut self) {
+        // A poisoned count still has to be released, or every other caller waits forever.
+        let mut count = self.0.count.lock().unwrap_or_else(|e| e.into_inner());
+        *count -= 1;
+        self.0.freed.notify_one();
+    }
+}
+
 #[derive(Debug)]
 pub struct GpuYuNet {
     ops: Arc<GpuInferenceOps>,
     weights: graph::GpuWeights,
     input_size: InputSize,
     workspace: Mutex<GpuYuNetWorkspace>,
+    in_flight: InFlight,
 }
 
 impl GpuYuNet {
@@ -86,6 +141,7 @@ impl GpuYuNet {
             weights: weight_map,
             input_size,
             workspace: Mutex::new(GpuYuNetWorkspace::default()),
+            in_flight: InFlight::default(),
         })
     }
 
@@ -147,6 +203,8 @@ impl GpuYuNet {
         // without this they would return to the shared pool and a concurrently encoding thread
         // could acquire a buffer this pass already references. Declared first so it outlives
         // every tensor below and is dropped last, once the readback has completed.
+        // Taken before the scope, so a caller waiting here holds no intermediates.
+        let _slot = self.in_flight.enter()?;
         let _scope = self.ops.buffer_pool().execution_scope();
 
         // Accumulate the entire forward pass into one command buffer and submit
@@ -223,7 +281,7 @@ impl GpuYuNet {
             input,
             BACKBONE_STAGES.len(),
         )?;
-        graph::encode_neck_and_heads(encoder, &self.ops, &self.weights, &features)
+        graph::encode_neck_and_heads(encoder, &self.ops, &self.weights, features)
     }
 
     pub fn memory_usage(&self) -> u64 {

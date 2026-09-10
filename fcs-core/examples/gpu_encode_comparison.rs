@@ -24,7 +24,7 @@ fn forward(
 ) -> Result<[DetectionLevelOutputs; 3]> {
     let features =
         graph::encode_backbone_features(encoder, ops, weights, input, BACKBONE_STAGES.len())?;
-    graph::encode_neck_and_heads(encoder, ops, weights, &features)
+    graph::encode_neck_and_heads(encoder, ops, weights, features)
 }
 
 // Output readback is deliberately outside these timings. The last phase waits for

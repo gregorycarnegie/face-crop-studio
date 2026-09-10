@@ -100,6 +100,12 @@ fn encode_pool_tensor(
     ops.encode_max_pool_tensor(encoder, tensor, &cfg)
 }
 
+/// The backbone, returning the outputs of its last three stages -- the only ones the neck reads.
+///
+/// It used to return all five, so the 160x160x64 outputs of stages 1 and 2 (6.5 MB each) stayed
+/// referenced until the neck had been encoded. Intermediates released inside an execution scope
+/// are reused by later layers of the same inference, so a tensor held for no reader is
+/// allocation the rest of the graph cannot reuse (experiment 40).
 pub fn encode_backbone_features(
     encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
@@ -107,17 +113,22 @@ pub fn encode_backbone_features(
     input: &GpuTensor,
     stage_count: usize,
 ) -> Result<Vec<GpuTensor>> {
-    let mut features = Vec::with_capacity(stage_count);
+    let mut features = Vec::with_capacity(NECK_INPUTS);
     let mut current = encode_stage0_block(encoder, ops, weights, input)?;
-    for stage in BACKBONE_STAGES.iter().take(stage_count) {
+    for (index, stage) in BACKBONE_STAGES.iter().take(stage_count).enumerate() {
         if stage.pool_before {
             current = encode_pool_tensor(encoder, ops, &current)?;
         }
         current = encode_stage_blocks(encoder, ops, weights, &current, stage.blocks)?;
-        features.push(current.clone());
+        if index + NECK_INPUTS >= stage_count {
+            features.push(current.clone());
+        }
     }
     Ok(features)
 }
+
+/// Backbone stage outputs the neck consumes: the last three.
+pub const NECK_INPUTS: usize = 3;
 
 pub struct DetectionLevelOutputs {
     pub feature: GpuTensor,
@@ -144,17 +155,15 @@ pub fn encode_neck_and_heads(
     encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
     weights: &GpuWeights,
-    features: &[GpuTensor],
+    features: Vec<GpuTensor>,
 ) -> Result<[DetectionLevelOutputs; 3]> {
-    anyhow::ensure!(
-        features.len() >= 5,
-        "need at least five backbone outputs (got {})",
-        features.len()
-    );
-
-    let c3 = features[2].clone();
-    let c4 = features[3].clone();
-    let c5 = features[4].clone();
+    // By value, so nothing outlives the encode that reads it.
+    let [c3, c4, c5]: [GpuTensor; NECK_INPUTS] = features.try_into().map_err(|f: Vec<_>| {
+        anyhow!(
+            "need the last {NECK_INPUTS} backbone outputs (got {})",
+            f.len()
+        )
+    })?;
 
     let p5_raw = encode_stage_blocks(encoder, ops, weights, &c5, &NECK_BLOCKS[2..3])?;
     let level2 = encode_detection_level(encoder, ops, weights, p5_raw.clone(), 2)?;
