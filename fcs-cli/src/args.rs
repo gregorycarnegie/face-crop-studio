@@ -8,8 +8,16 @@ use std::path::PathBuf;
 #[command(author, version, about)]
 pub struct DetectArgs {
     /// Path to an image file or a directory containing images.
-    #[arg(short, long, required_unless_present_any = ["mapping_file", "webcam"])]
+    #[arg(short, long, required_unless_present_any = ["mapping_file", "webcam", "watch"])]
     pub input: Option<PathBuf>,
+
+    /// Watch a directory and process new or changed images as they arrive.
+    ///
+    /// Files already in the directory are left alone; run with --input to process those.
+    /// Runs until interrupted, so there is no final JSON document to write, which is why
+    /// it cannot be combined with --json.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["input", "webcam", "mapping_file", "json"])]
+    pub watch: Option<PathBuf>,
 
     /// Enable webcam capture mode (captures frames from the default webcam).
     #[arg(long, conflicts_with = "input", conflicts_with = "mapping_file")]

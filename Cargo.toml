@@ -63,6 +63,10 @@ egui_extras = "0.36.1"
 # Test-only harness that drives a real egui app. Kept in lockstep with egui.
 egui_kittest = "0.36.1"
 rfd = "0.17.2"
+# Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
+# APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
+# ours, because a create event fires before the file finishes being written.
+notify = "8.2.0"
 
 # Image processing and graphics
 fast_image_resize = { version = "6.1.0", features = ["rayon"] }

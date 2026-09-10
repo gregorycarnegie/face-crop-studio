@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Watch-folder mode in the CLI.** `fcs-cli --watch <dir>` monitors a directory
+  and runs the ordinary batch crop/export path on images as they arrive, so a
+  scanner, camera import or shared drop folder can feed it continuously. Files
+  already in the directory are left alone — pass `--input <dir>` for those — so
+  pointing it at a processed folder does not rewrite every crop. A file is only
+  picked up once its size has stopped changing for 400 ms, because a create event
+  arrives long before whatever is writing the file has finished, and an
+  undecodable file is logged and skipped rather than ending the session. Cannot
+  be combined with `--json`: the mode runs until interrupted, so there is no final
+  document to write.
+
 - **Live face detection on the webcam preview.** A `Live` toggle next to the
   camera's `Detect faces` button runs detection on every frame instead of only on
   demand, drawing boxes that follow the subject. Measured in the running

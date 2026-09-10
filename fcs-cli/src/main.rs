@@ -30,6 +30,7 @@ mod input;
 mod output_path;
 mod quality;
 mod types;
+mod watch;
 mod webcam;
 mod workflow;
 
@@ -112,7 +113,10 @@ fn main() -> Result<()> {
         );
     }
 
-    let processing_items = if let Some(mapping_file) = args.mapping_file.as_ref() {
+    // Watch mode has no list up front: the directory supplies one as files arrive.
+    let processing_items = if args.watch.is_some() {
+        Vec::new()
+    } else if let Some(mapping_file) = args.mapping_file.as_ref() {
         collect_mapping_targets(mapping_file, &args)?
     } else {
         let input_arg = args
@@ -122,7 +126,7 @@ fn main() -> Result<()> {
         let input_path = normalize_path(input_arg)?;
         collect_standard_targets(&input_path)?
     };
-    if processing_items.is_empty() {
+    if args.watch.is_none() && processing_items.is_empty() {
         anyhow::bail!("no images were queued for processing");
     }
 
@@ -155,7 +159,9 @@ fn main() -> Result<()> {
         );
     }
 
-    info!("Processing {} target(s)...", processing_items.len());
+    if args.watch.is_none() {
+        info!("Processing {} target(s)...", processing_items.len());
+    }
 
     // Wrap detector in Arc for thread-safe shared access
     let detector = Arc::new(detector);
@@ -208,6 +214,17 @@ fn main() -> Result<()> {
     // `RAYON_NUM_THREADS` overrides this, so no pool is built here. Note for anyone tempted to
     // cap it automatically: this number moved as soon as the work around it changed, and
     // "physical cores" counts P and E cores alike. See "Batch worker threads" in README.md.
+    if let Some(watch_dir) = args.watch.as_ref() {
+        return watch::run(
+            watch_dir,
+            &batch_ctx,
+            &detector,
+            &annotate_dir,
+            crop_enabled,
+            &crop_output_dir,
+        );
+    }
+
     let results: Vec<ImageDetections> = processing_items
         .par_iter()
         .filter_map(|target| {

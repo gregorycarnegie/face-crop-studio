@@ -248,6 +248,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 - `cargo run -p fcs-cli -- --benchmark-preprocess` – Benchmark GPU vs CPU preprocessing performance.
 - `cargo run -p fcs-cli -- --input fixtures/ --gpu` – Run with explicit GPU acceleration.
 - `cargo run -p fcs-cli -- --input fixtures/ --no-gpu` – Run with CPU-only mode.
+- `cargo run -p fcs-cli -- --watch inbox/ --crop --output-dir out/` – Watch a folder and crop each image as it lands. Files already in `inbox/` are left alone; run the same command with `--input inbox/` to process those.
 - `cargo run -p fcs-gui` – Launch the GUI with default settings (auto-detects GPU).
 - `cargo bench -p fcs-core crop_enhance` – Measure the crop + enhancement micro-benchmark.
 - `cargo fmt --all && cargo clippy --workspace -- -D warnings` – Formatting and linting hygiene. Note this only lints the platform you are on: code behind `#[cfg(target_os = ...)]` is invisible to the compiler everywhere else, which is why CI runs clippy on all three legs rather than just one. See [Cross-platform linting](#cross-platform-linting).

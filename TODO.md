@@ -20,4 +20,4 @@ tripping the nextest slow-timeout on the GPU parity suite.
 
 ## Competitive feature parity (from Face Crop Jet review)
 
-- [ ] **Watch-folder mode** — add `--watch <dir>` to `fcs-cli` that monitors a directory and runs the existing batch crop/export path on new/changed image files. Use the `notify` crate as a thin event loop around the current batch workflow (no new processing logic). FCJ calls this "Robot/Directory Monitor" mode.
+- [x] **Watch-folder mode** — `fcs-cli --watch <dir>` monitors a directory and runs the existing batch crop/export path on images as they arrive. Shipped; see CHANGELOG.
