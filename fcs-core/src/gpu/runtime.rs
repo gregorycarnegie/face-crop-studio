@@ -565,6 +565,12 @@ fn batch_download_with<T>(
         // The one blocking wait: the copies land and every map callback fires. It
         // absorbs the forward pass itself, so this is GPU execution plus the copies,
         // not idle cost, and must not be added to a GPU timestamp total.
+        //
+        // Device-wide rather than on this submission's index, which is not an oversight:
+        // experiment 16 measured both. Waiting on the index does shorten this phase 24%
+        // under 32 workers, because a device-wide wait also waits for whatever they
+        // submitted afterwards -- and it changes nothing end to end at any thread count
+        // from 2 to 32, so the simpler call stays.
         let _guard = timing_guard("fcs_core::readback_wait", log::Level::Trace);
         fcs_utils::gpu::wait_for_gpu(device, "batch readback")?;
     }
@@ -573,8 +579,11 @@ fn batch_download_with<T>(
     let _collect = timing_guard("fcs_core::readback_collect", log::Level::Trace);
     let mut results = Vec::with_capacity(tensors.len());
     for (i, (buf, rx)) in readback_bufs.iter().zip(receivers.iter()).enumerate() {
-        rx.recv()
-            .map_err(|_| anyhow!("batch readback channel dropped for tensor {i}"))?
+        // The wait above drives the map callbacks, so this should already hold a result.
+        // Bounded anyway, and for the same reason 94 bounded the wait: a `recv` that can
+        // only ever block forever is the wrong shape for a callback that might not fire.
+        rx.recv_timeout(fcs_utils::gpu::GPU_WAIT_TIMEOUT)
+            .map_err(|_| anyhow!("batch readback callback for tensor {i} never arrived"))?
             .map_err(|e| anyhow!("batch readback map failed for tensor {i}: {e}"))?;
 
         let elements = tensors[i].shape().elements();

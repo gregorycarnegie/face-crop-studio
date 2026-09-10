@@ -1073,10 +1073,12 @@ fn gpu_preprocess(
     buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = sender.send(res);
     });
+    // Device-wide rather than on this copy's submission index: experiment 16 measured
+    // both and the index made no end-to-end difference at any thread count.
     fcs_utils::gpu::wait_for_gpu(device, "preprocessing")?;
     receiver
-        .recv()
-        .map_err(|_| anyhow::anyhow!("GPU map callback was dropped"))?
+        .recv_timeout(fcs_utils::gpu::GPU_WAIT_TIMEOUT)
+        .map_err(|_| anyhow::anyhow!("GPU preprocessing map callback never arrived"))?
         .map_err(|e| anyhow::anyhow!("failed to map GPU preprocessing buffer: {e}"))?;
     let data = buffer_slice
         .get_mapped_range()

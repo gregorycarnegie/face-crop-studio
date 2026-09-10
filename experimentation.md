@@ -139,14 +139,20 @@ implementation or workload.
   compute pass ends and submit once instead of creating a second encoder and
   submission. Preserve tensor/pool lifetimes through completion; compare with
   the latest retained readback strategy, not the original baseline.
-- [ ] **15. Compare mapping-on-submit with explicit map requests.** Use
+- [x] **15. Compare mapping-on-submit with explicit map requests.** Use
   `map_buffer_on_submit` if it simplifies the retained path; compare CPU setup,
   callback and completion overhead. This is an alternative to explicit mapping,
-  not an assumed additional saving on top of experiment 11.
-- [ ] **16. Wait only for the relevant work.** Compare submission-index waits
+  not an assumed additional saving on top of experiment 11. **Rejected on the
+  measured ceiling:** the call exists in wgpu 30.0.1, and `readback_map` -- the
+  entire phase it would replace -- is 0.001 ms.
+- [x] **16. Wait only for the relevant work.** Compare submission-index waits
   or mapping completion with a device-wide wait under other in-flight work.
   Measure unrelated-work interference; no buffer may be read or recycled
-  before its own submission completes.
+  before its own submission completes. **Rejected, and the mechanism is real:**
+  waiting on the copy's own submission index takes `readback_wait` p50 down 24%
+  and p99 down 30% under 32 workers, and changes nothing end to end at any
+  thread count from 2 to 32. The GUI's renderer contention is the one case that
+  could still favour it and needs a running GUI to measure.
 - [x] **17. Reuse CPU output storage.** Compare new vectors/channels/temporary
   tensors per detection with appropriately scoped reuse or decoding from a
   mapped view. Measure copies and allocation cost; release mapped memory
@@ -156,10 +162,14 @@ implementation or workload.
   (-0.011 to -0.021 ms). Decoding from the mapping was measured and **rejected**
   -- reads there are 55% dearer than reads out of a `Vec`, more than the copy
   they would remove.
-- [ ] **18. Overlap readback with the next input.** After 11-17, test a bounded
+- [~] **18. Overlap readback with the next input.** After 11-17, test a bounded
   two/three-slot staging ring if throughput warrants it. Measure frame latency,
   throughput and VRAM, including slow consumers and cancellation. Depends on
-  explicit per-request ownership; not a single-image latency claim.
+  explicit per-request ownership; not a single-image latency claim. **Premise
+  removed by the measurement it asks for:** one process saturates at ~950-1000
+  detections/s and reaches it at three threads, so 32 threads are already
+  overlapping readback against other work and the ceiling holds anyway. A ring
+  inside a thread cannot lift it. Reopen if 24 removes the ceiling.
 
 ### CPU recording and resource allocation (P1)
 
@@ -186,7 +196,12 @@ implementation or workload.
   compare individually bound buffers with aligned suballocations and offsets.
   Account for binding limits, aliasing rules, internal fragmentation and CPU
   indexing. Reject if complexity exceeds a repeatable whole-path gain.
-- [ ] **24. Measure pool and shared-cache contention.** Compare lock wait and
+- [ ] **24. Measure pool and shared-cache contention. Half-answered; the rest
+  needs a profiler.** The ceiling is measured and located to the process: four
+  processes reach 2.3x the detection throughput of one (2115 against 915 det/s),
+  and it survives switching off the GPU preprocessing route, so it is a lock in
+  our address space rather than the adapter, driver or queue. Which lock is not
+  something wall-clock numbers can say. Original brief: compare lock wait and
   allocation behavior under actual batch concurrency; test per-worker/per-slot
   ownership only where contention is observed. Retain bounded memory and
   correctness during cancellation, failure and changing image sizes.
@@ -3857,6 +3872,124 @@ otherwise idle 4090, so it says nothing about a contended one. No thermals or
 energy per image; nothing here reads a sensor, and the wall-time slope is the only
 evidence offered that thermal behaviour is not a problem on this machine. Device
 loss and model switching remain untested, which is the other half of 81's brief.
+
+### 16/15/18. The readback group, closed - and a throughput ceiling found on the way
+
+Three items left in the readback group, all of them about doing less waiting. One
+needed building to answer, and building it turned up something the group was not
+looking for.
+
+**A probe had to come first.** `phase_timings` measures one detection at a time,
+so it cannot see a wait that is long only because other work is queued. A CLI
+folder job has the concurrency, but reading the phases out of it needs telemetry,
+and `env_logger` locks stderr -- 32 workers writing a line per phase serialise on
+that lock, and the tail being measured becomes the tail of the logger. The first
+attempt at this measured exactly that: `detect_image` p99 of 414 ms against a
+2 ms p50. `examples/concurrent_latency.rs` decodes the corpus once, runs N threads
+over it, times every call in process and writes nothing until the end.
+
+#### 16. Waiting on the submission index - rejected, and it works
+
+`batch_download` polls with `submission_index: None`, which waits for the most
+recent submission on the device. Under 32 workers sharing one device that is
+routinely somebody else's, submitted after this caller's copies were already done.
+Capturing the index `Queue::submit` returns and waiting on that instead is a
+two-line change, and **the mechanism is real** -- `readback_wait` over 828 samples
+from three alternated folder runs:
+
+| | p50 | p95 | p99 | max | mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| device-wide | 0.229 | 6.710 | 18.440 | 33.970 | 1.259 |
+| own submission | **0.175** | **5.070** | **12.900** | **24.600** | **0.955** |
+
+A worker waiting device-wide waits about **24% longer**, and 30% longer at p99.
+
+**It changes nothing end to end.** In-process A/B, 6 blocks per variant
+alternated, 18,432 detections per arm at 32 threads, and repeated across the
+thread sweep:
+
+| Threads | own submission | device-wide |
+| ---: | ---: | ---: |
+| 2 | 727.5 det/s | 775.9 |
+| 4 | 949.2 | 962.8 |
+| 8 | 959.0 | 961.3 |
+| 16 | 920.9 | 894.9 |
+| 32 | 956.0 | 963.2 |
+
+The differences change sign across the sweep, which is what noise looks like.
+Eight alternated folder jobs agree: 1129 faces and 959 crops every run, wall time
+6.5-8.0 s on both sides with the paired difference inside a 1.5 s band.
+
+**Rejected**, and the production call stays device-wide because it is the simpler
+one. The saved wait is not on the critical path -- shortening it moves where the
+thread blocks, not whether it does, which is 5's finding again. **One scenario is
+untested and could still favour it:** the GUI shares its device with eframe's
+renderer, and 97 measured detection at 6.89 ms there against 3.5 standalone. A
+device-wide wait there waits for the renderer. That needs a running GUI to
+measure, so it is named rather than claimed.
+
+Kept from the attempt: the map callback is now collected with `recv_timeout`
+rather than `recv`. It should already hold a result by then, but a `recv` that can
+only ever block forever is the wrong shape for a callback that might not fire,
+which is 94's argument applied one line further down.
+
+#### 15. Mapping on submit - rejected on the measured ceiling
+
+`CommandEncoder::map_buffer_on_submit` does exist in wgpu 30.0.1. The phase it
+would replace, `readback_map`, is **0.001 ms** in every phase table in this file --
+below the noise floor of every A/B here. The item already says it is an
+alternative to explicit mapping rather than an additional saving, and at 1 us
+there is no saving to be had. It could only be adopted as a simplification, and
+11 already made that path a single wait driving every callback.
+
+#### 18. A staging ring - premise removed by the throughput ceiling
+
+18 asks for a bounded two- or three-slot staging ring "if throughput warrants it".
+Measuring whether it does answered the question in the other direction.
+`concurrent_latency`, no logging, 6 rounds per point:
+
+| Threads | det/s | mean latency |
+| ---: | ---: | ---: |
+| 1 | 535 | 1.86 ms |
+| 2 | 778 | 2.18 |
+| 3 | **941** | 2.6 |
+| 4 | 922 | 4.18 |
+| 8 | 991 | 8.25 |
+| 32 | 974 | 32.6 |
+
+**One process saturates at about 950-1000 detections per second, and it gets
+there at three threads.** Everything above that buys 5% and multiplies latency by
+16. A staging ring pipelines readback against the next input *within* a thread;
+32 threads are already doing exactly that overlap across each other and the
+process still stops at 1000/s. A ring cannot lift a ceiling that already binds
+with the overlap in place. Reopen if 24 removes it.
+
+#### The ceiling is ours, not the GPU's (experiment 24, in part)
+
+Running the same probe in several processes, each with its own device:
+
+| Arrangement | total det/s |
+| --- | ---: |
+| 1 process x 2 threads | 915 |
+| 2 processes x 2 threads | **1621** |
+| 4 processes x 2 threads | **2115** |
+
+Four processes reach 2.3x what one can, so the limit is **per-process, not the
+adapter, the driver or the queue**. It is not the GPU preprocessing route either:
+forcing the CPU route with `FCS_MAX_GPU_PREPROCESS_PIXELS=0` moves the curve up
+slightly (1052 det/s peak against 941) and saturates at the same place.
+
+That is a serialisation point inside the process -- a lock in the buffer pool, the
+convolution caches, the workspace, or inside wgpu's device. **Which one is not
+something these numbers can say**, and finding it means instrumenting lock waits
+or sampling the stacks, which is where 24 now resumes. What is established is
+that the cap exists, that it costs roughly half the available detection
+throughput, and that it is in our address space.
+
+**Worth keeping in proportion:** in a folder job detection is about 3 ms of the
+65 ms of CPU each image costs, so lifting this cap would not move a folder wall
+time. It bounds a detection-heavy workload -- many small images, or a future
+video path -- not the one the application spends its time on today.
 
 ### Previous work
 
