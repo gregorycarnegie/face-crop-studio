@@ -941,6 +941,10 @@ Measured on both the 4090 and the Radeon iGPU, because the iGPU is where arithme
   iGPU. FP16 arithmetic misses the 1e-3 raw-error screen on every real shape and is 19-58% slower
   on the iGPU; f16 storage alone is 13-50% slower there. Neither is worth shipping DXC for.
 
+- **NHWC activations** (31) make both kernels of a segment several times slower on both adapters,
+  and **fusing depthwise into the following pointwise** (35) costs 2.2-2.6x the separate pair,
+  because every pointwise tile recomputes every channel's depthwise value.
+
 Closed without a new measurement because an existing one removes the cost they target: buffer
 arenas (23), a host dispatch plan (25), preprocessing-stem fusion (39), two-stage decoding (73)
 and webcam tracking (76). Native runtimes (47) were checked with no change; the smaller-model,

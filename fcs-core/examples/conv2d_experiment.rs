@@ -184,7 +184,9 @@ fn compare(
         context.queue().submit(Some(encoder.finish()));
         let timings = context.take_pass_timings()?;
         anyhow::ensure!(timings.len() == 2, "expected two timestamp pairs");
-        if pair == 0 {
+        // `FCS_CONV_TIMING_ONLY` skips the comparison, for candidates whose access pattern is the
+        // question and whose layout or bindings deliberately differ from A's (experiments 31, 35).
+        if pair == 0 && std::env::var_os("FCS_CONV_TIMING_ONLY").is_none() {
             let a = outputs[0].to_vec()?;
             let b = outputs[1].to_vec()?;
             for (index, (a, b)) in a.iter().zip(&b).enumerate() {

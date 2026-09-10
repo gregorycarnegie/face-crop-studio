@@ -256,10 +256,12 @@ implementation or workload.
   preserve channel tails and the source model's numerical values.
   **Rejected:** 1-3 ticks slower on most of the 4090's pointwise layers; ahead only on the
   iGPU's 40x40 and 20x20 ones. See the record.
-- [ ] **31. Compare activation layouts across a graph segment.** Test NCHW
+- [x] **31. Compare activation layouts across a graph segment.** Test NCHW
   against blocked channels or NHWC only on a representative connected segment.
   Include every required transpose/packing conversion and other affected ops;
   reject isolated kernel gains that lose end to end.
+  **Rejected:** NHWC makes both kernels of a segment several times slower on both adapters
+  -- pointwise 1.7-11x on the 4090, depthwise 3-6x -- before any conversion is counted.
 - [x] **32. Tune depthwise workgroups and tile reuse.** Compare more horizontal
   pixels or two-dimensional register/workgroup tiles against the retained six-
   value row reuse. Measure halo duplication, barriers, borders and tiny maps;
@@ -280,10 +282,12 @@ implementation or workload.
 
 ### Graph fusion and intermediate traffic (P2)
 
-- [ ] **35. Fuse depthwise then pointwise.** Prototype one expensive adjacent
+- [x] **35. Fuse depthwise then pointwise.** Prototype one expensive adjacent
   pair, keeping any intervening activation in its original position. Compare
   fewer intermediate reads/writes with recomputation, registers and halo costs;
   require intermediate/raw-head and final-detection parity.
+  **Rejected:** the fused kernel recomputes the depthwise value of every channel per output
+  tile, and costs 2.2-2.6x the separate pair on both adapters. See the record.
 - [x] **36. Fuse compatible pointwise/add/resize or pool boundaries.** Pick
   one actual graph pattern with measured traffic/dispatch cost. Preserve
   operation order and fan-out consumers; compare with already-merged passes,
@@ -4967,6 +4971,53 @@ arithmetic is what matters, and misses the screen once. The iGPU converts every 
 for the accumulation, and that costs more than the halved memory traffic saves. **46** was gated on
 a useful 45 candidate, and there is none. Reopen for hardware that does native half arithmetic
 fast and a model with headroom for the error.
+
+### 31. NHWC across a segment - rejected on the kernels alone
+
+A segment of YuNet is pointwise then depthwise, so a layout change only pays if both kernels are
+at least level in the new layout before counting the conversions at its ends. Both were written in
+41's register form reading NHWC (`pointwise_nhwc.wgsl`, `depthwise_nhwc.wgsl`) and timed against
+production with `FCS_CONV_TIMING_ONLY`, which skips the output check: the harness uploads NCHW,
+and the access pattern over a buffer of the same size is the question, not the values.
+
+| Layer | pointwise 4090 | pointwise iGPU | depthwise 4090 | depthwise iGPU |
+| --- | ---: | ---: | ---: | ---: |
+| 320x320 16 | +377% | +1623% | +333% | +1016% |
+| 160x160 64 | +1063% | +4239% | +525% | +4656% |
+| 80x80 64 | +169% | +3965% | +200% | +4225% |
+| 40x40 64 | +69% | +2195% | +25% | +881% |
+| 20x20 64 | -8% | +466% | +33% | +352% |
+
+**Rejected.** Every layer that carries time is several times slower in both kernels on both
+adapters, before a single conversion is paid. The iGPU magnitudes are larger than a change of
+access pattern should explain by itself and were not traced -- but no layout saving could recover
+a loss of that size on either adapter, so the reason does not change the decision. (The 64->1 and
+1x1 rows, where NHWC looked fast, are artefacts: the candidate skips partial channel tiles, so
+those shapes did almost no work.)
+
+### 35. Depthwise, ReLU and pointwise in one dispatch - rejected
+
+37 fused parallel branches; this fuses two consecutive layers. YuNet has pairs where a depthwise
+output (after its ReLU) is read only by the next block's pointwise -- the stage 4 and stage 5
+inner boundaries, and stage 5 into the neck -- so the intermediate need not exist.
+`dwpw_fused.wgsl` keeps the pointwise four-channel tile and, for each input channel, computes the
+depthwise value at the tile's four pixels with 41's register rows, applies ReLU and accumulates:
+the same `fma` order as the two kernels, so a production version would be bit-exact. Timed against
+the pointwise kernel alone, with the depthwise kernel's own time from an A/A run beside it:
+
+| Layer, 64 -> 64 | 4090 pw | 4090 dw | 4090 fused | iGPU pw | iGPU dw | iGPU fused |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 80x80 | 13.3 us | 5.1 | **43.0** | 657 | 117 | **1679** |
+| 40x40 | 13.3 | 3.1 | **38.9** | 154 | 38 | **478** |
+| 20x20 | 12.3 | 3.1 | **37.9** | 41 | 13 | **137** |
+
+**2.2-2.6x the separate pair on both adapters**, which the extra dispatch and its ~3 us of host
+encoding cannot begin to offset. The cost is structural: a pointwise tile covers four of the
+sixty-four output channels, so each of sixteen tiles at a pixel recomputes all sixty-four depthwise
+values. Avoiding that means one thread per pixel group carrying every output channel -- sixty-four
+accumulators in a local array, the exact pattern 41 removed -- or a staged per-pixel tile, which
+29 found unsafe on D3D12. Reopen only if a fused kernel can share the depthwise values without
+either.
 
 ### Previous work
 
