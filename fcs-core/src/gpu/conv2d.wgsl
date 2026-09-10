@@ -166,7 +166,77 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // -- so it is bit-exact with it. The difference is only that each gathered input vector is
 // used by four output channels instead of one, which for the 640x640 3->16 stem is the
 // difference between reading the source once and reading it sixteen times.
+//
+// A full tile keeps its four accumulators in separate registers, for the reason given on
+// `pointwise`; the last tile of a channel count that is not a multiple of four takes
+// `general_ungrouped_tail`.
 fn general_ungrouped(ox_start: u32, oy: u32, oc: u32) {
+    if oc + CHANNEL_TILE > params.output_channels {
+        general_ungrouped_tail(ox_start, oy, oc);
+        return;
+    }
+    let kernel_hw = params.kernel_height * params.kernel_width;
+    let weights_per_out = params.input_channels * kernel_hw;
+    let input_plane = params.input_width * params.input_height;
+    let stride = vec2<i32>(i32(params.stride_x), i32(params.stride_y));
+    let pad = vec2<i32>(i32(params.pad_x), i32(params.pad_y));
+    let dims = vec2<i32>(i32(params.input_width), i32(params.input_height));
+
+    let ox_vec = vec4<i32>(i32(ox_start), i32(ox_start) + 1, i32(ox_start) + 2, i32(ox_start) + 3);
+    let start_y = i32(oy) * stride.y - pad.y;
+    let start_x_vec = ox_vec * stride.x - pad.x;
+    let w0 = oc * weights_per_out;
+    let w1 = w0 + weights_per_out;
+    let w2 = w1 + weights_per_out;
+    let w3 = w2 + weights_per_out;
+
+    var a0 = vec4<f32>(bias[oc]);
+    var a1 = vec4<f32>(bias[oc + 1u]);
+    var a2 = vec4<f32>(bias[oc + 2u]);
+    var a3 = vec4<f32>(bias[oc + 3u]);
+
+    for (var ic = 0u; ic < params.input_channels; ic++) {
+        let channel_base = ic * input_plane;
+        let weight_channel_base = ic * kernel_hw;
+        for (var ky = 0u; ky < params.kernel_height; ky++) {
+            let iy = start_y + i32(ky);
+            if iy < 0 || iy >= dims.y {
+                continue;
+            }
+            let input_row_base = channel_base + u32(iy) * params.input_width;
+            let weight_row_base = weight_channel_base + ky * params.kernel_width;
+            for (var kx = 0u; kx < params.kernel_width; kx++) {
+                let ix_vec = start_x_vec + i32(kx);
+                var inputs = vec4<f32>(0.0);
+                if ix_vec.x >= 0 && ix_vec.x < dims.x {
+                    inputs.x = input_tensor[input_row_base + u32(ix_vec.x)];
+                }
+                if ix_vec.y >= 0 && ix_vec.y < dims.x {
+                    inputs.y = input_tensor[input_row_base + u32(ix_vec.y)];
+                }
+                if ix_vec.z >= 0 && ix_vec.z < dims.x {
+                    inputs.z = input_tensor[input_row_base + u32(ix_vec.z)];
+                }
+                if ix_vec.w >= 0 && ix_vec.w < dims.x {
+                    inputs.w = input_tensor[input_row_base + u32(ix_vec.w)];
+                }
+                let weight_offset = weight_row_base + kx;
+                a0 = fma(inputs, vec4<f32>(weights[w0 + weight_offset]), a0);
+                a1 = fma(inputs, vec4<f32>(weights[w1 + weight_offset]), a1);
+                a2 = fma(inputs, vec4<f32>(weights[w2 + weight_offset]), a2);
+                a3 = fma(inputs, vec4<f32>(weights[w3 + weight_offset]), a3);
+            }
+        }
+    }
+
+    write_output(ox_start, oy, oc, a0);
+    write_output(ox_start, oy, oc + 1u, a1);
+    write_output(ox_start, oy, oc + 2u, a2);
+    write_output(ox_start, oy, oc + 3u, a3);
+}
+
+// `general_ungrouped` for the last, partial tile of a channel count not divisible by four.
+fn general_ungrouped_tail(ox_start: u32, oy: u32, oc: u32) {
     let kernel_hw = params.kernel_height * params.kernel_width;
     let weights_per_out = params.input_channels * kernel_hw;
     let input_plane = params.input_width * params.input_height;
@@ -228,7 +298,50 @@ fn general_ungrouped(ox_start: u32, oy: u32, oc: u32) {
 }
 
 // Four output channels share each loaded input vector. Dispatch z covers ceil(channels / 4).
+//
+// A full tile keeps its four accumulators in separate registers with no inner loop. Written as
+// `array<vec4<f32>, 4>` updated inside a loop bounded by the channel tail -- which is how
+// `pointwise_tail` still does it -- DXC lowers the array to stack memory with a load and a store
+// on every multiply-add: 68.6 us against 27.6 on a 160x160 64->64 layer, the entire DXC
+// regression experiment 4 recorded. FXC is indifferent to it on the 4090 and 4-22% faster
+// without it on the Radeon iGPU (experiment 41). Same `fma` per channel in the same order, so
+// bit-exact either way.
 fn pointwise(ox_start: u32, oy: u32, oc: u32) {
+    if oc + CHANNEL_TILE > params.output_channels {
+        pointwise_tail(ox_start, oy, oc);
+        return;
+    }
+    let c_in = params.input_channels;
+    let plane = params.input_width * params.input_height;
+    let pixel = oy * params.input_width + ox_start;
+    let w0 = oc * c_in;
+    let w1 = w0 + c_in;
+    let w2 = w1 + c_in;
+    let w3 = w2 + c_in;
+    var a0 = vec4<f32>(bias[oc]);
+    var a1 = vec4<f32>(bias[oc + 1u]);
+    var a2 = vec4<f32>(bias[oc + 2u]);
+    var a3 = vec4<f32>(bias[oc + 3u]);
+    for (var ic = 0u; ic < c_in; ic++) {
+        let base = ic * plane + pixel;
+        var values = vec4<f32>(0.0);
+        values.x = input_tensor[base];
+        if ox_start + 1u < params.input_width { values.y = input_tensor[base + 1u]; }
+        if ox_start + 2u < params.input_width { values.z = input_tensor[base + 2u]; }
+        if ox_start + 3u < params.input_width { values.w = input_tensor[base + 3u]; }
+        a0 = fma(values, vec4<f32>(weights[w0 + ic]), a0);
+        a1 = fma(values, vec4<f32>(weights[w1 + ic]), a1);
+        a2 = fma(values, vec4<f32>(weights[w2 + ic]), a2);
+        a3 = fma(values, vec4<f32>(weights[w3 + ic]), a3);
+    }
+    write_output(ox_start, oy, oc, a0);
+    write_output(ox_start, oy, oc + 1u, a1);
+    write_output(ox_start, oy, oc + 2u, a2);
+    write_output(ox_start, oy, oc + 3u, a3);
+}
+
+// `pointwise` for the last, partial tile of a channel count not divisible by four.
+fn pointwise_tail(ox_start: u32, oy: u32, oc: u32) {
     let plane = params.input_width * params.input_height;
     let pixel = oy * params.input_width + ox_start;
     var acc: array<vec4<f32>, 4>;
@@ -285,24 +398,36 @@ fn write_output(ox_start: u32, oy: u32, oc: u32, value: vec4<f32>) {
     }
 }
 
+// Six loads per row serve four output pixels. The row is six registers, not an
+// `array<f32, 6>` filled in a loop: DXC lowers a loop-indexed local array to stack memory, which
+// cost these layers 40-68%, and FXC is level on the 4090 and 10-26% faster on the Radeon iGPU
+// without it (experiment 41). Padding is `select` over a read clamped into the row, so no index
+// is ever out of range and every value is the one the array held: bit-exact.
 fn depthwise(ox_start: u32, oy: u32, oc: u32) {
     var acc = vec4<f32>(bias[oc]);
+    let x = i32(ox_start);
     for (var ky = 0u; ky < 3u; ky++) {
         let iy = i32(oy) + i32(ky) - 1;
         if iy < 0 || iy >= i32(params.input_height) { continue; }
         let base = (oc * params.input_height + u32(iy)) * params.input_width;
-        var row: array<f32, 6>;
-        for (var i = 0u; i < 6u; i++) {
-            let ix = i32(ox_start) + i32(i) - 1;
-            row[i] = 0.0;
-            if ix >= 0 && ix < i32(params.input_width) { row[i] = input_tensor[base + u32(ix)]; }
-        }
-        for (var kx = 0u; kx < 3u; kx++) {
-            let values = vec4<f32>(row[kx], row[kx + 1u], row[kx + 2u], row[kx + 3u]);
-            acc = fma(values, vec4<f32>(weights[oc * 9u + ky * 3u + kx]), acc);
-        }
+        let r0 = load_or_zero(base, x - 1);
+        let r1 = load_or_zero(base, x);
+        let r2 = load_or_zero(base, x + 1);
+        let r3 = load_or_zero(base, x + 2);
+        let r4 = load_or_zero(base, x + 3);
+        let r5 = load_or_zero(base, x + 4);
+        let w = oc * 9u + ky * 3u;
+        acc = fma(vec4<f32>(r0, r1, r2, r3), vec4<f32>(weights[w]), acc);
+        acc = fma(vec4<f32>(r1, r2, r3, r4), vec4<f32>(weights[w + 1u]), acc);
+        acc = fma(vec4<f32>(r2, r3, r4, r5), vec4<f32>(weights[w + 2u]), acc);
     }
     write_output(ox_start, oy, oc, acc);
+}
+
+// The row element at `ix`, or the zero padding outside it.
+fn load_or_zero(base: u32, ix: i32) -> f32 {
+    let safe = u32(clamp(ix, 0, i32(params.input_width) - 1));
+    return select(0.0, input_tensor[base + safe], ix >= 0 && ix < i32(params.input_width));
 }
 
 // One entry point per kernel, so a launch compiles only the kernels it will dispatch.
