@@ -147,7 +147,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                             .step_by(0.01),
                     );
                     if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                        app.needs_detector_rebuild = true;
+                        app.needs_postprocess_update = true;
                     }
                     let r = ui.add(
                         egui::DragValue::new(&mut app.settings.detection.top_k)
@@ -156,7 +156,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                             .speed(10),
                     );
                     if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                        app.needs_detector_rebuild = true;
+                        app.needs_postprocess_update = true;
                     }
 
                     // ── Input ──────────────────────────────────────────────────

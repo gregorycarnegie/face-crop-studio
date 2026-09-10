@@ -601,6 +601,8 @@ pub struct App2 {
 
     // Deferred side-effects
     pub needs_detector_rebuild: bool,
+    /// A detection threshold changed; the model stays, only postprocessing and the result do.
+    pub needs_postprocess_update: bool,
 
     // Cached OS window title; compared each frame to decide whether to emit
     // ViewportCommand::Title. Drives the taskbar/Alt+Tab label on Windows and

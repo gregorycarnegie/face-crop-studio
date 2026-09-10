@@ -201,6 +201,7 @@ impl App2 {
             rotation_drag: None,
             show_about: false,
             needs_detector_rebuild: false,
+            needs_postprocess_update: false,
             last_window_title: String::new(),
         }
     }
@@ -326,6 +327,11 @@ impl App for App2 {
         self.poll_detector(ctx);
         if self.needs_detector_rebuild {
             self.rebuild_detector();
+        }
+        // Once the pointer is released, so a slider drag re-detects once rather than on every
+        // frame of the drag.
+        if self.needs_postprocess_update && !ctx.input(|i| i.pointer.any_down()) {
+            self.apply_postprocess_settings();
         }
         self.poll_worker(ctx);
         self.poll_webcam_frames(ctx);
@@ -537,6 +543,8 @@ impl App2 {
 
     pub fn rebuild_detector(&mut self) {
         self.needs_detector_rebuild = false;
+        // A rebuild reads the current thresholds and re-detects anyway.
+        self.needs_postprocess_update = false;
         let shared = self.gpu.context.clone();
         let (status, new_gpu_ctx, result) = build_detector(&self.settings, shared);
         if new_gpu_ctx.is_some() {
@@ -787,6 +795,43 @@ impl App2 {
         if self.log_lines.len() > 100 {
             self.log_lines.pop_front();
         }
+    }
+
+    /// Apply changed detection thresholds without rebuilding the detector (experiment 66).
+    ///
+    /// Score threshold, NMS and top-k are applied after inference, so the loaded model and its
+    /// compiled pipelines stay valid, and the decoded image is already in memory. Routing these
+    /// through `rebuild_detector` recompiled every shader on the UI thread and re-decoded the
+    /// file from disk, all to change a comparison.
+    fn apply_postprocess_settings(&mut self) {
+        use crate::core::detection::spawn_detection_job_from_image;
+        // Still building: keep the flag and apply it once the detector arrives.
+        let Some(detector) = self.detector.clone() else {
+            return;
+        };
+        self.needs_postprocess_update = false;
+        let postprocess: fcs_core::PostprocessConfig = (&self.settings.detection).into();
+        let detector = Arc::new(detector.with_postprocess(postprocess));
+        self.detector = Some(Arc::clone(&detector));
+        let Some(path) = self.preview.image_path.clone() else {
+            return;
+        };
+        // A load still in flight has no decoded image yet -- or the previous one -- so restart
+        // it with the new detector rather than re-detecting whatever is in memory.
+        let Some(image) = self
+            .preview
+            .source_image
+            .clone()
+            .filter(|_| !self.preview.is_loading)
+        else {
+            self.load_image_path(path);
+            return;
+        };
+        self.is_busy = true;
+        let job_id = self.job_counter;
+        self.job_counter += 1;
+        self.current_job = Some(job_id);
+        spawn_detection_job_from_image(job_id, image, path, Some(detector), self.job_tx.clone());
     }
 
     pub fn load_image_path(&mut self, path: PathBuf) {

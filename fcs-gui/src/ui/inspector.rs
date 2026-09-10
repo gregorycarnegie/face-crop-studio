@@ -343,14 +343,18 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
                 app.settings.detection.score_threshold
             ),
         );
-        slider_with_label(
+        // Moving this used to change the setting and nothing else: the detector kept the
+        // threshold it was built with (experiment 66).
+        if slider_with_label(
             ui,
             "",
             &mut app.settings.detection.score_threshold,
             0.0,
             1.0,
             "conf",
-        );
+        ) {
+            app.needs_postprocess_update = true;
+        }
 
         // Fill color
         field_label(ui, "Padding fill color");

@@ -1407,6 +1407,61 @@ fn conv2d_bind_groups_are_reused_across_inferences() {
     );
 }
 
+/// A threshold swap has to take effect and leave the model usable as it was: the GUI now
+/// applies score, NMS and top-k edits this way instead of rebuilding (experiment 66).
+#[test]
+fn postprocess_swap_applies_new_thresholds_to_the_same_model() {
+    let Some(model_path) = model_file_path() else {
+        return;
+    };
+    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+        GpuAvailability::Available(ctx) => ctx,
+        other => {
+            eprintln!("Skipping postprocess swap test: {other:?}");
+            return;
+        }
+    };
+    let preprocessor: std::sync::Arc<dyn crate::Preprocessor> =
+        std::sync::Arc::new(crate::WgpuPreprocessor::new(context).expect("GPU preprocessor"));
+    let preprocess = crate::PreprocessConfig {
+        input_size: crate::InputSize::new(640, 640),
+        resize_quality: fcs_utils::config::ResizeQuality::Quality,
+    };
+    let detector = crate::YuNetDetector::with_gpu_preprocessor(
+        &model_path,
+        preprocess,
+        crate::PostprocessConfig::default(),
+        preprocessor,
+    )
+    .expect("GPU detector");
+    let image = fcs_utils::load_fixture_image("images/006.jpg").expect("fixture");
+    let base = detector.detect_image(&image).expect("detect").detections;
+    assert!(!base.is_empty(), "the fixture should contain a face");
+
+    let none = detector.with_postprocess(crate::PostprocessConfig {
+        score_threshold: 1.01,
+        ..crate::PostprocessConfig::default()
+    });
+    assert!(
+        none.detect_image(&image)
+            .expect("detect")
+            .detections
+            .is_empty(),
+        "a threshold above any score must leave nothing"
+    );
+
+    let again = none.with_postprocess(crate::PostprocessConfig::default());
+    let back = again.detect_image(&image).expect("detect").detections;
+    assert_eq!(
+        back.len(),
+        base.len(),
+        "restoring the thresholds must restore the result"
+    );
+    for (a, b) in base.iter().zip(&back) {
+        assert_eq!(a.score, b.score, "same model, same image, same score");
+    }
+}
+
 #[test]
 fn profiled_and_merged_inference_match() {
     let Some(model_path) = model_file_path() else {

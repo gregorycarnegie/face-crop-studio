@@ -37,7 +37,7 @@ pub struct DetectionOutput {
 /// This is the main entry point for running face detection.
 #[derive(Debug)]
 pub struct YuNetDetector {
-    backend: DetectorBackend,
+    backend: Arc<DetectorBackend>,
     preprocess: PreprocessConfig,
     postprocess: PostprocessConfig,
     preprocessor: Arc<dyn Preprocessor>,
@@ -138,7 +138,7 @@ impl YuNetDetector {
         let backend = DetectorBackend::Cpu(Box::new(model));
         backend.probe_input_size(preprocess.input_size)?;
         Ok(Self {
-            backend,
+            backend: Arc::new(backend),
             preprocess,
             postprocess,
             preprocessor,
@@ -176,7 +176,7 @@ impl YuNetDetector {
         let backend = DetectorBackend::Gpu(model);
         backend.probe_input_size(preprocess.input_size)?;
         Ok(Self {
-            backend,
+            backend: Arc::new(backend),
             preprocess,
             postprocess,
             preprocessor,
@@ -230,7 +230,7 @@ impl YuNetDetector {
     /// fusion loses, and it loses by more the larger the image gets. See
     /// `examples/preprocess_cost.rs`, which prints both sides and the crossover.
     fn detect_on_device(&self, image: &DynamicImage) -> Result<Option<DetectionOutput>> {
-        let DetectorBackend::Gpu(model) = &self.backend else {
+        let DetectorBackend::Gpu(model) = &*self.backend else {
             return Ok(None);
         };
         let Some(gpu_preprocessor) = self.preprocessor.as_wgpu() else {
@@ -273,7 +273,7 @@ impl YuNetDetector {
 
     /// Returns the estimated GPU memory usage in bytes, or None if running on CPU.
     pub fn gpu_memory_usage(&self) -> Option<u64> {
-        match &self.backend {
+        match &*self.backend {
             DetectorBackend::Cpu(_) => None,
             DetectorBackend::Gpu(gpu) => Some(gpu.memory_usage()),
         }
@@ -286,7 +286,7 @@ impl YuNetDetector {
     /// I running?" is not answerable from configuration alone — and it is the
     /// first thing worth knowing when detection is unexpectedly slow.
     pub fn inference_backend(&self) -> &'static str {
-        match &self.backend {
+        match &*self.backend {
             DetectorBackend::Gpu(_) => "wgsl-gpu",
             DetectorBackend::Cpu(model) => model.backend_name(),
         }
@@ -294,6 +294,20 @@ impl YuNetDetector {
 
     pub fn postprocess_config(&self) -> &PostprocessConfig {
         &self.postprocess
+    }
+
+    /// This detector with different postprocessing, sharing the loaded model, its compiled
+    /// pipelines and the preprocessor.
+    ///
+    /// Score threshold, NMS and top-k all apply after inference, so changing one needs
+    /// nothing rebuilt. The GUI used to rebuild the whole detector for it (experiment 66).
+    pub fn with_postprocess(&self, postprocess: PostprocessConfig) -> Self {
+        Self {
+            backend: Arc::clone(&self.backend),
+            preprocess: self.preprocess.clone(),
+            postprocess,
+            preprocessor: Arc::clone(&self.preprocessor),
+        }
     }
 
     /// Access the preprocessing configuration.
