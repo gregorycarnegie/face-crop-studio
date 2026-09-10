@@ -295,10 +295,13 @@ implementation or workload.
   shape, driver and context settings; inspect generated code and bounded source
   variants around dynamic array indexing/loops. Record the exact compiler
   binaries. A fix must retain the current f32 baseline before enabling features.
-- [ ] **42. Compare supported backend/compiler versions.** Test D3D12 versus
+- [x] **42. Compare supported backend/compiler versions.** Test D3D12 versus
   Vulkan on the same supported adapter and later Metal on available hardware.
   Include warm latency, compilation, correctness and stability; do not remove
-  platform guards or change shipped defaults solely for a benchmark.
+  platform guards or change shipped defaults solely for a benchmark. Done on the
+  4090 and the 7950X's Radeon iGPU: bit-identical output, D3D12 35%/75% less GPU
+  compute, Vulkan a third of the warm-cache launch time. No change; Metal not
+  measured. See the record.
 - [ ] **43. Revisit subgroups only on winning small shapes.** After 41/42,
   compare selective subgroup reduction with the best non-subgroup kernel,
   including selection and compiler effects across the full graph. Provide a
@@ -4220,6 +4223,49 @@ the "on" direction is not evidence on its own; it needs agreeing signs over thre
 processes, which is about ten seconds of detection.
 
 Not covered: another machine (10), and a GPU under thermal load -- nothing here heats it.
+
+### 42. D3D12 against Vulkan on the same adapters - D3D12 stays, and Vulkan's case is start-up
+
+Same binaries, `WGPU_BACKEND` choosing the backend. All four configurations return the
+decoded-output fingerprint `0xa116e42f7c2dabdb`, so correctness depends on neither the
+backend nor the vendor.
+
+**Warm** (`phase_timings` on the 0.17 MP fixture, `gpu_pass_breakdown`):
+
+| | 4090 D3D12 | 4090 Vulkan | Radeon iGPU D3D12 | Radeon iGPU Vulkan |
+| --- | ---: | ---: | ---: | ---: |
+| GPU compute | **0.370 ms** | 0.501 | **11.35** | 19.89 |
+| `detect_image` p50, 0.17 MP | **0.735** | 0.796 | **12.17** | 20.92 |
+| `detect_image` p50, 10 MP | **2.069** | 2.219 | **44.78** | 57.25 |
+| `gpu_finish` | 0.066 | **0.053** | 0.073 | **0.063** |
+| `gpu_preprocess` (host) | 0.155 | **0.117** | 0.242 | **0.224** |
+
+The gap is convolution codegen. On the 4090, pointwise is 209.9 us against 333.0,
+depthwise 92.2 against 112.8, the stem 18.4 against 26.5, while the small ops go the other
+way (max-pool 28.7 against 16.1, resize 14.3 against 7.6). On the Radeon, pointwise is 6.5 ms
+against 12.4. Vulkan's host side is about 20% cheaper everywhere, which does not come close to
+paying for its kernels.
+
+**Cold** (`cold_start`, three processes per backend, alternated, 4090):
+
+| | D3D12 | Vulkan |
+| --- | ---: | ---: |
+| `request_adapter` | 504-807 ms | **6-10** |
+| `request_device` | 66-124 | 38-122 |
+| `compile_conv2d` | 99-172, **every launch** | 124 on the first launch, then **1.8-1.9** |
+| launch to first face | 732-1215 | 725 on the first launch, then **293-354** |
+
+Vulkan compiles once and the driver's own pipeline cache answers thereafter, and its adapter
+bring-up is nearly free, so a warm Vulkan launch reaches its first face in about a third of the
+D3D12 time. This is the `PIPELINE_CACHE` finding from 82 seen from the driver side.
+
+**No change.** The backend is chosen per instance, so Vulkan's start-up cannot be combined
+with D3D12's kernels. It costs 35% more GPU compute on the 4090 and 75% more on the Radeon, and
+it stays excluded on Windows for the Intel ICD crash recorded in 80, which no speed number
+bears on. The case that would reopen it is a launch-per-image workload, where ~400-800 ms per
+process is worth more than 0.06 ms per detection, and only with evidence that Intel's driver
+no longer crashes. Metal is not measured here (no hardware), and nor is Vulkan stability over
+long sessions.
 
 ### Previous work
 

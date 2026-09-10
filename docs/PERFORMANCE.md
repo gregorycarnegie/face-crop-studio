@@ -175,6 +175,14 @@ Vulkan brings an adapter up in 278-312 ms against D3D12's 578-668
 because Intel's ICD crashes during bring-up. That is a stability decision with a
 measured price, not an oversight.
 
+The price has both sides now (experiment 42). Measured within `cold_start`, Vulkan's
+`request_adapter` is 6-10 ms against 504-807, and after its first launch the NVIDIA
+driver's own pipeline cache answers `conv2d` compilation in 1.8 ms against FXC's
+~120 ms every time -- a warm Vulkan launch reaches its first face in 293-354 ms against
+732-1215. But D3D12 runs the graph in **0.370 ms of GPU compute against 0.501** on the
+4090, and 11.3 against 19.9 ms on the Radeon iGPU, with identical output on all four.
+The backend is per instance, so the two cannot be combined.
+
 **The GUI pays a different bill**, and it is smaller than 80 recorded on both
 counts. It shares eframe's device, so `App::new` never issues that 546 ms call --
 though eframe issues one of its own to build the window, so the user still waits
