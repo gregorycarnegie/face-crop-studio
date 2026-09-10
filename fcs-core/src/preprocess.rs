@@ -425,16 +425,12 @@ impl WgpuPreprocessor {
     /// upload), against 0.6 ms to resize on the CPU and upload the tensor. The crossover sat
     /// between 1.1 and 2.5 MP; `examples/preprocess_cost.rs` prints both sides and finds it.
     ///
-    /// On an integrated GPU there is no bus to cross -- the upload is a copy inside memory
-    /// the CPU already owns -- so the penalty does not apply and the GPU path stays preferred
-    /// at any size.
+    /// The same cutoff applies on an integrated GPU, which this used to exempt on the grounds
+    /// that there is no bus to cross. The bus was never the only cost: the whole-source route
+    /// also has the GPU read every source pixel through the resize shader. On the 7950X's
+    /// Radeon iGPU that measured 42.4 ms per detection at 10 MP against 14.3 ms by the CPU
+    /// resize route, and 12.9 against 12.7 even at 0.8 MP (experiment 10).
     fn upload_pays_for_source(&self, image: &DynamicImage) -> bool {
-        if matches!(
-            self.context.adapter_info().device_type,
-            wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
-        ) {
-            return true;
-        }
         let (width, height) = image.dimensions();
         width.saturating_mul(height) <= max_gpu_preprocess_pixels()
     }

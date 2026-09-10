@@ -466,8 +466,15 @@ impl GpuContext {
         };
         let _adapter_guard =
             crate::telemetry::timing_guard("fcs_utils::gpu_request_adapter", log::Level::Trace);
+        // `WGPU_POWER_PREF=low` reaches the integrated adapter on a machine that has both,
+        // which is how the hardware baselines (experiment 10) run the same probes there.
+        let power_preference = options
+            .respect_env
+            .then(PowerPreference::from_env)
+            .flatten()
+            .unwrap_or(options.power_preference);
         let adapter = block_on(instance.request_adapter(&RequestAdapterOptions {
-            power_preference: options.power_preference,
+            power_preference,
             force_fallback_adapter: options.force_fallback_adapter,
             compatible_surface: None,
             // apply_limit_buckets defaults to false: bucketing rounds adapter limits
