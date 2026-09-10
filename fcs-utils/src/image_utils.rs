@@ -530,6 +530,17 @@ fn threading_pays(alg: fir::ResizeAlg, width: u32, height: u32) -> bool {
 ///
 /// Returns `None` if the pool cannot be built, which sends the caller down the threaded path
 /// rather than failing the resize -- slower than intended is better than no image.
+///
+/// **One pool for the whole process, so concurrent non-worker callers serialise on it.**
+/// `threading_pays` returns true on a rayon worker, so nothing in this application reaches
+/// here concurrently: the CLI folder job and watch mode are `par_iter`, the GUI's detection
+/// entry points are `rayon::spawn`, and GUI batch export is `pool.install`. A caller that
+/// detects from plain threads would be a different matter -- experiment 24 profiled exactly
+/// that and found eight threads' resizes running one after another on this pool's single
+/// core, one thread holding 31.5% of all CPU in the run, and per-process throughput capped
+/// at about half what it reaches through rayon. If a plain-threaded caller ever appears,
+/// this is what it will hit, and confining per calling thread rather than per process is
+/// the fix.
 fn single_thread_pool() -> Option<&'static rayon::ThreadPool> {
     static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
     POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().num_threads(1).build().ok())

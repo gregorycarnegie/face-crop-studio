@@ -415,20 +415,32 @@ p95 and 33.6 px at worst, box IoU down to 0.93, in exchange for 1.76x. That is
 the same failure the `Interpolation` candidate was rejected for below. The
 default is `Quality`; the numbers now sit on the enum variant.
 
-### One process caps at ~1000 detections/s, and the cap is ours
+### One process caps at ~1000 detections/s, and it is the resize
 
 `concurrent_latency` runs N threads over pre-decoded images with nothing logged
 until the end -- the first attempt at this used CLI telemetry and measured the
-stderr lock instead. Detection throughput saturates at **three threads**: 535
-det/s at one, 941 at three, and 974 at thirty-two, where mean latency has gone
-from 1.9 ms to 32.6.
+stderr lock instead. Detection throughput saturates around **1000/s** however the
+concurrency is created, but the shape depends on how, and that matters:
 
-The limit is inside the process, not in the hardware. Four processes with their
-own devices reach **2115 det/s against one process's 915**, and the ceiling
-survives forcing the CPU preprocessing route, so it is a lock somewhere in the
-buffer pool, the convolution caches, the workspace or wgpu's device rather than
-the adapter or the queue. Identifying it needs lock instrumentation, which is
-where experiment 24 resumes.
+| Threads | plain threads | rayon (what the app does) |
+| ---: | ---: | ---: |
+| 2 | 940 | 713 |
+| 8 | 938 | 1002 |
+| 16 | 863 | **1061** |
+| 32 | 754 | 813 |
+
+`samply` over both shapes (experiment 24) clears every suspect the backlog named:
+no buffer-pool, convolution-cache, workspace or wgpu device lock appears. CPU is
+`fast_image_resize`'s AVX2 vertical convolution, spread evenly across the 16
+workers in the rayon profile.
+
+The plain-thread column is capped by something the application never reaches.
+`threading_pays` returns false under 4 MP and installs the resize into
+`single_thread_pool()` -- one rayon pool with one thread, process-wide -- so eight
+plain-thread callers serialise on one core, and the profile shows a single thread
+holding 31.5% of all CPU. Every concurrent detection in production is on a rayon
+worker, where that branch is skipped. Four processes reach 1259 det/s against one
+process's 994, so the remaining cross-process headroom is ~27%.
 
 In proportion: detection is about 3 ms of the 65 ms of CPU a folder image costs,
 so this bounds a detection-heavy workload rather than the one the application

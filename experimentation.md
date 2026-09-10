@@ -196,12 +196,14 @@ implementation or workload.
   compare individually bound buffers with aligned suballocations and offsets.
   Account for binding limits, aliasing rules, internal fragmentation and CPU
   indexing. Reject if complexity exceeds a repeatable whole-path gain.
-- [ ] **24. Measure pool and shared-cache contention. Half-answered; the rest
-  needs a profiler.** The ceiling is measured and located to the process: four
-  processes reach 2.3x the detection throughput of one (2115 against 915 det/s),
-  and it survives switching off the GPU preprocessing route, so it is a lock in
-  our address space rather than the adapter, driver or queue. Which lock is not
-  something wall-clock numbers can say. Original brief: compare lock wait and
+- [x] **24. Measure pool and shared-cache contention.** Answered by profiling,
+  and the answer is that none of the suspects is the problem: no buffer-pool,
+  convolution-cache, workspace or wgpu device lock appears in either dispatch
+  shape. What does serialise is the resize path's process-wide **one-thread**
+  pool, and only for callers that are not rayon workers -- which production never
+  is, so it caps the probe rather than the application. CPU in concurrent
+  detection is dominated by `fast_image_resize`'s vertical convolution, spread
+  evenly across workers. Original brief: compare lock wait and
   allocation behavior under actual batch concurrency; test per-worker/per-slot
   ownership only where contention is observed. Retain bounded memory and
   correctness during cancellation, failure and changing image sizes.
@@ -3964,32 +3966,101 @@ there at three threads.** Everything above that buys 5% and multiplies latency b
 process still stops at 1000/s. A ring cannot lift a ceiling that already binds
 with the overlap in place. Reopen if 24 removes it.
 
-#### The ceiling is ours, not the GPU's (experiment 24, in part)
+#### The ceiling, and how the first reading of it was wrong
 
-Running the same probe in several processes, each with its own device:
+Running the same probe in several processes, each with its own device, **dispatching
+on plain threads**:
 
 | Arrangement | total det/s |
 | --- | ---: |
 | 1 process x 2 threads | 915 |
-| 2 processes x 2 threads | **1621** |
-| 4 processes x 2 threads | **2115** |
+| 2 processes x 2 threads | 1621 |
+| 4 processes x 2 threads | 2115 |
 
-Four processes reach 2.3x what one can, so the limit is **per-process, not the
-adapter, the driver or the queue**. It is not the GPU preprocessing route either:
-forcing the CPU route with `FCS_MAX_GPU_PREPROCESS_PIXELS=0` moves the curve up
-slightly (1052 det/s peak against 941) and saturates at the same place.
+That looked like 2.3x available outside one process, and it was first written up
+here as "roughly half the available detection throughput is lost to a lock in our
+address space". **That conclusion was wrong, and the profile in 24 below says
+why:** plain threads are not how this application creates concurrency, and the
+shape of the dispatch decides which resize path every detection takes. Corrected,
+with `--rayon`, which is what the CLI and the GUI both do:
 
-That is a serialisation point inside the process -- a lock in the buffer pool, the
-convolution caches, the workspace, or inside wgpu's device. **Which one is not
-something these numbers can say**, and finding it means instrumenting lock waits
-or sampling the stacks, which is where 24 now resumes. What is established is
-that the cap exists, that it costs roughly half the available detection
-throughput, and that it is in our address space.
+| Threads | plain threads | rayon |
+| ---: | ---: | ---: |
+| 1 | 523 | 549 |
+| 2 | **940** | 713 |
+| 3 | 942 | 746 |
+| 4 | 933 | 770 |
+| 8 | 938 | 1002 |
+| 16 | 863 | **1061** |
+| 32 | 754 | 813 |
 
-**Worth keeping in proportion:** in a folder job detection is about 3 ms of the
-65 ms of CPU each image costs, so lifting this cap would not move a folder wall
-time. It bounds a detection-heavy workload -- many small images, or a future
-video path -- not the one the application spends its time on today.
+| Arrangement (rayon) | total det/s |
+| --- | ---: |
+| 1 process x 16 threads | 994 |
+| 2 processes x 8 threads | 962 |
+| 4 processes x 8 threads | **1259** |
+
+So the ~1000 det/s ceiling is real in both shapes, but **everything else about the
+first reading changes**. Production reaches it at 8-16 threads rather than 2, and
+four processes buy **27%, not 130%** -- most of the ceiling is the machine doing
+the resize, not a lock being held. The 2115 figure was one process being held down
+to a single core, which is a property of the probe.
+
+What survives unchanged: 18's premise is still removed. A ~1000/s ceiling that
+binds with 16-way overlap already in place is not going to be lifted by
+pipelining readback inside one thread.
+
+### 24. None of the suspects, and a one-thread pool that only the probe can reach
+
+24 asks for lock wait and contention in the buffer pool and the shared caches.
+`samply` over `concurrent_latency` at saturation, both dispatch shapes, answers it:
+**no buffer-pool, convolution-cache, workspace or wgpu device lock appears in
+either profile.** The suspects are all innocent.
+
+**Plain-thread dispatch, 8 threads, 1920 detections.** 6.4 s of CPU across 66
+threads over a 2.0 s round -- 8 threads at 39% busy, so they are blocked, not
+computing. And one thread holds **2010 ms, 31.5% of all CPU in the run**, against
+~200 ms for each of the eight. Its stack says what it is:
+
+```text
+rayon_core::registry::WorkerThread::wait_until_cold
+  rayon_core::job::execute<LatchRef<LockLatch>,
+    in_worker_cold::closure<ThreadPool::install::closure<
+      fcs_utils::image_utils::resize_pixels_fast::closure_env$1, ...
+  fast_image_resize::convolution::vertical_u8::avx2::vert_convolution
+```
+
+That is `single_thread_pool()`, and it is a **process-wide rayon pool with exactly
+one thread**. `threading_pays` returns false for anything under 4 MP -- 23 of the
+24 fixtures -- so every one of those resizes is installed into that one pool, and
+eight callers' resizes run one after another on a single core. The ceiling in the
+plain-thread column is that pool.
+
+**Rayon dispatch, 16 threads.** `threading_pays` short-circuits to true on a rayon
+worker (88 put it there: saying no from a worker is a cross-registry hop), so the
+one-thread pool is never touched. The profile is healthy in exactly the way the
+other is not: the 16 workers sit at **121-142 ms each**, evenly, with no outlier,
+and `NtWaitForAlertByThreadId` down to 3.4% of CPU. Self time is
+`fast_image_resize`'s AVX2 vertical convolution, row after row, plus `memset`.
+
+**Every concurrent detection in production is the rayon case.** The CLI folder job
+and watch mode use `par_iter`; the GUI's three detection entry points use
+`rayon::spawn`; GUI batch export uses `pool.install` with `into_par_iter`. The
+only plain-thread callers are the webcam *capture* loop, which does not detect,
+and the detector build from 81. So the serialisation is reachable but not reached:
+**it caps the probe, not the application.**
+
+It is still a trap worth naming, because nothing at the call site says so: a future
+caller that detects from plain threads -- a server loop, a watcher that does its own
+threading -- would silently lose about half its throughput to a pool it never asked
+for. The comment on `single_thread_pool` now says that.
+
+**What actually limits concurrent detection is the resize**, which is where 48-51
+and 88 already live, and which 51 closed for single-image latency: at a fixed source
+resolution the convolution is bounded below by reading the source once. The
+remaining ~27% that four processes find over one is not attributed here, and is
+small enough that chasing it needs a reason the application does not currently
+supply -- detection is about 3 ms of the 65 ms of CPU a folder image costs.
 
 ### Previous work
 

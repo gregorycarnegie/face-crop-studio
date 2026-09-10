@@ -11,8 +11,13 @@
 //! `--ab VAR` alternates an environment flag between blocks, the way `phase_timings` does,
 //! because run-to-run drift on a shared GPU is larger than what these candidates change.
 //!
+//! `--rayon` dispatches through a rayon pool instead of plain threads, which is how both
+//! the CLI and the GUI create their concurrency -- and it is not cosmetic: `threading_pays`
+//! takes a different branch on a rayon worker, so the two shapes exercise different resize
+//! paths.
+//!
 //!   cargo run --release -p fcs-core --example concurrent_latency -- <dir> [--threads N]
-//!       [--images N] [--rounds N] [--ab VAR]
+//!       [--images N] [--rounds N] [--rayon] [--ab VAR]
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -26,6 +31,7 @@ use fcs_utils::{
     gpu::{GpuAvailability, GpuContext, GpuContextOptions},
 };
 use image::DynamicImage;
+use rayon::prelude::*;
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -60,33 +66,61 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
 ///
 /// Returns every individual latency in milliseconds, plus the wall time of the round, so
 /// latency and throughput can be reported separately -- they do not move together here.
+///
+/// `rayon` picks how the concurrency is created, and it is not a detail. `threading_pays`
+/// in `image_utils` short-circuits to true when it is already on a rayon worker, so a
+/// detection dispatched through rayon takes a different resize path from one on a plain
+/// thread -- the latter hops into a process-wide one-thread pool instead. Both the CLI
+/// (`par_iter` over the folder) and the GUI (`rayon::spawn`) are the rayon case, so that
+/// is the one that mirrors production; plain threads are kept because the difference
+/// between them is the measurement (experiment 24).
 fn run_round(
     detector: &Arc<YuNetDetector>,
     images: &Arc<Vec<DynamicImage>>,
     threads: usize,
     rounds: usize,
+    rayon_dispatch: bool,
 ) -> Result<(Vec<f64>, f64)> {
     let collected: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+    let one = |image: &DynamicImage| {
+        let t = Instant::now();
+        // A failure here is a real one: the inputs are already decoded.
+        detector.detect_image(image).expect("detect");
+        t.elapsed().as_secs_f64() * 1e3
+    };
+
     let started = Instant::now();
-    std::thread::scope(|scope| {
-        for _ in 0..threads {
-            let detector = Arc::clone(detector);
-            let images = Arc::clone(images);
-            let collected = Arc::clone(&collected);
-            scope.spawn(move || {
-                let mut mine = Vec::with_capacity(images.len() * rounds);
-                for _ in 0..rounds {
-                    for image in images.iter() {
-                        let t = Instant::now();
-                        // A failure here is a real one: the inputs are already decoded.
-                        detector.detect_image(image).expect("detect");
-                        mine.push(t.elapsed().as_secs_f64() * 1e3);
+    if rayon_dispatch {
+        // One task per detection over a pool of `threads` workers, which is the shape of
+        // the CLI's `processing_items.par_iter()`.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .context("build the dispatch pool")?;
+        let work: Vec<&DynamicImage> = (0..rounds).flat_map(|_| images.iter()).collect();
+        let collected = Arc::clone(&collected);
+        pool.install(|| {
+            let values: Vec<f64> = work.par_iter().map(|image| one(image)).collect();
+            collected.lock().expect("collect").extend(values);
+        });
+    } else {
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                let images = Arc::clone(images);
+                let collected = Arc::clone(&collected);
+                let one = &one;
+                scope.spawn(move || {
+                    let mut mine = Vec::with_capacity(images.len() * rounds);
+                    for _ in 0..rounds {
+                        for image in images.iter() {
+                            mine.push(one(image));
+                        }
                     }
-                }
-                collected.lock().expect("collect").extend(mine);
-            });
-        }
-    });
+                    collected.lock().expect("collect").extend(mine);
+                });
+            }
+        });
+    }
     let wall = started.elapsed().as_secs_f64() * 1e3;
     let values = Arc::try_unwrap(collected)
         .expect("threads joined")
@@ -119,6 +153,8 @@ fn main() -> Result<()> {
     let threads = flag_usize("--threads", 32);
     let image_count = flag_usize("--images", 24);
     let rounds = flag_usize("--rounds", 4);
+    // Plain threads by default so the two dispatch shapes stay comparable across runs.
+    let rayon_dispatch = std::env::args().any(|a| a == "--rayon");
 
     let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
         GpuAvailability::Available(ctx) => ctx,
@@ -163,15 +199,16 @@ fn main() -> Result<()> {
     );
     anyhow::ensure!(!images.is_empty(), "nothing decoded from {dir}");
     println!(
-        "{} images, {threads} threads, {rounds} rounds per block",
-        images.len()
+        "{} images, {threads} threads, {rounds} rounds per block, dispatch: {}",
+        images.len(),
+        if rayon_dispatch { "rayon" } else { "plain threads" }
     );
 
     // Warm: pipelines, pools and the file cache all settle on the first pass.
-    run_round(&detector, &images, threads, 1)?;
+    run_round(&detector, &images, threads, 1, rayon_dispatch)?;
 
     let Some(var) = flag_value("--ab") else {
-        let (values, wall) = run_round(&detector, &images, threads, rounds)?;
+        let (values, wall) = run_round(&detector, &images, threads, rounds, rayon_dispatch)?;
         println!();
         report("latency", values, wall);
         return Ok(());
@@ -191,7 +228,7 @@ fn main() -> Result<()> {
                 std::env::remove_var(&var);
             }
         }
-        let (values, wall) = run_round(&detector, &images, threads, rounds)?;
+        let (values, wall) = run_round(&detector, &images, threads, rounds, rayon_dispatch)?;
         if enabled {
             on.extend(values);
             on_wall += wall;
