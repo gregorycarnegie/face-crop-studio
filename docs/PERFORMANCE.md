@@ -168,9 +168,18 @@ Vulkan brings an adapter up in 278-312 ms against D3D12's 578-668
 because Intel's ICD crashes during bring-up. That is a stability decision with a
 measured price, not an oversight.
 
-**The GUI pays a different bill.** It shares eframe's device, so it never issues
-that 546 ms call; its cold-start cost is the ~235 ms of shader compilation, and
-`build_detector` runs synchronously in `App::new` before the first frame.
+**The GUI pays a different bill**, and it is smaller than 80 recorded on both
+counts. It shares eframe's device, so `App::new` never issues that 546 ms call --
+though eframe issues one of its own to build the window, so the user still waits
+for it. Its own cost is the shader compilation, which 82 took from ~235 ms to
+150-160.
+
+Launch to first painted frame is **894 ms**, measured in the running application
+over 12 launches, and `build_detector` was 17% of it because it ran before the
+first frame. Building it on a thread instead takes that to **737 ms** while the
+detector still becomes usable at the same wall time -- 896 ms against 894, since
+the build now overlaps the renderer's first frames rather than preceding them
+(experiment 81; the `startup:` lines in the GUI log are the measurement).
 
 ### The decode was three-quarters exponentials
 
@@ -474,6 +483,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 | Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |
 | Branch the heads off the mapped view, not a copy of it | -0.011 to -0.021 ms | `gpu/runtime.rs` |
+| Build the detector off the GUI's first frame | **-157 ms to first paint**, detector no later | `fcs-gui/src/app.rs` |
 | Letterbox instead of stretching to the model input | **+100 faces over 1239 images**, -0.38 ms at 2 MP | `image_utils.rs`, both preprocess shaders, `detector.rs` |
 
 All are bit-exact except the RGBA crop resize, which swaps one Lanczos3

@@ -16,6 +16,7 @@ use log::{LevelFilter, warn};
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
+    let _ = fcs_gui::LAUNCH.set(std::time::Instant::now());
     init_logging(LevelFilter::Info).expect("failed to initialize logging");
     let mut options = NativeOptions::default();
     options.viewport = options

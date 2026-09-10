@@ -473,13 +473,18 @@ implementation or workload.
   runs; prevent lazy initialization from hiding cost in the first user action.
   Answered: `request_adapter` 60%, one shader 22%, model loading 0.15%, nothing
   deferred into the first detection.
-- [ ] **81. Reuse device/model/pipelines across real UI lifetimes.** Check
+- [x] **81. Reuse device/model/pipelines across real UI lifetimes.** Check
   existing sharing, then eliminate measured accidental recreation across preview,
   webcam and export. **Half-answered by 80:** the GUI already shares eframe's
   device, so it never pays the 546 ms adapter bring-up. What remains is that
   `build_detector` runs synchronously in `App::new`, putting ~235 ms of shader
   compilation ahead of the first frame. Include device loss, switching models and shutting down;
   longer lifetime must not produce unbounded retained GPU memory.
+  Done: 82 had already cut that 235 to ~155, and building it on a thread takes
+  launch-to-first-frame from **894 ms to 737** over 24 alternated launches while
+  the detector still lands at the same wall time. It also turned up a real
+  defect: a file dropped in that window was told the model was not configured.
+  Not covered here: device loss and model switching, which need their own runs.
 - [x] **82. Evaluate supported pipeline caches or controlled prewarming.**
   **Sized by 80:** the target is one shader, `conv2d.wgsl` at 197 ms of FXC; the
   other four are 20 ms together, so parallel compilation is not the answer.
@@ -3725,6 +3730,70 @@ not have caught it.
 Validated with the full workspace suite under `FCS_STRICT_TESTS=1` (0 failures)
 and a 1239-image folder job, which is where 71's lesson says a change to a
 shared helper belongs: 959 of 959 crops byte-identical against master.
+
+### 81. 157 ms of empty window, and the detector arrives at the same moment anyway
+
+80 handed this over with a number that no longer applies and a claim that turned
+out to be half right. Its number was ~235 ms of shader compilation ahead of the
+GUI's first frame; 82 has since cut `conv2d.wgsl` from 197 ms to about 120, so
+the real figure is **150-160 ms**. Its claim was that the GUI never pays a
+`request_adapter` -- true of `App::new`, and irrelevant to the user, because
+eframe issues one to build the window it hands over. Launch to first frame is
+**894 ms** and the detector is 17% of it.
+
+Measured in the running application, because none of this is visible from a CLI
+probe: `LAUNCH` is stamped at the top of `main`, and three `info!` lines report
+`build_detector`, the first painted frame and the detector landing. **24
+launches, alternated one for one within a single binary** -- launch time drifts
+by more between runs than this change is worth, so two binaries compared a few
+times each cannot resolve it.
+
+| | p50 | min-max | n |
+| --- | ---: | --- | ---: |
+| first frame, built on the critical path | 894 ms | 877-918 | 12 |
+| first frame, built on a thread | **737 ms** | 726-763 (one 979) | 12 |
+| detector ready, on the critical path | 894 ms | 877-918 | 12 |
+| detector ready, on a thread | **896 ms** | 880-924 (one 1225) | 12 |
+
+**-157 ms to the first frame, +2 ms to a usable detector.** The build does not
+get slower for being moved -- it overlaps the renderer's first frames instead of
+preceding them, and lands at the same wall time. One launch in twelve was an
+outlier on both numbers; the distributions are otherwise disjoint.
+
+**The state this introduces already existed.** `detector` is an `Option` because
+the build can legitimately fail, and every consumer -- the queue button, the
+mapping panel, the menu bar, the export path -- already gates on
+`detector.is_some()`. "Not built yet" needs no new state beyond the channel the
+finished detector arrives on, which is why this is a small change rather than a
+rewrite of how the app handles a missing model.
+
+**Two things did need handling, and one of them is a real defect this would
+otherwise have shipped.** A file dropped between the first frame and the detector
+arriving went to `spawn_detection_job`, which answers a `None` detector with
+"No detector loaded. Configure model path in settings." -- true of a missing
+model, wrong about one that is 100 ms away. `load_image_path` now parks the path
+instead, and `poll_detector` replays it, the same way `rebuild_detector` already
+replays the open image. If the builder thread dies without sending, the parked
+load is released with an honest error rather than spinning forever. The window
+is only ~160 ms and the GUI takes no file argument, so nothing but a drop can
+reach it -- clipboard paste and the webcam both need a deliberate action after
+the window appears, and they keep the message they always had.
+
+egui repaints only when asked, so a pending build asks: without
+`ctx.request_repaint()` the window would paint once and then idle, and the
+detector would appear whenever the user next moved the mouse.
+
+**No unit test.** The logic is a three-branch state machine on an `App2`, and
+constructing one needs an eframe `CreationContext`; a harness for that would be
+larger than the change. The evidence is the 24 alternated launches above plus the
+full workspace suite, which is the standard 97 was held to for GUI work.
+
+**Kept.** The startup timing lines stay in: they cost three `info!` calls at
+launch and they are what any future startup work, or a user's log, has to start
+from. What is *not* addressed is the other 737 ms, which is eframe bringing up a
+window and a D3D12 device -- 80 already measured `request_adapter` at 546 ms of
+that and recorded why Vulkan, at less than half the time, is deliberately not
+used on Windows.
 
 ### Previous work
 

@@ -496,6 +496,13 @@ impl MappingUiState {
     }
 }
 
+/// What `build_detector` produces, as it crosses back from the thread that built it.
+pub type DetectorBuild = (
+    GpuStatusIndicator,
+    Option<Arc<GpuContext>>,
+    anyhow::Result<fcs_core::YuNetDetector>,
+);
+
 // ── GPU pipeline ──────────────────────────────────────────────────────────────
 
 /// Shared GPU context plus the status indicator describing the active adapter.
@@ -523,6 +530,13 @@ pub struct App2 {
     pub settings_path: PathBuf,
     pub gpu: GpuPipeline,
     pub detector: Option<Arc<fcs_core::YuNetDetector>>,
+    /// Set while the detector is still being built on a background thread.
+    ///
+    /// Experiment 81: building it took 150 ms of a 890 ms launch and ran before the first
+    /// frame, so the window sat empty for it. Everything that uses the detector already
+    /// gates on `detector.is_some()`, so "not built yet" needs no new state beyond the
+    /// channel the finished one arrives on.
+    pub detector_rx: Option<std::sync::mpsc::Receiver<DetectorBuild>>,
     pub job_tx: mpsc::Sender<JobMessage>,
     pub job_rx: mpsc::Receiver<JobMessage>,
 
@@ -572,6 +586,8 @@ pub struct App2 {
     /// Set when egui handled a text paste (clipboard had text). Cleared on the
     /// next V-release so we don't also trigger an image paste in that case.
     pub suppress_image_paste: bool,
+    /// One-shot latch for the startup timing line (experiment 81).
+    pub first_frame_logged: bool,
     pub webcam_state: WebcamState,
 
     // Canvas zoom / rotation

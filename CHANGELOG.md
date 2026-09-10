@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The window opens before the detector is built, not after.** Building the
+  detector compiles five compute pipelines, and it ran on the way to the first
+  frame, so the window sat empty for it. It is built on a background thread
+  instead: **launch to first painted frame goes from 894 ms to 737** over 24
+  alternated launches, and the detector is still ready at the same moment
+  (896 ms against 894), because the build now overlaps the first frames rather
+  than preceding them. Anything the app is asked to open in that window waits for
+  the detector rather than being told the model is not configured.
+
 - **Non-square images are letterboxed into the detector rather than squashed.**
   The preprocessor scaled x and y independently, so a 16:9 photo reached the model
   stretched to a square and the face it was shown was distorted in proportion to

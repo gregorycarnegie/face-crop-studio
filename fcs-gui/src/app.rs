@@ -9,7 +9,11 @@ use crate::{
 use eframe::{App, CreationContext, Frame};
 use egui::{CursorIcon, ResizeDirection, ViewportCommand};
 use fcs_core::CropSettings as CoreCropSettings;
-use fcs_utils::{config::default_settings_path, configure_telemetry, gpu::GpuContext};
+use fcs_utils::{
+    config::default_settings_path,
+    configure_telemetry,
+    gpu::{GpuContext, GpuStatusIndicator},
+};
 use image::DynamicImage;
 use log::info;
 use std::{
@@ -116,21 +120,27 @@ impl App2 {
 
         let shared_gpu = share_gpu_from_eframe(cc);
 
-        let (gpu_status, gpu_context, detector_result) = build_detector(&settings, shared_gpu);
-        let gpu = GpuPipeline::from_context(gpu_status, gpu_context);
+        // Experiment 81: `build_detector` compiles five compute pipelines, which measured
+        // 150 ms of an 890 ms launch, and it used to run right here -- so the window stayed
+        // empty for it. It is built on a thread instead and picked up by `poll_detector`
+        // a few frames later. Nothing needs to wait for it: every consumer of `detector`
+        // already gates on it being present, because it can legitimately fail to build.
+        let (detector_tx, detector_rx) = mpsc::channel();
+        let build_settings = settings.clone();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let built = build_detector(&build_settings, shared_gpu);
+            info!(
+                "startup: build_detector {:.0} ms, finished {:.0} ms after launch",
+                started.elapsed().as_secs_f64() * 1e3,
+                crate::since_launch_ms()
+            );
+            let _ = detector_tx.send(built);
+        });
 
-        let detector = match detector_result {
-            Ok(d) => {
-                info!("YuNet model loaded");
-                Some(Arc::new(d))
-            }
-            Err(err) => {
-                log::warn!("Model unavailable: {err}");
-                None
-            }
-        };
-
-        let status_line = initial_status_line(detector.is_some()).to_owned();
+        let gpu = GpuPipeline::from_context(GpuStatusIndicator::pending(), None);
+        let detector = None;
+        let status_line = STATUS_DETECTOR_PENDING.to_owned();
 
         let (job_tx, job_rx) = mpsc::channel();
         let default_settings = settings.clone();
@@ -145,6 +155,7 @@ impl App2 {
             settings_path,
             gpu,
             detector,
+            detector_rx: Some(detector_rx),
             job_tx,
             job_rx,
             preview: PreviewState::default(),
@@ -182,6 +193,7 @@ impl App2 {
             model_path_dirty: false,
             clipboard_paste_pending: false,
             suppress_image_paste: false,
+            first_frame_logged: false,
             webcam_state: WebcamState::default(),
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
@@ -254,6 +266,9 @@ fn crop_fill_hex(crop: &fcs_utils::config::CropSettings) -> String {
 }
 
 /// Status-bar text shown immediately after startup.
+/// Shown between the first frame and the detector arriving on it (experiment 81).
+const STATUS_DETECTOR_PENDING: &str = "Starting the detector…";
+
 fn initial_status_line(has_detector: bool) -> &'static str {
     if has_detector {
         "Model ready — select an image to detect faces."
@@ -301,6 +316,14 @@ impl App for App2 {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
+        if !self.first_frame_logged {
+            self.first_frame_logged = true;
+            info!(
+                "startup: first frame at {:.0} ms since launch",
+                crate::since_launch_ms()
+            );
+        }
+        self.poll_detector(ctx);
         if self.needs_detector_rebuild {
             self.rebuild_detector();
         }
@@ -455,6 +478,63 @@ fn install_resize_edges(ui: &mut egui::Ui) {
 // ── Worker polling / dropped files ───────────────────────────────────────────
 
 impl App2 {
+    /// Takes delivery of the detector built off the critical path in `App::new`.
+    ///
+    /// egui only repaints when something asks it to, so this asks: without the repaint
+    /// request the window would paint once and then sit idle until the user moved the
+    /// mouse, and the detector would appear whenever that happened rather than when it
+    /// was ready.
+    fn poll_detector(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.detector_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((status, context, result)) => {
+                self.detector_rx = None;
+                self.gpu = GpuPipeline::from_context(status, context);
+                self.detector = match result {
+                    Ok(d) => {
+                        info!("YuNet model loaded");
+                        Some(Arc::new(d))
+                    }
+                    Err(err) => {
+                        log::warn!("Model unavailable: {err}");
+                        None
+                    }
+                };
+                self.status_line = initial_status_line(self.detector.is_some()).to_owned();
+                info!(
+                    "startup: detector ready at {:.0} ms since launch",
+                    crate::since_launch_ms()
+                );
+                // Anything dropped or pasted while it was building was parked rather than
+                // refused; run it now.
+                if let Some(path) = self.preview.image_path.clone()
+                    && self.preview.is_loading
+                {
+                    self.load_image_path(path);
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => ctx.request_repaint(),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // The builder thread died without sending. Nothing will arrive, so stop
+                // asking and leave the app in the same state a failed build leaves it.
+                self.detector_rx = None;
+                log::warn!("Detector build thread ended without a result");
+                self.status_line = initial_status_line(false).to_owned();
+                // Release anything that was parked waiting for it, or the preview spins
+                // on a detector that is never coming.
+                if self.preview.is_loading {
+                    self.preview.is_loading = false;
+                    self.show_error(
+                        "Detector unavailable",
+                        "The detector failed to start. Check the model path in settings.",
+                    );
+                }
+            }
+        }
+    }
+
     pub fn rebuild_detector(&mut self) {
         self.needs_detector_rebuild = false;
         let shared = self.gpu.context.clone();
@@ -712,6 +792,14 @@ impl App2 {
     pub fn load_image_path(&mut self, path: PathBuf) {
         use crate::core::detection::spawn_detection_job;
         self.preview.begin_loading(path.clone());
+        // A file dropped between the first frame and the detector arriving would otherwise
+        // be told "No detector loaded. Configure model path in settings." -- true of a
+        // missing model, wrong about one that is 100 ms away (experiment 81). Hold the
+        // path instead; `poll_detector` replays it, the same way `rebuild_detector` does.
+        if self.detector.is_none() && self.detector_rx.is_some() {
+            self.status_line = STATUS_DETECTOR_PENDING.to_owned();
+            return;
+        }
         self.is_busy = true;
         let job_id = self.job_counter;
         self.job_counter += 1;
