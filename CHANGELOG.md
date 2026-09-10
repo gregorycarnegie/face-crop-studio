@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Cropping no longer copies the source region twice.** Extracting the crop went
+  through `crop_imm(..).to_image()`, which allocates a second copy of the region
+  and fills it one pixel at a time through an accessor that re-checks the image's
+  pixel format on every pixel; a second loop then copied that buffer into the
+  padded canvas, also pixel by pixel. It now copies a row at a time. **About 4% of
+  the CPU a 1239-image folder job spends**, with all 959 crops byte-identical.
+  Wall time is unchanged on a 16-core machine, so this is efficiency and headroom
+  on smaller ones rather than a faster batch.
+
 - **The window opens before the detector is built, not after.** Building the
   detector compiles five compute pipelines, and it ran on the way to the first
   frame, so the window sat empty for it. It is built on a background thread

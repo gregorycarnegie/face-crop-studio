@@ -415,6 +415,32 @@ p95 and 33.6 px at worst, box IoU down to 0.93, in exchange for 1.76x. That is
 the same failure the `Interpolation` candidate was rejected for below. The
 default is `Quality`; the numbers now sit on the enum variant.
 
+### Where a folder job's CPU actually goes
+
+`samply` over `fcs-cli --crop` on 1239 images, all threads, 109.5 s of CPU over a
+6.6 s wall run, summed by name across the top 400 self-time rows:
+
+| Bucket | share |
+| --- | ---: |
+| `fast_image_resize` convolution (AVX2) | **34%** |
+| `zlib_rs` deflate (PNG encode) | **22%** |
+| libjpeg-turbo decode | **22%** |
+| `DynamicImage::get_pixel` | 4.8% |
+| memset/memcpy | 4.4% |
+| our own code | **3.6%** |
+
+**83% is third-party hand-written SIMD**, which is what closes experiment 70: there
+is no autovectorisation opportunity in 3.6% of a profile, and `target-cpu=x86-64-v3`
+is already set. The `get_pixel` row had no caller in our source -- it was
+`crop_imm(..).to_image()` inside `crop_face_from_image` filling a second copy of the
+crop region through the enum-matching accessor, then copying that into the canvas a
+pixel at a time. A row-wise blit removed about 4% of the job's CPU with
+byte-identical crops (experiment 98).
+
+It removed no wall time. Six alternated folder runs each side sit inside one
+band, which is the third result in a row saying the same thing: at 32 workers on 16
+cores this job is not bound by CPU throughput.
+
 ### One process caps at ~1000 detections/s, and it is the resize
 
 `concurrent_latency` runs N threads over pre-decoded images with nothing logged
@@ -514,6 +540,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 | Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |
 | Branch the heads off the mapped view, not a copy of it | -0.011 to -0.021 ms | `gpu/runtime.rs` |
+| Blit the crop region instead of `crop_imm().to_image()` | **-4% of batch CPU**, byte-identical | `face_cropper.rs` |
 | Build the detector off the GUI's first frame | **-157 ms to first paint**, detector no later | `fcs-gui/src/app.rs` |
 | Letterbox instead of stretching to the model input | **+100 faces over 1239 images**, -0.38 ms at 2 MP | `image_utils.rs`, both preprocess shaders, `detector.rs` |
 

@@ -437,10 +437,15 @@ implementation or workload.
   shipped tract and ONNX Runtime paths with bounded thread/optimization settings,
   warm sessions and real batches. Profile tensor conversion and memory copies;
   a faster isolated runtime is not necessarily a faster application.
-- [ ] **70. Apply measured CPU vectorization/PGO changes.** Inspect hot-loop
+- [x] **70. Apply measured CPU vectorization/PGO changes.** Inspect hot-loop
   assembly first; compare compiler flags or representative profile-guided
   optimization with the current x86-64-v3/autovectorized build. Include portable
   fallbacks and startup/binary-size costs; do not re-add `wide` without evidence.
+  Inspected: **83% of a folder job's CPU is in three third-party hand-written SIMD
+  kernels** (`fast_image_resize` AVX2, `zlib-rs`, libjpeg-turbo NASM) and our own
+  code is 2.4-3.6%, so there is nothing here to vectorise and `wide` stays
+  rejected. **PGO is not measured** -- reason recorded in the result, chiefly that
+  98 removed 4% of the job's CPU for no wall-time change at all.
 - [x] **71. Keep crop/enhancement intermediates on device.** Trace actual
   filters and crop batches, then remove measured intermediate downloads/uploads
   or fuse compatible filter passes. Include final export readback and verify
@@ -555,6 +560,15 @@ implementation or workload.
   on a non-square source moves (median IoU 0.76-0.87, landmarks 34-46 px). The
   crops were compared both ways on a real folder, which is the standard 71 was
   held to; **adopted**, and the corpus goes from 1030 detections to 1130.
+- [x] **98. Blit the crop region instead of copying it twice.** A fresh batch
+  profile put `DynamicImage::get_pixel` at 4.8% of all CPU with no caller in our
+  source: `crop_imm(..).to_image()` inside `crop_face_from_image` allocates a
+  second copy of the region and fills it through the enum-matching per-pixel
+  accessor, and a second loop then copies that into the canvas a pixel at a time.
+  Replaced by a row-wise blit specialised for the two variants the decoders
+  produce. **-4% of the job's CPU, 959 of 959 crops byte-identical, wall time
+  unchanged** -- this job is not bound by CPU throughput.
+
 - [x] **97. Detect on every webcam frame in the GUI.** 95 showed the headroom;
   this spends it, and measures the two things a CLI probe could not: the GUI's
   per-frame texture cost (1.8 us, free) and detection under contention with the
@@ -4061,6 +4075,101 @@ resolution the convolution is bounded below by reading the source once. The
 remaining ~27% that four processes find over one is not attributed here, and is
 small enough that chasing it needs a reason the application does not currently
 supply -- detection is about 3 ms of the 65 ms of CPU a folder image costs.
+
+### 98/70. The crop copied every source pixel twice, and there is nothing left to vectorise
+
+A fresh `samply` profile of the folder job, which 87's is not -- 71, 88, 89, 93 and
+96 have all landed since. `fcs-cli --crop` over the 1239-image folder, all threads,
+**109.5 s of CPU over a 6.6 s wall run**, bucketed by aggregating the top 400
+self-time rows (one function inlined at many call sites is many rows, so the rows
+have to be summed by name before any single percentage means anything):
+
+| Bucket | ms | share of attributed |
+| --- | ---: | ---: |
+| `fast_image_resize` convolution, AVX2 | 25397 | **34.0%** |
+| `zlib_rs` deflate (PNG encode) | 16806 | **22.5%** |
+| libjpeg-turbo decode | 16607 | **22.2%** |
+| `DynamicImage::get_pixel` | 3559 | 4.8% |
+| memset/memcpy | 3309 | 4.4% |
+| `fast_image_resize` convolution, SSE4 | 3301 | 4.4% |
+| **our code** | 2685 | **3.6%** |
+
+Inclusive, the shape of a folder job: `resize_pixels_fast` 43.2%, `detect_image`
+33.6% (of which `resize_image` is 33.6% -- essentially all of it),
+`save_dynamic_image` 19.4%, `decode_jpeg_turbo` 13.3%, `crop_face_from_image` 9.8%.
+
+#### 70. Nothing in our code is waiting to be vectorised
+
+70 says to inspect the hot loops before touching compiler flags. Inspected: **83%
+of CPU is in three third-party kernels that are already hand-written SIMD** --
+`fast_image_resize`'s AVX2 intrinsics, `zlib-rs`, and libjpeg-turbo's NASM. Our own
+code is **3.6%**, and after 98 below it is 2.4%. There is no autovectorisation
+opportunity to find in 2.4% of a profile, `target-cpu=x86-64-v3` is already set, and
+the rejected `wide` experiment stays rejected for exactly the reason the item warns
+about: there is no evidence for it.
+
+**PGO was not measured, and this is the reason rather than an oversight.** It would
+reach `fast_image_resize` and `zlib-rs`, which are Rust and together are 56% of CPU,
+but their hot loops are explicit intrinsics where PGO's lever is branch layout and
+inlining rather than vectorisation; libjpeg-turbo's 22% is C and NASM and out of
+rustc's reach entirely. More to the point, 98 below removes about 4% of the job's
+CPU and **does not move its wall time at all**, which is the measured answer to
+whether shaving CPU off this workload shortens it. A PGO gain of a few percent of
+CPU would land in the same place. Reopen it if a workload appears that is actually
+bound by CPU throughput, and measure wall time on that workload.
+
+#### 98. `crop_imm(..).to_image()` was copying the region twice
+
+`DynamicImage::get_pixel` at 4.8% had no caller in our source -- every match was a
+test. It is reached through `crop_face_from_image`:
+
+```rust
+let sub = image::imageops::crop_imm(img, src_x, src_y, src_w, src_h).to_image();
+for y in 0..sub.height() { for x in 0..sub.width() { ...
+    canvas.put_pixel(dest_x, dest_y, *sub.get_pixel(x, y));
+```
+
+`to_image()` allocates a whole second copy of the crop region and fills it through
+`DynamicImage`'s `get_pixel`, which **matches on the enum variant once per pixel**.
+Then the loop copies that buffer into the canvas a pixel at a time. Two full passes
+and an allocation to put a rectangle of source pixels at an offset.
+
+Replaced by `blit_region`, which copies a row at a time and specialises the two
+variants the decoders actually produce: `ImageRgba8` is a `copy_from_slice` per row,
+`ImageRgb8` expands to RGBA in a tight loop, and everything else (Luma, 16-bit, f32)
+keeps the generic per-pixel path. Three profiles after the change, against one
+before:
+
+| Bucket | before | after (3 runs) | delta |
+| --- | ---: | --- | ---: |
+| `DynamicImage::get_pixel` | 3559 | 956 / 979 / 1102 | **-2.6 s** |
+| our code | 2685 | 1599 / 1561 / 1788 | **-1.1 s** |
+| memset/memcpy | 3309 | 2563 / 2688 / 2869 | **-0.6 s** |
+| total CPU | 109.5 s | 97.9 / 96.6 / 102.7 | see below |
+
+**About 4.3 s of CPU, ~4% of the job, is directly attributable.** The measured total
+fell further than that, but with one before-sample against a 6% spread on the after
+samples, only the attributable part is claimable -- `fast_image_resize`'s bucket also
+"fell" 3.2 s, and this change cannot make a convolution cheaper, so that is variance.
+
+**Byte-identical, and wall time does not move.** 959 of 959 crops hash the same as
+the build without the change, 1129 faces either way. Six alternated folder runs each:
+before 6300-6806 ms (median 6673), after 6444-7136 (median 6541) -- a -132 ms median
+difference inside a 700 ms band, and the means are 6640 against 6651. So this is a
+CPU and memory-traffic win, not a throughput one, which is the same conclusion 87
+reached about the quality-metric swap and 16 reached about the submission wait: at 32
+workers on 16 cores this job is not bound by CPU throughput.
+
+**Kept** -- byte-identical output, 4% less CPU, one allocation and one whole pass
+deleted, and less code than it replaces. `the_blit_fast_paths_agree_with_the_generic_one`
+checks all three paths against the old loop over five geometries, including clipped
+edges and a non-zero source offset, because these crops are compared byte for byte
+against previous releases.
+
+**What is left of `get_pixel`**, about 1 s, is not this call site. The likely
+remainder is `DynamicImage::to_luma8` inside `laplacian_variance`, which converts
+per pixel the same way; it would take the same treatment and is worth roughly 1% of
+the job.
 
 ### Previous work
 

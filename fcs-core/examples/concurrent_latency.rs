@@ -201,7 +201,11 @@ fn main() -> Result<()> {
     println!(
         "{} images, {threads} threads, {rounds} rounds per block, dispatch: {}",
         images.len(),
-        if rayon_dispatch { "rayon" } else { "plain threads" }
+        if rayon_dispatch {
+            "rayon"
+        } else {
+            "plain threads"
+        }
     );
 
     // Warm: pipelines, pools and the file cache all settle on the first pass.

@@ -11,6 +11,77 @@ use crate::{
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
 use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
 
+/// Copy the in-bounds source region `(x, y, w, h)` onto the padded canvas at `offset`.
+///
+/// This used to be `imageops::crop_imm(img, ..).to_image()` followed by a per-pixel loop
+/// copying that into the canvas, and it was the third largest cost in a folder job --
+/// `DynamicImage::get_pixel` at 4.8% of all CPU (experiment 98). Two reasons, both from
+/// `to_image`: it allocates and fills a whole second copy of the region, and it reads the
+/// source through `DynamicImage`'s `get_pixel`, which matches on the enum variant for
+/// every single pixel.
+///
+/// The two variants the decoders actually produce are handled a row at a time instead --
+/// `load_image` returns `ImageRgb8` for every JPEG through libjpeg-turbo, and `ImageRgba8`
+/// for anything with alpha. Everything else (Luma, 16-bit, f32) keeps the generic
+/// per-pixel path, which is correct for all of them and is what the fast paths are
+/// checked against.
+fn blit_region(
+    img: &DynamicImage,
+    (src_x, src_y, src_w, src_h): (u32, u32, u32, u32),
+    canvas: &mut RgbaImage,
+    (offset_x, offset_y): (u32, u32),
+) {
+    let (canvas_w, canvas_h) = canvas.dimensions();
+    // The old loop skipped any destination pixel outside the canvas; clipping the extent
+    // up front is the same thing without testing it per pixel.
+    let w = src_w.min(canvas_w.saturating_sub(offset_x));
+    let h = src_h.min(canvas_h.saturating_sub(offset_y));
+    if w == 0 || h == 0 {
+        return;
+    }
+    let dst_stride = canvas_w as usize * 4;
+
+    match img {
+        DynamicImage::ImageRgba8(src) => {
+            let src_stride = src.width() as usize * 4;
+            let src_raw = src.as_raw();
+            let dst_raw = canvas.as_mut();
+            let len = w as usize * 4;
+            for row in 0..h as usize {
+                let s = (src_y as usize + row) * src_stride + src_x as usize * 4;
+                let d = (offset_y as usize + row) * dst_stride + offset_x as usize * 4;
+                dst_raw[d..d + len].copy_from_slice(&src_raw[s..s + len]);
+            }
+        }
+        DynamicImage::ImageRgb8(src) => {
+            let src_stride = src.width() as usize * 3;
+            let src_raw = src.as_raw();
+            let dst_raw = canvas.as_mut();
+            for row in 0..h as usize {
+                let s = (src_y as usize + row) * src_stride + src_x as usize * 3;
+                let d = (offset_y as usize + row) * dst_stride + offset_x as usize * 4;
+                let src_row = &src_raw[s..s + w as usize * 3];
+                let dst_row = &mut dst_raw[d..d + w as usize * 4];
+                let (dst_px, _) = dst_row.as_chunks_mut::<4>();
+                let (src_px, _) = src_row.as_chunks::<3>();
+                for (out, rgb) in dst_px.iter_mut().zip(src_px) {
+                    // `get_pixel` on an `ImageRgb8` returns an opaque Rgba, so 255 is the
+                    // alpha the per-pixel path produced.
+                    *out = [rgb[0], rgb[1], rgb[2], 255];
+                }
+            }
+        }
+        other => {
+            for row in 0..h {
+                for col in 0..w {
+                    let pixel = other.get_pixel(src_x + col, src_y + row);
+                    canvas.put_pixel(offset_x + col, offset_y + row, pixel);
+                }
+            }
+        }
+    }
+}
+
 /// Crop a face from `img` according to `detection` and `settings`.
 ///
 /// The returned image is resized to `settings.output_width` x `settings.output_height`.
@@ -36,19 +107,14 @@ pub fn crop_face_from_image(
     // `in_bounds_rect` returns `None` rather than a zero-sized rect, so there is
     // nothing left to filter out here.
     if let Some((src_x, src_y, src_w, src_h)) = region.in_bounds_rect(img_w, img_h) {
-        let sub = image::imageops::crop_imm(img, src_x, src_y, src_w, src_h).to_image();
         let offset_x = region.pad_left.min(canvas_width.saturating_sub(1));
         let offset_y = region.pad_top.min(canvas_height.saturating_sub(1));
-        for y in 0..sub.height() {
-            for x in 0..sub.width() {
-                let dest_x = offset_x + x;
-                let dest_y = offset_y + y;
-                if dest_x < canvas_width && dest_y < canvas_height {
-                    let pixel = sub.get_pixel(x, y);
-                    canvas.put_pixel(dest_x, dest_y, *pixel);
-                }
-            }
-        }
+        blit_region(
+            img,
+            (src_x, src_y, src_w, src_h),
+            &mut canvas,
+            (offset_x, offset_y),
+        );
     }
 
     // If output dimensions are zero, return the raw (possibly padded) crop as DynamicImage.
@@ -112,6 +178,85 @@ pub fn crop_face_from_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The RGB and RGBA fast paths must produce exactly what the generic `get_pixel` loop
+    /// produced, including at the clipped edges and with a non-zero source offset, because
+    /// the crops they feed are compared byte for byte against previous releases
+    /// (experiment 98).
+    #[test]
+    fn the_blit_fast_paths_agree_with_the_generic_one() {
+        /// The pre-experiment-98 loop, kept here as the reference.
+        fn reference(
+            img: &DynamicImage,
+            (src_x, src_y, src_w, src_h): (u32, u32, u32, u32),
+            canvas: &mut RgbaImage,
+            (offset_x, offset_y): (u32, u32),
+        ) {
+            let (canvas_width, canvas_height) = canvas.dimensions();
+            let sub = image::imageops::crop_imm(img, src_x, src_y, src_w, src_h).to_image();
+            for y in 0..sub.height() {
+                for x in 0..sub.width() {
+                    let dest_x = offset_x + x;
+                    let dest_y = offset_y + y;
+                    if dest_x < canvas_width && dest_y < canvas_height {
+                        canvas.put_pixel(dest_x, dest_y, *sub.get_pixel(x, y));
+                    }
+                }
+            }
+        }
+
+        // Every pixel distinct, so a wrong stride or a swapped axis cannot survive.
+        let mut rgb = image::RgbImage::new(23, 17);
+        for (x, y, px) in rgb.enumerate_pixels_mut() {
+            *px = image::Rgb([
+                (x * 7 % 251) as u8,
+                (y * 13 % 241) as u8,
+                ((x + y) % 239) as u8,
+            ]);
+        }
+        let mut rgba = RgbaImage::new(23, 17);
+        for (x, y, px) in rgba.enumerate_pixels_mut() {
+            *px = Rgba([
+                (x * 5 % 251) as u8,
+                (y * 11 % 241) as u8,
+                ((x * y) % 239) as u8,
+                ((x + y * 3) % 253) as u8,
+            ]);
+        }
+        let luma = DynamicImage::ImageLuma8(image::GrayImage::from_fn(23, 17, |x, y| {
+            image::Luma([((x * 3 + y * 29) % 251) as u8])
+        }));
+
+        let sources = [
+            DynamicImage::ImageRgb8(rgb),
+            DynamicImage::ImageRgba8(rgba),
+            luma,
+        ];
+        // Exact fit, clipped on both axes, offset into the canvas, and a region that
+        // starts away from the origin.
+        let cases = [
+            ((0, 0, 23, 17), (20, 20), (0, 0)),
+            ((0, 0, 23, 17), (10, 8), (0, 0)),
+            ((0, 0, 23, 17), (30, 30), (7, 5)),
+            ((4, 3, 11, 9), (30, 30), (2, 6)),
+            ((4, 3, 11, 9), (8, 8), (5, 5)),
+        ];
+
+        for src in &sources {
+            for (rect, (cw, ch), offset) in cases {
+                let fill = Rgba([9, 8, 7, 200]);
+                let mut want = RgbaImage::from_pixel(cw, ch, fill);
+                let mut got = RgbaImage::from_pixel(cw, ch, fill);
+                reference(src, rect, &mut want, offset);
+                blit_region(src, rect, &mut got, offset);
+                assert_eq!(
+                    got.as_raw(),
+                    want.as_raw(),
+                    "blit disagreed for {src:?} rect {rect:?} canvas {cw}x{ch} offset {offset:?}"
+                );
+            }
+        }
+    }
     use crate::{
         cropper::{CropSettings, FillColor},
         postprocess::BoundingBox,
