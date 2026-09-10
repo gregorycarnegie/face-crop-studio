@@ -79,6 +79,30 @@ same run stay within 0.001. GPU timestamp totals agree to one 1.024 us tick per
 family across processes. A p95 from 30 samples moved 0.89-1.20 ms between five
 identical processes, so tails need hundreds of samples before they mean anything.
 
+### On an integrated GPU the shader work is the detection
+
+Everything above was measured on an RTX 4090. The 7950X's integrated Radeon (experiment 10)
+runs the same graph, with identical output, in **11.35 ms of GPU compute** -- 92% of
+`run_on_device`, against 35% on the 4090. The findings that the dispatches are latency-bound
+and that shader arithmetic is the wrong lever (8, 26, 27) are about the 4090; on this adapter
+the arithmetic is the detection.
+
+It also exposed a routing rule that had only been true on the first adapter. Integrated GPUs
+were exempt from the 1.75 MP preprocessing cutoff, on the reasoning that with no bus the
+upload is free. The upload was not the cost: the whole-source route has the GPU read every
+source pixel through the resize shader.
+
+| Source, iGPU | GPU route | CPU resize route |
+| --- | ---: | ---: |
+| 0.8 MP | 12.98 ms | 12.67 ms |
+| 4 MP | 20.45 | 13.74 |
+| 10 MP | **42.46** | **14.30** |
+| 1239-image folder | 55.4, 53.2 s | **26.7, 26.5 s** |
+
+The exemption is gone; one cutoff applies everywhere. ONNX Runtime on the same CPU runs
+inference in 2.86 ms against the iGPU's 11.93, but GPU inference stays the default: one
+16-core desktop and the weakest current iGPU are not enough to reorder a laptop.
+
 ### Live webcam detection, and the cost of sharing a device with the renderer
 
 Detection now runs on every webcam frame in the GUI, tracking **95% of frames at
@@ -122,8 +146,8 @@ Two defects fell out (experiments 95 and 96):
 GPU retention is flat: 44.1 MB across 400 sources up to 23.4 MP, largest first
 (`examples/memory_growth.rs`). The buffer pool has an idle ceiling, the conv
 caches are keyed by a graph fixed at 640x640, and the preprocessor's texture is
-bounded by the 1.75 MP upload gate -- except on integrated adapters, where that
-gate always passes and the texture takes the largest source seen.
+bounded by the 1.75 MP upload gate, on every adapter since experiment 10 removed the
+integrated-GPU exemption.
 
 Host memory is the one that moves. Peak working set over the 1239-image folder:
 
@@ -551,6 +575,8 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
 | Cache the eight small-op uniform buffers | **-0.08 ms**, -10% of small-image detection | `gpu/utils.rs`, `max_pool.rs`, `add.rs`, `upsample2x.rs` |
 | Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
+| One preprocessing cutoff for integrated adapters too | **2.07x** on a folder on the Radeon iGPU; -28 ms per 10 MP image | `preprocess.rs` |
+| Upsample and add in one dispatch (neck) | -0.012 to -0.017 ms on a 4090, -0.13 to -0.19 ms on an iGPU; 43 dispatches to 41 | `gpu/resize2x_add.wgsl`, `gpu/upsample2x.rs`, `gpu/graph.rs` |
 | Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 | Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |

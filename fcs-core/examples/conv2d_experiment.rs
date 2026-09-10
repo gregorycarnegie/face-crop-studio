@@ -90,6 +90,26 @@ fn compare(
             contents: bytemuck::cast_slice(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
+    // `FCS_CONV_PACK_WEIGHTS` hands side B pointwise weights prepacked as one vec4 per (output
+    // tile, input channel), zero-padded past the last channel: the layout a packed kernel would
+    // be given once at model load (experiment 30).
+    let packed_weights = (std::env::var_os("FCS_CONV_PACK_WEIGHTS").is_some()).then(|| {
+        let (ic, oc) = (cfg.input_channels as usize, cfg.output_channels as usize);
+        let flat = data(cfg.weight_shape_dims().iter().product());
+        let mut packed = vec![0.0f32; oc.div_ceil(4) * ic * 4];
+        for o in 0..oc {
+            for i in 0..ic {
+                packed[(o / 4) * ic * 4 + i * 4 + o % 4] = flat[o * ic + i];
+            }
+        }
+        context
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("packed weights"),
+                contents: bytemuck::cast_slice(&packed),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+    });
     let packed: Vec<_> = if half_storage {
         [&input, &weights, &bias]
             .into_iter()
@@ -111,6 +131,8 @@ fn compare(
                 },
                 if mode == 1 && half_storage {
                     &packed[1]
+                } else if let (1, Some(buffer)) = (mode, packed_weights.as_ref()) {
+                    buffer
                 } else {
                     weights.buffer()
                 },
@@ -338,7 +360,21 @@ fn main() -> Result<()> {
         (640, 640, 3, 16, 3, 2, 1, 1),
         (17, 5, 4, 8, 1, 2, 1, 2),
     ] {
-        if args.len() > 2 && (kernel != 1 || stride != 1 || pad != 0 || groups != 1) {
+        // `FCS_CONV_ONLY_DEPTHWISE` keeps the depthwise cases, for single-kernel candidate files
+        // whose `main` would compute nonsense on the others (experiments 32 and 33). Otherwise
+        // explicit coverage selects the pointwise cases.
+        let depthwise = kernel == 3 && stride == 1 && pad == 1 && groups == ic && ic == oc;
+        if std::env::var_os("FCS_CONV_ONLY_DEPTHWISE").is_some() {
+            if !depthwise {
+                continue;
+            }
+        } else if args.len() > 2 && (kernel != 1 || stride != 1 || pad != 0 || groups != 1) {
+            continue;
+        }
+        // `FCS_CONV_CASE=WxHxICxOC` keeps one shape, for kernels specialised to it (experiment 28).
+        if std::env::var("FCS_CONV_CASE")
+            .is_ok_and(|case| case != format!("{width}x{height}x{ic}x{oc}"))
+        {
             continue;
         }
         let cfg = Conv2dConfig::new(

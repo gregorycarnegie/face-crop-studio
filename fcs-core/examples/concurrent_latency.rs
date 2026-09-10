@@ -215,6 +215,13 @@ fn main() -> Result<()> {
         let (values, wall) = run_round(&detector, &images, threads, rounds, rayon_dispatch)?;
         println!();
         report("latency", values, wall);
+        // Each in-flight inference parks its intermediates in its own execution scope, so the
+        // pool's high water is a function of concurrency, which a serial probe cannot see
+        // (experiments 21 and 40).
+        println!(
+            "GPU pool after the round: {:.1} MB",
+            detector.gpu_memory_usage().unwrap_or(0) as f64 / (1024.0 * 1024.0)
+        );
         return Ok(());
     };
 
