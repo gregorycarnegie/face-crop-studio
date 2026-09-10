@@ -188,10 +188,12 @@ implementation or workload.
   add and resize uniform creation after convolution caching. Reuse immutable
   content-keyed values only if the eight dispatches contribute a repeatable
   cost; include cache growth under varied resolutions.
-- [ ] **21. Compare per-inference fixed intermediate plans with pooling.**
+- [x] **21. Compare per-inference fixed intermediate plans with pooling.**
   Precompute shapes/lifetimes for the fixed YuNet graph and allocate a bounded
   workspace per in-flight request. Measure recording time and peak memory;
   protect current safe reuse and never share writable intermediates concurrently.
+  Kept, as a bound rather than a plan: at most four inferences hold intermediates on one model.
+  GPU pool 58-75% smaller at 16-32 callers, iGPU folder -10%, 0 crops differ. See the record.
 - [x] **22. Cache bind groups with stable buffer identities.** Depends on
   evidence from 19/21. Compare construction cost against retained groups per
   workspace, with correct input/output identities and invalidation. The old
@@ -216,13 +218,15 @@ implementation or workload.
   allocation behavior under actual batch concurrency; test per-worker/per-slot
   ownership only where contention is observed. Retain bounded memory and
   correctness during cancellation, failure and changing image sizes.
-- [ ] **25. Cache a host-side dispatch plan.** Compare graph traversal with
+- [~] **25. Cache a host-side dispatch plan.** Compare graph traversal with
   pre-resolved pipelines, shapes and resource slots after 19. Include warm and
   cold cost. This means reusing metadata, not assuming a submitted wgpu compute
   command buffer can be replayed.
 
 ### Shader geometry and memory access (P1)
 
+  **Premise removed by 20 and 22:** all of recording is 0.027-0.028 ms on the 4090 and
+  0.068 ms on the iGPU, including the lookups a plan would keep. See the record.
 - [x] **26. Sweep pointwise workgroup shapes.** Start with a small explicit
   set such as 8x8, 16x4, 32x2 and 8x4, adjusting dispatch coverage consistently.
   Measure large layers and tiny heads, raw tails and full graph; select per-shape
@@ -256,10 +260,12 @@ implementation or workload.
   against blocked channels or NHWC only on a representative connected segment.
   Include every required transpose/packing conversion and other affected ops;
   reject isolated kernel gains that lose end to end.
-- [ ] **32. Tune depthwise workgroups and tile reuse.** Compare more horizontal
+- [x] **32. Tune depthwise workgroups and tile reuse.** Compare more horizontal
   pixels or two-dimensional register/workgroup tiles against the retained six-
   value row reuse. Measure halo duplication, barriers, borders and tiny maps;
   verify stride/padding fallbacks remain correct.
+  **Rejected:** eight pixels per thread loses everywhere; a 4x2 tile gains one or two ticks
+  under FXC and loses 12-34% under DXC on the iGPU. See the record.
 - [x] **33. Separate interior and edge handling.** Compare bounds-checked
   kernels with an interior fast path or explicit border dispatch for large
   maps. Include extra dispatch cost and safe accesses on small/odd inputs;
@@ -304,17 +310,24 @@ implementation or workload.
   not settled by 92, but it inherits the warning.
   **Premise removed:** one route would recompute the resize per stem tap, the other's
   whole phase is 0.2 ms including an upload a fusion keeps. See the record.
-- [ ] **40. Reduce intermediate lifetimes and unnecessary traffic.** Use graph
+- [x] **40. Reduce intermediate lifetimes and unnecessary traffic.** Use graph
   liveness to find copies or buffers that can be removed or safely reused.
   Compare VRAM and GPU time with the existing pool; avoid assuming every
   allocation causes a copy, or reusing memory before all consumers finish.
 
 ### Compilers, backends and precision (P2)
 
-- [ ] **41. Isolate the FXC/DXC regression.** Compare the same f32 source,
+  Kept: the backbone no longer hands the neck two 6.5 MB outputs it never reads, and the
+  neck takes its inputs by value -- 7-16% less GPU pool at every concurrency, bit-exact.
+  See the record.
+- [x] **41. Isolate the FXC/DXC regression.** Compare the same f32 source,
   shape, driver and context settings; inspect generated code and bounded source
   variants around dynamic array indexing/loops. Record the exact compiler
   binaries. A fix must retain the current f32 baseline before enabling features.
+  **Found and fixed:** it was never DXC. A loop-indexed local array (the four-channel
+  accumulators, the depthwise row) becomes stack memory under DXC. Registers instead: DXC
+  0.696 -> 0.375 ms on the 4090, 18.3 -> 10.3 ms on the iGPU; FXC level on the 4090 and faster
+  on the iGPU. Bit-exact. See the record.
 - [x] **42. Compare supported backend/compiler versions.** Test D3D12 versus
   Vulkan on the same supported adapter and later Metal on available hardware.
   Include warm latency, compilation, correctness and stability; do not remove
@@ -322,23 +335,30 @@ implementation or workload.
   4090 and the 7950X's Radeon iGPU: bit-identical output, D3D12 35%/75% less GPU
   compute, Vulkan a third of the warm-cache launch time. No change; Metal not
   measured. See the record.
-- [ ] **43. Revisit subgroups only on winning small shapes.** After 41/42,
+- [x] **43. Revisit subgroups only on winning small shapes.** After 41/42,
   compare selective subgroup reduction with the best non-subgroup kernel,
   including selection and compiler effects across the full graph. Provide a
   valid fallback and verify the actual subgroup width.
-- [ ] **44. Try subgroup sharing without channel reduction.** Compare
+  **Rejected:** with DXC now at parity (41), subgroup reduction still wins only small layers on
+  the 4090 -- about 25 us of graph at best -- and is 5-31x slower on the iGPU. See the record.
+- [~] **44. Try subgroup sharing without channel reduction.** Compare
   broadcast/shuffle-based sharing of inputs or weights within a suitable tile
   against register/workgroup reuse. Avoid the uncoalesced accesses of the
   rejected candidate; measure across available subgroup sizes and adapters.
-- [ ] **45. Test FP16 arithmetic and packed layouts separately.** The rejected
+  **Premise removed by 43:** subgroup collectives cost the iGPU 5-31x, and the 4090's ceiling on
+  small layers is tens of microseconds on an adapter detection does not bind. See the record.
+- [x] **45. Test FP16 arithmetic and packed layouts separately.** The rejected
   experiment changed storage with f32 accumulation. Compare native half
   arithmetic or packed vectors as distinct candidates, including conversions;
   screen raw error before expensive full-model/detection validation. Q if parity
   cannot be preserved; no production tolerance relaxation.
-- [ ] **46. Test selective mixed precision.** After a useful candidate in 45,
+  **Rejected:** f16 arithmetic fails the 1e-3 raw-error screen on every real shape (2-7e-3) and
+  is 19-58% slower on the iGPU; f16 storage alone is 13-50% slower there. See the record.
+- [~] **46. Test selective mixed precision.** After a useful candidate in 45,
   keep sensitive layers/heads in f32 and test lower precision only where error
   and speed permit. Include boundary conversion cost and a representative
   difficult-face corpus; synthetic one-layer accuracy is insufficient. Q.
+  **Premise removed by 45:** gated on a useful FP16 candidate, and neither one was.
 - [x] **47. Investigate accelerated matrix/native-runtime paths.** Check actual
   supported features or a platform runtime before prototyping matrix hardware,
   CUDA/TensorRT/DirectML/CoreML or another backend. Compare the complete workload,
@@ -419,19 +439,23 @@ implementation or workload.
   requests with fixed input sets and safe per-request buffers. Record images/s,
   p50/p95 latency, peak memory and queue delay; do not assume more rayon workers
   create useful GPU parallelism.
-- [ ] **61. Pipeline CPU decode/upload/GPU inference/export.** Use measured
+- [~] **61. Pipeline CPU decode/upload/GPU inference/export.** Use measured
   stage costs to test a bounded producer/consumer schedule. Include backpressure,
   errors and cancellation; compare total folder completion time, not a stage in
   isolation. Depends on safe ownership from 18/21/60 as applicable.
-- [ ] **62. Submit true small inference batches.** Compare a batch dimension
+  **Premise removed by 60, 87 and 21:** rayon already overlaps every stage across images; the
+  4090 job is CPU-bound, and the iGPU's one contended stage is now bounded. See the record.
+- [~] **62. Submit true small inference batches.** Compare a batch dimension
   of 2/4/8 with independent in-flight requests. Validate every kernel, head,
   decode and memory plan for batch indexing; current single-image behavior is
   not evidence that batching already works or improves throughput.
+  **Premise removed:** on the iGPU, where detection binds, 91.5% of an inference is arithmetic
+  a batch cannot remove; on the 4090 detection already outruns everything feeding it.
 - [x] **63. Tune CPU thread budgets alongside GPU work.** Compare rayon and
   runtime thread counts on single/batch workloads; detect oversubscription,
   driver starvation and memory-bandwidth contention. Record CPU-only results
   as well; avoid a global setting chosen from one developer machine.
-- [~] **64. Compare a GPU submission worker with caller-thread submission.**
+- [x] **64. Compare a GPU submission worker with caller-thread submission.**
   Gated on 9/24/60 showing contention or idle gaps. 60 shows neither: throughput
   peaks exactly at one worker per logical processor and falls away above it,
   which is the shape of a CPU-bound schedule, not a contended queue. No premise
@@ -439,6 +463,9 @@ implementation or workload.
   Only if 9/24/60 show contention or idle gaps, test a bounded dispatcher.
   Include handoff latency and fairness; do not introduce a worker/thread solely
   as an abstraction or serialize independent CPU work unnecessarily.
+  **Answered through 21:** the Radeon iGPU showed the contention this item waited for (80.7
+  detections/s at one caller, 57 at sixteen), and a counting gate on the caller threads
+  recovers it. No submission thread was built: the contended resource is the adapter.
 - [~] **65. Prefer fresh webcam frames under overload.** Compare queued-all
   processing with bounded latest-frame scheduling, skipping stale detections
   when a newer frame supersedes them. Report capture-to-display age, dropped
@@ -446,13 +473,16 @@ implementation or workload.
   **Premise removed by 95:** there is no overload to schedule around -- capture
   delivers every 42 ms and the pipeline answers in 3-9. Re-open if a faster
   camera or several at once makes the pipeline the constraint.
-- [ ] **66. Share work across identical preview requests.** Inspect existing
+- [x] **66. Share work across identical preview requests.** Inspect existing
   cancellation/caches, then test coalescing duplicate in-flight detections.
   Measure rapid UI edits and mixed images; prevent stale results from replacing
   current ones and preserve errors/cancellation for each requester.
 
 ### Decode, CPU execution and export (P1/P2)
 
+  Kept: threshold edits no longer rebuild the detector or re-decode the file (6.2 + 21.5 ms
+  -> 3.0 ms per edit), and the confidence slider, which changed nothing, now applies.
+  Supersession was already right. See the record.
 - [x] **67. Benchmark alternative full-resolution decoders.** Compare available
   implementations on the actual format corpus, including orientation/colour
   fidelity, cold I/O, warm cache and batch throughput. Preserve full-resolution
@@ -509,10 +539,12 @@ implementation or workload.
   missed faces as well as throughput. Does not apply to independent exports.
   **Premise removed by 95 and 97:** detection already fits every frame -- 6.89 ms of a
   69 ms interval in the GUI, 12.2 ms on the iGPU. See the record.
-- [ ] **77. Evaluate calibrated INT8/QDQ models.** First check graph loading
+- [x] **77. Evaluate calibrated INT8/QDQ models.** First check graph loading
   and actual quantized-kernel use, then speed and quality on a held-out corpus.
   Separate calibration data from evaluation; compare CPU and any supported GPU
   path honestly. A smaller model file alone is not an inference speedup.
+  **Rejected:** 0.73x on ONNX Runtime's CPU path, 13 faces lost and 111 landmarks moved past
+  35 px over 1239 images. The GPU graph is f32 and could not use it. See the record.
 - [ ] **78. Compare smaller models or structured pruning/distillation.** Treat
   as model research with training/calibration costs and a reproducible quality
   benchmark. Measure deployment size, load time and all target runtimes;
@@ -4616,6 +4648,325 @@ What the measurements do say about their value, for whoever picks them up: on th
 is 0.72 ms of a folder image's 65 ms of CPU and none of them could move a folder job; on the
 Radeon iGPU inference is 92% of detection and the folder is GPU-bound (10), which is the hardware
 these items would actually be for.
+
+### 25. A host-side dispatch plan - premise removed by 20 and 22
+
+25 would pre-resolve pipelines, shapes and resource slots so that recording stops walking the
+graph. What recording costs now is `gpu_record` at 0.027-0.028 ms on the 4090, across five
+independent processes (7), and 0.068 ms on the Radeon iGPU (10). That is for 41 dispatches, and
+it includes everything a plan would have to keep: 41 pooled output acquisitions, 41 cached
+uniform lookups, 35 cached bind groups and six created, each lookup a mutex and a hash, plus
+wgpu's own pass recording. The part a plan removes -- the string-keyed weight lookups,
+`Conv2dConfig::new` validation, shape arithmetic -- is some fraction of 0.028 ms, against a
+smallest readable effect of 0.01 ms on that path. 19 profiled the traversal when recording was
+seven times larger than it is now and found nothing in it worth caching. Reopen if `gpu_record`
+grows back past about 0.1 ms.
+
+### 41. The FXC/DXC regression was a local array, and it is gone
+
+Experiment 4 recorded DXC regressing the retained f32 tile -- 160x160 64->64 at 67.6 us against
+FXC's 27.6 -- and concluded that a whole-context compiler switch would sacrifice large layers.
+That blocked every DXC-only feature behind it (43-46). The brief was to compare the same source
+under both compilers and inspect generated code around dynamic indexing and loops.
+
+**Tools.** `scratchpad/wgsl2hlsl` (a throwaway, not committed) runs naga 30.0.1 with wgpu's own
+defaults -- index clamping and loop bounding on, as `create_shader_module` has them -- and the
+Windows SDK 10.0.28000.0 compilers take the HLSL: `fxc.exe` at wgpu's flags
+(`D3DCOMPILE_ENABLE_STRICTNESS`, default optimisation) and `dxc.exe` 1.9.2602.17 at `-O3 -HV 2018`.
+Every WGSL loop arrives wrapped in a 64-bit loop-bound counter and every array index in a `min`.
+
+**The mechanism.** Production's pointwise tile keeps its four accumulators as
+`array<vec4<f32>, 4>`, updated inside `for j in 0..4` bounded by the channel tail. DXC lowers that
+array to four `alloca [4 x float]` with a load and a store on every multiply-add; FXC keeps it as
+an indexable temp `x0[]`. `pointwise_fixed4.wgsl` hoists the tail check and writes four register
+accumulators with no inner loop -- same `fma` per channel, same order -- and its compiled code has
+exactly production's memory operations (4 `alloca`, 8 loads, 24 stores), all of them in the tail
+function it keeps, while the full-tile path is registers only.
+
+`conv2d_experiment`, production against that variant, alternated in one process:
+
+| Pointwise layer | 4090 FXC | 4090 DXC | iGPU FXC | iGPU DXC |
+| --- | ---: | ---: | ---: | ---: |
+| 320x320 16->16 | +8.3% | -35.0% | -7.0% | -17.1% |
+| 160x160 64->64 | 0.0% | **-59.7%** (68.6 -> 27.6 us) | -4.1% | -31.8% |
+| 80x80 64->64 | 0.0% | -56.2% | -6.0% | -41.1% |
+| 40x40 64->64 | -7.7% | -55.2% | -14.9% | -66.3% |
+| 20x20 64->64 | 0.0% | -55.2% | -22.5% | -61.0% |
+
+The 160x160 row is experiment 4's regression, exactly: DXC lands on FXC's 27.6 us. The depthwise
+kernel's `array<f32, 6>` row is the same pattern -- 33's interior path had stumbled on it -- and
+six registers (`depthwise_scalars.wgsl`) take DXC 40-68% on both adapters, level under FXC on the
+4090 and 10-26% faster under FXC on the iGPU. Clamping the padded read into the row, so that no
+index is ever out of range, costs nothing measurable (`depthwise_scalars_clamped.wgsl`: ticks on
+the 4090, -8% to +8% on the iGPU).
+
+**Adopted in `conv2d.wgsl`**: register accumulators for full pointwise and stem tiles, with the
+old loops kept as the tail-channel paths, and register depthwise rows. The whole graph,
+`gpu_pass_breakdown`, before and after:
+
+| | before | after |
+| --- | ---: | ---: |
+| 4090 FXC | 0.367 ms | **0.366** |
+| 4090 DXC | 0.696 | **0.375** |
+| iGPU FXC | ~11.3 (10) | **10.51** |
+| iGPU DXC | 18.26 | **10.27** |
+
+The iGPU "before" taken in the same session read 13.85 ms, out of line with 10's 11.35, so the
+in-process microbenchmarks above are the iGPU evidence and the cross-process totals are not.
+Every configuration keeps the fingerprint `0xa116e42f7c2dabdb`; the strict `fcs-core` suite
+passes, including the conv2d tests that are the only cover the tail and grouped paths have.
+
+**What it changes downstream.** FXC is what ships, so production speed on the 4090 does not move.
+What moves is that **DXC is no longer a regression**: at 0.375 against 0.366 ms on the 4090 and
+10.27 against 10.51 on the iGPU, the two compilers are at parity. 43-46 were written as gated on
+"a fix must retain the current f32 baseline before enabling features", and that condition now
+holds.
+
+### 32. Depthwise tiles - rejected
+
+Two geometries against production's four pixels per thread and one row, both bit-exact:
+
+- **Eight pixels per thread** (`depthwise_8px.wgsl`, one ten-value row feeding two accumulators)
+  loses everywhere that is readable: +50-100% on the 4090's large layers, +90% on the iGPU's.
+- **A 4x2 register tile** (`depthwise_4x2.wgsl`, two output rows sharing two of three input rows),
+  retried on top of 41's register rows as `depthwise_4x2_scalars.wgsl`:
+
+| Layer | 4090 FXC | 4090 DXC | iGPU FXC | iGPU DXC |
+| --- | ---: | ---: | ---: | ---: |
+| 320x320 16 | 0.0% | +25.0% | -0.3% | +24.8% |
+| 160x160 64 | -16.7% | -8.3% | -8.0% | +11.6% |
+| 80x80 64 | -16.7% | -16.7% | -2.8% | +26.1% |
+| 40x40 64 | 0.0% | 0.0% | -8.7% | +33.3% |
+| 20x20 64 | 0.0% | +33.3% | -1.9% | +33.7% |
+
+**Rejected without a graph trial**, and the reason is stated rather than implied. Under FXC the gain
+is one or two 1.024 us ticks on the 4090's 160x160 and 80x80 layers -- about 9 us over the graph,
+inside what `gpu_pass_breakdown` can resolve against 0.366 ms -- and 3-9% on the iGPU. Under DXC,
+which 41 has just made a viable compiler, the same kernel loses 12-34% on the iGPU. A tile shape
+that swings that far with the compiler is a poor trade for a gain of that size, and it would
+change dispatch coverage on the host as well.
+
+### 66. Threshold edits rebuilt the detector, and the confidence slider did nothing
+
+Inspected first, as the item asks. The GUI keeps one `current_job` id: a newer request supersedes
+an older one, and the older result is dropped on arrival, so a stale detection cannot replace a
+current one. That part was already right. Superseded detections are not cancelled and still run
+to completion on rayon; each is a few milliseconds and that is left alone.
+
+The duplicated work was somewhere else:
+
+- **NMS and top-k edits rebuilt everything.** They set `needs_detector_rebuild`, which built a new
+  `YuNetDetector` on the UI thread and then called `load_image_path` -- decoding the file from
+  disk again and detecting again -- to change a comparison applied after inference. The controls
+  already fired only on release, so this was once per edit, not per frame.
+- **The inspector's "Confidence floor" slider did nothing.** It wrote
+  `settings.detection.score_threshold` and discarded the slider's `changed`, so the detector kept
+  the threshold it was built with until some unrelated setting forced a rebuild. That is a defect,
+  not a cost, and nothing had noticed it.
+
+`examples/threshold_edit_cost.rs` prices both on the open device, 10 MP fixture, 10 repetitions,
+medians, 4090:
+
+| Piece | ms |
+| --- | ---: |
+| rebuild the detector on a device that has already built it | 6.245 |
+| swap postprocessing only (`with_postprocess`) | 0.000 |
+| decode the file again | 18.479 |
+| detect | 2.986 |
+
+**Per threshold edit: 6.2 ms on the UI thread plus 21.5 ms of work before, nothing measurable on
+the UI thread plus 3.0 ms after.** The rebuild is far cheaper than 81's 150-160 ms, which was a
+first build in a fresh process; a device that has built these pipelines once builds them again
+in 6 ms. Most of what went was the decode.
+
+**The change.** `YuNetDetector::with_postprocess` returns a detector sharing the backend (now behind
+an `Arc`), the preprocessor and the preprocessing config. Score, NMS and top-k edits set
+`needs_postprocess_update`, which is applied once no pointer button is down -- so a slider drag
+re-detects once -- by swapping the detector and re-detecting the in-memory image through the same
+job-id supersession as every other detection. A load still in flight has no decoded image yet, so
+it is restarted with the new detector instead. A rebuild clears the flag, since it reads the
+current thresholds anyway.
+
+`postprocess_swap_applies_new_thresholds_to_the_same_model` holds the detector side to it: a
+threshold above every score leaves nothing, and restoring the thresholds restores the same
+detections with identical scores. **The GUI side is verified by compilation and not by use** --
+it cannot be driven from here -- so the slider, the release debounce and the in-flight restart
+want a person to try them.
+
+### 40. Two backbone outputs nobody read - kept
+
+`take_best_fit` searches the current execution scope's own released buffers first, so a tensor
+dropped part-way through an inference is available to every later layer of that same inference.
+That makes lifetimes a real lever on peak memory, and the graph was holding two tensors for no
+reader: `encode_backbone_features` returned all five stage outputs, and the neck reads only the
+last three. The stage 1 and stage 2 outputs -- 160x160x64, 6.5 MB each -- stayed referenced from
+the returned `Vec` until the whole neck had been encoded.
+
+`encode_backbone_features` now keeps only the last `NECK_INPUTS` (three) stage outputs, and
+`encode_neck_and_heads` takes them by value so nothing outlives the encode that reads it. Two
+callers changed (`runtime.rs`, `gpu_encode_comparison`); the GPU tests' eager reference graph has
+its own backbone and is untouched.
+
+GPU pool after a `concurrent_latency --rayon` round over the fixtures, before and after, which is
+deterministic enough to compare across binaries:
+
+| In flight | 4090 before | 4090 after | iGPU before | iGPU after |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 42.2 MB | **39.1** | 42.2 | **39.1** |
+| 4 | 172.0 | **147.5** | 167.3 | **140.0** |
+| 16 | 596.9 | **534.8** | 590.8 | **559.6** |
+| 32 | 1166.0 | **1083.6** | 1203.3 | **1086.9** |
+
+**7-16% less at every level.** Bit-exact (`0xa116e42f7c2dabdb` on both adapters); throughput and
+latency stay inside their run-to-run spread, and `gpu_record` is 0.028 ms, unchanged.
+
+What it does not change is the slope: each in-flight inference still costs about 33 MB, because
+buffers released inside one scope are invisible to every other scope until it ends. That is the
+cost 21 goes after.
+
+### 21. A bound on in-flight inferences - kept
+
+21 proposed a precomputed workspace per in-flight request and a bounded number of them. 40
+measured what that would bound: about 33 MB of GPU pool per concurrent inference, 1.1-1.2 GB at
+32 rayon workers on both adapters, because a buffer released inside one execution scope is
+invisible to every other scope until that one ends. The plan half -- shapes and lifetimes worked
+out ahead -- is what 40 did for the two tensors that mattered; a planner for the rest would
+re-derive what in-scope reuse already does. The bound was the missing half.
+
+`GpuYuNet` now admits at most four inferences at once: a counter and a condvar, entered before
+the execution scope so a waiting caller holds no intermediates. `FCS_MAX_IN_FLIGHT` overrides it.
+`concurrent_latency --rayon` over the fixtures, the limit against an override of 64:
+
+| Adapter | Callers | Pool, unbounded | Pool, limit 4 | det/s, unbounded | det/s, limit 4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4090 | 16 | 559.6 MB | **233.8** | 1004 | 858 |
+| 4090 | 32 | 1083.3 | **346.3** | 737 | 794 |
+| Radeon iGPU | 16 | 566.6 | **210.4** | 60.5 | **68.8** |
+| Radeon iGPU | 32 | 1120.8 | **280.7** | 58.7 | **63.8** |
+
+**58-75% less GPU pool.** On the 4090 throughput moves both ways, -15% at sixteen callers and +8%
+at thirty-two -- 96 detections per point is a short sample, and both are far above anything a
+folder job asks for. On the iGPU it rises 9-14% at both: past four, callers only contend for an
+adapter that is already fully occupied. The pool still grows with callers under the limit (234 MB
+at sixteen, 346 at thirty-two); what a caller acquires *before* the gate -- its input tensor and
+preprocessing upload -- is not covered, which is the likely remainder and was not traced.
+
+Folder, 1239 images, alternated:
+
+| | limit 4 | unbounded |
+| --- | --- | --- |
+| Radeon iGPU | **22.7, 22.7 s** | 24.8, 25.5 s |
+| RTX 4090 | 7.46, 8.16 s | 7.47, 7.36 s |
+
+**-10% on the iGPU; the 4090 inside its ~1 s band.** 0 of 959 crops differ on either adapter, 1129
+faces throughout, and the strict `fcs-core` and `fcs-cli` suites pass.
+
+Why four: the iGPU does 80 detections/s with one caller and keeps it with four, and the 4090 does
+945/s at four (60's sweep), several times what a folder job's decode and resize can feed. One
+constant for every adapter, marked `ponytail:` in the source.
+
+### 77. INT8 on the CPU path - rejected, slower and less accurate
+
+The WGSL graph is f32, so a quantised model file can only help ONNX Runtime's CPU path. The item's
+cheapest killer came first -- does the graph still load -- and the first attempt said no, in a
+misleading way. Static per-channel QDQ on the bundled export produces a model ONNX Runtime refuses:
+per-channel `DequantizeLinear` carries `axis`, which needs opset 13, and the export is opset 11.
+Our loader reported "no compatible ONNX Runtime was found", which is the built-in graph fallback's
+generic message rather than the cause. So: convert to opset 13 (`onnx.version_converter`), then
+static QDQ with int8 per-channel weights and uint8 activations, calibrated on 100 in-repo fixtures
+(`quantize_yunet.py`, run through `uvx` with onnx and onnxruntime). Evaluated on the separate
+1239-image corpus, with production's thresholds, both models on ONNX Runtime 1.24.4
+(`examples/int8_quality.rs`):
+
+| | |
+| --- | --- |
+| faces | 1129 from f32: 1116 matched, **13 lost, 7 gained**; 964 images change |
+| landmark shift | p50 3.21 px, p95 22.43, max 181.55; **111 past 35 px** |
+| box IoU | min 0.785, p05 0.908 |
+| detection time over the corpus | f32 8.40 s, int8 11.51 s -- **0.73x** |
+
+**Rejected on both counts.** It is slower on a Zen 4 part with AVX-512 VNNI, the kind of CPU the
+notes in PERFORMANCE.md warned would *overstate* an INT8 gain; YuNet is mostly depthwise convolution,
+which the quantised path does not accelerate. And it moves 111 landmarks past the 35 px bar 51 and
+90 rejected candidates at. Not tried: QOperator format, entropy or percentile calibration, or
+keeping the depthwise layers in f32 -- the last is the only one with a plausible route to a
+different speed answer, and none would be adopted while the accuracy result stands. The quantiser
+script is not committed; its command line is above.
+
+### 61. A producer/consumer pipeline for folder jobs - premise removed
+
+A folder job is already a pipeline: rayon runs whole images concurrently, so one image's decode
+overlaps another's detection and a third's encode, and 87 and 24 found nothing serialising it. On
+the 4090 the job is CPU-bound (60, 98), with detection capable of about 1000/s against roughly 190
+images/s of demand. On the Radeon iGPU it is bound by the adapter, and 21's gate is exactly the
+bounded stage a producer/consumer design would introduce -- four inferences admitted, decode and
+encode left free -- already measured at -10% of folder wall time. Separate queues, backpressure and
+cancellation plumbing would wrap a schedule whose only contended stage is now bounded. Reopen if a
+profile shows a stage sitting idle for input.
+
+### 62. True small batches - premise removed
+
+A batch dimension pays by amortising per-dispatch and per-submission work over several images. On
+the 4090 that work is real -- `run_on_device` is 1.01 ms against 0.366 ms of GPU compute -- but
+detection there already runs at about 1000/s (18) against a folder job's ~190 images/s, so nothing
+downstream could take the extra. On the Radeon iGPU, where detection binds, GPU compute is 10.51 of
+11.49 ms, 91.5%, and batching removes none of the arithmetic: the ceiling is the remaining ~8%.
+Against that, every kernel, the decode and the memory plan would need a batch axis -- the graph is
+batch 1 by construction, and `Conv2dConfig::new` rejects anything else. Not started.
+
+### 43, 44. Subgroups, with the compiler out of the way - rejected
+
+41 made DXC a fair compiler for f32, which was the condition these items were written against.
+`pointwise_subgroup.wgsl` (experiment 4's kernel: one subgroup sums the input channels for four
+pixels, stride taken from `subgroup_size`) against 41's register kernel, both under DXC:
+
+| Pointwise layer | 4090 (32 lanes) | Radeon iGPU (32-64 lanes) |
+| --- | ---: | ---: |
+| 320x320 16->16 | +1542% | +956% |
+| 160x160 64->64 | +1241% | +3122% |
+| 80x80 64->64 | +564% | +2823% |
+| 40x40 64->64 | +100% | +1828% |
+| 20x20 64->64 | **-41.7%** | +512% |
+| 80x80 64->1 | **-73.7%** | +442% |
+| 40x40 64->10 | **-71.4%** | +614% |
+
+On the 4090 it reproduces experiment 4 almost exactly: small layers win, large layers are an order
+of magnitude slower. On the iGPU it loses everywhere that is not a single pixel. The harness's
+output check passed on both, so the 64-lane subgroups were at least not summing across workgroups.
+
+**43 is rejected.** A shape-selective kernel would touch the 20x20 pointwise layers -- four or five
+dispatches -- for about 25 us of a 0.366 ms graph on the one adapter where detection does not bind,
+would be a regression on the adapter where it does, and would need DXC shipped with the
+application (`dxcompiler.dll` and `dxil.dll`, or the `static-dxc` feature) plus per-adapter
+selection and a fallback. **44** asks for a different subgroup algorithm, sharing inputs or weights
+by broadcast rather than reducing channels; its premise goes with 43's numbers: any gain is capped
+at tens of microseconds on the 4090, and the adapter where arithmetic matters pays heavily for
+subgroup collectives. Reopen for hardware where a subgroup collective is cheap and detection binds.
+
+### 45, 46. FP16, with the compiler out of the way - rejected
+
+Experiment 4 rejected f16 storage with f32 accumulation, but its kernel accumulated into an
+`array<vec4<f32>, 4>`, the pattern 41 found DXC turns into stack memory -- so that rejection was
+measured through the same trap as the regression. Two register-form candidates, both reading
+f16-packed input, weights and bias (`--f16-storage`), both under DXC against 41's f32 kernel:
+
+| Pointwise layer | 4090 f16 storage | 4090 f16 arithmetic | iGPU f16 storage | iGPU f16 arithmetic |
+| --- | ---: | ---: | ---: | ---: |
+| 320x320 16->16 | +8.3% | 0.0% | +13.4% | +18.6% |
+| 160x160 64->64 | -14.8% | -7.4% | +33.4% | +36.9% |
+| 80x80 64->64 | 0.0% | 0.0% | +36.2% | +39.9% |
+| 40x40 64->64 | 0.0% | 0.0% | +41.5% | +47.0% |
+| 20x20 64->64 | 0.0% | 0.0% | +49.6% | +57.8% |
+| max raw error, real shapes | 0.000824 | **0.002-0.0067** | 0.00118 | **0.0021-0.0068** |
+
+**45 is rejected.** f16 arithmetic misses the 1e-3 raw-error screen on every non-trivial shape --
+and that is on synthetic inputs in [-0.5, 0.5], where the real graph's activations start from
+0-255 pixel values -- and it is 19-58% slower on the iGPU. f16 storage with f32 arithmetic passes
+the screen on the 4090 and wins one layer there, but is 13-50% slower on the iGPU, where
+arithmetic is what matters, and misses the screen once. The iGPU converts every f16 read to f32
+for the accumulation, and that costs more than the halved memory traffic saves. **46** was gated on
+a useful 45 candidate, and there is none. Reopen for hardware that does native half arithmetic
+fast and a model with headroom for the error.
 
 ### Previous work
 

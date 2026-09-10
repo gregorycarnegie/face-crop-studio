@@ -103,6 +103,34 @@ The exemption is gone; one cutoff applies everywhere. ONNX Runtime on the same C
 inference in 2.86 ms against the iGPU's 11.93, but GPU inference stays the default: one
 16-core desktop and the weakest current iGPU are not enough to reorder a laptop.
 
+### The DXC regression was a local array
+
+Experiment 4 found DXC running the pointwise tile at 67.6 us where FXC took 27.6, and a
+whole-context compiler switch was ruled out on the strength of it. Dumping naga's HLSL and
+compiling it with both SDK compilers (experiment 41) located the cause: an accumulator array
+updated inside a short loop -- `array<vec4<f32>, 4>` in the pointwise and stem tiles, and the
+depthwise kernel's `array<f32, 6>` row -- becomes stack memory under DXC, with a load and a store
+per multiply-add. Written as registers, bit-exact:
+
+| GPU compute | FXC | DXC |
+| --- | ---: | ---: |
+| 4090, before | 0.367 ms | 0.696 ms |
+| 4090, after | **0.366** | **0.375** |
+| Radeon iGPU, before | ~11.3 | 18.26 |
+| Radeon iGPU, after | **10.51** | **10.27** |
+
+FXC ships, so production speed on the 4090 does not move; the iGPU gains under both. What
+changed is that the two compilers are now at parity, so DXC-only features (subgroups, f16) are
+no longer ruled out by the compiler itself.
+
+### A threshold edit no longer rebuilds the detector
+
+Score threshold, NMS and top-k are applied after inference, but NMS and top-k edits rebuilt the
+whole detector and re-decoded the file, and the inspector's confidence slider changed a setting
+the detector never saw (experiment 66). `YuNetDetector::with_postprocess` shares the loaded model;
+an edit now re-detects the in-memory image. Per edit on a 10 MP image: **6.2 ms on the UI thread
+plus 21.5 ms of work before, 3.0 ms of work after**, and the slider takes effect.
+
 ### Live webcam detection, and the cost of sharing a device with the renderer
 
 Detection now runs on every webcam frame in the GUI, tracking **95% of frames at
@@ -575,6 +603,10 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | One readback poll instead of two | no speed change; less code | `gpu/runtime.rs` |
 | Cache the eight small-op uniform buffers | **-0.08 ms**, -10% of small-image detection | `gpu/utils.rs`, `max_pool.rs`, `add.rs`, `upsample2x.rs` |
 | Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
+| At most four in-flight inferences per model | GPU pool -58 to -75% at 16-32 callers; iGPU folder -10% | `gpu/runtime.rs` |
+| Backbone keeps only the outputs the neck reads | GPU pool -7 to -16% at every concurrency | `gpu/graph.rs` |
+| Register accumulators and rows instead of local arrays | DXC 0.696 -> 0.375 ms (4090), 18.3 -> 10.3 ms (iGPU); FXC iGPU -4 to -26% per layer | `gpu/conv2d.wgsl` |
+| Threshold edits swap postprocessing instead of rebuilding | 6.2 ms UI stall + 21.5 ms -> 3.0 ms per edit; confidence slider fixed | `detector.rs`, `fcs-gui` |
 | One preprocessing cutoff for integrated adapters too | **2.07x** on a folder on the Radeon iGPU; -28 ms per 10 MP image | `preprocess.rs` |
 | Upsample and add in one dispatch (neck) | -0.012 to -0.017 ms on a 4090, -0.13 to -0.19 ms on an iGPU; 43 dispatches to 41 | `gpu/resize2x_add.wgsl`, `gpu/upsample2x.rs`, `gpu/graph.rs` |
 | Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
@@ -871,6 +903,49 @@ The standalone [FP16](../fcs-core/examples/shaders/pointwise_f16.wgsl) and
 [subgroup](../fcs-core/examples/shaders/pointwise_subgroup.wgsl) probes and exact
 commands remain in [experimentation.md](../experimentation.md). Neither adds a
 production feature requirement.
+
+### GPU memory scaled with concurrency, not with images
+
+GPU retention is flat as a session goes on (experiment 84), but that was measured one inference at a
+time. Every in-flight inference parks its intermediates in its own execution scope, so the pool grew
+about 36 MB per concurrent caller: **1.2 GB at 32 rayon workers**, on the 4090 and the Radeon iGPU
+alike. Two changes: the backbone stopped handing the neck two 6.5 MB outputs it never reads
+(experiment 40, 7-16% off), and a model now admits at most four inferences at once (experiment 21).
+At 32 callers the pool is **346 MB on the 4090 and 281 MB on the iGPU**, where past four callers
+only contend for a busy adapter -- the iGPU's folder job got 10% faster. 0 crops differ.
+
+### INT8 is slower on the CPU path, and moves landmarks
+
+A static per-channel QDQ model on ONNX Runtime 1.24.4 took 11.5 s of detection over 1239 images
+against 8.4 s for f32 -- 0.73x on a Zen 4 with VNNI -- and lost 13 faces, gained 7, and moved 111
+landmarks past 35 px (experiment 77). YuNet is mostly depthwise convolution, which the quantised path
+does not accelerate. The bundled export also needs an opset 11 -> 13 conversion before per-channel
+quantisation produces a model ONNX Runtime will load at all.
+
+### Shader arithmetic that did not pay: constants, packed weights, interior paths, shared tiles
+
+Measured on both the 4090 and the Radeon iGPU, because the iGPU is where arithmetic matters:
+
+- **A compile-time channel count** (experiment 28) is one timestamp tick either way on the 4090,
+  nothing under DXC, and under FXC *slower* on three of four iGPU layers (+46% at 80x80). No gain
+  to pay a pipeline per shape for.
+- **Weights prepacked as one vec4 per tile** (30) costs one to three ticks on most of the 4090's
+  pointwise layers and helps only the iGPU's two smallest.
+- **An interior fast path for depthwise** (33) is slower on the 4090 and a net loss across the
+  iGPU's layers under FXC. Its large DXC win turned out to be 41's mechanism, not the bounds checks.
+- **Cooperative workgroup tiles** (29) are not built: naga lowers `workgroupBarrier()` to HLSL's
+  non-synchronising `GroupMemoryBarrier()`, so staged workgroup memory is a race on D3D12.
+
+- **Subgroups and FP16, retried once DXC stopped regressing** (43-46). Subgroup channel reduction
+  still wins only the 4090's smallest layers -- about 25 us of graph -- and is 5-31x slower on the
+  iGPU. FP16 arithmetic misses the 1e-3 raw-error screen on every real shape and is 19-58% slower
+  on the iGPU; f16 storage alone is 13-50% slower there. Neither is worth shipping DXC for.
+
+Closed without a new measurement because an existing one removes the cost they target: buffer
+arenas (23), a host dispatch plan (25), preprocessing-stem fusion (39), two-stage decoding (73)
+and webcam tracking (76). Native runtimes (47) were checked with no change; the smaller-model,
+early-exit and coarse-to-fine items (75, 78, 79) are blocked on a model this repository cannot
+train or re-export.
 
 ### Nested loop parallelisation in `decode_yunet_outputs`
 
