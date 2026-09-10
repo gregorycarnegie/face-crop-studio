@@ -72,6 +72,13 @@ drift +/-0.08 ms as clocks ramp, and CPU throughput on this machine moved by
 variants inside one warm process (`phase_timings --ab VAR`), whose A/A control
 sits within +/-0.003 ms per phase.
 
+Repeated across independent processes (experiment 7), the smallest readable
+effect is **0.01 ms** of wall time on a small image and **~0.1 ms** on a 10 MP one,
+where the CPU resize alone moves +/-0.03-0.05 ms while the GPU-side phases in the
+same run stay within 0.001. GPU timestamp totals agree to one 1.024 us tick per
+family across processes. A p95 from 30 samples moved 0.89-1.20 ms between five
+identical processes, so tails need hundreds of samples before they mean anything.
+
 ### Live webcam detection, and the cost of sharing a device with the renderer
 
 Detection now runs on every webcam frame in the GUI, tracking **95% of frames at

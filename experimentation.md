@@ -104,10 +104,13 @@ implementation or workload.
   portrait/landscape, supported formats, no/one/many faces, difficult small
   faces, warm preview, first detection, webcam and folder export. Record p50/p95
   latency, images/s, CPU use and peak RAM/VRAM where relevant.
-- [ ] **7. Quantify timing noise and minimum detectable gains.** Repeat
+- [x] **7. Quantify timing noise and minimum detectable gains.** Repeat
   identical A/A controls, alternating A/B order and independent runs; record
   clocks, power mode, thermals and competing GPU work. Select sample duration
   from observed variance; treat isolated timestamp ticks as inconclusive.
+  Done: 0.01 ms in process on a small image, ~0.1 ms on a large one (the CPU
+  resize is the noisy phase), one timestamp tick per GPU family, and p95 from 30
+  samples is not a statistic. See the record.
 - [x] **8. Compare profiled and normal execution costs.** Measure one merged
   graph timestamp where supported versus summed per-op timestamps and normal
   wall time. Separate query resolution/profiler overhead; verify identical raw
@@ -4170,6 +4173,53 @@ against previous releases.
 remainder is `DynamicImage::to_luma8` inside `laplacian_variance`, which converts
 per pixel the same way; it would take the same treatment and is worth roughly 1% of
 the job.
+
+### 7. The noise floor, repeated across processes - kept (measurement)
+
+Completes 7 (partial), which had one A/A on one image. Recorded conditions: Windows
+power plan **High performance**, RTX 4090 driver 610.47, GPU at 37 C / P8 / 44.9 W
+before and 40 C / P0 / 84.6 W after, clock-event reason `0x1` (GPU idle -- no thermal
+or power cap) at both ends. **Not isolated:** 27 desktop processes hold GPU contexts
+(browsers, VS Code, vendor overlays) and utilisation idles at 8%, which is the
+environment every other number in this file was taken in too. CPU temperature is not
+readable from here.
+
+In-process A/A (`phase_timings --ab FCS_AA_CONTROL`, 8 alternated blocks of 15 per
+arm), **each value an independent process**:
+
+| Source | `detect_image` delta, ms | largest phase delta |
+| --- | --- | --- |
+| 0.17 MP | +0.001, -0.004, +0.004, -0.001, +0.001 | `readback_wait`, `gpu_record` +/-0.001 |
+| 10 MP | -0.050, +0.020, -0.040 | `cpu_resize` -0.030 to +0.010; `readback_wait` +/-0.001 |
+
+Across processes, without A/B: 0.17 MP `detect_image` p50 0.724-0.735 ms over five
+processes (A/A off-arm medians 0.696-0.729), 10 MP 2.040-2.135 over three.
+`gpu_pass_breakdown` in three processes: 0.370, 0.371, 0.371 ms, every family within
+one 1.024 us tick -- pointwise 208.9-209.9 us (17), depthwise 92.2-93.2 (17), max-pool
+28.7-29.7 (4), stem 18.4 (1), resize 13.3-14.3 (2), add 6.1-7.2 (2). That is the GPU
+profile the rest of this round starts from.
+
+**Smallest readable effect**, taken as about 2.5x the largest A/A excursion:
+
+| Measure | Readable | Why |
+| --- | ---: | --- |
+| small-image wall, in process | **0.01 ms** | A/A within +/-0.004 |
+| small-image wall, across processes | 0.03-0.04 ms | why cross-process comparison was retired |
+| 10 MP wall, in process | **~0.1 ms** | `cpu_resize` alone moves +/-0.03-0.05; GPU phases in the same run stay +/-0.001 |
+| GPU compute | one tick per family | ~0.3% of the graph |
+| folder job | ~1 s | 60 and 85: 0.3-1.7 s spreads over identical runs |
+
+**p95 from 30 samples is not a statistic.** Five identical small-image processes gave
+p95 0.893, 0.922, 1.111, 1.200 and 0.913 ms while p50 moved 0.011. Tails need the
+hundreds of samples 16 used before they are quoted.
+
+**Order.** The harness always opens with the off arm, and two of three 10 MP A/A runs
+came out 0.04-0.05 ms in favour of the later arm, consistent with a CPU still warming.
+The small image shows no sign either way. So on large images a win under ~0.05 ms in
+the "on" direction is not evidence on its own; it needs agreeing signs over three
+processes, which is about ten seconds of detection.
+
+Not covered: another machine (10), and a GPU under thermal load -- nothing here heats it.
 
 ### Previous work
 
