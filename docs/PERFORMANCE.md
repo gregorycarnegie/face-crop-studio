@@ -681,6 +681,10 @@ cargo run --release -p fcs-core --example decode_cost
 # What a head download costs per byte, with no inference hiding the copies
 cargo run --release -p fcs-core --example readback_bytes
 
+# Sustained operation: the same corpus N times in one process (drift, growth, drift in
+# what it finds)
+cargo run --release -p fcs-core --example memory_growth -- <dir> 400 --passes 50
+
 # Whether the decode should read the mapped range or a copy of it
 cargo run --release -p fcs-core --example readback_bytes -- --reads
 

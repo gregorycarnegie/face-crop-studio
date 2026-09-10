@@ -11,7 +11,13 @@
 //! The detection graph is fixed at 640x640 whatever the source is, so the last of those can
 //! only grow through the buffer pool handing out new buffers.
 //!
-//!   cargo run --release -p fcs-core --example memory_growth -- <dir> [limit]
+//! `--passes N` walks the corpus N times in **one process**, which is the question
+//! experiment 85 asks and a single pass cannot answer. Every batch job the CLI runs is its
+//! own process, so a per-run measurement can never see a leak; the GUI is the long-lived
+//! one, and this is the stand-in for it. Per-pass wall time, retained memory and detection
+//! count together show drift, growth, and any change in what the detector finds.
+//!
+//!   cargo run --release -p fcs-core --example memory_growth -- <dir> [limit] [--passes N]
 
 use std::sync::Arc;
 
@@ -66,14 +72,30 @@ fn working_set_mb() -> f64 {
     f64::NAN
 }
 
+/// The value after `name` on the command line, if it is there.
+fn flag_value(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let index = args.iter().position(|a| a == name)?;
+    args.get(index + 1).cloned()
+}
+
 fn main() -> Result<()> {
-    let dir = std::env::args()
-        .nth(1)
+    let positional: Vec<String> = std::env::args()
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .collect();
+    let dir = positional
+        .first()
+        .cloned()
         .unwrap_or_else(|| "fixtures/images".into());
-    let limit: usize = std::env::args()
-        .nth(2)
+    let limit: usize = positional
+        .get(1)
         .and_then(|v| v.parse().ok())
         .unwrap_or(400);
+    let passes: usize = flag_value("--passes")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+        .max(1);
 
     let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
         GpuAvailability::Available(ctx) => ctx,
@@ -111,27 +133,71 @@ fn main() -> Result<()> {
     anyhow::ensure!(!files.is_empty(), "no images in {dir}");
 
     println!("{} images from {dir}, largest first\n", files.len());
-    println!(
-        "{:>7} {:>12} {:>12} {:>12}",
-        "images", "source MP", "GPU pool MB", "host RSS MB"
-    );
-
     let baseline_rss = working_set_mb();
     let mut biggest_mp = 0.0f64;
-    for (index, path) in files.iter().enumerate() {
-        let Ok(image) = image::open(path) else {
-            continue;
-        };
-        let mp = (image.width() as f64 * image.height() as f64) / 1e6;
-        biggest_mp = biggest_mp.max(mp);
-        detector.detect_image(&image).context("detect")?;
-        let n = index + 1;
-        if n == 1 || n == 10 || n == 50 || n % 100 == 0 || n == files.len() {
+
+    if passes > 1 {
+        // Sustained operation (experiment 85). One row per pass over the same corpus, so
+        // wall time, retained memory and detections are all comparable pass to pass and
+        // any drift is a slope rather than a single number. Every CLI batch job is its own
+        // process, so no per-run measurement can see a leak; the GUI is the long-lived one
+        // and this stands in for it.
+        println!(
+            "{passes} passes over the same {} images, in one process",
+            files.len()
+        );
+        println!(
+            "{:>6} {:>10} {:>12} {:>12} {:>12}",
+            "pass", "wall s", "detections", "GPU pool MB", "host RSS MB"
+        );
+        let mut first_detections: Option<usize> = None;
+        for pass in 1..=passes {
+            let started = std::time::Instant::now();
+            let mut detections = 0usize;
+            for path in &files {
+                let Ok(image) = image::open(path) else {
+                    continue;
+                };
+                let mp = (image.width() as f64 * image.height() as f64) / 1e6;
+                biggest_mp = biggest_mp.max(mp);
+                detections += detector
+                    .detect_image(&image)
+                    .context("detect")?
+                    .detections
+                    .len();
+            }
+            let first = *first_detections.get_or_insert(detections);
+            anyhow::ensure!(
+                detections == first,
+                "pass {pass} found {detections} faces, pass 1 found {first}: the same images stopped producing the same answer"
+            );
             println!(
-                "{n:>7} {mp:>12.2} {:>12.1} {:>12.1}",
+                "{pass:>6} {:>10.2} {detections:>12} {:>12.1} {:>12.1}",
+                started.elapsed().as_secs_f64(),
                 detector.gpu_memory_usage().unwrap_or(0) as f64 / (1024.0 * 1024.0),
                 working_set_mb()
             );
+        }
+    } else {
+        println!(
+            "{:>7} {:>12} {:>12} {:>12}",
+            "images", "source MP", "GPU pool MB", "host RSS MB"
+        );
+        for (index, path) in files.iter().enumerate() {
+            let Ok(image) = image::open(path) else {
+                continue;
+            };
+            let mp = (image.width() as f64 * image.height() as f64) / 1e6;
+            biggest_mp = biggest_mp.max(mp);
+            detector.detect_image(&image).context("detect")?;
+            let n = index + 1;
+            if n == 1 || n == 10 || n == 50 || n % 100 == 0 || n == files.len() {
+                println!(
+                    "{n:>7} {mp:>12.2} {:>12.1} {:>12.1}",
+                    detector.gpu_memory_usage().unwrap_or(0) as f64 / (1024.0 * 1024.0),
+                    working_set_mb()
+                );
+            }
         }
     }
 

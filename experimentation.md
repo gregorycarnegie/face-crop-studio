@@ -521,11 +521,16 @@ implementation or workload.
   test and ran 32 at once. One shared context fixed that and made the `fcs-utils`
   suite 2.6x faster.
 
-- [ ] **85. Validate sustained operation and power efficiency.** Run the best
+- [x] **85. Validate sustained operation and power efficiency.** Run the best
   candidates through long webcam sessions and large exports, including VRAM
   pressure and background GPU work. Track drift, thermals, memory growth,
   responsiveness and energy/image where measurable; short warm microbenchmarks
-  can miss production regressions.
+  can miss production regressions. Done for the export half: 50 passes in one
+  process (20,000 detections, 12 minutes) and 15 consecutive folder jobs (18,585
+  images) drift by nothing -- flat wall time, flat 44.1 MB GPU pool, no RSS slope,
+  identical detections and crops every time. **Not covered:** webcam sessions,
+  VRAM pressure, background GPU work, thermals and energy, all named in the
+  record rather than quietly folded into a pass.
 - [x] **96. Letterbox instead of stretching to the model input.** The
   preprocessor scaled x and y independently, so every non-square source reached
   the model distorted and its score fell. Measured over all 1239 images at
@@ -3794,6 +3799,64 @@ from. What is *not* addressed is the other 737 ms, which is eframe bringing up a
 window and a D3D12 device -- 80 already measured `request_adapter` at 546 ms of
 that and recorded why Vulkan, at less than half the time, is deliberately not
 used on Windows.
+
+### 85. Twelve minutes of one process, and fifteen folder jobs back to back
+
+Every measurement in this file is a warm microbenchmark or a single run, and 71's
+lesson was that a folder job catches what those miss. This asks the other
+question: whether anything drifts when the work does not stop. Two shapes,
+because the application has two and they fail differently.
+
+**One process, 50 passes over the same 400 largest sources** (up to 23.4 MP),
+`memory_growth --passes 50` -- about 12 minutes and 20,000 detections. Every CLI
+batch job is its own process, so no per-run measurement can see a leak; the GUI
+is the long-lived one, and this stands in for it.
+
+| | first 10 | last 10 | over the run |
+| --- | ---: | ---: | ---: |
+| wall per pass | 14.43 s | 14.39 s | **-1.8 ms/pass** (-0.09 s total) |
+| host RSS | 295 MB | 307 MB | **-0.11 MB/pass** (no slope) |
+| GPU pool | 44.1 MB | 44.1 MB | one value, all 50 passes |
+| detections | 250 | 250 | **one value, all 50 passes** |
+
+Wall time spans 14.21-14.76 s, a 3.9% band with no slope in it. Host RSS
+oscillates between 275 and 308 MB as mimalloc returns and reclaims, and the
+regression through it points slightly *down*. The GPU pool never moves off 44.1
+MB, which is 84's number, now held for fifty times as long. The detection count
+is asserted rather than reported: the probe fails the run if a pass stops
+agreeing with pass 1, so 250 x 50 is a check, not an observation.
+
+**Fifteen consecutive folder jobs**, `fcs-cli --crop` over the 1239-image
+reference folder -- 18,585 images, 16,935 detections and 14,385 crops written:
+
+| | value |
+| --- | --- |
+| wall | 6228-7907 ms, median **6966** |
+| first 5 / last 5 median | 6916 / **6273** ms |
+| slope | **-39 ms per run** |
+| faces | **1129 every run** |
+| crops | **959 every run** |
+| exit code | 0 every run |
+
+**Nothing drifts, and the trend is the wrong way to be thermal.** The three
+fastest folder jobs are the last three, and the in-process slope is also
+negative; if the GPU or CPU were throttling over 14 minutes of continuous work,
+both would slope the other way. What the negative slopes actually measure is the
+file cache warming, which is 63's finding about cold first runs showing up again.
+
+**What this also validates, for free.** The three changes made in this session ran
+about 37,000 detections between them without incident: the head branches come off
+the mapped view 60,000 times over (three levels per detection), the pooled
+readback buffers were acquired and recycled the same number of times, and the
+30-second wait deadline from 94 did not fire once.
+
+**Not covered, and named rather than implied.** No webcam session -- the camera
+half of 85 needs the hardware and a running GUI, and 97 already measured the loop
+live for a shorter window. No VRAM pressure or background GPU work: this ran on an
+otherwise idle 4090, so it says nothing about a contended one. No thermals or
+energy per image; nothing here reads a sensor, and the wall-time slope is the only
+evidence offered that thermal behaviour is not a problem on this machine. Device
+loss and model switching remain untested, which is the other half of 81's brief.
 
 ### Previous work
 
