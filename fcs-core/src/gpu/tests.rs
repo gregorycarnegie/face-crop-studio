@@ -1368,8 +1368,13 @@ fn concurrent_inference_matches_sequential() {
 
 /// The bind-group cache is only worth its lookup if the buffer pool keeps handing the same
 /// intermediates to the same layers. That is a property of the pool's release order, not of
-/// this cache, so a change there would quietly turn the cache into pure overhead. Ten
-/// inferences is well past the point the assignment settles.
+/// this cache, so a change there would quietly turn the cache into pure overhead.
+///
+/// Measured once the assignment has settled, because that is the claim: the first few
+/// inferences miss while the pool cycles, and how many depends on how many intermediates the
+/// graph has. Fusing the neck's upsample and add (experiment 36) left 93 warm-up misses where
+/// there had been 73 -- enough to pull a ten-inference average to 73% -- while every inference
+/// from the fourth on hit all 35 dispatches in both graphs.
 #[test]
 fn conv2d_bind_groups_are_reused_across_inferences() {
     let Some(model_path) = model_file_path() else {
@@ -1384,12 +1389,16 @@ fn conv2d_bind_groups_are_reused_across_inferences() {
     };
     let model = GpuYuNet::with_context(context, &model_path, crate::InputSize::new(640, 640))
         .expect("build GPU model");
-    for _ in 0..10 {
+    let infer = || {
         let input = crate::tensor::Tensor::from_shape(&[1, 3, 640, 640], &synthetic_input())
             .expect("input shape");
         model.run(input).expect("inference");
-    }
+    };
+    (0..10).for_each(|_| infer());
+    let (warm_hits, warm_misses) = model.bind_cache_stats();
+    (0..10).for_each(|_| infer());
     let (hits, misses) = model.bind_cache_stats();
+    let (hits, misses) = (hits - warm_hits, misses - warm_misses);
     let total = hits + misses;
     assert!(total > 0, "no convolution dispatches were recorded");
     assert!(
@@ -1432,17 +1441,19 @@ fn profiled_and_merged_inference_match() {
         }
         let timings = context.take_pass_timings().expect("read timestamps");
         if context.profiler().is_some() {
-            // 43, not 61: the four head branches at each level share a feature map and
+            // 41, not 61: the four head branches at each level share a feature map and
             // differ only in output channels, so their weights are concatenated at upload
-            // and one pointwise plus one depthwise covers all four (experiment 37).
-            assert_eq!(timings.len(), 43, "profiling must retain every operation");
+            // and one pointwise plus one depthwise covers all four (experiment 37); and each
+            // neck upsample feeds only its add, so the pair is one dispatch (experiment 36).
+            assert_eq!(timings.len(), 41, "profiling must retain every operation");
             for (label, count) in [
                 ("conv2d/pointwise", 17),
                 ("conv2d/depthwise", 17),
                 ("conv2d/general", 1),
                 ("max_pool", 4),
-                ("add", 2),
-                ("resize2x", 2),
+                ("resize2x_add", 2),
+                ("add", 0),
+                ("resize2x", 0),
             ] {
                 assert_eq!(timings.iter().filter(|t| t.label == label).count(), count);
             }

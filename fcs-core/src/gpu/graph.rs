@@ -159,17 +159,31 @@ pub fn encode_neck_and_heads(
     let p5_raw = encode_stage_blocks(encoder, ops, weights, &c5, &NECK_BLOCKS[2..3])?;
     let level2 = encode_detection_level(encoder, ops, weights, p5_raw.clone(), 2)?;
 
-    let up_p5 = ops.encode_resize2x_tensor(encoder, &p5_raw)?;
-    let merged_p4_input = ops.encode_add_tensors(encoder, &up_p5, &c4)?;
+    let merged_p4_input = encode_upsample_add(encoder, ops, &p5_raw, &c4)?;
     let p4_raw = encode_stage_blocks(encoder, ops, weights, &merged_p4_input, &NECK_BLOCKS[1..2])?;
     let level1 = encode_detection_level(encoder, ops, weights, p4_raw.clone(), 1)?;
 
-    let up_p4 = ops.encode_resize2x_tensor(encoder, &p4_raw)?;
-    let merged_p3_input = ops.encode_add_tensors(encoder, &up_p4, &c3)?;
+    let merged_p3_input = encode_upsample_add(encoder, ops, &p4_raw, &c3)?;
     let p3_raw = encode_stage_blocks(encoder, ops, weights, &merged_p3_input, &NECK_BLOCKS[0..1])?;
     let level0 = encode_detection_level(encoder, ops, weights, p3_raw.clone(), 0)?;
 
     Ok([level0, level1, level2])
+}
+
+/// `upsample2x(small) + skip`. Each upsample in the neck feeds only its add, so the pair is one
+/// dispatch (experiment 36). `FCS_SEPARATE_RESIZE_ADD` restores the two-dispatch form for the
+/// in-process A/B.
+fn encode_upsample_add(
+    encoder: &mut impl ComputeDispatch,
+    ops: &GpuInferenceOps,
+    small: &GpuTensor,
+    skip: &GpuTensor,
+) -> Result<GpuTensor> {
+    if std::env::var_os("FCS_SEPARATE_RESIZE_ADD").is_some() {
+        let up = ops.encode_resize2x_tensor(encoder, small)?;
+        return ops.encode_add_tensors(encoder, &up, skip);
+    }
+    ops.encode_resize2x_add_tensors(encoder, small, skip)
 }
 
 fn encode_detection_level(
