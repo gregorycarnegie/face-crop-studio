@@ -267,7 +267,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Final whole-detection timings overlapped around 3.5 ms, so this is not an
   established detection-latency or batch-throughputput improvement.
 
-  [experimentation.md](experimentation.md) records every attempt and decision.
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md#experiment-index) records every attempt and decision.
   FP16 storage was slower; subgroup reduction helped small layers but heavily
   regressed large ones. Both remain standalone probes, with no new production
   feature requirements. Convolution timestamps now distinguish pointwise,

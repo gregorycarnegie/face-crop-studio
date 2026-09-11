@@ -2,26 +2,25 @@
 
 ## Current Performance Profile
 
-### Latest GPU results (2026-09-05)
+### Where the GPU graph stands
 
-The completed shader experiments reduced full-graph GPU compute from **0.910 ms
-to about 0.536 ms (41% less time)** on RTX 4090 / D3D12 at 640x640. Three f32
-changes were retained: pointwise specialization, depthwise input reuse, and a
-four-output-channel pointwise tile. FP16 storage and subgroup reduction were
-measured but not adopted. These changes are in the working tree at the time of
-this report; the experiment baseline is commit `c332075`.
+The YuNet graph runs in **0.366 ms of GPU compute** on RTX 4090 / D3D12 / FXC and **10.51 ms**
+on the Ryzen 9 7950X's integrated Radeon, with output bit-identical to the original graph
+(decoded-output fingerprint `0xa116e42f7c2dabdb`). The first shader round (experiments 0-4,
+baseline `c332075`) took it from 0.910 to 0.536 ms with pointwise specialisation, depthwise
+input reuse and a four-channel pointwise tile. Later rounds fused the head branches (37),
+tiled the stem (34), fused the neck's upsample-and-add (36) and rewrote loop-indexed local
+arrays as registers (41). FP16 and subgroups were measured twice and rejected both times
+(4, 43-46).
 
-The final whole-detection A/B/B/A estimates were **3.561 / 3.504 / 3.495 /
-3.463 ms**, with overlapping intervals. They establish **no reliable
-whole-detection speedup** from this shader round. This Criterion case is
-`inference_pipeline/detect_image/gpu`: CPU speed resize followed by GPU inference,
-excluding image decode. It is distinct from `gpu_on_device` and `gpu_quality`.
-No new batch-throughputput measurement was made.
+That first round's whole-detection A/B/B/A estimates -- **3.561 / 3.504 / 3.495 / 3.463 ms**,
+Criterion `inference_pipeline/detect_image/gpu`, CPU speed resize plus GPU inference, decode
+excluded -- established **no reliable wall-time gain**. Later results are measured per section
+below; the [GPU experiment results](#gpu-experiment-results) keep the first round's detail.
 
-The [GPU experiment results](#gpu-experiment-results) below consolidate
-the findings; [experimentation.md](../experimentation.md) retains the sequential
-checklist, individual runs and reproduction commands. Finishing that checklist
-does **not** mean the performance search is exhausted.
+Every experiment has a stable ID, and code comments cite those IDs: the
+[experiment index](#experiment-index) records what each one found. Finishing that list does
+**not** mean the performance search is exhausted; see [Open questions](#open-questions).
 
 ### Where warm detection actually spends its time (2026-09-05, later round)
 
@@ -30,8 +29,10 @@ RTX 4090 / D3D12, warm, single request. Indentation is containment; children
 must not be summed with their parent, and `readback_wait` **contains** the
 forward pass rather than idling beside it.
 
-Two different paths, chosen by source size. `upload_pays_for_source` declines
-above 2.5 MP, so a large photo preprocesses on the CPU and a small one does not.
+Two different paths, chosen by source size. At the time (experiment 5)
+`upload_pays_for_source` declined above 2.5 MP, so a large photo preprocessed
+entirely on the CPU and a small one did not. Since 50 a large photo is resized on
+the CPU and converted on the GPU, and since 54 the cutoff is 1.75 MP.
 
 | Phase | 0.17 MP | 10 MP |
 | --- | ---: | ---: |
@@ -173,7 +174,8 @@ Two defects fell out (experiments 95 and 96):
 
 GPU retention is flat: 44.1 MB across 400 sources up to 23.4 MP, largest first
 (`examples/memory_growth.rs`). The buffer pool has an idle ceiling, the conv
-caches are keyed by a graph fixed at 640x640, and the preprocessor's texture is
+caches are keyed by a graph production runs only at 640x640 and are cleared past
+512 entries, and the preprocessor's texture is
 bounded by the 1.75 MP upload gate, on every adapter since experiment 10 removed the
 integrated-GPU exemption.
 
@@ -616,14 +618,28 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Blit the crop region instead of `crop_imm().to_image()` | **-4% of batch CPU**, byte-identical | `face_cropper.rs` |
 | Build the detector off the GUI's first frame | **-157 ms to first paint**, detector no later | `fcs-gui/src/app.rs` |
 | Letterbox instead of stretching to the model input | **+100 faces over 1239 images**, -0.38 ms at 2 MP | `image_utils.rs`, both preprocess shaders, `detector.rs` |
+| Delete the GPU batch cropper, crop on the CPU | **-43%** of folder wall time; ~740 lines removed | `face_cropper.rs` |
+| libjpeg-turbo for JPEG decode | **1.23x** decode | `fcs-utils/src/image_utils.rs` |
+| One shader entry point per convolution kernel | `compile_conv2d` ~197 -> ~120 ms at start-up | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
+| Preprocessing cutoff 1.75 MP instead of 1.5 | -0.25 to -0.29 ms on 1.5-1.75 MP sources | `preprocess.rs` |
+| NMS grid sized to the boxes; bitmap dedup | clustered, n=5000: NMS 23.1 -> 0.25 ms, dedup 6.1 -> 0.009 ms | `nms.rs` |
+| ONNX Runtime intra-op threads = logical CPUs / 4, clamped 1..=4 | CPU inference 7.27 -> 4.17 ms; folder unchanged | `fcs-ort/src/session.rs` |
+| Preview texture clamp through `fast_image_resize` | **3.2 s -> 0.1 s** on a 133 MP preview | `fcs-gui/src/core/detection.rs` |
+| Delete the three unread GUI caches, and `lru` | up to ~1.3 GB no longer retained; 179 lines | `fcs-gui` |
+| 30 s deadline on every GPU wait; one test device per binary | no runtime change; `fcs-utils` suite 2.6x faster, harness hang gone | `fcs-utils/src/gpu/mod.rs` |
+| Stem sized from its input tensor | none at 640; makes a 320 input runnable (75) | `gpu/graph.rs` |
 
-All are bit-exact except the RGBA crop resize, which swaps one Lanczos3
-implementation for another and so differs by rounding -- at most 23 per channel
-over a 1239-image folder, one crop in 901 shifting quality label (experiment 88).
-The rest: the raw 126000-float output fingerprint is unchanged
-(`readback_parity` probe), resize output is byte-identical between one thread
-and many (`threaded_and_single_threaded_resize_agree`), and the full workspace
-suite passes under `FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4.
+Output-changing rows, each adopted only after the output was reviewed: the GPU
+cropper deletion (Lanczos3 instead of fixed 2x2 taps; 18% of quality labels shift,
+71), libjpeg-turbo (pixels within 5/255, boxes 0.28-1.30 px, 67), letterboxing
+(96), the 1.75 MP cutoff (moves the seam between the two preprocessing routes, 54)
+and the RGBA crop resize, which swaps one Lanczos3 implementation for another and
+so differs by rounding -- at most 23 per channel over a 1239-image folder, one crop
+in 901 shifting quality label (88). The rest are bit-exact: the 126000-float
+decoded-output fingerprint is unchanged (`readback_parity`), resize output is
+byte-identical between one thread and many
+(`threaded_and_single_threaded_resize_agree`), and the full workspace suite passes
+under `FCS_STRICT_TESTS=1` with ONNX Runtime 1.24.4.
 
 ### Historical stage breakdown (before the latest GPU optimizations)
 
@@ -657,11 +673,12 @@ quoting the single-image ratio at anyone.
   time is only one part of detection. Measure CPU recording, submission, buffer
   allocation, synchronization, readback and output conversion separately before
   selecting the next latency change.
-- **Remaining shader budget:** about 0.536 ms in this measured profiled graph.
-  Halving all shader time would remove about 0.268 ms of GPU work; eliminating
-  it entirely would remove about 0.536 ms. These are fixed-workload arithmetic
-  ceilings, not promised wall-time savings. Profiling uses separate passes;
-  normal inference uses one merged pass, so validate gains in the normal path.
+- **Remaining shader budget:** 0.366 ms of GPU compute on the 4090, where
+  detection is latency-bound rather than compute-bound (8), against 10.5 ms on
+  the Radeon iGPU, where the arithmetic is 92% of detection (10). These are
+  fixed-workload ceilings, not promised wall-time savings. Profiling uses
+  separate passes (0.83 us each); normal inference uses one merged pass, so
+  validate gains in the normal path.
 - **Full-resolution image processing:** JPEG decode was about 21 ms in the
   historical fixture measurement and remains a separate workload from
   `detect_image`. Reduced-resolution decode does not preserve crop quality.
@@ -715,7 +732,7 @@ quoting the single-image ratio at anyone.
 | GPU preprocessing (WGSL shader)   | ✅ Shipped | CPU ~162ms → GPU ~51ms (Criterion)          |
 | GPU enhancement pipeline          | ✅ Shipped | All filters have WGSL kernels               |
 | Custom WGPU YuNet inference graph | ✅ Shipped | Conv2D/BN/Activation on GPU, parity-tested  |
-| GPU batch crop extraction         | ✅ Shipped | Parallel crop regions as GPU draw calls     |
+| GPU batch crop extraction         | ❌ Removed | CPU cropping is 43% faster on a folder (experiment 71) |
 | GPU buffer/texture pool           | ✅ Shipped | Avoids repeated allocation overhead         |
 
 ### GPU experiment results
@@ -864,6 +881,35 @@ cargo run --release -p fcs-core --example resize_threading
 # Whole detection; keep gpu, gpu_on_device and gpu_quality results separate
 cargo bench -p fcs-core --bench inference_pipeline
 
+# Quality against production for a changed detector path: faces lost and gained,
+# landmark shift, IoU. INT8 model (77); 320 first pass, cascade, screen, crop refinement (75, 79)
+cargo run --release -p fcs-core --example int8_quality -- <int8.onnx> <dir> [limit]
+cargo run --release -p fcs-core --example coarse_to_fine -- <dir> [limit] [roi scale]
+
+# CPU inference backends, cpu-graph against ONNX Runtime (69)
+cargo run --release -p fcs-core --example cpu_backends -- <image> [reps]
+
+# JPEG decoders over the largest fixtures (67); compare two folders of exported crops
+cargo run --release -p fcs-core --example decode_bench [image-count]
+cargo run --release -p fcs-core --example cropdiff -- <dir-a> <dir-b>
+
+# Container formats decoded from identical pixels (6); scaled DCT decode against the resize (90)
+cargo run --release -p fcs-core --example decode_formats -- <image> [reps]
+cargo run --release -p fcs-core --example scaled_decode -- <dir-of-jpegs> [limit]
+
+# Per-image decode and detect, bucketed by resolution, orientation, format and faces (6)
+cargo run --release -p fcs-core --example workload_matrix -- <dir> [more dirs...]
+
+# Warm file reads at batch concurrency (68); PNG encoder settings over exported crops (72)
+cargo run --release -p fcs-core --example io_cost -- <dir> [passes]
+cargo run --release -p fcs-core --example png_bench -- <dir-of-pngs> [limit]
+
+# A threshold edit: detector rebuild against a postprocessing swap (66)
+cargo run --release -p fcs-core --example threshold_edit_cost -- [image] [reps]
+
+# Preview texture build and the oversize clamp's resize (91)
+cargo run --release -p fcs-gui --example preview_texture_cost -- <image> [reps]
+
 # GPU/CPU parity validation (set FCS_STRICT_TESTS=1 to reject missing prerequisites)
 cargo test -p fcs-core gpu_inference_matches_cpu_baseline -- --nocapture
 ```
@@ -900,9 +946,22 @@ candidate. Selective kernels need a compiler/deployment solution and a full-grap
 measurement before adoption. Other subgroup algorithms have not been exhausted.
 
 The standalone [FP16](../fcs-core/examples/shaders/pointwise_f16.wgsl) and
-[subgroup](../fcs-core/examples/shaders/pointwise_subgroup.wgsl) probes and exact
-commands remain in [experimentation.md](../experimentation.md). Neither adds a
-production feature requirement.
+[subgroup](../fcs-core/examples/shaders/pointwise_subgroup.wgsl) probes reproduce
+these; neither adds a production feature requirement. Run them in a fresh
+PowerShell process so the PATH change stays local (adjust the SDK path):
+
+```powershell
+cargo build --release -p fcs-core --example conv2d_experiment
+$env:PATH='C:/Program Files (x86)/Windows Kits/10/bin/10.0.28000.0/x64;' + $env:PATH
+& target/release/examples/conv2d_experiment.exe fcs-core/src/gpu/conv2d.wgsl fcs-core/examples/shaders/pointwise_f16.wgsl 32 8 4 32 8 4 --f16-storage
+& target/release/examples/conv2d_experiment.exe fcs-core/src/gpu/conv2d.wgsl fcs-core/examples/shaders/pointwise_subgroup.wgsl 32 8 4 4 1 1
+```
+
+The subgroup kernel assumes a 32-lane subgroup and is not portable; with this naga
+the native SUBGROUP feature enables the builtins directly and `enable subgroups;` is
+rejected. The DXC regression above was later traced to loop-indexed local arrays and
+removed (41), and both candidates were re-measured without it and rejected again
+(43-46).
 
 ### GPU memory scaled with concurrency, not with images
 
@@ -945,11 +1004,17 @@ Measured on both the 4090 and the Radeon iGPU, because the iGPU is where arithme
   and **fusing depthwise into the following pointwise** (35) costs 2.2-2.6x the separate pair,
   because every pointwise tile recomputes every channel's depthwise value.
 
+- **A 320 first pass** (75, 79), the same weights re-exported at 320, moves landmarks past 35 px
+  more than ten times as often as rejected INT8 wherever its detections are kept -- alone,
+  behind a confidence gate, or refined on crops. As a pure no-face screen it keeps production's
+  detections, but on the reference corpus it is slower on both adapters (0.80x iGPU, 0.61x
+  4090): 86% of images still need the 640 pass.
+
 Closed without a new measurement because an existing one removes the cost they target: buffer
 arenas (23), a host dispatch plan (25), preprocessing-stem fusion (39), two-stage decoding (73)
-and webcam tracking (76). Native runtimes (47) were checked with no change; the smaller-model,
-early-exit and coarse-to-fine items (75, 78, 79) are blocked on a model this repository cannot
-train or re-export.
+and webcam tracking (76). Native runtimes (47) were checked with no change. Smaller models and
+trained early exits (78, 79) are blocked on a training pipeline and labelled data this
+repository does not have.
 
 ### Nested loop parallelisation in `decode_yunet_outputs`
 
@@ -975,9 +1040,10 @@ image that actually contains a face, which is most of them.
 Two further measurements explain why reduced-scale or within-image parallel
 decode was not pursued for these fixtures:
 
-- **The decoder is already fast.** zune-jpeg, via `image`, runs at 390-570
-  Mpx/s on this hardware. The ~21 ms is simply what 10.1 megapixels costs; it is
-  not evidence of avoidable overhead. No faster decoder has been established here.
+- **The decoder was already fast.** zune-jpeg, via `image`, ran at 390-570
+  Mpx/s on this hardware; the ~21 ms is what 10.1 megapixels costs. libjpeg-turbo
+  has since replaced it for JPEG at 1.23x (67), which is the whole of the decoder
+  gain found.
 - **It cannot be parallelised for these files.** Decode is single-threaded —
   identical timings under `RAYON_NUM_THREADS=1` and 32 — and splitting one image
   across threads requires restart markers to give independent entry points into
@@ -1010,54 +1076,54 @@ and a saturating `(x + 0.5) as u8` cast instead, marked with `ponytail:` comment
 
 ---
 
-## Future Opportunities
+## Open questions
 
-**No, the avenues are not exhausted.** This round tested a small set of kernels
-on one GPU/backend/compiler configuration. It did not sweep workgroup sizes,
-implement cooperative workgroup tiling, fuse adjacent layers, or redesign
-readback and frame scheduling. The following is a ranked investigation list,
-not a promise that each idea will win.
+What the experiments left open, each with the ID whose record says why. None is a
+promised saving.
 
-The full [experiment backlog](../experimentation.md#remaining-experiments) assigns
-stable IDs, prerequisites and acceptance checks to 81 further experiments. Start
-with phase measurements (5), then the preliminary readback wait (11); the table
-below is the shorter priority summary.
+- **Other hardware** (10). Everything here is one RTX 4090 and one Ryzen 7950X
+  iGPU. Not measured: Intel, Apple/Metal, discrete AMD, a strong unified-memory
+  part. On the 7950X, ONNX Runtime on the CPU (2.86 ms) beats the iGPU (11.93 ms of
+  inference), and GPU inference stays the default anyway; re-run `cpu_backends`
+  against the iGPU on a mainstream laptop before changing that. DirectML was never
+  measured on an integrated adapter (47).
+- **Cross-adapter output.** The 4090 and the iGPU disagree on 132 of 959 crops
+  although inference fingerprints identically; the likely source, the whole-source
+  route's texture sampling, was not traced (10).
+- **The GUI under contention.** Waiting on a readback's own submission index cut
+  `readback_wait` 24-30% under 32 workers and changed nothing end to end, but the
+  GUI shares its device with the renderer, where a device-wide wait also waits for
+  rendering (16). Device loss and model switching are untested (81).
+- **Long sessions.** Export drift is measured (85); webcam sessions, VRAM pressure,
+  background GPU work, thermals and energy per image are not.
+- **Memory.** Host RSS is ~85 MB per worker and the default worker count follows
+  logical processors, so a many-thread CPU with little RAM is the case to check
+  before any cap (84). Under the in-flight limit the GPU pool still grows with
+  callers, probably from input tensors and uploads acquired before the gate (21).
+  Worker count on hybrid-core CPUs is unmeasured (63).
+- **Cold file I/O.** A cold folder run once took 39.8 s against ~17 s warm, before
+  most of this work, and was never attributed; warm reads are 2.4% of a job (68).
+- **Small remainders.** `dedup_close_centers` on 5000 separated survivors is still
+  14.3 ms, reachable only with NMS at 0 (58); `to_luma8` in `laplacian_variance` is
+  worth ~1% of a folder's CPU (98); the nine non-convolution bind groups are ~7 us
+  (22); max-pool into pointwise fusion was not tried (36); restoring the GUI
+  detection cache with a correct key would save ~60 ms per re-selection (52).
+- **Model research** (74, 75, 78, 79). A smaller or distilled model and trained
+  early exits need a training pipeline and labelled data this repository does not
+  have. Every quality comparison here is against production's own detections, so
+  whether 960-input detections are real faces (74) or a 320-derived landmark is
+  worse than production's (75) needs ground truth. The reference corpus has no
+  image with four or more faces. A no-face screen could pay on a mostly faceless
+  workload on an iGPU-class adapter, measured together with two-stage decoding
+  (73, 79).
+- **Faster cameras.** Webcam GPU residency, fresh-frame scheduling and tracking
+  (53, 65, 76) reopen only for a camera, or several, fast enough to saturate the
+  pipeline (95, 97).
 
-| Priority | Next experiment | Evidence and acceptance condition |
-| --- | --- | --- |
-| 1 | Measure and simplify head readback | `batch_download` still creates 12 staging buffers, submits a second command buffer, waits, starts 12 maps, then waits again. Measure those components; try mapping before the first wait, then pooled/packed staging separately. Require raw-head equality and concurrent-inference safety. |
-| 2 | ~~Sweep workgroup and tile choices~~ -- done, nothing to take | Workgroup shapes (26) and both tile axes (27) were swept. Nothing beats the production 8x8 grid with four pixels and four output channels per thread on the graph as a whole; the one variant that wins any shape, 8 channels, loses the full graph by 23%. Reopen only with a per-shape pipeline, which single-digit microseconds do not justify. |
-| 3 | Reuse inputs/weights across a workgroup or fuse adjacent layers | Cooperative pointwise tiles and depthwise-to-pointwise fusion remain untested. They may save reads and dispatches, but add barriers, storage/register pressure or redundant work. Benchmark one hotspot first; preserve activation boundaries and parity. |
-| 4 | Measure batch and webcam scheduling | Test bounded frames/images in flight and CPU/GPU work overlap against the current path. Preserve per-inference buffer ownership through completion. Report throughput and frame latency separately; more concurrent submissions alone are not a gain. |
-| 5 | Resolve compiler effects, then revisit selective subgroups/precision | Small-layer subgroup gains exist, but DXC regressed the f32 baseline. Test compiler/code-generation and backend variants before introducing optional production kernels. FP16 arithmetic and packed layouts are different, untried candidates with accuracy/deployment costs. |
-| 6 | Reprofile preprocessing, output conversion and command recording | Preprocess-to-inference GPU residency and merged passes already exist. Time the remaining upload, CHW/HWC conversion, sigmoid/decode, uniform and bind-group work. Avoid rebuilding those already-completed optimizations. |
-| 7 | Broaden hardware and model experiments | Measure AMD/Intel, Metal/Vulkan and representative image sets. Smaller detector input, model changes or INT8 require explicit recall/landmark/crop-quality evaluation as well as speed measurements. The current GPU implementation is f32. |
+DirectML, CoreML and hand-written `wide` SIMD results are scoped negatives, not
+proofs that every runtime, compiler or architecture behaves the same way.
 
-For priority 1, inspect [runtime.rs](../fcs-core/src/gpu/runtime.rs), especially
-`run_inference`, `build_decode_tensors` and `batch_download`. The proposed
-single-wait experiment follows wgpu's documented asynchronous mapping behavior:
-a map can wait for preceding GPU work, with callbacks driven by polling. That
-supports a test, not a claim of measured savings. Mapped buffers cannot be used
-by the GPU until unmapped. [wgpu buffer mapping documentation](https://docs.rs/wgpu/latest/wgpu/struct.Buffer.html#mapping-buffers).
-
-For cooperative tiling, [ONNX Runtime's packed WebGPU matmul](https://github.com/microsoft/onnxruntime/blob/main/js/web/lib/wasm/jsep/webgpu/ops/3rd-party/matmul_packed_webgpu.ts)
-provides a concrete primary-source implementation using workgroup tiles and
-barriers. Applying it to our pointwise layers is an unmeasured hypothesis; the
-current four-channel register tile does not exhaust that design space.
-
-Bind-group caching was dismissed after experiment 20 on the grounds that the
-groups reference pooled intermediates "whose identities change between passes".
-That was an assumption and it was wrong -- the pool cycles through about three
-assignments and then settles, giving 730 hits against 110 misses over 25
-inferences. Cached, recording falls 60% and a detection 6% (experiment 22).
-Fixed intermediate buffers would still be a larger architectural change. The old unverified "~20 ms CLI map/poll" estimate
-has been retired; it is not compatible with using today's roughly 3.5 ms
-single-detection result as the reference workload.
-
-DirectML was measured without a win in the historical comparison below; CoreML
-was not established by that comparison. Hand-written `wide` SIMD was tried and
-reverted. These are scoped negative results, not proofs that every runtime,
-compiler or architecture will behave the same way.
+## CPU inference
 
 ### The ONNX Runtime CPU backend (shipped in fcs-core)
 
@@ -1114,16 +1180,14 @@ These are often conflated. They are separate decisions:
   output is a committed `.onnx`, exactly like `face_detection_yunet_2023mar_640.onnx` — nothing
   extra ships and the pure-Rust build story is unchanged.
 
-No gain figure is quoted above because none has been measured here. Three things would decide it,
-and they are listed in the order that kills the idea cheapest:
-
-1. **Does the graph still load?** This model already needed a fixed-shape re-export to satisfy
-   `into_optimized()` at all (see models/README.md). A quantised export may not survive it.
-2. **Are the i8 kernels even on the critical path?** YuNet is a depthwise-separable backbone
-   (53 convs, all carrying a `group` attribute). Depthwise convolution does not lower to GEMM
-   cleanly, so the i8 GEMM kernels above may contribute little.
-3. **What does it cost in recall?** Post-training quantisation on a small detector can lose
-   detections, and the quality thresholds are tuned against f32 behaviour.
+Experiment 77 measured it, cheapest killer first. **Loading:** per-channel QDQ
+needs opset 13 and the bundled export is opset 11, so it needs
+`onnx.version_converter` first -- and without that the loader's error blames the
+runtime rather than the model. **Speed and recall** together: static per-channel
+QDQ calibrated on 100 fixtures and evaluated on the separate 1239-image corpus ran
+at **0.73x** of f32 on ONNX Runtime and moved 111 landmarks past 35 px; see "INT8 is
+slower on the CPU path" above. YuNet is mostly depthwise convolution, which the
+quantised path does not accelerate.
 
 Two further costs are easy to overlook. INT8 gains depend strongly on the CPU: with AVX512-VNNI
 (Zen 4, Cascade Lake+, Alder Lake+) `VPDPBUSD` gives a 4-way i8 dot per lane, but on the shipped
@@ -1132,3 +1196,398 @@ f32 FMA, so the win is cache footprint rather than arithmetic. Benchmarking only
 developer machine will overstate what most users get. And the WGSL GPU inference path gains
 nothing, so an INT8 CPU path diverges numerically from the f32 GPU path that
 `gpu_inference_matches_cpu_baseline` and docs/parity_report.md compare against.
+
+---
+
+## Measurement rules and lessons
+
+### Rules
+
+- **Alternate inside one warm process, with an A/A control first** (`phase_timings --ab`,
+  `concurrent_latency --ab`). Cross-process comparisons of single detections cannot resolve
+  these effects. Readable (7): 0.01 ms of wall time on a small image, ~0.1 ms at 10 MP, one
+  1.024 us timestamp tick per GPU family, ~1 s on a folder job.
+- **Compare outputs before timing.** `readback_parity` fingerprints the *decoded* output --
+  8400 cells x 15 columns = 126000 floats, `0xa116e42f7c2dabdb` -- not the raw heads, so a
+  bit-exact claim covers readback and decode, and a change to what decode writes changes the
+  fingerprint by design.
+- **A faster microbenchmark earns a full-graph trial, not adoption.** Eight channels per
+  pointwise thread won the three largest layers by 15-19% and lost the graph by 23% (27).
+- **Quality-changing candidates are judged against production**, since there is no ground
+  truth: faces lost and gained, landmark shift in source pixels and box IoU, through
+  `resize_quality`, `int8_quality` or `coarse_to_fine`. Since 51 a candidate that moves
+  landmarks past 35 px is rejected. Never weaken a parity test to admit a candidate; where a
+  test had to change what it asserts (36, 37, 96), the entry says why.
+- **Batch wall time swings ~10% run to run and drifts between batches**, so only compare
+  order-alternated pairs from the same batch (60, 63, 72).
+- **A change to a shared cache, a thread-local or the resize path needs a folder run** as well
+  as the test suite: nested rayon is where such changes break, and nothing else nests it (67).
+- **p95 from 30 samples is not a statistic**: it moved 0.89-1.20 ms across five identical
+  processes (7). Quote tails from hundreds of samples.
+- Do not run GPU benchmarks concurrently. State the configuration, including thresholds and
+  resize quality. Record negative results, remove losing production code, and keep the smallest
+  probe that makes the decision reviewable.
+
+### Traps that invalidated earlier measurements
+
+- CPU throughput on this machine moved **1.6x between two builds of identical code**; never
+  compare CPU work across builds (48).
+- The first pipeline built in a process carries ~180 ms of one-off FXC and D3D12 warm-up, so
+  compare shader compile costs within one process (82).
+- `fcs-cli` reads `config/gui_settings.json` from the working directory: the same command found
+  1020 faces from the repository root and 423 elsewhere. Pass `--config` (63).
+- The library's default score threshold is 0.9 and production's is 0.8; 96's first numbers
+  measured the wrong one.
+- `YuNetDetector::new_gpu` pairs GPU inference with the CPU preprocessor, while the CLI and GUI
+  build `with_gpu_preprocessor`; the wrong one inverted 6's first conclusion.
+- Repeating one image understates per-image cost by a quarter to a half (5.48 against 8.40 ms
+  over the corpus), so `phase_timings`' absolute numbers are a floor (6).
+- A cold first folder run looks like a 33% win for whatever ran second, and an unalternated
+  series of six runs decreased monotonically (63). A 20-image subset produced a curve the full
+  corpus inverted (74).
+- Telemetry through `env_logger` locks stderr, and 32 workers then measure the lock (16).
+- `cargo build` does not compile tests -- `cargo clippy --all-targets` and a test run do (71).
+  `cargo build -p fcs-cli --example X` builds the example *instead of* the CLI binary, and the
+  CLI needs `--gpu-env auto` for `WGPU_POWER_PREF` or `WGPU_BACKEND` to reach it (10). A
+  backgrounded `cargo test` reports the shell's exit code (88). `cargo clean -p mozjpeg-sys`
+  does not invalidate its cached build-script output (67).
+- Without NASM on `PATH`, `mozjpeg-sys` builds its scalar fallback with only a warning, ~2.2x
+  slower; CI now installs it and the Windows leg fails without it (67).
+- `preprocess_cost.rs` reports 0.00 ms of GPU preprocessing wherever `upload_pays_for_source`
+  declines, and then names the GPU the winner (48).
+- A rate means something only over the interval the thing ran: 97's first reading counted
+  frames from before live detection was switched on.
+- Back-of-envelope arithmetic pointed the wrong way three times in one round (27, 92, 93), so
+  probe before deciding. And a rejection whose record names its blocker is worth re-running once
+  the blocker goes: 89 re-ran 87 and got 9%.
+
+---
+
+## Experiment index
+
+One entry per ID: what was tried, what it found, and when to reopen where that is known.
+**Kept**, **rejected**, **premise removed** (another result took away the cost it targeted) or
+**blocked**. Sections above carry the full tables for most kept changes. RTX 4090 / D3D12 / FXC
+unless the Radeon iGPU is named; "the corpus" is the 1239-JPEG reference folder (~10.7 GP),
+and "folder" means `fcs-cli --crop` over it.
+
+### First shader round (0-4)
+
+- **0. Measurement tools - kept.** Baseline GPU compute 0.910 ms: pointwise 673.8 us (26
+  dispatches, 74%), depthwise 145.4 (16%), stem 42.0 (4.6%), pool/resize/add 49.1 (5.4%).
+  `gpu_pass_breakdown` reports those families; `conv2d_experiment` A/Bs two WGSL files, checking
+  outputs within `1e-4 + 1e-4 * |ref|` and timing 50 alternated pairs after 20 warm-ups.
+- **1. Pointwise specialisation - kept.** 1x1, unit stride, no padding, one group: A/B/B/A
+  0.909 / 0.673 / 0.672 / 0.910 ms, **-0.237 ms** of GPU.
+- **2. Depthwise input reuse - kept.** Six loads per row feed four outputs: 0.673 / 0.648 /
+  0.646 / 0.674 ms, -0.027 ms.
+- **3. Four-channel pointwise tile - kept.** 0.647 / 0.535 / 0.538 / 0.651 ms, -0.113 ms; 1-3
+  together 0.910 -> 0.536 ms. `conv2d_experiment` needs output coverage `32 8 4` for the tiled
+  shader.
+- **4. FP16 storage and subgroups - rejected.** See "What Did Not Work"; both retried in 43-46
+  once 41 showed the DXC baseline had been handicapped.
+
+### Measurement and controls (5-10)
+
+- **5. Phase timings - kept (measurement).** Eleven timing guards and `phase_timings`. 0.17 MP:
+  detection 1.57 ms; 10 MP: 4.68 ms, 2.65 of it CPU preprocessing (57%). Re-run after 20, 34 and
+  37 with guards on the on-device preprocessor: a small-image detection was 0.841 ms, its two
+  submits 0.055 + 0.093 ms -- 18%, taken up in 92 -- and input allocation and pool acquisition
+  free.
+- **6. Workload matrix - kept (measurement).** `workload_matrix`: detection is 64% of per-image
+  decode plus detection under 1 MP, 44% at 1-4 MP, 27-28% at 4-16 MP and 19% above; orientation
+  and face count matter only through size. On identical 12.2 MP pixels (`decode_formats`) TIFF
+  decodes at 0.77 ms/MP, BMP 1.92, JPEG through `image` 3.92, PNG 5.89 and WebP 9.75, about 3x
+  libjpeg-turbo; not acted on, since the corpus is all JPEG and libwebp would be a new native
+  dependency. Peak memory: 84.
+- **7. Noise floor - kept (measurement).** See Rules. Conditions recorded: High performance power
+  plan, NVIDIA 610.47, not isolated (27 desktop processes holding GPU contexts). The GPU graph
+  was 0.370-0.371 ms over three processes, every family within one tick.
+- **8. Profiled against normal execution - kept (measurement).** `pass_overhead`: a timestamped
+  pass boundary is 0.83 us, so the 61-pass breakdown overstated work by ~51 us (9%). The
+  per-dispatch floor is 1.85 us; small pointwise layers at 11-13 us are latency with no
+  parallelism to hide it.
+- **9. Native CPU timeline.** Done together with 19.
+- **10. A second adapter - kept (routing fix).** The Radeon iGPU (driver 32.0.21043.5001) beside
+  the 4090 (32.0.16.1047), on D3D12 and Vulkan, chosen with `WGPU_POWER_PREF`; identical
+  fingerprint on all four. The iGPU spends 11.35 ms in GPU compute, 92% of `run_on_device`
+  against the 4090's 35%. Deleting the integrated-adapter exemption from the preprocessing cutoff
+  took a 10 MP detection 42.46 -> 14.30 ms and the folder ~54 -> 26.6 s (**2.07x**). See "On an
+  integrated GPU the shader work is the detection" and Open questions.
+
+### Readback and synchronisation (11-18)
+
+- **11. Request maps before the blocking poll - kept (simplicity).** One wait instead of two; the
+  second poll had been 0.003-0.005 ms.
+- **12. Pooled staging buffers - rejected.** Allocation -0.039 ms, `readback_wait` +0.046,
+  detection unchanged.
+- **13. One packed staging buffer - rejected.** Allocation -0.034, wait +0.038. Established that
+  host work between the inference submit and the readback wait is free.
+- **14. Readback copies encoded with inference - rejected.** +0.07 to +0.09 ms: ~0.084 ms of
+  staging work moved in front of the submit and delayed the GPU.
+- **15. Map on submit - rejected on its ceiling.** `readback_map` is 0.001 ms.
+- **16. Wait on the copy's own submission - rejected.** Under 32 workers `readback_wait` p50 went
+  0.229 -> 0.175 ms and p99 18.4 -> 12.9, and throughput from 2 to 32 threads did not move. The
+  map callback is now collected with `recv_timeout`. The GUI case is open.
+- **17. Reuse CPU output storage - half kept.** Branches come straight off the mapped range:
+  -0.011 ms at 0.8 MP, -0.021 at 10 MP. Decoding from the mapping rather than a copy loses: a
+  decode-shaped read is 0.031 ms in the mapping against 0.009 to copy plus 0.020 to read.
+- **18. Staging ring - premise removed.** One process saturates at ~950-1000 detections/s with
+  cross-thread overlap already in place (24). Reopen if that ceiling moves.
+
+### CPU recording and resources (19-25)
+
+- **19 (with 9). Warm CPU profile - kept (one fix).** Per-layer bookkeeping is ~0.9% of CPU and
+  not worth pre-resolving. A `Resizer` built per call re-zeroed an 8.1 MB scratch buffer; one per
+  thread saves 0.1-0.15 ms on large images. That thread-local later panicked with `RefCell
+  already borrowed` under nested rayon, found by 67's folder run and fixed by taking the
+  `Resizer` out for the duration. The `quality` and `speed` Criterion cases are CPU inference.
+- **20. Cache the small-op uniforms - kept.** `create_buffer_init` is 8.1 us, ten times
+  `create_bind_group`: `gpu_record` 0.186 -> 0.103 ms, small-image detection -10%, crops
+  identical.
+- **21. Bound in-flight inferences - kept.** Four per model (`FCS_MAX_IN_FLIGHT`): GPU pool -58
+  to -75% at 16-32 callers, iGPU detections/s +9-14%, iGPU folder -10%, 0 crops differ. See "GPU
+  memory scaled with concurrency".
+- **22. Cache convolution bind groups - kept.** Once dismissed on the assumption that pooled
+  buffers change identity; measured, the pool settles after ~3 inferences (730 hits, 110 misses
+  over 25). Recording -60%, detection -6%, and a test asserts the settled hit rate.
+- **23. Buffer arenas or dynamic offsets - premise removed by 22.** Every settled inference hits
+  all 35 bind groups; recording is 0.028 ms on the 4090 and 0.068 on the iGPU. Reopen if bind-group
+  creation reappears in a profile.
+- **24. Pool and cache contention - answered.** `samply` at saturation shows no pool, cache,
+  workspace or device lock. Plain-thread callers serialise on `single_thread_pool()`, a
+  process-wide one-thread pool that only non-rayon callers under 4 MP reach -- not production.
+  Rayon dispatch peaks at 1061 detections/s at 16 threads, and four processes reach 1259 against
+  one's 994. The limit is the resize.
+- **25. Host dispatch plan - premise removed.** Recording is 0.027-0.028 ms for 41 dispatches,
+  including what a plan would keep. Reopen if `gpu_record` passes ~0.1 ms.
+
+### Shader geometry (26-34)
+
+- **26. Pointwise workgroup shapes - nothing to take.** Nine shapes against 8x8: level or worse on
+  the expensive 160x160 layer, narrow-x shapes 26-69% slower, one reproducible one-tick win on one
+  dispatch.
+- **27. Pixels and channels per thread - local optimum.** One channel per thread is up to 248%
+  slower; eight wins 15-19% on the three largest layers and loses the graph by 23% (0.611 against
+  0.538 ms); eight pixels per thread is 15-108% slower.
+- **28. Constant channel count - rejected.** One tick either way on the 4090, nothing under DXC,
+  and slower under FXC on three of four iGPU layers (+46% at 80x80).
+- **29. Cooperative workgroup tiles - not implementable safely on D3D12.** naga lowers
+  `workgroupBarrier()` to non-synchronising `GroupMemoryBarrier()`. Reopen when naga emits a
+  synchronising barrier for workgroup memory, or for Metal.
+- **30. Prepacked pointwise weights - rejected.** One to three ticks slower on most 4090 layers;
+  8-15% faster only on the iGPU's 40x40 and 20x20 layers.
+- **31. NHWC across a segment - rejected.** Both kernels several times slower on both adapters
+  before any conversion (160x160 pointwise +1063% on the 4090).
+- **32. Depthwise tiles - rejected.** Eight pixels per thread +50-100%; a 4x2 register tile gains a
+  tick or two under FXC and loses 12-34% under DXC on the iGPU.
+- **33. Interior depthwise fast path - rejected.** Slower under FXC; its DXC gain was 41's
+  mechanism, not the bounds checks.
+- **34. Stem tiling - kept.** The stem computed one output channel per thread, gathering the same
+  27 inputs sixteen times; the four-channel tile takes it 42.0 -> 18.4 us and the graph 0.396 ->
+  0.376 ms, bit-exact.
+
+### Graph fusion (35-40)
+
+- **35. Depthwise, ReLU and pointwise in one dispatch - rejected.** 2.2-2.6x the separate pair on
+  both adapters, because each pointwise tile recomputes all 64 depthwise values. Reopen only if a
+  fused kernel can share them without a local array or staged workgroup memory.
+- **36. The neck's upsample-and-add in one dispatch - kept.** -0.012 to -0.017 ms on the 4090,
+  -0.13 to -0.19 on the iGPU; 43 -> 41 dispatches; 0 crops differ. Max-pool into pointwise was
+  not tried.
+- **37. Head branches computed together - kept.** See "Four head branches are one convolution".
+- **38. Head outputs in decode order - premise removed by 55.** No CPU reorder is left.
+- **39. Preprocessing fused into the stem - premise removed.** The whole-source route would
+  resample for every stem tap; the bytes route's phase is 0.18-0.22 ms including an upload fusion
+  keeps, and 92 measured moving that dispatch as a loss. Reopen for a third preprocessing route.
+- **40. Intermediate lifetimes - kept.** The backbone stopped returning two 6.5 MB outputs the neck
+  never reads: GPU pool 7-16% smaller at every concurrency, bit-exact.
+
+### Compilers, backends and precision (41-47)
+
+- **41. The FXC/DXC regression - fixed.** See "The DXC regression was a local array". Found by
+  compiling naga 30.0.1's HLSL with both Windows SDK 10.0.28000.0 compilers.
+- **42. D3D12 against Vulkan - no change.** Identical output. Vulkan costs 35% more GPU compute on
+  the 4090 and 75% more on the iGPU; its adapter comes up in 6-10 ms against 504-807, and its
+  driver cache lets a warm launch reach a first face in 293-354 ms against 732-1215. Vulkan stays
+  excluded on Windows for the Intel ICD crash (80). Reopen for launch-per-image workloads, with
+  evidence that driver is fixed.
+- **43, 44. Subgroups after 41 - rejected.** Channel reduction still wins only the 4090's small
+  layers (-42 to -74%, about 25 us of graph) and is 442-3122% slower on the iGPU; it would also mean
+  shipping DXC. 44's broadcast sharing goes with it. Reopen for hardware where subgroup
+  collectives are cheap and detection binds.
+- **45, 46. FP16 after 41 - rejected.** f16 arithmetic misses the 1e-3 raw-error screen
+  (0.002-0.0068) and is 19-58% slower on the iGPU; f16 storage is 13-50% slower there. 46 was
+  gated on a useful 45.
+- **47. Native runtimes - checked, no change.** CUDA and TensorRT are excluded by product decision
+  (nothing for the user to install); DirectML measured ~9.8 ms against the then 8.2 ms graph and
+  adds ~38 MB; the bundled ONNX Runtime CPU path already beats this iGPU; no CoreML hardware.
+
+### Preprocessing and upload (48-54)
+
+- **48, 49. Threaded source resize - kept.** `fast_image_resize`'s rayon feature above 4 MP (not for
+  Nearest): -0.61 ms at 10 and 22 MP, byte-identical output. There is no redundant source
+  conversion to remove (49). A second pass stopped zeroing the 4.9 MB BGR/CHW buffer, -0.1-0.2 ms.
+  On rayon workers the gate now always threads (88).
+- **50. Upload resized bytes, convert on the GPU - kept.** The 640x640 result goes up as 1.2 MB of
+  bytes and `rgb_to_chw.wgsl` writes the tensor: -0.6 to -1.0 ms on large images, bit-exact. Its
+  test caught a `COPY_BUFFER_ALIGNMENT` panic that 640x640 never hits.
+- **51. Cheaper resize algorithms - rejected.** `SuperSampling` is slower (+0.17 to +1.43 ms);
+  `Interpolation` is 0.7-2.0 ms faster and moves landmarks up to 35.39 px. See "The resize is at
+  its floor".
+- **52. GUI caches - all three dead, deleted.** The detection cache was written and never read and
+  kept up to 50 decoded images alive (~1.3 GB); the other two were never used.
+- **53. Webcam frames on the GPU - premise removed by 95.**
+- **54. Adaptive routing - kept (1.75 MP cutoff).** See "The preprocessing route crosses over at
+  1.75 MP" and "The `Speed` resize setting costs faces".
+
+### Detection output (55-59)
+
+- **55. Output conversion and decode - kept.** Decoding the GPU's channel-major logits directly
+  removed a transpose of all twelve heads: **-0.15 to -0.2 ms**, 11-15% of a small-image detection.
+  `Tensor::from_vec` instead of copies, -0.02 to -0.03 ms. A pixel-major reorder loop measured
+  slower and was reverted.
+- **56. GPU decode - premise removed.** Decode was 0.072-0.082 ms after 55, and 93 cut it to
+  0.014. Reopen for a much larger input or anchor count.
+- **57. Compact survivors before readback - rejected.** See "The head readback is not paying for
+  its bytes".
+- **58. NMS at worst-case counts - kept.** A fixed 32x32 grid over the scene bounds made a tight
+  cluster insert each box into ~640 cells: sizing cells to the mean box took clustered NMS at
+  n=5000 from 23.1 to 0.25 ms, and a bitmap instead of `Vec::remove` took `dedup_close_centers`
+  from 6.1 to 0.009 ms. Output unchanged.
+- **59. Approximate pruning - premise removed with 56.** No time in the stage to trade recall for.
+
+### Batch and webcam scheduling (60-66)
+
+- **60. Worker count - default confirmed.** One worker per logical processor: 7.82 s against 8.90 at
+  16 workers, flat above 32. Reversed 63's answer after per-image CPU fell 2.4x; 84 has the memory
+  price.
+- **61. Producer/consumer pipeline - premise removed.** Rayon already overlaps every stage across
+  images, and the iGPU's contended stage is bounded by 21.
+- **62. True batches - premise removed.** On the iGPU 91.5% of an inference is arithmetic a batch
+  cannot remove; on the 4090 detection (~1000/s) outruns the ~190 images/s a folder supplies.
+- **63. Thread budgets - no change.** At the time 16 workers beat 32 by ~8% (since reversed, 60).
+  Skipping the inner resize threading on rayon workers is 27% slower (15.75 against 21.35 s).
+- **64. GPU submission worker - not built.** The contention it waited for appeared only on the iGPU,
+  and a counting gate on the callers (21) recovered it.
+- **65. Fresh webcam frames - premise removed by 95.** Drain-to-latest already existed.
+- **66. Duplicate preview work - kept.** See "A threshold edit no longer rebuilds the detector".
+
+### Decode, CPU execution and export (67-73)
+
+- **67. JPEG decoders - kept (libjpeg-turbo).** See "Decode, not detection, sets what a folder
+  costs". Its folder validation found 19's `RefCell` regression.
+- **68. File I/O - skipped by its own gate.** Warm reads are 0.17 s of a 7.1 s folder at 32 threads;
+  cold reads could not be measured on this machine.
+- **69. CPU backends - kept (thread default).** ONNX Runtime 7.03 ms p50 against `cpu-graph` 29.70
+  (4.2x; 204.7 against 90.8 images/s), so `Auto` is right. Four intra-op threads: single CPU
+  inference 7.27 -> 4.17 ms, `--no-gpu` folder unchanged.
+- **70. Vectorisation and PGO - nothing to vectorise.** See "Where a folder job's CPU actually goes".
+  PGO was not measured, because removing 4% of CPU (98) moved no wall time.
+- **71. GPU batch cropping - deleted.** See "The biggest saving found is switching cropping off the
+  GPU".
+- **72. Export encoding - no setting change.** PNG `fast` is 16x quicker in isolation but moved the
+  folder 6.90 -> 7.00 s for 14% more bytes; `best` costs 26% of wall time for 2% fewer bytes.
+  Encoding borrows RGBA8 crops instead of cloning them (byte-identical; speed not measurable).
+- **73. Two-stage decoding - premise removed by 90.** The screening decode moves landmarks past
+  35 px wherever it saves time. Reopen with a screening decode whose downscale matches the
+  convolution resize.
+
+### Model and algorithm changes (74-79)
+
+- **74. Input resolution - premise removed at the time.** Only `cpu-graph` could vary the input.
+  Its corpus sweep: 320 -> 907 faces in 7.6 s, 480 -> 1006 in 12.1, 640 -> 1032 in 18.4, 800 ->
+  1041 in 31.4, 960 -> 1070 in 59.1, with no ground truth on whether the extra faces are real.
+  `probe_input_size` now rejects an unrunnable size at construction.
+- **75, 79. A 320 first pass - rejected.** The fixed input was a hardcoded stem and a fixed-shape
+  export, not a retraining problem: the stem now sizes from its input, and
+  `face_detection_yunet_2023mar_320.onnx` is the same weights through `onnxsim` (CI only).
+  `coarse_to_fine` against production's 1130 faces:
+
+| Strategy | Faces lost | Landmarks > 35 px | iGPU | 4090 |
+| --- | ---: | ---: | ---: | ---: |
+| 320 alone | 158 | 1512 of 4860 | 2.54x | 1.23-1.29x |
+| confidence cascade, t 0.3-0.7 | 9-90 | 1269-1477 | 1.48-2.16x | 0.95-1.26x |
+| refine each candidate on a crop, t 0.3-0.7 | 39-102 | 1320-1451 | 1.02-1.20x | 0.48-0.61x |
+| no-face screen, t 0.3-0.7 | 7-71 | 0 | 0.80-0.88x | 0.61-0.67x |
+
+  Keeping any 320-derived landmark fails the 35 px bar at more than ten times INT8's rate. The
+  screen keeps production's detections but still escalates 74-86% of images, and pays only where
+  about 40% (iGPU) or 80% (4090) of images yield no candidate. 105 of 320's 158 losses are faces
+  of 64+ model pixels that it scores under 0.8. Trained screeners stay blocked, as 78.
+
+- **76. Webcam tracking - premise removed by 95 and 97.** Detection fits every frame: 6.89 ms of a
+  69 ms interval in the GUI, 12.2 ms on the iGPU.
+- **77. INT8 - rejected.** See "INT8 is slower on the CPU path, and moves landmarks".
+- **78. Smaller models, pruning, distillation - blocked.** Needs a training pipeline and labelled
+  data.
+
+### Startup, caching and lifetime (80-85)
+
+- **80. Cold start split - answered.** See "Cold start is 900 ms, and model loading is 0.15% of
+  it".
+- **81. Detector built off the GUI's first frame - kept.** First frame 894 -> 737 ms over 24
+  alternated launches, detector usable at the same time; a file dropped during the build no
+  longer reports a missing model. Device loss and model switching are untested.
+- **82. Pipeline caches - kept (one entry point per kernel).** `PIPELINE_CACHE` is Vulkan-only; see
+  "One entry point per kernel halves shader compilation".
+- **83. Cache growth over many input sizes - premise removed.** The pools stay at 44.1 MB (84) and
+  production runs one input size. Since 75 a 320 input is runnable; the bind-group cache clears
+  past 512 entries.
+- **84. Pool retention - no change.** See "Peak memory scales with worker count, and nothing else
+  does".
+- **85. Sustained operation - no drift.** 50 passes in one process (20,000 detections): 14.43 ->
+  14.39 s per pass, no host RSS slope, GPU pool 44.1 MB and identical detections throughout. 15
+  consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
+  warming, not throttling).
+
+### Later findings (86-98)
+
+- **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
+  decode for its crop regardless.
+- **87. Batch profile - no serial bottleneck.** 194.7 s of CPU across 51 threads in ~16 s, the top
+  ten workers within 15%. The quality metric's downscale swap was neutral because it converted
+  RGBA to RGB first (fixed by 88, retried in 89).
+- **88. RGBA crop resize, and the gate's pool hop - kept.** From a rayon worker, "don't thread"
+  meant a cross-registry `install` hop costing ~18% of folder wall time; the gate now threads on
+  workers. With an RGBA `fast_image_resize` path for crops: 9.58 -> 8.17 s.
+- **89. Quality metric through the RGBA resize - kept.** Folder 7.77 -> 7.10 s (9%), crops
+  byte-identical; the JSON report's per-detection `quality_score` moves up to 6% (p95 2%) with no
+  label flips on the corpus.
+- **90. Detect from a scaled JPEG decode - rejected.** See "The source resize is now a third of a
+  folder job".
+- **91. Single-image latency - kept (preview clamp).** A 12 MP detection is 3.39 ms (48% of it the
+  resize) against a 27 ms decode, which closed the GPU-overhead chain for that workload. The
+  clamp for previews over 8192 px used `resize_exact`: 3215 ms against 103 through
+  `fast_image_resize` on a 133 MP image.
+- **92. Preprocessing in the inference pass - rejected.** It saved 60 us of host time, but the
+  preprocess dispatch had been running while the host recorded inference; merged, the wait grew
+  ~43 us and lost four pairs of five. `encode_cost`: an encoder plus pass ~30 us, a submit ~26.
+- **93. Skip decoding cells below the threshold - kept.** See "The decode was three-quarters
+  exponentials".
+- **94. A deadline on GPU waits - kept; its premise was wrong.** Every wait goes through
+  `wait_for_gpu` with a 30 s deadline. The hang behind it was the test harness opening a D3D12
+  device per test on 32 threads, stalling inside the NVIDIA driver; one device per test binary:
+  `fcs-utils` suite 3.8-4.2 -> 1.5 s, 0 hangs in 70 runs.
+- **95. The webcam path - capture-bound, two defects fixed.** See "The webcam loop is
+  capture-bound".
+- **96. Letterboxing - kept.** See the webcam section and "Letterboxing is free".
+- **97. Live webcam detection in the GUI - kept.** See "Live webcam detection".
+- **98. Blit the crop region - kept.** See "Where a folder job's CPU actually goes".
+
+---
+
+## References
+
+Primary sources behind the shader and readback experiments -- technique support, not evidence of
+a speedup in this application:
+
+- ONNX Runtime WebGPU [convolution selection](https://github.com/microsoft/onnxruntime/blob/main/js/web/lib/wasm/jsep/webgpu/ops/conv.ts),
+  [depthwise implementation](https://github.com/microsoft/onnxruntime/blob/main/js/web/lib/wasm/jsep/webgpu/ops/conv-grouped.ts)
+  and [packed matmul](https://github.com/microsoft/onnxruntime/blob/main/js/web/lib/wasm/jsep/webgpu/ops/3rd-party/matmul_packed_webgpu.ts).
+- [Chrome's WebAssembly and WebGPU measurements](https://developer.chrome.com/blog/io24-webassembly-webgpu-2):
+  FP16, subgroup and memory-access gains vary by GPU.
+- wgpu [features](https://wgpu.rs/doc/wgpu/struct.Features.html),
+  [mapping on submit](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit)
+  and [buffer mapping](https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#mapping-buffers).
+- [ONNX Runtime quantization guide](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html).

@@ -1,7 +1,7 @@
 //! GPU timestamp A/B comparison of two WGSL files with the existing conv2d bindings.
 //! cargo run --release -p fcs-core --example conv2d_experiment -- baseline.wgsl candidate.wgsl
 //! Uploads, compilation, validation readback and timestamp resolution are outside timing.
-//! See experimentation.md for tile coverage arguments and optional-feature probes.
+//! See docs/PERFORMANCE.md (experiments 0-4, 26-33, 41-46) for tile coverage and optional-feature probes.
 use std::{path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
