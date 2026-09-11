@@ -22,6 +22,17 @@ fn weight(weights: &GpuWeights, name: &str) -> Result<GpuTensor> {
         .ok_or_else(|| anyhow!("cached weight '{name}' missing"))
 }
 
+/// Width and height of an NCHW tensor.
+fn spatial_dims(tensor: &GpuTensor) -> Result<SpatialDims> {
+    match *tensor.shape().dims() {
+        [_, _, height, width] => Ok(SpatialDims::new(width as u32, height as u32)),
+        ref dims => Err(anyhow!("expected an NCHW tensor, got {dims:?}")),
+    }
+}
+
+/// Sized from the tensors it is given rather than a compiled-in 640, which is what made every
+/// other input size fail at "stage0 conv" (experiments 74 and 75). Everything downstream already
+/// read its sizes from its inputs.
 fn encode_stage0_block(
     encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,
@@ -38,7 +49,7 @@ fn encode_stage0_block(
     let conv_cfg = Conv2dConfig::new(
         1,
         Conv2dChannels::new(3, 16),
-        SpatialDims::new(640, 640),
+        spatial_dims(input)?,
         SpatialDims::new(3, 3),
         SpatialDims::new(2, 2),
         SpatialDims::new(1, 1),
@@ -51,7 +62,7 @@ fn encode_stage0_block(
     let point_cfg = Conv2dConfig::new(
         1,
         Conv2dChannels::new(16, 16),
-        SpatialDims::new(320, 320),
+        spatial_dims(&relu0)?,
         SpatialDims::new(1, 1),
         SpatialDims::new(1, 1),
         SpatialDims::new(0, 0),
@@ -64,7 +75,7 @@ fn encode_stage0_block(
     let depth_cfg = Conv2dConfig::new(
         1,
         Conv2dChannels::new(16, 16),
-        SpatialDims::new(320, 320),
+        spatial_dims(&point)?,
         SpatialDims::new(3, 3),
         SpatialDims::new(1, 1),
         SpatialDims::new(1, 1),

@@ -9,8 +9,6 @@ use fcs_utils::{
 };
 use std::{path::Path, sync::Arc};
 
-const MODEL_PATH: &str = "models/face_detection_yunet_2023mar_640.onnx";
-
 struct FixtureSpec {
     path: &'static str,
     label: &'static str,
@@ -61,16 +59,27 @@ struct Detectors {
 
 #[test]
 fn gpu_inference_matches_cpu_baseline() {
-    let Some(model_path) = model_path(MODEL_PATH).expect("resolve YuNet model") else {
-        eprintln!("skipping GPU parity test (model {MODEL_PATH} missing)");
+    assert_parity("models/face_detection_yunet_2023mar_640.onnx", 640);
+}
+
+/// The WGSL stem was compiled in at 640, so any other size failed at "stage0 conv". This is
+/// what shows it now follows the input (experiment 75).
+#[test]
+fn gpu_inference_matches_cpu_baseline_at_320() {
+    assert_parity("models/face_detection_yunet_2023mar_320.onnx", 320);
+}
+
+fn assert_parity(model: &str, side: u32) {
+    let Some(model_path) = model_path(model).expect("resolve YuNet model") else {
+        eprintln!("skipping GPU parity test (model {model} missing)");
         return;
     };
     let model_path = model_path.as_path();
 
     let preprocess = PreprocessConfig {
         input_size: InputSize {
-            width: 640,
-            height: 640,
+            width: side,
+            height: side,
         },
         ..Default::default()
     };
@@ -81,6 +90,7 @@ fn gpu_inference_matches_cpu_baseline() {
     };
 
     let mut stats = ParityStats::default();
+    let mut faces = 0;
     for fixture in FIXTURES {
         let Ok(image_path) = fixture_path(fixture.path) else {
             eprintln!(
@@ -101,10 +111,16 @@ fn gpu_inference_matches_cpu_baseline() {
             .unwrap_or_else(|e| panic!("GPU detection failed on {}: {e}", fixture.path));
 
         compare_detections(&cpu, &gpu, fixture, &mut stats);
+        faces += cpu.detections.len();
     }
 
+    // Two backends that both find nothing agree perfectly, and prove nothing.
+    assert!(
+        faces > 0,
+        "no fixture produced a detection at {side}x{side}"
+    );
     println!(
-        "GPU parity suite passed on {} fixtures (max score Δ={:.4}, bbox Δ={:.2}px, landmark Δ={:.2}px)",
+        "GPU parity suite passed at {side}x{side} on {} fixtures, {faces} faces (max score Δ={:.4}, bbox Δ={:.2}px, landmark Δ={:.2}px)",
         FIXTURES.len(),
         stats.max_score_delta,
         stats.max_bbox_delta,

@@ -26,6 +26,8 @@ env:
   # Keep these checksums in sync with release.yml.
   YUNET_ORIGINAL_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
   YUNET_640_SHA256: d2c5a887db77802389261b13d2b9f5e1171b9d5787cb315d0add225812ff4d96
+  # CI only: the 320 export is for tests and experiment 75, and release.yml does not ship it.
+  YUNET_320_SHA256: 024177811019bb600bc7205c26b769917a97048fa18519dc79071024fa279c4f
 
 jobs:
   # Generate and verify the models once, then hand them to every platform leg as
@@ -54,12 +56,14 @@ jobs:
           onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
             || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
             || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
+          onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_320.onnx --overwrite-input-shape "1,3,320,320"
 
       - name: Verify model checksums
         uses: ./.github/actions/verify-models
         with:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
+          simplified-320-sha256: ${{ env.YUNET_320_SHA256 }}
 
       - name: Upload models
         uses: actions/upload-artifact@v4

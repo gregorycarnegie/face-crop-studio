@@ -17,6 +17,9 @@ inputs:
   simplified-sha256:
     description: Expected digest of face_detection_yunet_2023mar_640.onnx.
     required: true
+  simplified-320-sha256:
+    description: Expected digest of face_detection_yunet_2023mar_320.onnx. Only CI generates it, so empty skips the check.
+    default: ""
 
 runs:
   using: composite
@@ -27,6 +30,7 @@ runs:
         MODELS_DIR: ${{ inputs.models-dir }}
         ORIGINAL_SHA256: ${{ inputs.original-sha256 }}
         SIMPLIFIED_SHA256: ${{ inputs.simplified-sha256 }}
+        SIMPLIFIED_320_SHA256: ${{ inputs.simplified-320-sha256 }}
       run: |
         set -euo pipefail
         # sha256sum --check needs "<digest>  <path>" lines; build them from the
@@ -35,5 +39,8 @@ runs:
         {
           echo "${ORIGINAL_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar.onnx"
           echo "${SIMPLIFIED_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar_640.onnx"
+          if [ -n "${SIMPLIFIED_320_SHA256}" ]; then
+            echo "${SIMPLIFIED_320_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar_320.onnx"
+          fi
         } > "$sums_file"
         sha256sum --check --strict "$sums_file"

@@ -3,7 +3,7 @@
 //! `input.width` and `input.height` are settings, and nothing rejected values the bundled
 //! model does not accept. A folder run then loaded the model, read every file, and failed each
 //! one separately -- "Got invalid dimensions for input" from ONNX Runtime, "stage0 conv" from
-//! the WGSL graph, whose stage dimensions are compiled in as 640 -- before ending with "all
+//! the WGSL graph, whose stem was then compiled in at 640 -- before ending with "all
 //! detections failed" (experiment 74).
 
 use fcs_core::{InputSize, PostprocessConfig, PreprocessConfig, YuNetDetector};

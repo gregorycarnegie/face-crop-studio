@@ -78,7 +78,7 @@ impl DetectorBackend {
 
         self.run(probe).with_context(|| {
             format!(
-                "this backend rejected a {}x{} input; the bundled YuNet model and the GPU graph are both fixed at 640x640, so check `input.width` and `input.height` in your settings",
+                "this backend rejected a {}x{} input; the bundled YuNet model is fixed at 640x640, so check `input.width` and `input.height` in your settings",
                 input_size.width, input_size.height
             )
         })?;
