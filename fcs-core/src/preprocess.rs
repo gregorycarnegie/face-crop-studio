@@ -126,6 +126,23 @@ where
 ///
 /// * `image` - The dynamic image to process.
 /// * `config` - The configuration for preprocessing.
+///
+/// # Example
+///
+/// ```
+/// use fcs_core::{InputSize, PreprocessConfig, preprocess_dynamic_image};
+/// use image::{DynamicImage, Rgb, RgbImage};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(32, 16, Rgb([10, 20, 30])));
+/// let config = PreprocessConfig { input_size: InputSize::new(32, 32), ..Default::default() };
+/// let prepared = preprocess_dynamic_image(&image, &config)?;
+/// assert_eq!(prepared.tensor.shape(), &[1, 3, 32, 32]);
+/// assert_eq!(prepared.fit.origin, (0, 8)); // Centered vertical letterbox bars.
+/// assert_eq!(prepared.tensor.as_slice()[8 * 32], 30.0); // Blue channel first.
+/// # Ok(())
+/// # }
+/// ```
 pub fn preprocess_dynamic_image(
     image: &DynamicImage,
     config: &PreprocessConfig,

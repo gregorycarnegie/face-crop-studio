@@ -48,11 +48,21 @@ static PRESETS: [CropPreset; 7] = [
     CropPreset::new("Custom", 0, 0, "User-defined custom dimensions"),
 ];
 
+/// Return the built-in crop presets, including the zero-sized `Custom` placeholder.
 pub fn standard_presets() -> &'static [CropPreset] {
     &PRESETS
 }
 
-/// Find a preset by name (case-insensitive). Returns `None` if not found.
+/// Find a preset by name, ignoring case, spaces and punctuation. Returns `None` if not found.
+///
+/// ```
+/// use fcs_core::preset_by_name;
+///
+/// let id_card = preset_by_name("id-card").unwrap();
+/// assert_eq!((id_card.name, id_card.width, id_card.height), ("ID Card", 332, 498));
+/// assert_eq!(preset_by_name("LINKED IN").unwrap().name, "LinkedIn");
+/// assert!(preset_by_name("Poster").is_none());
+/// ```
 pub fn preset_by_name(name: &str) -> Option<CropPreset> {
     let lookup_key = normalize_name(name);
     for p in standard_presets() {

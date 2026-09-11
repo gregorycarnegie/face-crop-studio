@@ -18,6 +18,7 @@ gpu_uniforms!(BackgroundBlurUniforms, 1, {
     mask_size: f32,
 });
 
+/// GPU blending of a sharp foreground and an already-blurred background.
 #[derive(Clone)]
 pub struct GpuBackgroundBlur {
     context: Arc<GpuContext>,
@@ -27,6 +28,7 @@ pub struct GpuBackgroundBlur {
 }
 
 impl GpuBackgroundBlur {
+    /// Create the blending pipeline and pool on an existing GPU context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
 
@@ -52,6 +54,11 @@ impl GpuBackgroundBlur {
         })
     }
 
+    /// Blend matching-size images using a soft central ellipse.
+    ///
+    /// `mask_size` scales the ellipse radii relative to half the image dimensions
+    /// and is clamped to 0.3..=1. The center stays sharp and the outside is blurred.
+    /// Returns RGBA8 or an error for mismatched sizes, allocation, or readback failure.
     pub fn blend(
         &self,
         sharp: &DynamicImage,

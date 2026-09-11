@@ -6,9 +6,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RgbaColor {
+    /// Red channel, from 0 to 255.
     pub red: u8,
+    /// Green channel, from 0 to 255.
     pub green: u8,
+    /// Blue channel, from 0 to 255.
     pub blue: u8,
+    /// Opacity: 0 is transparent and 255 is opaque.
     pub alpha: u8,
 }
 
@@ -96,7 +100,22 @@ pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     (to_byte(r1), to_byte(g1), to_byte(b1))
 }
 
-/// Parse a hexadecimal color string. Accepts `#RGB`, `#RRGGBB`, `#RRGGBBAA`, with or without `#`.
+/// Parse a hexadecimal color string.
+///
+/// Accepts `RGB`, `RGBA`, `RRGGBB` and `RRGGBBAA` digits, optionally prefixed with `#` or
+/// `0x`, ignoring `_` separators and surrounding whitespace. Short forms repeat each digit,
+/// so `#f80` is `#ff8800`. A color without alpha is opaque.
+///
+/// ```
+/// use fcs_utils::{RgbaColor, parse_hex_color};
+///
+/// assert_eq!(parse_hex_color("#f80"), Some(RgbaColor::opaque(0xff, 0x88, 0x00)));
+/// assert_eq!(parse_hex_color("0xFF8800"), parse_hex_color("#f80"));
+/// assert_eq!(parse_hex_color("#f808").map(|c| c.alpha), Some(0x88));
+/// assert_eq!(parse_hex_color(" ff_88_00_80 ").map(|c| c.alpha), Some(0x80));
+/// assert_eq!(parse_hex_color("#12345"), None);
+/// assert_eq!(parse_hex_color("#ggg"), None);
+/// ```
 pub fn parse_hex_color(input: &str) -> Option<RgbaColor> {
     let trimmed = input.trim();
     if trimmed.is_empty() {

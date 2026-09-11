@@ -143,6 +143,43 @@ pub struct Detection {
 /// * `scale_x` - The horizontal scale factor to map coordinates to the original image.
 /// * `scale_y` - The vertical scale factor to map coordinates to the original image.
 /// * `config` - The post-processing parameters.
+///
+/// # Example
+///
+/// Scaling is the only mapping applied. When the input was letterboxed, subtract
+/// [`InputFit::source_offset`](fcs_utils::InputFit::source_offset) afterwards;
+/// [`YuNetDetector`](crate::YuNetDetector) does both. A letterbox fit has one scale for
+/// both axes, so pass it twice.
+///
+/// ```
+/// use fcs_core::{PostprocessConfig, apply_postprocess, tensor::Tensor};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// // A 1000×500 source letterboxed into the 640×640 model input.
+/// let fit = fcs_utils::fit_input((1000, 500), (640, 640))?;
+///
+/// // Rows in model coordinates: x, y, width, height, ten landmark values, score.
+/// let row = |x: f32, y: f32, score: f32| {
+///     let mut r = [0.0; 15];
+///     r[..4].copy_from_slice(&[x, y, 64.0, 64.0]);
+///     r[14] = score;
+///     r
+/// };
+/// let face = row(100.0, 260.0, 0.95);
+/// let weak = row(400.0, 300.0, 0.5); // below the default 0.9 score threshold
+/// let output = Tensor::from_vec(&[2, 15], [face, weak].concat())?;
+///
+/// let detections = apply_postprocess(&output, fit.scale, fit.scale, &PostprocessConfig::default())?;
+/// assert_eq!(detections.len(), 1);
+/// let bbox = detections[0].bbox;
+/// assert_eq!((bbox.x, bbox.width, bbox.height), (156.25, 100.0, 100.0));
+/// assert_eq!(bbox.y, 406.25); // still includes the scaled 160 px letterbox bar
+///
+/// let (_, offset_y) = fit.source_offset();
+/// assert_eq!(bbox.y - offset_y, 156.25); // source pixels
+/// # Ok(())
+/// # }
+/// ```
 pub fn apply_postprocess(
     output: &Tensor,
     scale_x: f32,

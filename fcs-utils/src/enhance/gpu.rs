@@ -242,6 +242,10 @@ impl WgpuEnhancer {
         }
     }
 
+    /// Apply the GPU shape mask and optional edge vignette.
+    ///
+    /// See [`crate::gpu::shape_mask::GpuShapeMask::apply`] for parameter units,
+    /// outline limits, and when `Ok(None)` is returned. GPU errors are propagated.
     pub fn apply_shape_mask_gpu(
         &self,
         image: &DynamicImage,

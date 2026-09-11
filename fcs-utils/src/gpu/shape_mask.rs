@@ -28,6 +28,7 @@ struct ShapeMaskUniforms {
     pub __padding: u32,
 }
 
+/// Reusable GPU pipeline for antialiased crop outlines and edge vignettes.
 #[derive(Clone)]
 pub struct GpuShapeMask {
     context: Arc<GpuContext>,
@@ -37,6 +38,7 @@ pub struct GpuShapeMask {
 }
 
 impl GpuShapeMask {
+    /// Create the shape-mask pipeline and pool on an existing GPU context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
 
@@ -71,6 +73,15 @@ impl GpuShapeMask {
         self.pool.memory_usage()
     }
 
+    /// Mask an image to a crop shape, optionally fading and tinting its edge.
+    ///
+    /// `vignette_softness` is the fade width as a fraction of the shorter image
+    /// side; use 0..=1. `vignette_intensity` is the color blend amount (0..=1);
+    /// alpha coverage is independent of this tint.
+    ///
+    /// Returns `Ok(None)` for rectangles or outlines with fewer than three points.
+    /// Otherwise returns RGBA8, or an error on allocation/readback failure.
+    /// Only the first 512 outline points are used; use the CPU mask for denser outlines.
     pub fn apply(
         &self,
         image: &DynamicImage,

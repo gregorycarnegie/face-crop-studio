@@ -20,6 +20,7 @@ gpu_uniforms!(BlurUniforms, 0, {
     direction: u32,
 });
 
+/// Reusable two-pass Gaussian blur pipeline with pooled GPU buffers.
 #[derive(Clone)]
 pub struct GpuGaussianBlur {
     context: Arc<GpuContext>,
@@ -29,6 +30,7 @@ pub struct GpuGaussianBlur {
 }
 
 impl GpuGaussianBlur {
+    /// Create the blur pipeline and buffer pool on an existing GPU context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
 
@@ -54,6 +56,9 @@ impl GpuGaussianBlur {
         })
     }
 
+    /// Blur an image with a pixel radius rounded up and capped at 12.
+    /// Nonpositive radii return an unchanged clone. Active blurs return RGBA8;
+    /// buffer allocation or readback failures return an error.
     pub fn blur(&self, image: &DynamicImage, radius: f32) -> Result<DynamicImage> {
         let radius = radius.ceil() as i32;
         if radius <= 0 {

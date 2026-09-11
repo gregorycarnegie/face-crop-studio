@@ -25,7 +25,9 @@ use super::tensor::Tensor;
 /// Activation fused into the convolution's epilogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
+    /// Leave the convolution output unchanged.
     None,
+    /// Clamp negative output values to zero.
     Relu,
 }
 
@@ -43,10 +45,13 @@ impl Activation {
 /// Everything a convolution needs beyond its tensors.
 #[derive(Debug, Clone, Copy)]
 pub struct ConvConfig {
+    /// Kernel step in input pixels along both spatial axes; must be nonzero.
     pub stride: usize,
+    /// Number of zero-padding pixels on each side of each spatial axis.
     pub padding: usize,
     /// 1 for a dense convolution, `channels` for depthwise.
     pub groups: usize,
+    /// Activation applied after adding the bias.
     pub activation: Activation,
 }
 
@@ -75,15 +80,25 @@ impl ConvConfig {
 /// Convolution weights, kept as plain data so they can be shared across threads.
 #[derive(Debug, Clone)]
 pub struct ConvWeights {
+    /// Number of output channels.
     pub out_channels: usize,
+    /// Number of input channels consumed by each convolution group.
     pub in_channels_per_group: usize,
+    /// Kernel height in pixels.
     pub kernel_h: usize,
+    /// Kernel width in pixels.
     pub kernel_w: usize,
+    /// Flattened weights in `[output_channel, input_channel_in_group, y, x]` order.
     pub data: Vec<f32>,
+    /// One additive bias per output channel.
     pub bias: Vec<f32>,
 }
 
 impl ConvWeights {
+    /// Wrap convolution weights and biases, checking their lengths against the dimensions.
+    ///
+    /// Returns an error unless `data` has `out_channels * in_channels_per_group *
+    /// kernel_h * kernel_w` elements and `bias` has `out_channels` elements.
     pub fn new(
         out_channels: usize,
         in_channels_per_group: usize,

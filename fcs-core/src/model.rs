@@ -47,20 +47,18 @@ struct CellDecodeInput {
     kps: [f32; 10],
 }
 
-/// Wrapper around the YuNet ONNX runnable model.
+/// CPU inference runtime selection for [`YuNetModel::load_with`].
 ///
-/// This struct handles loading the ONNX graph, preparing it for execution, and running inference.
-/// Which inference runtime to use. `Auto` is what shipping code wants; the
-/// explicit variants exist so the backend-parity test can run both over the
-/// same fixtures, and so a user hitting a bad ONNX Runtime can be told to force
-/// the built-in graph rather than being stuck.
+/// `Auto` prefers ONNX Runtime and falls back to the built-in graph.
+/// Select `CpuGraph` to run without an external runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InferenceBackend {
     /// ONNX Runtime when a compatible library is present, else the built-in
     /// graph.
     #[default]
     Auto,
-    /// ONNX Runtime, failing if no compatible library is present.
+    /// Require a compatible ONNX Runtime library to be present.
+    /// If session creation fails, loading still falls back to the built-in graph.
     OnnxRuntime,
     /// The built-in pure-Rust graph. Needs nothing installed, but knows only
     /// YuNet's topology, so it fails on any other model.
@@ -76,6 +74,10 @@ enum Backend {
     CpuGraph(Box<CpuYuNet>),
 }
 
+/// Loaded YuNet model using ONNX Runtime or the built-in CPU graph.
+///
+/// Load once with [`Self::load`] or [`Self::load_with`], then reuse [`Self::run`].
+/// For the GPU runtime, use [`crate::gpu::GpuYuNet`].
 #[derive(Debug)]
 pub struct YuNetModel {
     backend: Backend,
@@ -197,6 +199,7 @@ impl YuNetModel {
         }
     }
 
+    /// Return the configured model input width and height in pixels.
     pub fn input_size(&self) -> InputSize {
         self.input_size
     }

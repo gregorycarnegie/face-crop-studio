@@ -1,4 +1,39 @@
-//! Common helpers shared across YuNet crates.
+//! Image loading, enhancement, crop shapes, and export helpers.
+//!
+//! These utilities can be used independently of the face detector. Use
+//! [`load_image`] for EXIF-oriented decoding, [`apply_enhancements`] for CPU
+//! image adjustments, and [`save_dynamic_image`] for format and metadata options.
+//! [`config`] contains serializable settings; [`gpu`] provides optional runtime
+//! acceleration on a shared device.
+//!
+//! # Enhance and export
+//!
+//! ```no_run
+//! use std::path::Path;
+//! use fcs_utils::{EnhancementSettings, MetadataContext, OutputOptions,
+//!                 apply_enhancements, load_image, save_dynamic_image};
+//!
+//! # fn main() -> anyhow::Result<()> {
+//! let source = Path::new("portrait.jpg");
+//! let image = load_image(source)?;
+//! let enhanced = apply_enhancements(&image, &EnhancementSettings::default(), None);
+//! let settings = fcs_utils::config::CropSettings::default();
+//! let options = OutputOptions::from_crop_settings(&settings);
+//! let metadata = MetadataContext { source_path: Some(source), ..Default::default() };
+//! save_dynamic_image(&enhanced, Path::new("portrait.png"), &options, &metadata)?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Cargo features
+//!
+//! No features are enabled by default. `webcam` adds camera capture, `raw` adds
+//! camera RAW decoding, and `heic` adds HEIC/HEIF decoding through native libheif.
+//! `fixtures` exposes repository fixture helpers for tests, benches, and examples.
+//! GPU helpers are always compiled; callers decide whether to initialize them
+//! and can use [`GpuAvailability`] to choose a CPU fallback.
+
+#![warn(missing_docs)]
 
 /// Shared color utilities.
 pub mod color;

@@ -1,3 +1,5 @@
+/// Construct a [`StageBlock`](crate::yunet::StageBlock) from stage/block string literals
+/// and explicit depthwise weight/bias initializer names.
 #[macro_export]
 macro_rules! backbone_block {
     ($stage:literal, $conv:literal, $dw:literal, $db:literal) => {
@@ -10,6 +12,8 @@ macro_rules! backbone_block {
     };
 }
 
+/// Construct a neck [`StageBlock`](crate::yunet::StageBlock) from a level string literal
+/// and explicit depthwise weight/bias initializer names.
 #[macro_export]
 macro_rules! neck_block {
     ($idx:literal, $dw:literal, $db:literal) => {
@@ -22,6 +26,8 @@ macro_rules! neck_block {
     };
 }
 
+/// Construct a [`HeadBlock`](crate::yunet::HeadBlock) from branch and level string
+/// literals, such as `"cls"` and `"0"`.
 #[macro_export]
 macro_rules! head_block {
     ($type:literal, $level:literal) => {
@@ -46,6 +52,8 @@ macro_rules! head_block {
     };
 }
 
+/// Construct all four detection branches for a level string literal (`"0"` to `"2"`).
+/// The expansion requires [`head_block!`] to be in scope.
 #[macro_export]
 macro_rules! detection_head {
     ($level:literal) => {

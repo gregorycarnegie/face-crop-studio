@@ -27,6 +27,8 @@ gpu_uniforms!(PixelAdjustUniforms, 2, {
     flags: u32,
 });
 
+/// Reusable GPU pipeline for exposure, brightness, contrast, and saturation.
+/// Other enhancement settings are ignored by this pipeline.
 #[derive(Clone)]
 pub struct GpuPixelAdjust {
     context: Arc<GpuContext>,
@@ -36,6 +38,7 @@ pub struct GpuPixelAdjust {
 }
 
 impl GpuPixelAdjust {
+    /// Create the adjustment pipeline and buffer pool on an existing GPU context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
 
@@ -69,10 +72,14 @@ impl GpuPixelAdjust {
         self.pool.memory_usage()
     }
 
+    /// Return whether exposure, brightness, contrast, or saturation differs from neutral.
     pub fn needs_adjustment(settings: &EnhancementSettings) -> bool {
         Self::activity(settings).has_any()
     }
 
+    /// Apply active pixel adjustments and return an RGBA8 image.
+    /// Returns an unchanged clone if no adjustment is active, and an error if
+    /// buffer allocation or readback fails.
     pub fn apply(
         &self,
         image: &DynamicImage,

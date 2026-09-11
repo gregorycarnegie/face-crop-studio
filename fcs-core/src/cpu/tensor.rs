@@ -51,18 +51,22 @@ impl Tensor {
         }
     }
 
+    /// Return the number of batch items.
     pub fn batch(&self) -> usize {
         self.batch
     }
 
+    /// Return the number of channels per batch item.
     pub fn channels(&self) -> usize {
         self.channels
     }
 
+    /// Return the number of rows in each channel plane.
     pub fn height(&self) -> usize {
         self.height
     }
 
+    /// Return the number of columns in each channel plane.
     pub fn width(&self) -> usize {
         self.width
     }
@@ -72,18 +76,22 @@ impl Tensor {
         self.height * self.width
     }
 
+    /// Return dimensions in `[batch, channels, height, width]` order.
     pub fn dims(&self) -> [usize; 4] {
         [self.batch, self.channels, self.height, self.width]
     }
 
+    /// Borrow the contiguous NCHW data buffer.
     pub fn data(&self) -> &[f32] {
         &self.data
     }
 
+    /// Mutably borrow the contiguous NCHW data buffer without changing its shape.
     pub fn data_mut(&mut self) -> &mut [f32] {
         &mut self.data
     }
 
+    /// Consume the tensor and return its contiguous NCHW data buffer.
     pub fn into_data(self) -> Vec<f32> {
         self.data
     }

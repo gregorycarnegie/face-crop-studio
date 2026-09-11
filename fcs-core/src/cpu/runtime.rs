@@ -30,6 +30,7 @@ impl CpuYuNet {
         })
     }
 
+    /// Return the configured model input width and height in pixels.
     pub fn input_size(&self) -> InputSize {
         self.input_size
     }

@@ -76,9 +76,7 @@ impl DetectionSettings {
     }
 }
 
-/// Inference input resolution in pixels (width x height).
-///
-/// The input image will be resized to these dimensions before being passed to the model.
+/// Filter preference when resizing images for inference.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ResizeQuality {
@@ -96,6 +94,7 @@ pub enum ResizeQuality {
 }
 
 impl ResizeQuality {
+    /// Return the display label (`"Quality"` or `"Speed"`).
     pub const fn as_label(self) -> &'static str {
         match self {
             ResizeQuality::Quality => "Quality",
@@ -131,10 +130,14 @@ impl FromStr for ResizeQuality {
     }
 }
 
+/// Model input dimensions and the resize filter preference.
+/// Defaults to 640 by 640 pixels with quality resizing.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct InputDimensions {
+    /// Target model-input width in pixels.
     pub width: u32,
+    /// Target model-input height in pixels.
     pub height: u32,
     /// Choose between quality-focused or speed-focused resizing.
     pub resize_quality: ResizeQuality,
@@ -305,9 +308,12 @@ impl Default for CropSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MetadataMode {
+    /// Copy supported source EXIF metadata and optionally add configured custom metadata.
     #[default]
     Preserve,
+    /// Omit source and custom metadata from the encoded image.
     Strip,
+    /// Write configured custom metadata without copying source EXIF.
     Custom,
 }
 

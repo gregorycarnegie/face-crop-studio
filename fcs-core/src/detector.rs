@@ -18,15 +18,15 @@ use std::{path::Path, sync::Arc};
 
 /// Result of running YuNet on an image.
 ///
-/// Contains the final list of detections along with metadata to map them
-/// back to the original image's coordinate space.
+/// Contains final detections in original-image pixels and preprocessing metadata.
+/// Scale and letterbox correction have already been applied to the detections.
 #[derive(Debug)]
 pub struct DetectionOutput {
-    /// A list of detected faces.
+    /// Detected faces in original-image pixels, after filtering and suppression.
     pub detections: Vec<Detection>,
-    /// The horizontal scale factor to convert detection coordinates to the original image space.
+    /// Horizontal model-to-source scale used during postprocessing; do not apply it again.
     pub scale_x: f32,
-    /// The vertical scale factor to convert detection coordinates to the original image space.
+    /// Vertical model-to-source scale used during postprocessing; do not apply it again.
     pub scale_y: f32,
     /// The original dimensions of the input image.
     pub original_size: (u32, u32),
@@ -292,6 +292,7 @@ impl YuNetDetector {
         }
     }
 
+    /// Return the score-filtering and non-maximum-suppression configuration.
     pub fn postprocess_config(&self) -> &PostprocessConfig {
         &self.postprocess
     }

@@ -23,24 +23,33 @@ pub const SHAPE_MASK_WGSL: &str = include_str!("shape_mask.wgsl");
 /// Histogram equalization shader module.
 pub const HIST_EQUALIZE_WGSL: &str = include_str!("hist_equalize.wgsl");
 
+/// GPU exposure, brightness, contrast, and saturation adjustments.
 pub mod pixel_adjust;
 pub use pixel_adjust::GpuPixelAdjust;
+/// Separable Gaussian blur on the GPU.
 pub mod gaussian_blur;
 pub use gaussian_blur::GpuGaussianBlur;
+/// Edge-preserving bilateral smoothing on the GPU.
 pub mod bilateral_filter;
 pub use bilateral_filter::GpuBilateralFilter;
+/// Blending sharp and blurred images with a central elliptical mask.
 pub mod background_blur;
 pub use background_blur::GpuBackgroundBlur;
+/// GPU red-eye correction and optional eye regions.
 pub mod red_eye;
 pub use red_eye::{GpuRedEyeRemoval, RedEye};
+/// GPU crop-shape masking and edge vignettes.
 pub mod shape_mask;
 pub use shape_mask::GpuShapeMask;
+/// Per-channel histogram equalization on the GPU.
 pub mod hist_equalize;
 pub use hist_equalize::GpuHistogramEqualizer;
+/// Reusable GPU buffer allocations and execution scopes.
 pub mod buffer_pool;
 pub use buffer_pool::{ExecutionScope, GpuBufferPool};
 pub mod profiler;
 pub use profiler::{GpuProfiler, PassTiming, total_by_label};
+/// Platform-specific estimates of available video memory.
 pub mod memory;
 pub use memory::get_available_vram;
 #[cfg(test)]
@@ -108,8 +117,10 @@ fn wait_error(
     }
 }
 
+/// Human-readable summary of resources tracked by the GPU instance.
 #[derive(Debug, Clone)]
 pub struct GpuReport {
+    /// Formatted resource report for diagnostics.
     pub summary: String,
 }
 
@@ -220,9 +231,15 @@ pub enum GpuAvailability {
     /// GPU resources are ready to use.
     Available(Arc<GpuContext>),
     /// GPU code path has been disabled by configuration (CLI flag, user choice, etc.).
-    Disabled { reason: String },
+    Disabled {
+        /// Human-readable explanation of why GPU use was disabled.
+        reason: String,
+    },
     /// GPU initialization failed; callers should fall back to CPU.
-    Unavailable { error: GpuInitError },
+    Unavailable {
+        /// Initialization failure that prompted CPU fallback.
+        error: GpuInitError,
+    },
 }
 
 impl GpuAvailability {
@@ -685,6 +702,15 @@ impl GpuContext {
 ///
 /// Each returned element stores the four 8-bit color channels in the order
 /// `R | G << 8 | B << 16 | A << 24`.
+///
+/// ```
+/// use fcs_utils::gpu::{pack_rgba_pixels, unpack_rgba_pixels};
+///
+/// let rgba = [0x11, 0x22, 0x33, 0xff];
+/// let packed = pack_rgba_pixels(&rgba);
+/// assert_eq!(packed, [0xff33_2211]);
+/// assert_eq!(unpack_rgba_pixels(&packed), rgba);
+/// ```
 pub fn pack_rgba_pixels(bytes: &[u8]) -> Vec<u32> {
     debug_assert!(
         bytes.len().is_multiple_of(4),
@@ -710,21 +736,29 @@ pub fn unpack_rgba_pixels(packed: &[u32]) -> Vec<u8> {
 /// Tracks GPU initialization failures and reasons for CPU fallback.
 #[derive(Debug, Error)]
 pub enum GpuInitError {
+    /// No adapter could be obtained from the requested backends.
     #[error("GPU adapter request failed for {backends:?}: {source}")]
     Adapter {
+        /// Backends searched for an adapter.
         backends: Backends,
+        /// Underlying adapter-request failure.
         #[source]
         source: RequestAdapterError,
     },
+    /// The selected adapter does not support every required feature.
     #[error(
         "GPU adapter missing required features (requested={requested:?}, supported={supported:?})"
     )]
     MissingFeatures {
+        /// Features required by the caller.
         requested: Features,
+        /// Features advertised by the adapter.
         supported: Features,
     },
+    /// Creating the logical GPU device failed.
     #[error("GPU device creation failed: {0}")]
     Device(#[from] RequestDeviceError),
+    /// GPU use was disabled by configuration or the environment.
     #[error("GPU acceleration disabled")]
     Disabled,
 }

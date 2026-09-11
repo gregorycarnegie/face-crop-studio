@@ -82,6 +82,9 @@ impl Drop for InFlightSlot<'_> {
     }
 }
 
+/// Reusable YuNet GPU runtime with resident weights and pooled working buffers.
+///
+/// Use [`Self::with_context`] to share a device with GPU preprocessing.
 #[derive(Debug)]
 pub struct GpuYuNet {
     ops: Arc<GpuInferenceOps>,
@@ -92,6 +95,8 @@ pub struct GpuYuNet {
 }
 
 impl GpuYuNet {
+    /// Initialize a GPU context and load YuNet weights for the configured input size.
+    /// Returns an error if GPU initialization, model loading, or pipeline setup fails.
     pub fn new<P: AsRef<Path>>(model_path: P, input_size: InputSize) -> Result<Self> {
         let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
             GpuAvailability::Available(ctx) => ctx,
@@ -145,6 +150,12 @@ impl GpuYuNet {
         })
     }
 
+    /// Upload a preprocessed BGR NCHW tensor, run inference, and download decoded rows.
+    ///
+    /// The input must match `[1, 3, input_height, input_width]`. The result is
+    /// `[N, 15]` in model-input coordinates, as for [`crate::YuNetModel::run`],
+    /// before score filtering and non-maximum suppression. Returns an error on
+    /// incompatible input, GPU execution, or readback failure.
     pub fn run(&self, tensor: Tensor) -> Result<Tensor> {
         let dims = tensor.shape().to_vec();
         let data = tensor.as_slice();
@@ -284,6 +295,7 @@ impl GpuYuNet {
         graph::encode_neck_and_heads(encoder, &self.ops, &self.weights, features)
     }
 
+    /// Return the number of bytes tracked by the inference buffer pool.
     pub fn memory_usage(&self) -> u64 {
         self.ops.memory_usage()
     }

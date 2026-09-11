@@ -300,8 +300,11 @@ fn to_hwc(tensor: &Tensor, apply_sigmoid: bool) -> Vec<f32> {
 
 /// One head output, ready to become a `[rows, channels]` tensor.
 pub struct HeadOutput {
+    /// Number of spatial positions (`height * width`) in this feature level.
     pub rows: usize,
+    /// Values per position: 1 for cls/obj, 4 for boxes, or 10 for landmarks.
     pub channels: usize,
+    /// Row-major `[rows, channels]` values; cls/obj values already have sigmoid applied.
     pub data: Vec<f32>,
 }
 

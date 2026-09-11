@@ -33,9 +33,9 @@ description = "Face Crop Studio — pure Rust face detection and cropping."
 # `lints.workspace = true`.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
-# `missing_docs` is deliberately off: it reports 610 items across the workspace,
-# which under CI's `-D warnings` is a hard failure and otherwise just buries real
-# diagnostics. Worth revisiting per-crate once a crate is actually fully documented.
+# `missing_docs` is enabled in fcs-core and fcs-utils via crate attributes.
+# Keep it per-crate until the remaining workspace crates are documented;
+# CI's `-D warnings` enforces coverage for the opted-in libraries.
 
 [workspace.lints.clippy]
 # priority -1 so individual lint overrides added later win over the group.
@@ -57,11 +57,11 @@ thiserror = "2.0.20"
 # CLI and desktop UI
 arboard = "3.6.1"
 clap = { version = "4.6.6", features = ["derive"] }
-eframe = { version = "0.36.1", features = ["wgpu"] }
-egui = "0.36.1"
-egui_extras = "0.36.1"
+eframe = { version = "0.36.2", features = ["wgpu"] }
+egui = "0.36.2"
+egui_extras = "0.36.2"
 # Test-only harness that drives a real egui app. Kept in lockstep with egui.
-egui_kittest = "0.36.1"
+egui_kittest = "0.36.2"
 rfd = "0.17.2"
 # Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
 # APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
@@ -104,7 +104,7 @@ tiny-skia = "0.12.0"
 # Machine learning and numeric processing
 bytemuck = { version = "1.25.2", features = ["derive"] }
 prost = "0.14.4"
-tract-onnx = "0.23.6"
+tract-onnx = "0.23.7"
 # Dynamic loading of the ONNX Runtime library, used by fcs-ort.
 libloading = "0.9.0"
 

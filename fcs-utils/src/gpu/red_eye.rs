@@ -19,15 +19,21 @@ gpu_uniforms!(RedEyeUniforms, 3, {
     eye_count: u32,
 });
 
+/// Circular correction region in image pixels, with a shader-compatible layout.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct RedEye {
+    /// Horizontal eye-center coordinate in pixels from the image's left edge.
     pub x: f32,
+    /// Vertical eye-center coordinate in pixels from the image's top edge.
     pub y: f32,
+    /// Radius of the correction region in pixels.
     pub radius: f32,
+    /// Unused shader-alignment padding; initialize to 0.0.
     pub _pad: f32,
 }
 
+/// Reusable GPU pipeline that reduces excessive red in eye regions.
 #[derive(Clone)]
 pub struct GpuRedEyeRemoval {
     context: Arc<GpuContext>,
@@ -37,6 +43,7 @@ pub struct GpuRedEyeRemoval {
 }
 
 impl GpuRedEyeRemoval {
+    /// Create the red-eye pipeline and pool on an existing GPU context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
 
@@ -71,6 +78,12 @@ impl GpuRedEyeRemoval {
         self.pool.memory_usage()
     }
 
+    /// Reduce red relative to the average green/blue intensity.
+    ///
+    /// `threshold` controls the red-to-green/blue ratio that triggers correction.
+    /// `eyes` restricts correction to pixel-space circles; `None` or an empty
+    /// slice processes the whole image. Returns RGBA8 (an unchanged clone for
+    /// an empty image), or an error on allocation or readback failure.
     pub fn apply(
         &self,
         image: &DynamicImage,

@@ -51,18 +51,22 @@ impl OnnxInitializerMap {
             .with_context(|| format!("initializer '{name}' not loaded"))
     }
 
+    /// Return the number of loaded initializer tensors.
     pub fn len(&self) -> usize {
         self.tensors.len()
     }
 
+    /// Return whether no initializer tensors were loaded.
     pub fn is_empty(&self) -> bool {
         self.tensors.is_empty()
     }
 
+    /// Iterate over loaded tensors in unspecified order.
     pub fn values(&self) -> impl Iterator<Item = &OnnxTensor> {
         self.tensors.values()
     }
 
+    /// Consume the loader and return its initializer-name-to-tensor map.
     pub fn into_map(self) -> HashMap<String, OnnxTensor> {
         self.tensors
     }

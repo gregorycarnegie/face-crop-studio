@@ -7,12 +7,22 @@ use std::{
 use crate::gpu::GpuContext;
 use thiserror::Error;
 
+/// Failure to acquire a buffer from a GPU pool.
 #[derive(Debug, Error)]
 pub enum BufferPoolError {
+    /// A new allocation would exceed the configured pool budget after clearing idle buffers.
     #[error(
         "GPU memory limit exceeded (allocation size: {size}, current usage: {usage}, limit: {limit})"
     )]
-    MemoryLimitExceeded { size: u64, usage: u64, limit: u64 },
+    MemoryLimitExceeded {
+        /// Requested allocation size in bytes.
+        size: u64,
+        /// Bytes tracked by the pool after clearing idle buffers.
+        usage: u64,
+        /// Configured total allocation budget in bytes.
+        limit: u64,
+    },
+    /// A GPU buffer allocation failed with the supplied diagnostic.
     #[error("Failed to create GPU buffer: {0}")]
     AllocationFailed(String),
 }
@@ -39,9 +49,6 @@ thread_local! {
     static ACTIVE_SCOPE: std::cell::Cell<Option<(usize, u64)>> = const { std::cell::Cell::new(None) };
 }
 
-/// Best-fit pool for `wgpu::Buffer` allocations organized by usage flags.
-/// Buffers are grouped by usage to improve search performance and avoid
-/// iterating through incompatible buffers.
 /// Ceiling on the bytes held in `idle` when the pool has no explicit `max_memory`.
 ///
 /// Without a bound the pool only ever grows: `take_best_fit` needs a buffer at least as large as
@@ -56,6 +63,10 @@ thread_local! {
 /// slack in practice.
 const DEFAULT_MAX_IDLE_BYTES: u64 = 512 * 1024 * 1024;
 
+/// Best-fit GPU buffer pool, grouped by usage flags.
+///
+/// Return acquired buffers with [`Self::recycle`]. For concurrent encoding,
+/// keep an [`Self::execution_scope`] alive until the submitted work completes.
 pub struct GpuBufferPool {
     context: Arc<GpuContext>,
     idle: Mutex<HashMap<wgpu::BufferUsages, Vec<BufferEntry>>>,
@@ -72,6 +83,9 @@ pub struct GpuBufferPool {
 }
 
 impl GpuBufferPool {
+    /// Create a pool with an optional total allocation budget in bytes.
+    /// With `None`, total allocation is uncapped but retained idle buffers are
+    /// limited to 512 MiB. Use [`Self::with_idle_limit`] to tune idle retention.
     pub fn new(context: Arc<GpuContext>, max_memory: Option<u64>) -> Self {
         Self {
             context,
@@ -161,6 +175,15 @@ impl GpuBufferPool {
         self.evict_to_cap();
     }
 
+    /// Reuse a matching buffer of at least `size` bytes, or allocate one.
+    ///
+    /// The buffer has the requested usage flags; reused contents are not cleared.
+    /// Return it with [`Self::recycle`] when safe to reuse. Returns an error if a
+    /// new allocation would exceed the memory budget after idle buffers are cleared.
+    ///
+    /// # Panics
+    ///
+    /// Invalid descriptors or device allocation failures may panic through wgpu.
     pub fn acquire(
         &self,
         size: u64,
@@ -284,6 +307,7 @@ impl GpuBufferPool {
         }
     }
 
+    /// Return the number of idle buffers, excluding buffers parked in execution scopes.
     pub fn available(&self) -> usize {
         self.idle
             .lock()

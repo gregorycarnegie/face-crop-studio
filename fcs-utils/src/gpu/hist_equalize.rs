@@ -20,6 +20,7 @@ gpu_uniforms!(LutUniforms, 3, {
     pixel_count: u32,
 });
 
+/// Reusable GPU histogram equalizer with independent red, green, and blue lookup tables.
 #[derive(Clone)]
 pub struct GpuHistogramEqualizer {
     context: Arc<GpuContext>,
@@ -41,6 +42,7 @@ fn hist_readback_usage() -> wgpu::BufferUsages {
 }
 
 impl GpuHistogramEqualizer {
+    /// Create histogram, lookup-table, and application pipelines on an existing context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
         // Panics if WGSL compilation fails; the label appears in the panic message.
@@ -140,6 +142,9 @@ impl GpuHistogramEqualizer {
         self.pool.memory_usage()
     }
 
+    /// Equalize each RGB channel's histogram, preserving alpha.
+    /// Returns RGBA8 (an unchanged clone for an empty image), or an error on
+    /// buffer allocation or GPU readback failure.
     pub fn equalize(&self, image: &DynamicImage) -> Result<DynamicImage> {
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();

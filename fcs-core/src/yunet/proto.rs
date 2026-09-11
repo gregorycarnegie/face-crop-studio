@@ -14,6 +14,7 @@ use prost::Message;
 /// `onnx.ModelProto`, reduced to the graph.
 #[derive(Clone, PartialEq, Message)]
 pub struct ModelProto {
+    /// The model graph, absent if the protobuf contains no graph field.
     #[prost(message, optional, tag = "7")]
     pub graph: Option<GraphProto>,
 }
@@ -21,6 +22,7 @@ pub struct ModelProto {
 /// `onnx.GraphProto`, reduced to the initializers (the weights).
 #[derive(Clone, PartialEq, Message)]
 pub struct GraphProto {
+    /// Constant tensors stored in the graph.
     #[prost(message, repeated, tag = "5")]
     pub initializer: Vec<TensorProto>,
 }
@@ -28,13 +30,16 @@ pub struct GraphProto {
 /// `onnx.TensorProto`, reduced to what a float initializer needs.
 #[derive(Clone, PartialEq, Message)]
 pub struct TensorProto {
+    /// Tensor dimensions in ONNX axis order.
     #[prost(int64, repeated, tag = "1")]
     pub dims: Vec<i64>,
+    /// ONNX element-type identifier; float initializers use [`DATA_TYPE_FLOAT`].
     #[prost(int32, tag = "2")]
     pub data_type: i32,
     /// Set when the exporter stored floats individually rather than packed.
     #[prost(float, repeated, tag = "4")]
     pub float_data: Vec<f32>,
+    /// Initializer name used by graph nodes to reference this tensor.
     #[prost(string, tag = "8")]
     pub name: String,
     /// The usual payload: little-endian f32 bytes.

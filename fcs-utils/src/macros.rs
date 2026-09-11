@@ -7,8 +7,11 @@
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use fcs_utils::storage_buffer_entry;
+///
 /// let entry = storage_buffer_entry!(0, read_only);
+/// assert_eq!(entry.binding, 0);
 /// ```
 #[macro_export]
 macro_rules! storage_buffer_entry {
@@ -42,8 +45,11 @@ macro_rules! storage_buffer_entry {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use fcs_utils::uniform_buffer_entry;
+///
 /// let entry = uniform_buffer_entry!(2);
+/// assert_eq!(entry.binding, 2);
 /// ```
 #[macro_export]
 macro_rules! uniform_buffer_entry {
@@ -73,19 +79,21 @@ macro_rules! uniform_buffer_entry {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use fcs_utils::{storage_buffer_entry, uniform_buffer_entry, create_gpu_pipeline};
+/// ```no_run
+/// use fcs_utils::{create_gpu_pipeline, storage_buffer_entry, uniform_buffer_entry};
 ///
-/// let (pipeline, bind_group_layout) = create_gpu_pipeline!(
-///     device,
-///     "my_shader",
-///     include_str!("shaders/my_shader.wgsl"),
-///     [
-///         storage_buffer_entry!(0, read_only),
-///         storage_buffer_entry!(1, read_write),
-///         uniform_buffer_entry!(2),
-///     ]
-/// );
+/// fn build(device: &wgpu::Device) -> (wgpu::ComputePipeline, wgpu::BindGroupLayout) {
+///     create_gpu_pipeline!(
+///         device,
+///         "my_shader",
+///         "@compute @workgroup_size(1) fn main() {}",
+///         [
+///             storage_buffer_entry!(0, read_only),
+///             storage_buffer_entry!(1, read_write),
+///             uniform_buffer_entry!(2),
+///         ]
+///     )
+/// }
 /// ```
 // Pipeline creation panics if the shader fails to compile.
 // The label (e.g. "bilateral_filter.wgsl shader") is included in the wgpu panic
@@ -141,15 +149,18 @@ macro_rules! create_gpu_pipeline {
 ///
 /// # Example
 ///
-/// ```ignore
+/// The length is a count of `u32` pixels, not bytes.
+///
+/// ```no_run
 /// use fcs_utils::gpu_readback;
 ///
-/// let bytes = gpu_readback!(
-///     readback_buffer,
-///     device,
-///     expected_byte_len,
-///     "gaussian blur"
-/// )?;
+/// fn read_pixels(
+///     readback: &wgpu::Buffer,
+///     device: &wgpu::Device,
+///     pixel_count: usize,
+/// ) -> anyhow::Result<Vec<u32>> {
+///     gpu_readback!(readback, device, pixel_count, "gaussian blur")
+/// }
 /// ```
 #[macro_export]
 macro_rules! gpu_readback {
@@ -220,15 +231,16 @@ macro_rules! gpu_readback {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use fcs_utils::gpu_uniforms;
 ///
+/// // 3 fields are 12 bytes, so 1 padding field reaches 16.
 /// gpu_uniforms!(MyUniforms, 1, {
 ///     width: u32,
 ///     height: u32,
 ///     radius: f32,
 /// });
-/// // padding = 1 because (3 fields * 4 bytes = 12 bytes, need 4 more to reach 16)
+/// assert_eq!(size_of::<MyUniforms>(), 16);
 /// ```
 #[macro_export]
 macro_rules! gpu_uniforms {

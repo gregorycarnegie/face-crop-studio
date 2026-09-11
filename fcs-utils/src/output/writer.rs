@@ -20,6 +20,19 @@ use std::{
 };
 
 /// Save an image using the provided options and metadata context.
+///
+/// Creates missing parent directories and overwrites an existing destination.
+/// A recognized extension selects the format when `options.auto_detect` is true;
+/// otherwise `options.format` is used, with PNG as the fallback.
+///
+/// Source EXIF copying supports PNG-to-PNG and JPEG-to-JPEG. Custom metadata
+/// is embedded for PNG and JPEG only. WebP encoding is always lossless;
+/// `options.webp_quality` currently has no effect.
+///
+/// # Errors
+///
+/// Returns an error on directory creation, encoding, metadata serialization, or
+/// file creation/write failure. Writing is not atomic.
 pub fn save_dynamic_image(
     image: &DynamicImage,
     destination: &Path,
@@ -113,7 +126,15 @@ pub(super) fn determine_format(path: &Path, options: &OutputOptions) -> ImageFor
     }
 }
 
-/// Append a suffix to a filename, preserving the existing extension.
+/// Append a suffix to a filename, before its last extension.
+///
+/// ```
+/// use fcs_utils::append_suffix_to_filename;
+///
+/// assert_eq!(append_suffix_to_filename("face.png", "_lowq"), "face_lowq.png");
+/// assert_eq!(append_suffix_to_filename("face", "_lowq"), "face_lowq");
+/// assert_eq!(append_suffix_to_filename("scan.tar.gz", "_1"), "scan.tar_1.gz");
+/// ```
 pub fn append_suffix_to_filename(name: &str, suffix: &str) -> String {
     if suffix.is_empty() {
         return name.to_string();

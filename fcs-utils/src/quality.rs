@@ -26,13 +26,27 @@ const QUALITY_MAX_DIM: u32 = 512;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Quality {
+    /// Laplacian variance at or below [`QUALITY_MEDIUM_THRESHOLD`] (also used for NaN).
     Low,
+    /// Laplacian variance above [`QUALITY_MEDIUM_THRESHOLD`] and at or below [`QUALITY_HIGH_THRESHOLD`].
     Medium,
+    /// Laplacian variance above [`QUALITY_HIGH_THRESHOLD`].
     High,
 }
 
 impl Quality {
     /// Map a Laplacian variance score into a `Quality` bucket.
+    ///
+    /// A score exactly on a threshold falls in the lower bucket.
+    ///
+    /// ```
+    /// use fcs_utils::quality::{QUALITY_HIGH_THRESHOLD, QUALITY_MEDIUM_THRESHOLD, Quality};
+    ///
+    /// assert_eq!(Quality::from_variance(QUALITY_MEDIUM_THRESHOLD), Quality::Low);
+    /// assert_eq!(Quality::from_variance(QUALITY_HIGH_THRESHOLD), Quality::Medium);
+    /// assert_eq!(Quality::from_variance(1000.5), Quality::High);
+    /// assert_eq!(Quality::from_variance(f64::NAN), Quality::Low);
+    /// ```
     pub const fn from_variance(v: f64) -> Self {
         if v > QUALITY_HIGH_THRESHOLD {
             Quality::High

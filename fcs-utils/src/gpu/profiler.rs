@@ -23,7 +23,9 @@ use wgpu::{
 /// How long one compute pass took on the GPU.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PassTiming {
+    /// Label supplied when the compute pass was recorded.
     pub label: String,
+    /// GPU elapsed time for the pass, in nanoseconds.
     pub duration_ns: f64,
 }
 

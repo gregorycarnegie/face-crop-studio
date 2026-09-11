@@ -24,6 +24,7 @@ gpu_uniforms!(BilateralUniforms, 1, {
     amount: f32,
 });
 
+/// Reusable GPU bilateral filter for smoothing while preserving color edges.
 #[derive(Clone)]
 pub struct GpuBilateralFilter {
     context: Arc<GpuContext>,
@@ -33,6 +34,7 @@ pub struct GpuBilateralFilter {
 }
 
 impl GpuBilateralFilter {
+    /// Create the bilateral-filter pipeline and pool on an existing GPU context.
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
 
@@ -67,6 +69,12 @@ impl GpuBilateralFilter {
         self.pool.memory_usage()
     }
 
+    /// Blend bilateral smoothing with the original image.
+    ///
+    /// `amount` is clamped to 0..=1; zero returns an unchanged clone.
+    /// `sigma_space` is measured in pixels and `sigma_color` in 8-bit RGB channel
+    /// units; both are at least 0.1. The sampling radius is capped at 8 pixels.
+    /// Returns RGBA8 or an error on buffer allocation or readback failure.
     pub fn smooth(
         &self,
         image: &DynamicImage,

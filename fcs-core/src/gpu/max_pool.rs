@@ -12,20 +12,34 @@ use std::sync::Arc;
 const POOL_WORKGROUP_X: u32 = 8;
 const POOL_WORKGROUP_Y: u32 = 8;
 
+/// Geometry for square max pooling over an NCHW tensor.
 #[derive(Debug)]
 pub struct MaxPoolConfig {
+    /// Number of batch items; only 1 is supported.
     pub batch: u32,
+    /// Number of channels, preserved by pooling.
     pub channels: u32,
+    /// Input width in pixels.
     pub input_width: u32,
+    /// Input height in pixels.
     pub input_height: u32,
+    /// Square pooling window side length in pixels.
     pub kernel: u32,
+    /// Window step in input pixels along both spatial axes.
     pub stride: u32,
+    /// Padding extent on each side; out-of-bounds samples are excluded from the maximum.
     pub pad: u32,
+    /// Computed output width in pixels.
     pub output_width: u32,
+    /// Computed output height in pixels.
     pub output_height: u32,
 }
 
 impl MaxPoolConfig {
+    /// Validate pooling geometry and compute its output dimensions.
+    ///
+    /// Returns an error for a batch other than 1, zero channels/sizes/kernel/stride,
+    /// or a kernel that does not fit the padded input.
     pub fn new(
         batch: u32,
         channels: u32,
@@ -60,6 +74,9 @@ impl MaxPoolConfig {
         })
     }
 
+    /// Construct pooling geometry from a 4-D NCHW tensor.
+    ///
+    /// Returns an error for other ranks or geometry rejected by [`Self::new`].
     pub fn from_tensor(tensor: &GpuTensor, kernel: u32, stride: u32, pad: u32) -> Result<Self> {
         let dims = tensor.shape().dims();
         anyhow::ensure!(
@@ -78,6 +95,7 @@ impl MaxPoolConfig {
         )
     }
 
+    /// Return the computed output shape in `[batch, channels, height, width]` order.
     pub fn output_dims(&self) -> [usize; 4] {
         [
             self.batch as usize,

@@ -220,6 +220,8 @@ impl GpuInferenceOps {
         self.activation.execute(&self.context, tensor, kind)
     }
 
+    /// Upload a host slice, apply an activation on the GPU, and download the result.
+    /// Returns an error if upload, execution, or readback fails.
     pub fn activation(&self, tensor: &[f32], kind: ActivationKind) -> Result<Vec<f32>> {
         let tensor_gpu = self.upload_tensor([tensor.len()], tensor, Some("activation_tensor"))?;
         let output = self.activation_tensor(&tensor_gpu, kind)?;
@@ -258,6 +260,10 @@ impl GpuInferenceOps {
     // Use them to accumulate an entire inference pass into one command buffer,
     // then call `context().queue().submit(Some(encoder.finish()))` once.
 
+    /// Record a convolution and return its output tensor without submitting work.
+    ///
+    /// Returns an error for incompatible buffer lengths or GPU contexts. Submit
+    /// the encoder on this context before reading the output.
     pub fn encode_conv2d_tensor(
         &self,
         encoder: &mut impl ComputeDispatch,
@@ -287,6 +293,8 @@ impl GpuInferenceOps {
         )
     }
 
+    /// Record max pooling and return its output tensor without submitting work.
+    /// The input must belong to this context and match `config`.
     pub fn encode_max_pool_tensor(
         &self,
         encoder: &mut impl ComputeDispatch,
@@ -298,6 +306,8 @@ impl GpuInferenceOps {
             .encode(encoder, &self.context, &self.buffer_pool, tensor, config)
     }
 
+    /// Record elementwise addition without submitting work.
+    /// Returns an error unless both tensors share this context and have identical shapes.
     pub fn encode_add_tensors(
         &self,
         encoder: &mut impl ComputeDispatch,
@@ -316,6 +326,8 @@ impl GpuInferenceOps {
             .encode(encoder, &self.context, &self.buffer_pool, lhs, rhs)
     }
 
+    /// Record nearest-neighbour 2x spatial upsampling without submitting work.
+    /// Requires batch-1 NCHW input. Returns an error for an incompatible context or rank.
     pub fn encode_resize2x_tensor(
         &self,
         encoder: &mut impl ComputeDispatch,

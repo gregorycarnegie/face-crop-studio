@@ -130,7 +130,9 @@ pub fn encode_backbone_features(
 /// Backbone stage outputs the neck consumes: the last three.
 pub const NECK_INPUTS: usize = 3;
 
+/// Device-resident feature and fused predictions for one detection level.
 pub struct DetectionLevelOutputs {
+    /// Neck feature map in NCHW order, used as input to this level's prediction branches.
     pub feature: GpuTensor,
     /// cls, obj, bbox and kps concatenated along the channel axis, in that order.
     ///
@@ -151,6 +153,12 @@ pub fn fused_head_key(level: usize, part: &str) -> String {
     format!("__fused_head{level}_{part}")
 }
 
+/// Record the feature-pyramid neck and all three detection heads without submitting.
+///
+/// `features` contains exactly the last three backbone stage outputs (c3, c4, c5);
+/// `weights` must include the fused head entries named by [`fused_head_key`].
+/// Returns stride-8, stride-16, and stride-32 outputs in that order, or an error
+/// for missing weights or incompatible tensor shapes/contexts.
 pub fn encode_neck_and_heads(
     encoder: &mut impl ComputeDispatch,
     ops: &GpuInferenceOps,

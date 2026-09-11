@@ -269,6 +269,12 @@ fn decode_jpeg_turbo(path: &Path, apply_exif_orientation: bool) -> Option<Dynami
     Some(image)
 }
 
+/// Decode an image without applying the normal EXIF-orientation correction.
+///
+/// Unlike [`load_image`], ordinary image formats retain their stored orientation.
+/// This does not mean camera RAW specifically: camera RAW and HEIC files use
+/// their dedicated decoders when the `raw` and `heic` features are enabled.
+/// Returns an error if the file cannot be opened, identified, or decoded.
 pub fn load_image_raw<P: AsRef<Path>>(path: P) -> Result<DynamicImage> {
     let path_ref = path.as_ref();
 
@@ -417,7 +423,6 @@ pub fn resize_rgba_fast(
 }
 
 /// Run one `fast_image_resize` convolution over raw interleaved bytes.
-#[allow(clippy::too_many_arguments)]
 fn resize_pixels_fast(
     src_bytes: &[u8],
     src_width: u32,
@@ -731,6 +736,23 @@ impl InputFit {
 ///
 /// * `original` - A tuple of the original image's (width, height).
 /// * `target` - A tuple of the model input's (width, height).
+///
+/// # Example
+///
+/// ```
+/// use fcs_utils::fit_input;
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let fit = fit_input((1000, 500), (640, 640))?;
+/// assert_eq!(fit.scale, 1.5625); // width is the tight axis
+/// assert_eq!(fit.drawn, (640, 320));
+/// assert_eq!(fit.origin, (0, 160)); // bars above and below
+/// assert_eq!(fit.source_offset(), (0.0, 250.0));
+///
+/// assert!(fit_input((0, 500), (640, 640)).is_err());
+/// # Ok(())
+/// # }
+/// ```
 pub fn fit_input(original: (u32, u32), target: (u32, u32)) -> Result<InputFit> {
     let (orig_w, orig_h) = original;
     let (target_w, target_h) = target;

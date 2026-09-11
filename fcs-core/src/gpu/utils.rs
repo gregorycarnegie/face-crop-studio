@@ -50,6 +50,9 @@ impl<T: Pod + Eq + Hash> UniformCache<T> {
 /// Records a dispatch in a new profiled pass or an already-open compute pass.
 /// Both paths use the same graph and resource preparation code.
 pub trait ComputeDispatch {
+    /// Bind `pipeline` and `bind_group` at index 0, then dispatch `[x, y, z]` workgroups.
+    /// A command encoder opens a pass labelled and profiled through `context`;
+    /// an existing compute pass records directly into that pass. Neither submits work.
     fn record_dispatch(
         &mut self,
         context: &fcs_utils::gpu::GpuContext,

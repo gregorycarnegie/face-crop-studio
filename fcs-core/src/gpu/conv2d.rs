@@ -334,25 +334,33 @@ impl Conv2dPipeline {
     }
 }
 
+/// Input and output channel counts for a convolution.
 #[derive(Debug, Clone, Copy)]
 pub struct Conv2dChannels {
+    /// Number of input channels.
     pub input: u32,
+    /// Number of output channels.
     pub output: u32,
 }
 
 impl Conv2dChannels {
+    /// Pair input/output channel counts; validation occurs in [`Conv2dConfig::new`].
     pub const fn new(input: u32, output: u32) -> Self {
         Self { input, output }
     }
 }
 
+/// Width and height used for convolution sizes, strides, or padding.
 #[derive(Debug, Clone, Copy)]
 pub struct SpatialDims {
+    /// Extent along the horizontal axis.
     pub width: u32,
+    /// Extent along the vertical axis.
     pub height: u32,
 }
 
 impl SpatialDims {
+    /// Pair horizontal and vertical extents without validation.
     pub const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
@@ -367,13 +375,17 @@ impl From<(u32, u32)> for SpatialDims {
     }
 }
 
+/// Channel grouping and optional activation fused into a convolution.
 #[derive(Debug, Clone, Copy)]
 pub struct Conv2dOptions {
+    /// Number of channel groups; 1 is dense, one per input channel is depthwise.
     pub groups: u32,
+    /// Activation applied after bias, or `None` for linear output.
     pub activation: Option<ActivationKind>,
 }
 
 impl Conv2dOptions {
+    /// Pair grouping and activation; validation occurs in [`Conv2dConfig::new`].
     pub const fn new(groups: u32, activation: Option<ActivationKind>) -> Self {
         Self { groups, activation }
     }
@@ -382,20 +394,35 @@ impl Conv2dOptions {
 /// Geometry for a convolution layer.
 #[derive(Debug, Clone)]
 pub struct Conv2dConfig {
+    /// Number of batch items; the GPU convolution supports only 1.
     pub batch: u32,
+    /// Input channels, divisible by `groups`.
     pub input_channels: u32,
+    /// Output channels, divisible by `groups`.
     pub output_channels: u32,
+    /// Input width in pixels.
     pub input_width: u32,
+    /// Input height in pixels.
     pub input_height: u32,
+    /// Kernel width in pixels.
     pub kernel_width: u32,
+    /// Kernel height in pixels.
     pub kernel_height: u32,
+    /// Horizontal kernel step in input pixels.
     pub stride_x: u32,
+    /// Vertical kernel step in input pixels.
     pub stride_y: u32,
+    /// Zero-padding pixels on each horizontal side.
     pub pad_x: u32,
+    /// Zero-padding pixels on each vertical side.
     pub pad_y: u32,
+    /// Number of independent channel groups; must be nonzero.
     pub groups: u32,
+    /// Output width computed from input width, kernel, stride, and padding.
     pub output_width: u32,
+    /// Output height computed from input height, kernel, stride, and padding.
     pub output_height: u32,
+    /// Activation applied after bias, or `None` for linear output.
     pub activation: Option<ActivationKind>,
 }
 
@@ -473,6 +500,7 @@ impl Conv2dConfig {
         })
     }
 
+    /// Return the expected input shape in NCHW order.
     pub fn input_shape_dims(&self) -> [usize; 4] {
         [
             self.batch as usize,
@@ -482,6 +510,7 @@ impl Conv2dConfig {
         ]
     }
 
+    /// Return the computed output shape in NCHW order.
     pub fn output_shape_dims(&self) -> [usize; 4] {
         [
             self.batch as usize,
@@ -491,6 +520,7 @@ impl Conv2dConfig {
         ]
     }
 
+    /// Return `[output_channels, input_channels / groups, kernel_height, kernel_width]`.
     pub fn weight_shape_dims(&self) -> [usize; 4] {
         [
             self.output_channels as usize,
@@ -500,10 +530,15 @@ impl Conv2dConfig {
         ]
     }
 
+    /// Return the bias shape: one value per output channel.
     pub fn bias_shape_dims(&self) -> [usize; 1] {
         [self.output_channels as usize]
     }
 
+    /// Check input, weight, and bias element counts against this geometry.
+    ///
+    /// Returns an error on a length mismatch. Construct the geometry with
+    /// [`Self::new`] first; this method does not revalidate its spatial parameters.
     pub fn validate(&self, input_len: usize, weight_len: usize, bias_len: usize) -> Result<()> {
         let expected_input = self.batch as usize
             * self.input_channels as usize
@@ -530,6 +565,7 @@ impl Conv2dConfig {
         Ok(())
     }
 
+    /// Return the total number of output elements.
     #[cfg(test)]
     pub fn output_element_count(&self) -> usize {
         self.batch as usize

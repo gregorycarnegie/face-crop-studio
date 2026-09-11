@@ -3,7 +3,9 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 /// Single 2D point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
+    /// Horizontal coordinate in the caller's coordinate system.
     pub x: f32,
+    /// Vertical coordinate in the caller's coordinate system.
     pub y: f32,
 }
 
@@ -14,6 +16,7 @@ impl Point {
         Self { x, y }
     }
 
+    /// Compute `self * a + b` with a fused multiply-add for each coordinate.
     pub fn mul_add(self, a: f32, b: Point) -> Point {
         Point {
             x: self.x.mul_add(a, b.x),
@@ -21,6 +24,7 @@ impl Point {
         }
     }
 
+    /// Return the Euclidean distance from this point to the origin.
     pub fn hypot(self) -> f32 {
         self.x.hypot(self.y)
     }
