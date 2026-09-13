@@ -4,11 +4,8 @@ mod history;
 mod mapping;
 mod queue;
 
-use crate::{
-    theme::P,
-    types::{App2, SidebarTab},
-};
-use egui::{Sense, Stroke, Ui, Vec2};
+use crate::types::{App2, SidebarTab};
+use egui::Ui;
 
 use history::show_history;
 use mapping::show_mapping;
@@ -19,7 +16,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
     tab_bar(ui, app);
 
-    const ACTION_BAR_H: f32 = 82.0;
+    const ACTION_BAR_H: f32 = 96.0;
     let queue_has_files = app.sidebar_tab == SidebarTab::Queue && !app.batch_files.is_empty();
     let scroll_max_h = if queue_has_files {
         (ui.available_height() - ACTION_BAR_H).max(80.0)
@@ -42,63 +39,13 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 }
 
 fn tab_bar(ui: &mut Ui, app: &mut App2) {
-    let tabs = [
-        ("Queue", SidebarTab::Queue),
-        ("Mapping", SidebarTab::Mapping),
-        ("History", SidebarTab::History),
-    ];
-    ui.painter().line_segment(
-        [
-            egui::pos2(ui.min_rect().min.x, ui.min_rect().min.y + 32.0),
-            egui::pos2(ui.min_rect().max.x, ui.min_rect().min.y + 32.0),
-        ],
-        Stroke::new(1.0, P::RULE),
-    );
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.set_height(32.0);
-        let w = ui.available_width() / tabs.len() as f32;
-        let row_left = ui.cursor().min.x;
-        let mut underline_y = 0.0;
-        for (label, variant) in &tabs {
-            let is_active = app.sidebar_tab == *variant;
-            let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
-            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-            underline_y = resp.rect.max.y - 2.0;
-            let text_color = if is_active { P::PEACH } else { P::INK3 };
-            if resp.hovered() && !is_active {
-                painter.rect_filled(resp.rect, 0.0, P::white_alpha(5));
-            }
-            if is_active {
-                painter.rect_filled(resp.rect, 0.0, P::peach_alpha(10));
-            }
-            painter.text(
-                resp.rect.center(),
-                egui::Align2::CENTER_CENTER,
-                *label,
-                egui::FontId::monospace(10.5),
-                text_color,
-            );
-            if resp.clicked() {
-                app.sidebar_tab = *variant;
-            }
-        }
-        // Sliding underline under the active tab
-        let active_idx = tabs
-            .iter()
-            .position(|(_, v)| app.sidebar_tab == *v)
-            .unwrap_or(0);
-        let anim = ui.ctx().animate_value_with_time(
-            ui.id().with("tab_underline"),
-            active_idx as f32,
-            0.15,
-        );
-        ui.painter().line_segment(
-            [
-                egui::pos2(row_left + anim * w, underline_y),
-                egui::pos2(row_left + (anim + 1.0) * w, underline_y),
-            ],
-            Stroke::new(2.0, P::PEACH),
-        );
+    let tabs = [SidebarTab::Queue, SidebarTab::Mapping, SidebarTab::History];
+    let mut selected = tabs
+        .iter()
+        .position(|tab| *tab == app.sidebar_tab)
+        .unwrap_or(0);
+    egui::Frame::new().inner_margin(8).show(ui, |ui| {
+        crate::ui::widgets::segmented_control(ui, &["Queue", "Mapping", "History"], &mut selected);
     });
+    app.sidebar_tab = tabs[selected];
 }

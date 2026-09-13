@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 arboard.workspace = true
+csv.workspace = true
 eframe.workspace = true
 egui.workspace = true
 egui_extras = { workspace = true, features = ["svg"] }

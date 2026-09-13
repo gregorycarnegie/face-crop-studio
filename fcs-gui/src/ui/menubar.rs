@@ -20,7 +20,14 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
         )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.add_space(6.0);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.label(RichText::new("Face").strong().size(16.0).color(P::INK));
+                    ui.label(RichText::new("Crop").strong().size(16.0).color(P::PEACH));
+                    ui.label(RichText::new(" Studio").strong().size(16.0).color(P::INK));
+                });
+                ui.add_space(16.0);
 
                 menu_item(ui, "File", 180.0, |ui| {
                     if ui.button("Open Images…").clicked()
@@ -334,33 +341,10 @@ fn menu_item(
     popup_width: f32,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
-    let font = egui::FontId::proportional(13.0);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), font, P::INK2);
-    let w = galley.size().x + 20.0;
-    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-
-    let popup_id = Popup::default_response_id(&resp);
-    let is_open = Popup::is_id_open(ui.ctx(), popup_id);
-
-    let highlighted = resp.hovered() || is_open;
-    if highlighted {
-        painter.rect_filled(
-            resp.rect.shrink2(Vec2::new(2.0, 4.0)),
-            5.0,
-            P::white_alpha(if is_open { 20 } else { 15 }),
-        );
-    }
-    let text_color = if highlighted { P::INK } else { P::INK2 };
-    painter.galley(
-        egui::pos2(
-            resp.rect.min.x + 10.0,
-            resp.rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        text_color,
+    let resp = ui.add(
+        egui::Button::new(label)
+            .frame(false)
+            .min_size(Vec2::new(0.0, 32.0)),
     );
 
     Popup::menu(&resp).width(popup_width).show(|ui| {

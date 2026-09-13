@@ -2,6 +2,11 @@
 
 use crate::{theme::P, types::App2};
 use egui::{RichText, Sense, Ui, Vec2};
+use fcs_mapping::MappingEntry;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use super::queue::draw_dashed_border;
 
@@ -435,37 +440,100 @@ fn queue_folder_drop_zone(ui: &mut Ui, app: &mut App2) {
 }
 
 fn apply_mapping_to_queue(app: &mut App2) {
-    let entries = app.mapping.entries.clone();
-    let mut matched = 0usize;
-
-    for file in &mut app.batch_files {
-        let file_name = file
-            .path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let file_stem = file
-            .path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-
-        let hit = entries.iter().find(|e| {
-            let src = std::path::Path::new(&e.source_path);
-            let src_name = src.file_name().and_then(|s| s.to_str()).unwrap_or_default();
-            let src_stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-            // Match by full filename, then by stem without extension
-            src_name == file_name || src_stem == file_stem
-        });
-
-        if let Some(entry) = hit {
-            file.output_override = Some(std::path::PathBuf::from(&entry.output_name));
-            matched += 1;
-        }
+    let outputs = match_mapping(
+        &app.mapping.entries,
+        app.batch_files.iter().map(|f| f.path.as_path()),
+    );
+    let matched = outputs.iter().flatten().count();
+    for (file, output) in app.batch_files.iter_mut().zip(outputs) {
+        // Unmatched files clear, rather than keep a name left by an earlier mapping.
+        file.output_override = output.map(PathBuf::from);
     }
 
     app.show_success(format!(
         "Mapping applied: {matched} / {} queue items matched",
         app.batch_files.len()
     ));
+}
+
+/// The mapped output name for each queued path, or `None` where no row matches.
+///
+/// A row matches by file name, else by stem (so a row may leave the extension off). Each tries
+/// the exact spelling before ignoring case: Windows and macOS treat `Photo.JPG` and `photo.jpg`
+/// as one file, and spreadsheet exports recase names. The first row wins within a tier.
+fn match_mapping<'a, 'p>(
+    entries: &'a [MappingEntry],
+    paths: impl IntoIterator<Item = &'p Path>,
+) -> Vec<Option<&'a str>> {
+    let mut index = HashMap::new();
+    for entry in entries {
+        let keys = match_keys(Path::new(&entry.source_path));
+        for (tier, key) in keys.into_iter().enumerate() {
+            if let Some(key) = key {
+                index
+                    .entry((tier, key))
+                    .or_insert(entry.output_name.as_str());
+            }
+        }
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            match_keys(path)
+                .into_iter()
+                .enumerate()
+                .find_map(|(tier, key)| index.get(&(tier, key?)).copied())
+        })
+        .collect()
+}
+
+/// Lookup keys, most specific first: name, name ignoring case, stem, stem ignoring case.
+fn match_keys(path: &Path) -> [Option<String>; 4] {
+    let name = path.file_name().and_then(|s| s.to_str());
+    let stem = path.file_stem().and_then(|s| s.to_str());
+    [
+        name.map(str::to_owned),
+        name.map(str::to_lowercase),
+        stem.map(str::to_owned),
+        stem.map(str::to_lowercase),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapping_matches_by_name_then_stem_preferring_the_exact_spelling() {
+        let entry = |source: &str, output: &str| MappingEntry {
+            source_path: source.into(),
+            output_name: output.into(),
+        };
+        let entries = [
+            // A spreadsheet export recased this one; the file on disk is lower case.
+            entry("shoots/FaceCropOTBreak_1.jpg", "recased"),
+            // Same stem, other extension: must not beat a name match listed later.
+            entry("photo.png", "other-extension"),
+            entry("PHOTO.JPG", "photo-folded"),
+            entry("photo.jpg", "photo-exact"),
+            entry("no-extension", "by-stem"),
+        ];
+        let queue = [
+            "in/facecropotbreak_1.jpg",
+            "in/photo.jpg",
+            "in/Photo.jpg",
+            "in/NO-EXTENSION.webp",
+            "in/unlisted.jpg",
+        ];
+        assert_eq!(
+            match_mapping(&entries, queue.iter().map(Path::new)),
+            [
+                Some("recased"),
+                Some("photo-exact"),
+                Some("photo-folded"),
+                Some("by-stem"),
+                None
+            ]
+        );
+    }
 }

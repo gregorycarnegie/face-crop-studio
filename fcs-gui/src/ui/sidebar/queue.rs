@@ -23,51 +23,6 @@ pub(super) fn show_queue(ui: &mut Ui, app: &mut App2) {
 fn webcam_bar(ui: &mut Ui, app: &mut App2) {
     use crate::types::WebcamStatus;
     let is_live = app.webcam_state.status == WebcamStatus::Active;
-
-    ui.add_space(4.0);
-    let row_h = 36.0;
-    let margin = 8.0_f32;
-    let avail_w = ui.available_width() - margin * 2.0;
-    let row_rect = egui::Rect::from_min_size(
-        egui::pos2(ui.min_rect().min.x + margin, ui.cursor().min.y),
-        Vec2::new(avail_w, row_h),
-    );
-    let resp = ui.allocate_rect(row_rect, Sense::hover());
-    let painter = ui.painter();
-
-    let bg = if is_live {
-        P::lime_alpha(12)
-    } else {
-        P::white_alpha(6)
-    };
-    painter.rect_filled(row_rect, 8.0, bg);
-    painter.rect_stroke(
-        row_rect,
-        8.0,
-        egui::Stroke::new(
-            1.0,
-            if is_live {
-                P::lime_alpha(80)
-            } else {
-                P::white_alpha(18)
-            },
-        ),
-        egui::StrokeKind::Outside,
-    );
-
-    // Dot — green when live
-    let dot_color = if is_live { P::LIME } else { P::INK3 };
-    let dot_center = egui::pos2(row_rect.min.x + 14.0, row_rect.center().y);
-    painter.circle_filled(dot_center, 5.0, dot_color);
-
-    // Labels
-    painter.text(
-        egui::pos2(row_rect.min.x + 26.0, row_rect.center().y - 5.0),
-        egui::Align2::LEFT_CENTER,
-        "Webcam capture",
-        egui::FontId::monospace(10.5),
-        P::INK,
-    );
     let subtitle = if is_live {
         match (
             app.webcam_state.live_detect,
@@ -88,138 +43,57 @@ fn webcam_bar(ui: &mut Ui, app: &mut App2) {
     } else {
         "Default camera".to_string()
     };
-    painter.text(
-        egui::pos2(row_rect.min.x + 26.0, row_rect.center().y + 8.0),
-        egui::Align2::LEFT_CENTER,
-        subtitle,
-        egui::FontId::monospace(9.0),
-        if is_live { P::LIME } else { P::INK3 },
-    );
 
-    // Right-side buttons
-    if is_live {
-        // "Detect faces" — cyan, left of close
-        let detect_w = 90.0_f32;
-        let detect_h = 24.0_f32;
-        let close_w = 24.0_f32;
-        let live_w = 44.0_f32;
-        let close_rect = egui::Rect::from_center_size(
-            egui::pos2(row_rect.max.x - close_w / 2.0 - 4.0, row_rect.center().y),
-            Vec2::new(close_w, detect_h),
-        );
-        let detect_rect = egui::Rect::from_center_size(
-            egui::pos2(close_rect.min.x - detect_w / 2.0 - 4.0, row_rect.center().y),
-            Vec2::new(detect_w, detect_h),
-        );
-        let live_rect = egui::Rect::from_center_size(
-            egui::pos2(detect_rect.min.x - live_w / 2.0 - 4.0, row_rect.center().y),
-            Vec2::new(live_w, detect_h),
-        );
-
-        // Live toggle: detect every frame rather than on demand.
-        let live_resp = ui
-            .interact(live_rect, resp.id.with("live_btn"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let live_on = app.webcam_state.live_detect;
-        let live_bg = if live_on {
-            P::lime_alpha(60)
-        } else if live_resp.hovered() {
-            P::white_alpha(20)
-        } else {
-            P::white_alpha(12)
-        };
-        painter.rect_filled(live_rect, 6.0, live_bg);
-        painter.text(
-            live_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Live",
-            egui::FontId::monospace(9.5),
-            if live_on { P::LIME } else { P::INK3 },
-        );
-        if live_resp.clicked() {
-            app.toggle_live_detection();
-        }
-        live_resp.on_hover_text(if live_on {
-            "Detecting every frame — click to stop"
-        } else {
-            "Detect faces on every frame"
+    // Laid out rather than painted at fixed offsets: the live subtitle grows with the
+    // frame counters and used to run underneath the buttons.
+    egui::Frame::new()
+        .outer_margin(egui::Margin::symmetric(8, 4))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .corner_radius(8)
+        .fill(P::SURFACE)
+        .stroke(Stroke::new(1.0, if is_live { P::RULE2 } else { P::RULE }))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (dot, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
+                let dot_color = if is_live { P::LIME } else { P::INK3 };
+                ui.painter().circle_filled(dot.center(), 5.0, dot_color);
+                ui.label(RichText::new("Webcam capture").size(13.0).color(P::INK));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !is_live {
+                        if ui.button("Open camera").clicked() {
+                            app.open_webcam();
+                        }
+                        return;
+                    }
+                    // Right-to-left, so the close button is added first.
+                    if ui.button("×").on_hover_text("Close camera").clicked() {
+                        app.close_webcam();
+                    }
+                    if ui
+                        .add_enabled(!app.is_busy, egui::Button::new("Detect faces"))
+                        .on_hover_text("Freeze frame and run face detection")
+                        .clicked()
+                    {
+                        app.detect_webcam_faces();
+                    }
+                    // Live toggle: detect every frame rather than on demand.
+                    let live_on = app.webcam_state.live_detect;
+                    let live = RichText::new("Live").color(if live_on { P::BG } else { P::INK });
+                    if ui
+                        .add(egui::Button::new(live).selected(live_on))
+                        .on_hover_text(if live_on {
+                            "Detecting every frame — click to stop"
+                        } else {
+                            "Detect faces on every frame"
+                        })
+                        .clicked()
+                    {
+                        app.toggle_live_detection();
+                    }
+                });
+            });
+            ui.label(RichText::new(subtitle).size(11.5).color(P::INK2));
         });
-
-        // Detect button
-        let detect_resp = ui
-            .interact(detect_rect, resp.id.with("detect_btn"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let detect_bg = if app.is_busy {
-            P::white_alpha(8)
-        } else if detect_resp.hovered() {
-            P::cyan_alpha(60)
-        } else {
-            P::cyan_alpha(35)
-        };
-        painter.rect_filled(detect_rect, 6.0, detect_bg);
-        painter.text(
-            detect_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Detect faces",
-            egui::FontId::monospace(9.5),
-            if app.is_busy { P::INK3 } else { P::CYAN },
-        );
-        if detect_resp.clicked() && !app.is_busy {
-            app.detect_webcam_faces();
-        }
-        detect_resp.on_hover_text("Freeze frame and run face detection");
-
-        // Close button
-        let close_resp = ui
-            .interact(close_rect, resp.id.with("close_btn"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let close_bg = if close_resp.hovered() {
-            P::rose_alpha(60)
-        } else {
-            P::white_alpha(12)
-        };
-        painter.rect_filled(close_rect, 6.0, close_bg);
-        painter.text(
-            close_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "×",
-            egui::FontId::proportional(13.0),
-            P::ROSE,
-        );
-        if close_resp.clicked() {
-            app.close_webcam();
-        }
-        close_resp.on_hover_text("Close camera");
-    } else {
-        // "Open camera" button
-        let btn_w = 86.0_f32;
-        let btn_h = 24.0_f32;
-        let btn_rect = egui::Rect::from_center_size(
-            egui::pos2(row_rect.max.x - btn_w / 2.0 - 4.0, row_rect.center().y),
-            Vec2::new(btn_w, btn_h),
-        );
-        let btn_resp = ui
-            .interact(btn_rect, resp.id.with("open_btn"), Sense::click())
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
-        let btn_bg = if btn_resp.hovered() {
-            P::lime_alpha(55)
-        } else {
-            P::lime_alpha(30)
-        };
-        painter.rect_filled(btn_rect, 6.0, btn_bg);
-        painter.text(
-            btn_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Open camera",
-            egui::FontId::monospace(9.5),
-            P::LIME,
-        );
-        if btn_resp.clicked() {
-            app.open_webcam();
-        }
-    }
-
-    ui.add_space(4.0);
 }
 
 fn folder_browse_bar(ui: &mut Ui, app: &mut App2) {
@@ -263,6 +137,25 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
     let margin = 8.0_f32;
     ui.add_space(8.0);
 
+    // ── Multi-face mode ──────────────────────────────────────────────────────
+    // The inverse of the "Auto-select best face" quality rule: with that rule off the
+    // batch already exports every detected face.
+    ui.horizontal(|ui| {
+        ui.add_space(margin);
+        let mut every_face = !app.settings.crop.quality_rules.auto_select_best_face;
+        if ui
+            .checkbox(&mut every_face, "Export every face")
+            .on_hover_text(
+                "Off exports only the best face per image. \
+                 \"Skip if no high-quality face\" in Settings still applies.",
+            )
+            .changed()
+        {
+            app.settings.crop.quality_rules.auto_select_best_face = !every_face;
+        }
+    });
+    ui.add_space(4.0);
+
     // ── Run batch ────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
         ui.add_space(margin);
@@ -272,13 +165,14 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
         ui.add_enabled_ui(enabled, |ui| {
             if ui
                 .add_sized(
-                    Vec2::new(avail, 30.0),
+                    Vec2::new(avail, 36.0),
                     egui::Button::new(
                         RichText::new(format!("Run batch  ({n} images) →"))
                             .size(11.0)
                             .family(egui::FontFamily::Monospace)
-                            .color(P::PEACH),
-                    ),
+                            .color(P::BG),
+                    )
+                    .fill(P::ACCENT),
                 )
                 .clicked()
             {
@@ -321,6 +215,50 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
                 Err(e) => app.show_error("Export failed", e.to_string()),
             }
         }
+    });
+
+    // ── Batch report ─────────────────────────────────────────────────────────
+    let has_results = !app.is_busy
+        && app.batch_files.iter().any(|f| {
+            !matches!(
+                f.status,
+                BatchFileStatus::Pending | BatchFileStatus::Processing
+            )
+        });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(margin);
+        let avail = ui.available_width() - margin;
+        ui.add_enabled_ui(has_results, |ui| {
+            if ui
+                .add_sized(
+                    Vec2::new(avail, 24.0),
+                    egui::Button::new(
+                        RichText::new("Export batch report…")
+                            .size(10.0)
+                            .family(egui::FontFamily::Monospace)
+                            .color(P::INK2),
+                    ),
+                )
+                .on_hover_text("Every image with its outcome. Saved as JSON or CSV by extension.")
+                .clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_file_name("batch_report.csv")
+                    .add_filter("CSV", &["csv"])
+                    .add_filter("JSON", &["json"])
+                    .save_file()
+            {
+                let csv = !path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
+                let written = crate::core::export::batch_report(&app.batch_files, csv)
+                    .and_then(|bytes| Ok(std::fs::write(&path, bytes)?));
+                match written {
+                    Ok(()) => app.show_success(format!("Batch report saved to {}", path.display())),
+                    Err(e) => app.show_error("Report export failed", format!("{e:#}")),
+                }
+            }
+        });
     });
     ui.add_space(6.0);
 }
@@ -375,7 +313,7 @@ fn drop_zone(ui: &mut Ui, app: &mut App2) {
     painter.text(
         egui::pos2(dz_rect.center().x, dz_rect.min.y + 68.0),
         egui::Align2::CENTER_CENTER,
-        "JPG · PNG · WEBP",
+        "Images · folders · clipboard",
         egui::FontId::proportional(11.5),
         P::INK3,
     );
@@ -411,7 +349,7 @@ fn drop_zone(ui: &mut Ui, app: &mut App2) {
         egui::FontId::monospace(10.0),
         paste_color,
     );
-    ui.add_space(108.0);
+    ui.add_space(8.0);
 
     if resp.clicked() {
         if resp
@@ -485,7 +423,7 @@ fn file_tree(ui: &mut Ui, app: &mut App2) {
     let queued_count = total - in_progress_count;
 
     if in_progress_count > 0 {
-        tree_group_header(ui, "In progress", in_progress_count, total);
+        tree_group_header(ui, "Batch results", in_progress_count, total);
         for idx in 0..total {
             if !is_in_progress(&app.batch_files[idx].status) {
                 continue;
@@ -552,142 +490,73 @@ fn tree_group_header(ui: &mut Ui, label: &str, count: usize, total: usize) {
 }
 
 fn tree_row(ui: &mut Ui, app: &App2, idx: usize) -> Option<TreeAction> {
-    let path = &app.batch_files[idx].path;
-    let status = &app.batch_files[idx].status;
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-    let status_label = status.badge_label();
-    let face_count = status.face_count();
-
-    let is_active = app.preview.image_path.as_deref() == Some(path.as_path());
-
-    let row_h = 32.0;
-    let (resp, painter) =
-        ui.allocate_painter(Vec2::new(ui.available_width(), row_h), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let r = resp.rect;
-
-    let bg = if is_active {
-        P::peach_alpha(25)
-    } else if resp.hovered() {
-        P::white_alpha(10)
-    } else {
-        egui::Color32::TRANSPARENT
+    let file = &app.batch_files[idx];
+    let name = file
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?");
+    let active = app.preview.image_path.as_deref() == Some(file.path.as_path());
+    let (status, color) = match &file.status {
+        BatchFileStatus::Pending => ("Queued".to_string(), P::INK3),
+        BatchFileStatus::Processing => ("Processing…".to_string(), P::PEACH),
+        BatchFileStatus::Completed {
+            faces_detected: 0, ..
+        } => ("! No faces found".to_string(), P::PEACH),
+        BatchFileStatus::Completed {
+            faces_detected,
+            faces_exported: 0,
+        } => (
+            format!("! {faces_detected} found, none passed quality rules"),
+            P::PEACH,
+        ),
+        BatchFileStatus::Completed {
+            faces_detected,
+            faces_exported,
+        } => (
+            format!("✔ Exported {faces_exported} of {faces_detected} face(s)"),
+            P::GREEN,
+        ),
+        BatchFileStatus::Failed { .. } => ("× Failed (hover for why)".to_string(), P::RED),
+        BatchFileStatus::Skipped => ("— Skipped".to_string(), P::INK3),
     };
-    if bg != egui::Color32::TRANSPARENT {
-        painter.rect_filled(r, 5.0, bg);
-    }
-
-    let text_color = if is_active { P::PEACH } else { P::INK2 };
-
-    // Index
-    painter.text(
-        egui::pos2(r.min.x + 20.0, r.center().y),
-        egui::Align2::RIGHT_CENTER,
-        format!("{:02}", idx + 1),
-        egui::FontId::monospace(10.0),
-        P::INK3,
-    );
-    // Person icon
-    painter.text(
-        egui::pos2(r.min.x + 34.0, r.center().y),
-        egui::Align2::CENTER_CENTER,
-        "◉",
-        egui::FontId::proportional(11.0),
-        P::INK3,
-    );
-    // Filename
-    let avail_w = r.width() - 132.0;
-    painter.text(
-        egui::pos2(r.min.x + 46.0, r.center().y),
-        egui::Align2::LEFT_CENTER,
-        truncate(name, avail_w, &egui::FontId::monospace(11.5), &painter),
-        egui::FontId::monospace(11.5),
-        text_color,
-    );
-
-    // Badge on the right
-    let badge_label = face_count.map_or_else(|| status_label.to_owned(), |count| count.to_string());
-    let (badge_bg, badge_fg) = crate::theme::badge_color(status_label);
-    let badge_font = egui::FontId::monospace(9.5);
-    let badge_g = painter.layout_no_wrap(badge_label, badge_font, badge_fg);
-    let bw = badge_g.size().x + 10.0;
-    let bh = badge_g.size().y + 4.0;
-    let remove_rect = egui::Rect::from_center_size(
-        egui::pos2(r.max.x - 18.0, r.center().y),
-        Vec2::new(24.0, 24.0),
-    );
-    let load_rect = egui::Rect::from_center_size(
-        egui::pos2(r.max.x - 46.0, r.center().y),
-        Vec2::new(24.0, 24.0),
-    );
-    let badge_rect = egui::Rect::from_min_size(
-        egui::pos2(load_rect.min.x - bw - 8.0, r.center().y - bh / 2.0),
-        Vec2::new(bw, bh),
-    );
-    painter.rect_filled(badge_rect, 3.0, badge_bg);
-    painter.galley(badge_rect.min + Vec2::new(5.0, 2.0), badge_g, badge_fg);
-
-    let load_clicked = row_icon_button(ui, load_rect, idx, "load", "▶", P::CYAN, "Load image");
-    let remove_clicked = row_icon_button(
-        ui,
-        remove_rect,
-        idx,
-        "remove",
-        "×",
-        P::ROSE,
-        "Remove from queue",
-    );
-
-    if remove_clicked {
-        Some(TreeAction::Remove(idx))
-    } else if load_clicked || resp.clicked() {
-        Some(TreeAction::Load(path.clone()))
-    } else {
-        None
-    }
-}
-
-fn row_icon_button(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    idx: usize,
-    salt: &str,
-    label: &str,
-    color: egui::Color32,
-    tooltip: &str,
-) -> bool {
-    let resp = ui
-        .interact(rect, ui.id().with((salt, idx)), Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
-    let bg = if resp.hovered() {
-        P::white_alpha(20)
-    } else {
-        P::white_alpha(8)
-    };
-    ui.painter().rect_filled(rect, 5.0, bg);
-    ui.painter().rect_stroke(
-        rect,
-        5.0,
-        Stroke::new(1.0, P::white_alpha(24)),
-        egui::StrokeKind::Outside,
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(12.0),
-        color,
-    );
-    let clicked = resp.clicked();
-    resp.on_hover_text(tooltip);
-    clicked
-}
-
-fn truncate(s: &str, max_w: f32, _font: &egui::FontId, _painter: &egui::Painter) -> String {
-    // Simple approximation — assume ~7px per char for monospace
-    let chars_fit = (max_w / 7.0) as usize;
-    if s.len() <= chars_fit {
-        return s.to_string();
-    }
-    format!("{}…", &s[..chars_fit.saturating_sub(1)])
+    let mut action = None;
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(8, 5))
+        .fill(if active {
+            P::SURFACE2
+        } else {
+            egui::Color32::TRANSPARENT
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 38.0).max(40.0);
+                let text = RichText::new(format!("{:02}  {name}", idx + 1))
+                    .size(13.0)
+                    .color(if active { P::BG } else { P::INK });
+                if ui
+                    .add_sized(
+                        [width, 30.0],
+                        egui::Button::new(text).truncate().selected(active),
+                    )
+                    .on_hover_text(file.path.display().to_string())
+                    .clicked()
+                {
+                    action = Some(TreeAction::Load(file.path.clone()));
+                }
+                if ui.button("×").on_hover_text("Remove from queue").clicked() {
+                    action = Some(TreeAction::Remove(idx));
+                }
+            });
+            let label = if active {
+                format!("Editing · {status}")
+            } else {
+                status
+            };
+            let response = ui.label(RichText::new(label).size(11.5).color(color));
+            if let BatchFileStatus::Failed { error } = &file.status {
+                response.on_hover_text(error);
+            }
+        });
+    action
 }

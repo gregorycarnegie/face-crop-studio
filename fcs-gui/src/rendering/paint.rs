@@ -7,9 +7,16 @@ pub fn draw_face_box(painter: &Painter, rect: Rect, color: Color32, selected: bo
     let stroke_w = if selected { 2.0 } else { 1.5 };
     let stroke = Stroke::new(stroke_w, color);
     if selected {
+        painter.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(stroke_w + 2.0, P::BG),
+            StrokeKind::Outside,
+        );
         painter.rect_stroke(rect, 4.0, stroke, StrokeKind::Outside);
     } else {
         // dashed for unselected
+        draw_dashed_rect(painter, rect, Stroke::new(stroke_w + 2.0, P::BG));
         draw_dashed_rect(painter, rect, stroke);
     }
 }
@@ -50,8 +57,8 @@ fn draw_dashed_v(painter: &Painter, y0: f32, y1: f32, x: f32, stroke: Stroke, da
 }
 
 pub fn draw_landmark_dot(painter: &Painter, pos: Pos2) {
-    painter.circle_filled(pos, 3.5, P::LIME);
-    painter.circle_stroke(pos, 3.5, Stroke::new(0.5, P::black_alpha(100)));
+    painter.circle_filled(pos, 3.5, P::INK);
+    painter.circle_stroke(pos, 3.5, Stroke::new(1.5, P::BG));
 }
 
 pub fn draw_drag_handle(painter: &Painter, center: Pos2, color: Color32) {
@@ -63,7 +70,7 @@ pub fn draw_drag_handle(painter: &Painter, center: Pos2, color: Color32) {
 
 pub fn draw_confidence_badge(painter: &Painter, text: String, above_rect: Rect, color: Color32) {
     let font_id = egui::FontId::monospace(9.5);
-    let galley = painter.layout_no_wrap(text, font_id, color);
+    let galley = painter.layout_no_wrap(text, font_id, P::BG);
     let pad = egui::Vec2::new(5.0, 2.0);
     let text_rect = Rect::from_min_size(
         Pos2::new(

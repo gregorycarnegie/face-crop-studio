@@ -120,7 +120,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
         CropShape::RoundedRectangle { radius_pct } => {
             let mut pct = (*radius_pct * 100.0).clamp(0.0, 50.0);
             field_label(ui, &format!("Corner radius · {pct:.0}%"));
-            if slider_with_label(ui, "", &mut pct, 0.0, 50.0, "pct") {
+            if slider_with_label(ui, "Corner radius", &mut pct, 0.0, 50.0, "pct") {
                 *radius_pct = (pct / 100.0).clamp(0.0, 0.5);
                 changed = true;
             }
@@ -128,7 +128,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
         CropShape::ChamferedRectangle { size_pct } => {
             let mut pct = (*size_pct * 100.0).clamp(0.0, 50.0);
             field_label(ui, &format!("Chamfer size · {pct:.0}%"));
-            if slider_with_label(ui, "", &mut pct, 0.0, 50.0, "pct") {
+            if slider_with_label(ui, "Chamfer size", &mut pct, 0.0, 50.0, "pct") {
                 *size_pct = (pct / 100.0).clamp(0.0, 0.5);
                 changed = true;
             }
@@ -149,7 +149,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
             }
 
             field_label(ui, &format!("Rotation · {rotation_deg:.0}°"));
-            if slider_with_label(ui, "", rotation_deg, -180.0, 180.0, "deg") {
+            if slider_with_label(ui, "Rotation", rotation_deg, -180.0, 180.0, "deg") {
                 changed = true;
             }
 
@@ -159,7 +159,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
                     let max = polygon_corner_radius_max(s) * 100.0;
                     let mut pct = (*radius_pct * 100.0).clamp(0.0, max);
                     field_label(ui, &format!("Corner radius · {pct:.1}%"));
-                    if slider_with_label(ui, "", &mut pct, 0.0, max, "pct") {
+                    if slider_with_label(ui, "Corner radius", &mut pct, 0.0, max, "pct") {
                         *radius_pct = (pct / 100.0).clamp(0.0, polygon_corner_radius_max(s));
                         changed = true;
                     }
@@ -168,14 +168,14 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
                     let max = polygon_chamfer_size_max(s) * 100.0;
                     let mut pct = (*size_pct * 100.0).clamp(0.0, max);
                     field_label(ui, &format!("Chamfer size · {pct:.1}%"));
-                    if slider_with_label(ui, "", &mut pct, 0.0, max, "pct") {
+                    if slider_with_label(ui, "Chamfer size", &mut pct, 0.0, max, "pct") {
                         *size_pct = (pct / 100.0).clamp(0.0, polygon_chamfer_size_max(s));
                         changed = true;
                     }
                 }
                 PolygonCornerStyle::Bezier { tension } => {
                     field_label(ui, &format!("Tension · {tension:.2}"));
-                    if slider_with_label(ui, "", tension, 0.0, 2.0, "") {
+                    if slider_with_label(ui, "Tension", tension, 0.0, 2.0, "") {
                         changed = true;
                     }
                 }
@@ -198,13 +198,13 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
 
             let mut inner = (*inner_radius_pct * 100.0).clamp(10.0, 90.0);
             field_label(ui, &format!("Inner radius · {inner:.0}%"));
-            if slider_with_label(ui, "", &mut inner, 10.0, 90.0, "pct") {
+            if slider_with_label(ui, "Inner radius", &mut inner, 10.0, 90.0, "pct") {
                 *inner_radius_pct = (inner / 100.0).clamp(0.1, 0.9);
                 changed = true;
             }
 
             field_label(ui, &format!("Rotation · {rotation_deg:.0}°"));
-            if slider_with_label(ui, "", rotation_deg, -180.0, 180.0, "deg") {
+            if slider_with_label(ui, "Rotation", rotation_deg, -180.0, 180.0, "deg") {
                 changed = true;
             }
         }
@@ -224,7 +224,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
             }
 
             field_label(ui, &format!("Rotation · {rotation_deg:.0}°"));
-            if slider_with_label(ui, "", rotation_deg, -180.0, 180.0, "deg") {
+            if slider_with_label(ui, "Rotation", rotation_deg, -180.0, 180.0, "deg") {
                 changed = true;
             }
 
@@ -273,14 +273,14 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
     ui.add_space(4.0);
     let mut softness = app.settings.crop.vignette_softness * 100.0;
     field_label(ui, &format!("Vignette softness · {softness:.0}%"));
-    if slider_with_label(ui, "", &mut softness, 0.0, 100.0, "pct") {
+    if slider_with_label(ui, "Vignette softness", &mut softness, 0.0, 100.0, "pct") {
         app.settings.crop.vignette_softness = (softness / 100.0).clamp(0.0, 1.0);
         changed = true;
     }
 
     let mut intensity = app.settings.crop.vignette_intensity * 100.0;
     field_label(ui, &format!("Vignette intensity · {intensity:.0}%"));
-    if slider_with_label(ui, "", &mut intensity, 0.0, 100.0, "pct") {
+    if slider_with_label(ui, "Vignette intensity", &mut intensity, 0.0, 100.0, "pct") {
         app.settings.crop.vignette_intensity = (intensity / 100.0).clamp(0.0, 1.0);
         changed = true;
     }

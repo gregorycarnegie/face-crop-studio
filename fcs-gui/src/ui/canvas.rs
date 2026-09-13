@@ -26,11 +26,33 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
     let _stage_h = (avail.y - bottom_bar_h).max(100.0);
 
     egui::Panel::bottom("canvas_bottom_bar")
-        .exact_size(bottom_bar_h)
+        .min_size(bottom_bar_h)
         .show_separator_line(false)
         .frame(Frame::new().fill(P::black_alpha(50)))
         .show(ui, |ui| {
             canvas_bottom_bar(ui, app);
+            ui.collapsing("Activity log", |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for line in &app.log_lines {
+                            let (kind, color) = match line.kind {
+                                LogKind::Ok => ("Done", P::INK2),
+                                LogKind::Warn => ("Notice", P::PEACH),
+                                LogKind::Info => ("Info", P::INK3),
+                            };
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}  {kind}  {}",
+                                    line.timestamp, line.message
+                                ))
+                                .size(11.5)
+                                .color(color),
+                            );
+                        }
+                    });
+            });
         });
 
     egui::CentralPanel::default()
@@ -72,13 +94,18 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
             .x;
         kw + vw + 20.0
     };
-    let pills_total_w = measure_pill("preset ",  preset)
+    let expanded = r.width() > 740.0;
+    let pills_total_w = if expanded {
+        measure_pill("preset ",  preset)
         + measure_pill("conf ",   &format!("{conf:.2}"))
         + measure_pill("aspect ", &aspect)
         + measure_pill("face-h ", &format!("{:.0}%", face_h))
         + 3.0 * 4.0   // three add_space(4) between pills
         + 12.0         // trailing add_space(12) on the right
-        + 20.0; // extra breathing room
+        + 20.0
+    } else {
+        measure_pill("preset ", preset) + 24.0
+    };
 
     // chips_x = left edge of the pills container; text is clipped before it.
     let chips_x = (r.max.x - pills_total_w).max(r.min.x + 80.0);
@@ -133,12 +160,14 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
     );
     child.add_space(12.0);
     ctl_pill(&mut child, "preset ", preset, Some(P::CYAN));
-    child.add_space(4.0);
-    ctl_pill(&mut child, "conf ", &format!("{conf:.2}"), Some(P::PEACH));
-    child.add_space(4.0);
-    ctl_pill(&mut child, "aspect ", &aspect, None);
-    child.add_space(4.0);
-    ctl_pill(&mut child, "face-h ", &format!("{:.0}%", face_h), None);
+    if expanded {
+        child.add_space(4.0);
+        ctl_pill(&mut child, "conf ", &format!("{conf:.2}"), Some(P::PEACH));
+        child.add_space(4.0);
+        ctl_pill(&mut child, "aspect ", &aspect, None);
+        child.add_space(4.0);
+        ctl_pill(&mut child, "face-h ", &format!("{:.0}%", face_h), None);
+    }
 }
 
 /// Maps a normalized image coordinate (0..1) to screen space under a CW rotation (degrees).
@@ -474,7 +503,7 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             painter.text(
                 fit_rect.center() + Vec2::new(0.0, 20.0),
                 egui::Align2::CENTER_CENTER,
-                "or click Detect faces →",
+                "or choose Open… in the toolbar",
                 egui::FontId::monospace(11.0),
                 P::INK3,
             );
@@ -499,18 +528,17 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             );
 
             let selected = app.selected_faces.contains(&i);
-            let color = if !selected {
-                P::INK3
-            } else if i % 2 == 0 {
-                P::PEACH
-            } else {
-                P::CYAN
-            };
+            let color = if !selected { P::INK3 } else { P::PEACH };
 
             draw_face_box(&painter, screen_rect, color, selected);
             draw_confidence_badge(
                 &painter,
-                format!("{:.2}", det.detection.score),
+                format!(
+                    "{} {} · {:.2}",
+                    if selected { "Selected" } else { "Face" },
+                    i + 1,
+                    det.detection.score
+                ),
                 screen_rect,
                 color,
             );
@@ -553,7 +581,8 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         && let Some((img_w, img_h)) = app.preview.image_size
     {
         let crop_settings = app.build_crop_settings();
-        let crop_stroke = Stroke::new(2.0, P::LIME);
+        let crop_stroke = Stroke::new(2.0, P::INK);
+        let crop_backing = Stroke::new(4.0, P::BG);
         let iw = img_w as f32;
         let ih = img_h as f32;
         let rot = app.canvas_rotation;
@@ -578,13 +607,16 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                         .iter()
                         .map(|(x, y)| egui::pos2(crop_rect.min.x + x, crop_rect.min.y + y))
                         .collect();
+                    painter.add(egui::Shape::closed_line(outline.clone(), crop_backing));
                     painter.add(egui::Shape::closed_line(outline, crop_stroke));
                 } else {
+                    painter.rect_stroke(crop_rect, 4.0, crop_backing, egui::StrokeKind::Inside);
                     painter.rect_stroke(crop_rect, 4.0, crop_stroke, egui::StrokeKind::Inside);
                 }
             } else {
                 let screen_rect =
                     rotated_bbox_screen_rect(rx, ry, rw, rh, Vec2::new(iw, ih), draw_rect, rot);
+                painter.rect_stroke(screen_rect, 4.0, crop_backing, egui::StrokeKind::Inside);
                 painter.rect_stroke(screen_rect, 4.0, crop_stroke, egui::StrokeKind::Inside);
             }
         }
@@ -594,7 +626,7 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     let delete_pressed = ui
         .ctx()
         .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
-    if delete_pressed && !app.selected_faces.is_empty() {
+    if delete_pressed && !ui.ctx().egui_wants_keyboard_input() && !app.selected_faces.is_empty() {
         app.delete_selected_faces();
     }
 
@@ -799,9 +831,6 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         }
     }
 
-    // Mini-log overlay
-    mini_log_overlay(ui, app, fit_rect);
-
     // Draw the rotation handle last (on top of image + overlays).
     // The handle lives inside stage_outer, so the panel painter clips it correctly.
     if let Some(h_resp) = h_resp_opt {
@@ -813,78 +842,6 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             app.canvas_rotation,
             h_resp.hovered(),
             dragging,
-        );
-    }
-}
-
-fn mini_log_overlay(ui: &mut Ui, app: &App2, image_rect: egui::Rect) {
-    if app.log_lines.is_empty() {
-        return;
-    }
-    let log_w = 300.0;
-    let log_max_lines = 5;
-    let line_h = 16.0;
-    let pad = 10.0;
-    let header_h = 24.0;
-    let n = app.log_lines.len().min(log_max_lines);
-    let log_h = header_h + n as f32 * line_h + pad * 2.0;
-
-    let log_rect = egui::Rect::from_min_size(
-        egui::pos2(image_rect.min.x + 18.0, image_rect.max.y - log_h - 18.0),
-        Vec2::new(log_w, log_h),
-    );
-    let painter = ui.painter();
-    painter.rect_filled(log_rect, 9.0, P::SURFACE.linear_multiply(0.85));
-    painter.rect_stroke(
-        log_rect,
-        9.0,
-        Stroke::new(1.0, P::RULE),
-        egui::StrokeKind::Outside,
-    );
-
-    painter.text(
-        egui::pos2(log_rect.min.x + pad, log_rect.min.y + 8.0),
-        egui::Align2::LEFT_TOP,
-        "Pipeline log",
-        egui::FontId::proportional(11.0),
-        P::INK,
-    );
-    painter.text(
-        egui::pos2(log_rect.max.x - pad, log_rect.min.y + 8.0),
-        egui::Align2::RIGHT_TOP,
-        "single.run",
-        egui::FontId::monospace(9.5),
-        P::CYAN,
-    );
-
-    let msg_x = log_rect.min.x + 62.0;
-    let msg_clip = egui::Rect::from_min_max(
-        egui::pos2(msg_x, log_rect.min.y),
-        egui::pos2(log_rect.max.x - pad, log_rect.max.y),
-    );
-    let msg_painter = painter.with_clip_rect(msg_clip);
-
-    let start = app.log_lines.len().saturating_sub(log_max_lines);
-    for (i, line) in app.log_lines.iter().skip(start).enumerate() {
-        let y = log_rect.min.y + header_h + i as f32 * line_h;
-        let msg_color = match line.kind {
-            LogKind::Ok => P::LIME,
-            LogKind::Warn => P::PEACH,
-            LogKind::Info => P::INK2,
-        };
-        painter.text(
-            egui::pos2(log_rect.min.x + pad, y),
-            egui::Align2::LEFT_TOP,
-            &line.timestamp,
-            egui::FontId::monospace(9.5),
-            P::INK3,
-        );
-        msg_painter.text(
-            egui::pos2(msg_x, y),
-            egui::Align2::LEFT_TOP,
-            &line.message,
-            egui::FontId::monospace(9.5),
-            msg_color,
         );
     }
 }
@@ -904,16 +861,24 @@ fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
 
         // Face chips
         let mut to_toggle: Option<usize> = None;
-        for (i, det) in app.preview.detections.iter().enumerate() {
-            let label = format!("face_{:03} · {:.2}", i + 1, det.detection.score);
-            let selected = app.selected_faces.contains(&i);
-            let alt = i % 2 == 1;
-            let resp = face_chip(ui, label, selected, alt);
-            if resp.clicked() {
-                to_toggle = Some(i);
-            }
-            ui.add_space(3.0);
-        }
+        egui::ScrollArea::horizontal()
+            .id_salt("face_chips")
+            .max_width((ui.available_width() - 200.0).max(40.0))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, det) in app.preview.detections.iter().enumerate() {
+                        let label = format!("face_{:03} · {:.2}", i + 1, det.detection.score);
+                        let selected = app.selected_faces.contains(&i);
+                        let alt = i % 2 == 1;
+                        let resp = face_chip(ui, label, selected, alt);
+                        if resp.clicked() {
+                            to_toggle = Some(i);
+                        }
+                        ui.add_space(3.0);
+                    }
+                });
+            });
         if let Some(i) = to_toggle {
             if app.selected_faces.contains(&i) {
                 app.selected_faces.remove(&i);
@@ -934,7 +899,10 @@ fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
                 app.zoom = (app.zoom * 1.2).min(8.0);
             }
             ui.add_space(2.0);
-            zoom_btn(ui, format!("{:.0}%", app.zoom * 100.0), "Reset");
+            if zoom_btn(ui, format!("{:.0}%", app.zoom * 100.0), "Reset zoom") {
+                app.zoom = 1.0;
+                app.pan = Vec2::ZERO;
+            }
             ui.add_space(2.0);
             if zoom_btn(ui, "−", "Zoom out") {
                 app.zoom = (app.zoom / 1.2).max(0.1);
@@ -943,24 +911,8 @@ fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
     });
 }
 
-fn zoom_btn(ui: &mut egui::Ui, label: impl Into<String>, _tip: &str) -> bool {
-    let font = egui::FontId::monospace(10.5);
-    let galley = ui.painter().layout_no_wrap(label.into(), font, P::INK2);
-    let w = (galley.size().x + 14.0).max(26.0);
-    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 26.0), Sense::click());
-    let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
-    let r = resp.rect;
-    let bg = if resp.hovered() {
-        P::white_alpha(20)
-    } else {
-        P::white_alpha(10)
-    };
-    painter.rect_filled(r, 6.0, bg);
-    painter.rect_stroke(r, 6.0, Stroke::new(1.0, P::RULE), egui::StrokeKind::Outside);
-    painter.galley(
-        r.min + Vec2::new((w - galley.size().x) / 2.0, (26.0 - galley.size().y) / 2.0),
-        galley,
-        P::INK2,
-    );
-    resp.clicked()
+fn zoom_btn(ui: &mut egui::Ui, label: impl Into<String>, tip: &str) -> bool {
+    ui.add(egui::Button::new(label.into()).min_size(Vec2::splat(28.0)))
+        .on_hover_text(tip)
+        .clicked()
 }

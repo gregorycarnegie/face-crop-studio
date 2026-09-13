@@ -53,19 +53,21 @@ pub enum BatchFileStatus {
 }
 
 impl BatchFileStatus {
-    pub fn badge_label(&self) -> &str {
+    /// Stable outcome name, as written to the batch report.
+    pub fn outcome(&self) -> &'static str {
         match self {
-            Self::Pending => "—",
-            Self::Processing => "run",
-            Self::Completed { faces_exported, .. } => {
-                if *faces_exported == 0 {
-                    "skip"
-                } else {
-                    "ok"
-                }
-            }
-            Self::Failed { .. } => "err",
-            Self::Skipped => "skip",
+            Self::Pending => "pending",
+            Self::Processing => "processing",
+            Self::Completed {
+                faces_detected: 0, ..
+            } => "no_faces",
+            // Faces were found, but the quality rules kept every one of them back.
+            Self::Completed {
+                faces_exported: 0, ..
+            } => "filtered",
+            Self::Completed { .. } => "succeeded",
+            Self::Failed { .. } => "failed",
+            Self::Skipped => "skipped",
         }
     }
     pub fn face_count(&self) -> Option<usize> {

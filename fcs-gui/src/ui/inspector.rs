@@ -53,64 +53,18 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
 fn inspector_tab_bar(ui: &mut Ui, app: &mut App2) {
     let tabs = [
-        ("Crop", InspectorTab::Crop),
-        ("Output", InspectorTab::Output),
-        ("Enhance", InspectorTab::Enhance),
+        InspectorTab::Crop,
+        InspectorTab::Output,
+        InspectorTab::Enhance,
     ];
-    ui.painter().line_segment(
-        [
-            egui::pos2(ui.min_rect().min.x, ui.min_rect().min.y + 32.0),
-            egui::pos2(ui.min_rect().max.x, ui.min_rect().min.y + 32.0),
-        ],
-        Stroke::new(1.0, P::RULE),
-    );
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.set_height(32.0);
-        let w = ui.available_width() / tabs.len() as f32;
-        let row_left = ui.cursor().min.x;
-        let mut underline_y = 0.0;
-        for (label, variant) in &tabs {
-            let is_active = app.inspector_tab == *variant;
-            let (resp, painter) = ui.allocate_painter(Vec2::new(w, 32.0), Sense::click());
-            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-            underline_y = resp.rect.max.y - 2.0;
-            let text_color = if is_active { P::CYAN } else { P::INK3 };
-            if resp.hovered() && !is_active {
-                painter.rect_filled(resp.rect, 0.0, P::white_alpha(5));
-            }
-            if is_active {
-                painter.rect_filled(resp.rect, 0.0, P::cyan_alpha(10));
-            }
-            painter.text(
-                resp.rect.center(),
-                egui::Align2::CENTER_CENTER,
-                *label,
-                egui::FontId::monospace(10.5),
-                text_color,
-            );
-            if resp.clicked() {
-                app.inspector_tab = *variant;
-            }
-        }
-        // Sliding underline under the active tab
-        let active_idx = tabs
-            .iter()
-            .position(|(_, v)| app.inspector_tab == *v)
-            .unwrap_or(0);
-        let anim = ui.ctx().animate_value_with_time(
-            ui.id().with("tab_underline"),
-            active_idx as f32,
-            0.15,
-        );
-        ui.painter().line_segment(
-            [
-                egui::pos2(row_left + anim * w, underline_y),
-                egui::pos2(row_left + (anim + 1.0) * w, underline_y),
-            ],
-            Stroke::new(2.0, P::CYAN),
-        );
+    let mut selected = tabs
+        .iter()
+        .position(|tab| *tab == app.inspector_tab)
+        .unwrap_or(0);
+    egui::Frame::new().inner_margin(8).show(ui, |ui| {
+        crate::ui::widgets::segmented_control(ui, &["Crop", "Output", "Enhance"], &mut selected);
     });
+    app.inspector_tab = tabs[selected];
 }
 
 fn mini_stats(ui: &mut Ui, app: &App2) {
@@ -130,13 +84,13 @@ fn mini_stats(ui: &mut Ui, app: &App2) {
     let w = ui.available_width() / 2.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        stat_cell(ui, "Faces", &total.to_string(), P::PEACH, w);
-        stat_cell(ui, "Selected", &selected.to_string(), P::CYAN, w);
+        stat_cell(ui, "Faces", &total.to_string(), P::INK, w);
+        stat_cell(ui, "Selected", &selected.to_string(), P::INK, w);
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        stat_cell(ui, "Detect", &format!("{detect_ms}ms"), P::LIME, w);
-        stat_cell(ui, "Source", &format!("{src_w}×{src_h}"), P::ROSE, w);
+        stat_cell(ui, "Detect", &format!("{detect_ms}ms"), P::INK, w);
+        stat_cell(ui, "Source", &format!("{src_w}×{src_h}"), P::INK, w);
     });
 }
 
@@ -290,7 +244,7 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         field_label(ui, &pct_label);
         slider_with_label(
             ui,
-            "",
+            "Face height",
             &mut app.settings.crop.face_height_pct,
             10.0,
             100.0,
@@ -347,7 +301,7 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         // threshold it was built with (experiment 66).
         if slider_with_label(
             ui,
-            "",
+            "Confidence floor",
             &mut app.settings.detection.score_threshold,
             0.0,
             1.0,
@@ -513,6 +467,7 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
 
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 64.0).max(80.0));
                         let name = app
                             .preview
                             .image_path
@@ -520,55 +475,37 @@ fn panel_04_crops_ready(ui: &mut Ui, app: &mut App2) {
                             .and_then(|p| p.file_stem())
                             .and_then(|s| s.to_str())
                             .unwrap_or("crop");
-                        ui.label(
-                            egui::RichText::new(format!("{name}_face{}.jpg", i + 1))
-                                .size(11.0)
-                                .color(P::INK)
-                                .family(egui::FontFamily::Monospace),
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{name} · Face {}", i + 1))
+                                    .size(11.0)
+                                    .color(P::INK)
+                                    .family(egui::FontFamily::Monospace),
+                            )
+                            .truncate(),
                         );
                         let w = app.settings.crop.output_width;
                         let h = app.settings.crop.output_height;
                         ui.label(
-                            egui::RichText::new(format!("{w}×{h} · q92"))
-                                .size(10.0)
-                                .color(P::INK3)
-                                .family(egui::FontFamily::Monospace),
+                            egui::RichText::new(format!(
+                                "{w}×{h} · {:?}",
+                                app.settings.crop.output_format
+                            ))
+                            .size(10.0)
+                            .color(P::INK3)
+                            .family(egui::FontFamily::Monospace),
                         );
                         ui.label(
-                            egui::RichText::new("● ready")
+                            egui::RichText::new("✔ Ready")
                                 .size(10.0)
                                 .color(P::LIME)
                                 .family(egui::FontFamily::Monospace),
                         );
                     });
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (resp, painter) =
-                            ui.allocate_painter(Vec2::new(46.0, 26.0), Sense::click());
-                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                        let bg = if resp.hovered() {
-                            P::lime_alpha(50)
-                        } else {
-                            P::lime_alpha(30)
-                        };
-                        painter.rect_filled(resp.rect, 6.0, bg);
-                        painter.rect_stroke(
-                            resp.rect,
-                            6.0,
-                            Stroke::new(1.0, P::lime_alpha(76)),
-                            egui::StrokeKind::Outside,
-                        );
-                        painter.text(
-                            resp.rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Save",
-                            egui::FontId::monospace(10.0),
-                            P::LIME,
-                        );
-                        if resp.clicked() {
-                            save_face = Some(i);
-                        }
-                    });
+                    if ui.button("Save").clicked() {
+                        save_face = Some(i);
+                    }
                 });
             }
         }
@@ -638,7 +575,7 @@ fn output_tab(ui: &mut Ui, app: &mut App2) {
         ui.add_space(8.0);
         field_label(ui, "JPEG quality");
         let mut q = app.settings.crop.jpeg_quality as f32;
-        slider_with_label(ui, "", &mut q, 50.0, 100.0, "px");
+        slider_with_label(ui, "JPEG quality", &mut q, 50.0, 100.0, "pct");
         app.settings.crop.jpeg_quality = q as u8;
     });
 }
@@ -655,7 +592,7 @@ fn enhance_tab(ui: &mut Ui, app: &mut App2) {
         );
         slider_with_label(
             ui,
-            "",
+            "Exposure",
             &mut app.settings.enhance.exposure_stops,
             -3.0,
             3.0,
@@ -668,7 +605,7 @@ fn enhance_tab(ui: &mut Ui, app: &mut App2) {
             &format!("Brightness · {}", app.settings.enhance.brightness),
         );
         let mut bright = app.settings.enhance.brightness as f32;
-        slider_with_label(ui, "", &mut bright, -100.0, 100.0, "px");
+        slider_with_label(ui, "Brightness", &mut bright, -100.0, 100.0, "int");
         app.settings.enhance.brightness = bright as i32;
         ui.add_space(4.0);
 
@@ -676,21 +613,42 @@ fn enhance_tab(ui: &mut Ui, app: &mut App2) {
             ui,
             &format!("Contrast · {:.2}", app.settings.enhance.contrast),
         );
-        slider_with_label(ui, "", &mut app.settings.enhance.contrast, -2.0, 2.0, "");
+        slider_with_label(
+            ui,
+            "Contrast",
+            &mut app.settings.enhance.contrast,
+            -2.0,
+            2.0,
+            "",
+        );
         ui.add_space(4.0);
 
         field_label(
             ui,
             &format!("Saturation · {:.2}", app.settings.enhance.saturation),
         );
-        slider_with_label(ui, "", &mut app.settings.enhance.saturation, 0.0, 3.0, "");
+        slider_with_label(
+            ui,
+            "Saturation",
+            &mut app.settings.enhance.saturation,
+            0.0,
+            3.0,
+            "",
+        );
         ui.add_space(4.0);
 
         field_label(
             ui,
             &format!("Sharpness · {:.2}", app.settings.enhance.sharpness),
         );
-        slider_with_label(ui, "", &mut app.settings.enhance.sharpness, 0.0, 4.0, "");
+        slider_with_label(
+            ui,
+            "Sharpness",
+            &mut app.settings.enhance.sharpness,
+            0.0,
+            4.0,
+            "",
+        );
         ui.add_space(8.0);
 
         toggle_row(

@@ -34,17 +34,9 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
                     .unwrap_or("YuNet 640");
                 status_cell(ui, &format!("{model_name} · ONNX"), None);
 
-                // GPU adapter name
-                let gpu_label = app
-                    .gpu
-                    .status
-                    .adapter_name
-                    .as_deref()
-                    .map(|n| {
-                        let backend = app.gpu.status.backend.as_deref().unwrap_or("wgpu");
-                        format!("{backend} · {n}")
-                    })
-                    .unwrap_or_else(|| "wgpu · CPU".to_string());
+                // Where detection runs
+                let backend = app.detector.as_deref().map(|d| d.inference_backend());
+                let gpu_label = crate::ui::toolbar::gpu_label(&app.gpu.status, backend);
                 status_cell(ui, &gpu_label, None);
 
                 // Batch progress

@@ -5,21 +5,22 @@ use crate::{
     types::App2,
     ui::widgets::{gpu_pill, tb_sep},
 };
-use egui::{Color32, Frame, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, Frame, Ui, Vec2};
+use fcs_utils::gpu::{GpuStatusIndicator, GpuStatusMode};
 
 pub fn show(ui: &mut Ui, app: &mut App2) {
     egui::Panel::top("toolbar")
-        .exact_size(52.0)
+        .min_size(52.0)
         .show_separator_line(false)
         .frame(
             Frame::new()
-                .fill(P::SURFACE.linear_multiply(0.6))
+                .fill(P::BG1)
                 .inner_margin(egui::Margin::symmetric(12, 8)),
         )
         .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 // Primary action: Detect
-                if primary_btn(ui, "Detect faces →", P::CYAN, bg_from_cyan())
+                if primary_btn(ui, "Detect faces →", P::BG, P::ACCENT)
                     && let Some(path) = app.preview.image_path.clone()
                 {
                     app.load_image_path(path);
@@ -27,7 +28,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 ui.add_space(4.0);
 
                 // Secondary action: Export
-                if primary_btn(ui, "Export crops", P::PEACH, bg_from_peach()) {
+                if ghost_btn(ui, "Export crops") {
                     if app.selected_faces.is_empty() && !app.batch_files.is_empty() {
                         crate::core::export::start_batch_export(app);
                     } else {
@@ -37,7 +38,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 tb_sep(ui);
 
                 // Icon buttons
-                icon_btn(ui, "📂", "Open", true, || {
+                icon_btn(ui, "Open…", "Open images", true, || {
                     if let Some(paths) = rfd::FileDialog::new()
                         .add_filter("Images", fcs_utils::SUPPORTED_IMAGE_EXTENSIONS)
                         .pick_files()
@@ -49,13 +50,13 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                         }
                     }
                 });
-                icon_btn(ui, "💾", "Save", true, || {
+                icon_btn(ui, "Save", "Save selected crops", true, || {
                     crate::core::export::export_selected_faces(app);
                 });
                 let can_undo = !app.undo_stack.is_empty();
                 let can_redo = !app.redo_stack.is_empty();
-                icon_btn(ui, "↩", "Undo (Ctrl+Z)", can_undo, || app.undo());
-                icon_btn(ui, "↪", "Redo (Ctrl+Y)", can_redo, || app.redo());
+                icon_btn(ui, "Undo", "Undo (Ctrl+Z)", can_undo, || app.undo());
+                icon_btn(ui, "Redo", "Redo (Ctrl+Y)", can_redo, || app.redo());
                 tb_sep(ui);
 
                 // Rotation
@@ -96,213 +97,72 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 });
 
                 // Right: GPU pill
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = app
-                        .gpu
-                        .status
-                        .adapter_name
-                        .as_deref()
-                        .map(|n| format!("GPU · {n}"))
-                        .unwrap_or_else(|| "GPU · wgpu".to_string());
-                    gpu_pill(ui, &label);
-                });
+                if ui.available_width() > 300.0 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let backend = app.detector.as_deref().map(|d| d.inference_backend());
+                        gpu_pill(ui, &gpu_label(&app.gpu.status, backend));
+                    });
+                }
             });
         });
 }
 
-fn primary_btn(ui: &mut egui::Ui, label: &str, fg: Color32, bg: Color32) -> bool {
-    let font = egui::FontId::proportional(12.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, fg);
-    let w = galley.size().x + 26.0;
-    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let r = resp.rect;
-    let fill = if resp.is_pointer_button_down_on() {
-        lighten(bg, -0.04)
-    } else if resp.hovered() {
-        lighten(bg, 0.08)
-    } else {
-        bg
-    };
-    painter.rect_filled(r, 7.0, fill);
-    // Accent border makes the two primary actions read as primary.
-    let border_a = if resp.hovered() { 130 } else { 70 };
-    painter.rect_stroke(
-        r,
-        7.0,
-        Stroke::new(
-            1.0,
-            Color32::from_rgba_unmultiplied(fg.r(), fg.g(), fg.b(), border_a),
-        ),
-        egui::StrokeKind::Outside,
-    );
-    painter.galley(
-        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
-        galley,
-        fg,
-    );
-    resp.clicked()
+/// Where detection really runs, for the toolbar pill and the status bar.
+///
+/// `status` only describes GPU preprocessing: with that off it carries no adapter even
+/// while inference is on the GPU, and with the GPU off it must not claim one at all
+/// (this used to fall back to "GPU · wgpu").
+pub(crate) fn gpu_label(status: &GpuStatusIndicator, inference_backend: Option<&str>) -> String {
+    let gpu_inference = inference_backend == Some("wgsl-gpu");
+    match status.adapter_name.as_deref() {
+        Some(name) if gpu_inference || status.mode == GpuStatusMode::Available => {
+            format!("GPU · {name}")
+        }
+        _ if gpu_inference => "GPU · inference only".to_string(),
+        _ => "CPU".to_string(),
+    }
 }
 
-fn ghost_btn(ui: &mut egui::Ui, label: &str) -> bool {
-    let font = egui::FontId::proportional(12.5);
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, P::INK);
-    let w = galley.size().x + 26.0;
-    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let r = resp.rect;
-    if resp.hovered() {
-        painter.rect_filled(r, 7.0, P::white_alpha(15));
-        painter.rect_stroke(
-            r,
-            7.0,
-            Stroke::new(1.0, P::RULE2),
-            egui::StrokeKind::Outside,
-        );
-    } else {
-        painter.rect_stroke(
-            r,
-            7.0,
-            Stroke::new(1.0, P::RULE2),
-            egui::StrokeKind::Outside,
-        );
-        painter.rect_filled(r, 7.0, P::white_alpha(5));
-    }
-    painter.galley(
-        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
-        galley,
-        P::INK,
-    );
-    resp.clicked()
+fn primary_btn(ui: &mut Ui, label: &str, fg: Color32, bg: Color32) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).color(fg))
+            .fill(bg)
+            .min_size(Vec2::new(0.0, 34.0)),
+    )
+    .clicked()
 }
 
-fn icon_btn(
-    ui: &mut egui::Ui,
-    icon: &str,
-    tooltip: &str,
-    enabled: bool,
-    action: impl FnOnce(),
-) -> bool {
-    let (resp, painter) = ui.allocate_painter(Vec2::splat(34.0), Sense::click());
-    let resp = if enabled {
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-    } else {
-        resp
-    };
-    let r = resp.rect;
-    if enabled && resp.hovered() {
-        painter.rect_filled(r, 7.0, P::white_alpha(15));
-    }
-    painter.rect_stroke(
-        r,
-        7.0,
-        Stroke::new(1.0, if enabled { P::RULE2 } else { P::RULE }),
-        egui::StrokeKind::Outside,
-    );
-    painter.text(
-        r.center(),
-        egui::Align2::CENTER_CENTER,
-        icon,
-        egui::FontId::proportional(14.0),
-        if enabled { P::INK2 } else { P::white_alpha(50) },
-    );
-    let clicked = enabled && resp.clicked();
-    resp.on_hover_text(tooltip);
+fn ghost_btn(ui: &mut Ui, label: &str) -> bool {
+    ui.add(egui::Button::new(label).min_size(Vec2::new(0.0, 34.0)))
+        .clicked()
+}
+
+fn icon_btn(ui: &mut Ui, icon: &str, tooltip: &str, enabled: bool, action: impl FnOnce()) -> bool {
+    let clicked = ui
+        .add_enabled(enabled, egui::Button::new(icon).min_size(Vec2::splat(34.0)))
+        .on_hover_text(tooltip)
+        .clicked();
     if clicked {
         action();
     }
     clicked
 }
 
-fn toggle_btn(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
-    let font = egui::FontId::proportional(12.5);
-    let color = if active { P::CYAN } else { P::INK };
-    let galley = ui.painter().layout_no_wrap(label.to_string(), font, color);
-    let w = galley.size().x + 26.0;
-    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let r = resp.rect;
-    if active {
-        painter.rect_filled(r, 7.0, P::cyan_alpha(30));
-        painter.rect_stroke(r, 7.0, Stroke::new(1.5, P::CYAN), egui::StrokeKind::Outside);
-    } else {
-        let bg = if resp.hovered() {
-            P::white_alpha(15)
-        } else {
-            P::white_alpha(5)
-        };
-        painter.rect_filled(r, 7.0, bg);
-        painter.rect_stroke(
-            r,
-            7.0,
-            Stroke::new(1.0, P::RULE2),
-            egui::StrokeKind::Outside,
-        );
-    }
-    painter.galley(
-        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
-        galley,
-        color,
-    );
-    resp.clicked()
+fn toggle_btn(ui: &mut Ui, label: &str, active: bool) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).color(if active { P::BG } else { P::INK }))
+            .selected(active)
+            .min_size(Vec2::new(0.0, 34.0)),
+    )
+    .clicked()
 }
 
-fn danger_btn(ui: &mut egui::Ui, label: &str, action: impl FnOnce()) -> bool {
-    let font = egui::FontId::proportional(12.5);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), font, P::ROSE);
-    let w = galley.size().x + 26.0;
-    let (resp, painter) = ui.allocate_painter(Vec2::new(w, 34.0), Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let r = resp.rect;
-    let bg = if resp.hovered() {
-        P::rose_alpha(30)
-    } else {
-        P::rose_alpha(12)
-    };
-    painter.rect_filled(r, 7.0, bg);
-    painter.rect_stroke(
-        r,
-        7.0,
-        Stroke::new(1.0, P::rose_alpha(64)),
-        egui::StrokeKind::Outside,
-    );
-    painter.galley(
-        r.min + Vec2::new(13.0, (34.0 - galley.size().y) / 2.0),
-        galley,
-        P::ROSE,
-    );
-    if resp.clicked() {
+fn danger_btn(ui: &mut Ui, label: &str, action: impl FnOnce()) -> bool {
+    let clicked = ghost_btn(ui, label);
+    if clicked {
         action();
-        true
-    } else {
-        false
     }
-}
-
-// ponytail: assumes an opaque input. `Color32` stores premultiplied channels, so
-// feeding this a translucent colour premultiplies a second time and darkens
-// instead of lightening. Every caller passes `bg_from_*`/`P::` opaque constants;
-// switch to `Color32::from_rgba_premultiplied` if that ever stops being true.
-fn lighten(c: Color32, amt: f32) -> Color32 {
-    let f = |v: u8| ((v as f32 + amt * 255.0).min(255.0)) as u8;
-    Color32::from_rgba_unmultiplied(f(c.r()), f(c.g()), f(c.b()), c.a())
-}
-
-fn bg_from_cyan() -> Color32 {
-    Color32::from_rgb(
-        (0x7b_u8 as f32 * 0.35) as u8,
-        (0xe0_u8 as f32 * 0.35) as u8,
-        (0xd6_u8 as f32 * 0.35) as u8,
-    )
-}
-fn bg_from_peach() -> Color32 {
-    Color32::from_rgb(
-        (0xff_u8 as f32 * 0.40) as u8,
-        (0xb8_u8 as f32 * 0.35) as u8,
-        (0x9a_u8 as f32 * 0.30) as u8,
-    )
+    clicked
 }
 
 #[cfg(test)]
@@ -329,6 +189,27 @@ mod tests {
     const INSIDE: egui::Vec2 = egui::vec2(14.0, 17.0);
     /// Well past the 34px row, so it belongs to whatever is laid out next.
     const BELOW: egui::Vec2 = egui::vec2(14.0, 60.0);
+
+    #[test]
+    fn gpu_label_names_a_gpu_only_when_detection_uses_one() {
+        let available = GpuStatusIndicator::available("RTX 4090", "Dx12", None, None, None);
+        assert_eq!(gpu_label(&available, Some("onnxruntime")), "GPU · RTX 4090");
+        assert_eq!(gpu_label(&available, None), "GPU · RTX 4090");
+
+        // GPU off (or preprocessing off): no adapter, and nothing should say GPU...
+        let disabled = GpuStatusIndicator::disabled("GPU preprocessing disabled");
+        assert_eq!(gpu_label(&disabled, Some("onnxruntime")), "CPU");
+        // ...unless inference is still on the GPU.
+        assert_eq!(
+            gpu_label(&disabled, Some("wgsl-gpu")),
+            "GPU · inference only"
+        );
+
+        // The preprocessor failed: its adapter only counts if inference uses it.
+        let fallback = GpuStatusIndicator::fallback("boom", Some("RTX 4090".into()), None);
+        assert_eq!(gpu_label(&fallback, Some("cpu-graph")), "CPU");
+        assert_eq!(gpu_label(&fallback, Some("wgsl-gpu")), "GPU · RTX 4090");
+    }
 
     #[test]
     fn primary_btn_reports_clicks_on_its_row_only() {
@@ -434,41 +315,6 @@ mod tests {
             click_at(&mut h, origin + egui::vec2(17.0, 17.0));
             assert_eq!(h.state().clicks, expected, "enabled = {enabled}");
             assert_eq!(fired.get(), expected, "action, enabled = {enabled}");
-        }
-    }
-
-    #[test]
-    fn lighten_brightens_darkens_and_saturates_without_wrapping() {
-        // Opaque, matching every real caller — see the note on `lighten`.
-        let c = Color32::from_rgb(100, 150, 200);
-
-        let up = lighten(c, 0.1);
-        assert!(up.r() > c.r() && up.g() > c.g() && up.b() > c.b());
-
-        // The two hover/press states in `primary_btn` are a +0.08 and a -0.04,
-        // so the negative direction is not hypothetical.
-        let down = lighten(c, -0.1);
-        assert!(down.r() < c.r() && down.g() < c.g() && down.b() < c.b());
-
-        // Both ends saturate. The `as u8` cast on a negative float is the only
-        // thing standing between -25.5 and a wrapped-around bright colour.
-        assert_eq!(lighten(c, 10.0), Color32::from_rgb(255, 255, 255));
-        assert_eq!(lighten(c, -10.0), Color32::from_rgb(0, 0, 0));
-
-        assert_eq!(lighten(c, 0.1).a(), 255, "alpha is preserved");
-    }
-
-    #[test]
-    fn the_two_primary_button_backgrounds_are_distinct_and_dark() {
-        // They tint the two primary actions apart; identical values would make
-        // the toolbar's colour coding meaningless.
-        let (cyan, peach) = (bg_from_cyan(), bg_from_peach());
-        assert_ne!(cyan, peach);
-        for c in [cyan, peach] {
-            assert!(
-                c.r() < 128 && c.g() < 128 && c.b() < 128,
-                "{c:?} must stay dark enough for P::INK text to read on it",
-            );
         }
     }
 }

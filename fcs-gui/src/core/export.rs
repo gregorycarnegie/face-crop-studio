@@ -1,6 +1,6 @@
 //! Export / batch crop logic.
 
-use crate::types::{App2, BatchFileStatus, JobMessage};
+use crate::types::{App2, BatchFile, BatchFileStatus, JobMessage};
 
 use fcs_core::{
     CropSettings as CoreCropSettings, Detection, YuNetDetector, calculate_crop_region,
@@ -471,6 +471,7 @@ fn run_batch_job(
 
     let multi_face = selected.len() > 1;
     let mut faces_exported = 0usize;
+    let mut save_errors = Vec::new();
     for candidate_index in selected {
         let candidate = &candidates[candidate_index];
         if settings
@@ -512,14 +513,76 @@ fn run_batch_job(
                     candidate.face_index + 1,
                     path.display()
                 );
+                save_errors.push(format!("{}: {err}", output_path.display()));
             }
         }
+    }
+
+    // A crop that was chosen but never written is lost output, so it fails the image
+    // rather than hiding inside a lower "exported" count.
+    if !save_errors.is_empty() {
+        return BatchFileStatus::Failed {
+            error: format!(
+                "Saved {faces_exported} of {} crop(s): {}",
+                faces_exported + save_errors.len(),
+                save_errors.join("; ")
+            ),
+        };
     }
 
     BatchFileStatus::Completed {
         faces_detected,
         faces_exported,
     }
+}
+
+#[derive(serde::Serialize)]
+struct ReportRow<'a> {
+    image: String,
+    outcome: &'static str,
+    faces_detected: Option<usize>,
+    faces_exported: Option<usize>,
+    error: Option<&'a str>,
+}
+
+/// One row per queued image with its outcome, as CSV or as JSON with success/failure totals.
+pub fn batch_report(files: &[BatchFile], csv: bool) -> anyhow::Result<Vec<u8>> {
+    let rows: Vec<ReportRow> = files
+        .iter()
+        .map(|file| {
+            let (faces_detected, faces_exported) = match file.status {
+                BatchFileStatus::Completed {
+                    faces_detected,
+                    faces_exported,
+                } => (Some(faces_detected), Some(faces_exported)),
+                _ => (None, None),
+            };
+            ReportRow {
+                image: file.path.display().to_string(),
+                outcome: file.status.outcome(),
+                faces_detected,
+                faces_exported,
+                error: match &file.status {
+                    BatchFileStatus::Failed { error } => Some(error.as_str()),
+                    _ => None,
+                },
+            }
+        })
+        .collect();
+
+    if csv {
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        for row in &rows {
+            writer.serialize(row)?;
+        }
+        return Ok(writer.into_inner().map_err(|e| e.into_error())?);
+    }
+    let count = |outcome: &str| rows.iter().filter(|row| row.outcome == outcome).count();
+    Ok(serde_json::to_vec_pretty(&serde_json::json!({
+        "succeeded": count("succeeded"),
+        "failed": count("failed"),
+        "images": rows,
+    }))?)
 }
 
 fn select_candidates(
@@ -634,5 +697,76 @@ fn output_extension(format: ImageFormatHint) -> &'static str {
         ImageFormatHint::Tiff => "tif",
         ImageFormatHint::Bmp => "bmp",
         ImageFormatHint::Avif => "avif",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fcs_utils::config::QualityAutomationSettings;
+
+    #[test]
+    fn select_candidates_keeps_every_face_unless_auto_select_is_on() {
+        // Multi-face mode is this rule switched off.
+        let candidate = |face_index, quality, quality_score| ExportCandidate {
+            face_index,
+            quality,
+            quality_score,
+            detection_score: 0.9,
+        };
+        let candidates = [
+            candidate(0, Quality::Medium, 5.0),
+            candidate(1, Quality::High, 9.0),
+            candidate(2, Quality::High, 7.0),
+        ];
+        let mut rules = QualityAutomationSettings::default();
+        assert_eq!(select_candidates(&candidates, &rules), Some(vec![0, 1, 2]));
+
+        rules.auto_select_best_face = true;
+        assert_eq!(select_candidates(&candidates, &rules), Some(vec![1]));
+    }
+
+    #[test]
+    fn batch_report_lists_each_image_with_its_outcome() {
+        let file = |name: &str, status: BatchFileStatus| BatchFile {
+            path: PathBuf::from(name),
+            status,
+            output_override: None,
+        };
+        let completed = |faces_detected, faces_exported| BatchFileStatus::Completed {
+            faces_detected,
+            faces_exported,
+        };
+        let files = [
+            file("ok.jpg", completed(3, 3)),
+            file("empty.jpg", completed(0, 0)),
+            file("filtered.jpg", completed(2, 0)),
+            file(
+                "bad, \"name\".jpg",
+                BatchFileStatus::Failed {
+                    error: "Failed to load: truncated".into(),
+                },
+            ),
+            file("later.jpg", BatchFileStatus::Pending),
+        ];
+
+        let csv = String::from_utf8(batch_report(&files, true).unwrap()).unwrap();
+        assert_eq!(
+            csv,
+            "image,outcome,faces_detected,faces_exported,error\n\
+             ok.jpg,succeeded,3,3,\n\
+             empty.jpg,no_faces,0,0,\n\
+             filtered.jpg,filtered,2,0,\n\
+             \"bad, \"\"name\"\".jpg\",failed,,,Failed to load: truncated\n\
+             later.jpg,pending,,,\n"
+        );
+
+        let json: serde_json::Value =
+            serde_json::from_slice(&batch_report(&files, false).unwrap()).unwrap();
+        assert_eq!(json["succeeded"], 1);
+        assert_eq!(json["failed"], 1);
+        assert_eq!(json["images"].as_array().map(Vec::len), Some(5));
+        assert_eq!(json["images"][3]["outcome"], "failed");
+        assert_eq!(json["images"][3]["error"], "Failed to load: truncated");
     }
 }
