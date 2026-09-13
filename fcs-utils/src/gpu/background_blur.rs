@@ -6,7 +6,9 @@ use image::{DynamicImage, RgbaImage};
 use wgpu::util::DeviceExt;
 
 use super::{
-    BACKGROUND_BLUR_WGSL, GpuBufferPool, GpuContext, pack_rgba_pixels, unpack_rgba_pixels,
+    BACKGROUND_BLUR_WGSL, GpuBufferPool, GpuContext,
+    buffer_pool::{READBACK, STORAGE_RW},
+    pack_rgba_pixels, unpack_rgba_pixels,
 };
 use crate::{
     create_gpu_pipeline, gpu_readback, gpu_uniforms, storage_buffer_entry, uniform_buffer_entry,
@@ -82,26 +84,12 @@ impl GpuBackgroundBlur {
         let buffer_size = (sharp_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
 
         // Acquire buffers from pool
-        let sharp_buffer = self.buffer_pool.acquire(
-            buffer_size,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            Some("background_blur_sharp"),
-        )?;
-        let blur_buffer = self.buffer_pool.acquire(
-            buffer_size,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            Some("background_blur_blur"),
-        )?;
-        let output_buffer = self.buffer_pool.acquire(
-            buffer_size,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            Some("background_blur_output"),
-        )?;
-        let readback = self.buffer_pool.acquire(
-            buffer_size,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            Some("background_blur_readback"),
-        )?;
+        let pool = &self.buffer_pool;
+        let sharp_buffer = pool.acquire(buffer_size, STORAGE_RW, Some("background_blur_sharp"))?;
+        let blur_buffer = pool.acquire(buffer_size, STORAGE_RW, Some("background_blur_blur"))?;
+        let output_buffer =
+            pool.acquire(buffer_size, STORAGE_RW, Some("background_blur_output"))?;
+        let readback = pool.acquire(buffer_size, READBACK, Some("background_blur_readback"))?;
 
         // Upload input data
         queue.write_buffer(&sharp_buffer, 0, cast_slice(&sharp_u32));
@@ -163,26 +151,10 @@ impl GpuBackgroundBlur {
         let out_bytes = unpack_rgba_pixels(&out_pixels);
 
         // Recycle buffers back to pool
-        self.buffer_pool.recycle(
-            sharp_buffer,
-            buffer_size,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
-        self.buffer_pool.recycle(
-            blur_buffer,
-            buffer_size,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
-        self.buffer_pool.recycle(
-            output_buffer,
-            buffer_size,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        );
-        self.buffer_pool.recycle(
-            readback,
-            buffer_size,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        );
+        pool.recycle(sharp_buffer, buffer_size, STORAGE_RW);
+        pool.recycle(blur_buffer, buffer_size, STORAGE_RW);
+        pool.recycle(output_buffer, buffer_size, STORAGE_RW);
+        pool.recycle(readback, buffer_size, READBACK);
 
         let image = RgbaImage::from_raw(width, height, out_bytes)
             .context("failed to build blurred image")?;
@@ -221,9 +193,9 @@ mod tests {
             image::Rgba([100, 100, 100, 255]),
         ));
         blurrer.blend(&img, &img, 0.5).expect("blend");
-        // Verify accessors don't panic
+        assert!(blurrer.memory_usage() > 0, "a pass pools its buffers");
         blurrer.clear_cache();
-        let _ = blurrer.memory_usage();
+        assert_eq!(blurrer.memory_usage(), 0, "clear_cache must release them");
     }
 
     #[test]

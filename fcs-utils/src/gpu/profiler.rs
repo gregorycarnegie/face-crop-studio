@@ -85,7 +85,7 @@ impl GpuProfiler {
             readback: device.create_buffer(&BufferDescriptor {
                 label: Some("gpu_profiler_readback"),
                 size: byte_len,
-                usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+                usage: super::buffer_pool::READBACK,
                 mapped_at_creation: false,
             }),
             period_ns: queue.get_timestamp_period(),
@@ -145,12 +145,9 @@ impl GpuProfiler {
             .enumerate()
             .filter_map(|(pass, pair)| {
                 let label = labels.get(pass)?.clone()?;
-                // Saturating: a pass whose timestamps land out of order (some drivers
-                // reorder across a submit boundary) reports zero rather than underflows.
-                let elapsed = pair[1].saturating_sub(pair[0]);
                 Some(PassTiming {
                     label,
-                    duration_ns: elapsed as f64 * f64::from(self.period_ns),
+                    duration_ns: pass_duration_ns(pair[0], pair[1], self.period_ns),
                 })
             })
             .collect();
@@ -193,6 +190,12 @@ impl GpuProfiler {
         self.readback.unmap();
         Ok(ticks)
     }
+}
+
+/// Nanoseconds between a (begin, end) tick pair. Saturating: a pass whose timestamps land out
+/// of order (some drivers reorder across a submit boundary) reports zero rather than underflows.
+fn pass_duration_ns(begin: u64, end: u64, period_ns: f32) -> f64 {
+    end.saturating_sub(begin) as f64 * f64::from(period_ns)
 }
 
 /// Sums timings that share a label, so a graph with 50 conv passes reads as one row.
@@ -242,6 +245,13 @@ mod tests {
         let rows = total_by_label(&timings);
         assert_eq!(rows[0], ("conv2d".to_string(), 2, 1000.0));
         assert_eq!(rows[1], ("pool".to_string(), 1, 500.0));
+    }
+
+    #[test]
+    fn pass_duration_scales_ticks_by_the_period() {
+        // A 1.0 ns period (common on desktop GPUs) cannot tell `*` from `/`, so use 2.5.
+        assert_eq!(pass_duration_ns(100, 140, 2.5), 100.0);
+        assert_eq!(pass_duration_ns(140, 100, 2.5), 0.0);
     }
 
     #[test]

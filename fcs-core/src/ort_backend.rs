@@ -37,10 +37,10 @@ impl OrtBackend {
         // Experiment 69: FCS_ORT_INTRA_THREADS sweeps the runtime's own thread count so the
         // batch-versus-latency trade can be measured against production without a rebuild.
         let mut options = fcs_ort::SessionOptions::default();
-        if let Some(n) = std::env::var("FCS_ORT_INTRA_THREADS")
-            .ok()
-            .and_then(|v| v.parse::<i32>().ok())
-            .filter(|n| *n > 0)
+        if let Some(n) = crate::model_config::positive_count(
+            std::env::var("FCS_ORT_INTRA_THREADS").ok().as_deref(),
+        )
+        .and_then(|n| i32::try_from(n).ok())
         {
             options.intra_threads = n;
         }

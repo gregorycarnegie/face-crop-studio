@@ -374,17 +374,11 @@ fn read_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fcs_utils::gpu::{GpuAvailability, GpuBufferPool, GpuContextOptions};
+    use fcs_utils::gpu::GpuBufferPool;
     use std::sync::Arc;
 
     fn test_context() -> Option<Arc<GpuContext>> {
-        match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => Some(ctx),
-            other => {
-                eprintln!("Skipping GPU tensor test: {:?}", other);
-                None
-            }
-        }
+        crate::gpu::test_context()
     }
 
     #[test]

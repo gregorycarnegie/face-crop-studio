@@ -6,6 +6,19 @@ fn solid(color: [u8; 4]) -> DynamicImage {
     DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, image::Rgba(color)))
 }
 
+/// The folded tone LUT for `settings`, applied the way `apply_enhancements` runs it.
+fn tone(img: &DynamicImage, settings: EnhancementSettings) -> RgbaImage {
+    let mut buf = img.to_rgba8();
+    apply_lut_in_place(&mut buf, &tone_lut(&settings).expect("an active tone stage"));
+    buf
+}
+
+fn saturate(img: &DynamicImage, saturation: f32) -> RgbaImage {
+    let mut buf = img.to_rgba8();
+    saturation_in_place(&mut buf, saturation);
+    buf
+}
+
 #[test]
 fn histogram_equalization_stretches_levels() {
     let mut img = RgbaImage::new(4, 1);
@@ -37,8 +50,7 @@ fn histogram_equalization_stretches_levels() {
 #[test]
 fn exposure_positive_increases_values() {
     let img = solid([64, 64, 64, 255]);
-    let out = apply_exposure(&img, 1.0);
-    let buf = out.to_rgba8();
+    let buf = tone(&img, EnhancementSettings { exposure_stops: 1.0, ..Default::default() });
     let px = buf.get_pixel(0, 0);
     assert_eq!(px[0], 128);
 }
@@ -46,8 +58,7 @@ fn exposure_positive_increases_values() {
 #[test]
 fn exposure_negative_darkens_values() {
     let img = solid([200, 200, 200, 255]);
-    let out = apply_exposure(&img, -1.0);
-    let buf = out.to_rgba8();
+    let buf = tone(&img, EnhancementSettings { exposure_stops: -1.0, ..Default::default() });
     let px = buf.get_pixel(0, 0);
     assert_eq!(px[0], 100);
 }
@@ -55,8 +66,7 @@ fn exposure_negative_darkens_values() {
 #[test]
 fn brightness_offsets_channels() {
     let img = solid([100, 100, 100, 255]);
-    let out = apply_brightness(&img, 20);
-    let buf = out.to_rgba8();
+    let buf = tone(&img, EnhancementSettings { brightness: 20, ..Default::default() });
     let px = buf.get_pixel(0, 0);
     assert_eq!(px[0], 120);
 }
@@ -66,8 +76,10 @@ fn contrast_multiplier_expands_range() {
     let mut img = RgbaImage::from_pixel(4, 1, image::Rgba([128, 128, 128, 255]));
     img.put_pixel(0, 0, image::Rgba([80, 80, 80, 255]));
     img.put_pixel(3, 0, image::Rgba([180, 180, 180, 255]));
-    let out = apply_contrast(&DynamicImage::ImageRgba8(img), 1.5);
-    let buf = out.to_rgba8();
+    let buf = tone(
+        &DynamicImage::ImageRgba8(img),
+        EnhancementSettings { contrast: 1.5, ..Default::default() },
+    );
     assert!(buf.get_pixel(0, 0)[0] < 80);
     assert!(buf.get_pixel(3, 0)[0] > 180);
 }
@@ -75,8 +87,7 @@ fn contrast_multiplier_expands_range() {
 #[test]
 fn saturation_zero_grays_image() {
     let img = solid([200, 100, 50, 255]);
-    let out = apply_saturation(&img, 0.0);
-    let buf = out.to_rgba8();
+    let buf = saturate(&img, 0.0);
     // At saturation 0 every channel collapses to the Rec.601 luma:
     // 0.299*200 + 0.587*100 + 0.114*50 = 124.2, +0.5 and truncated = 124.
     // Pinning the value (not just channel equality) is what catches a mangled
@@ -536,7 +547,7 @@ fn saturation_scalar_tail_is_exercised_by_odd_pixel_count() {
     img.put_pixel(4, 0, image::Rgba([120, 60, 10, 255]));
 
     let source = DynamicImage::ImageRgba8(img.clone());
-    let out = apply_saturation(&source, 0.0).to_rgba8();
+    let out = saturate(&source, 0.0);
 
     // At saturation=0 every pixel must be fully desaturated (all channels equal)
     for x in 0..5 {
@@ -596,8 +607,14 @@ fn tone_lut_composes_stages_in_pipeline_order() {
     apply_lut_in_place(&mut folded, &lut);
 
     // Same three stages applied one image pass at a time.
-    let staged =
-        apply_contrast(&apply_brightness(&apply_exposure(&source, 1.0), 10), 1.5).to_rgba8();
+    let mut staged = source.to_rgba8();
+    for stage in [
+        EnhancementSettings { exposure_stops: 1.0, ..EnhancementSettings::default() },
+        EnhancementSettings { brightness: 10, ..EnhancementSettings::default() },
+        EnhancementSettings { contrast: 1.5, ..EnhancementSettings::default() },
+    ] {
+        apply_lut_in_place(&mut staged, &tone_lut(&stage).expect("one active stage"));
+    }
 
     assert_eq!(
         folded, staged,
@@ -739,8 +756,8 @@ fn saturation_simd_and_scalar_paths_agree() {
         DynamicImage::ImageRgba8(img)
     };
 
-    let out4 = apply_saturation(&make_img(4), 1.5).to_rgba8();
-    let out5 = apply_saturation(&make_img(5), 1.5).to_rgba8();
+    let out4 = saturate(&make_img(4), 1.5);
+    let out5 = saturate(&make_img(5), 1.5);
 
     for x in 0..4 {
         assert_eq!(
@@ -760,26 +777,11 @@ fn colourful_rgb() -> DynamicImage {
 }
 
 #[test]
-fn tone_stages_hand_back_the_source_when_they_are_no_ops() {
-    // A no-op stage returns the input as-is, keeping its pixel format; running
-    // an identity LUT instead would silently convert the image to RGBA.
-    let img = colourful_rgb();
+fn tone_lut_is_absent_for_neutral_settings_and_present_from_epsilon() {
+    assert!(tone_lut(&EnhancementSettings::default()).is_none(), "defaults are tone-neutral");
+    let at_epsilon = EnhancementSettings { exposure_stops: EPSILON, ..Default::default() };
     assert!(
-        matches!(apply_exposure(&img, 0.0), DynamicImage::ImageRgb8(_)),
-        "zero stops is a no-op"
-    );
-    assert!(
-        matches!(apply_contrast(&img, 1.0), DynamicImage::ImageRgb8(_)),
-        "a contrast multiplier of one is a no-op"
-    );
-    assert!(
-        matches!(apply_saturation(&img, 1.0), DynamicImage::ImageRgb8(_)),
-        "a saturation multiplier of one is a no-op"
-    );
-
-    // At exactly the epsilon the stage is no longer a no-op and does run.
-    assert!(
-        matches!(apply_exposure(&img, EPSILON), DynamicImage::ImageRgba8(_)),
+        tone_lut(&at_epsilon).is_some(),
         "epsilon is the smallest exposure that still applies"
     );
 }

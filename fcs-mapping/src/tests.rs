@@ -408,6 +408,17 @@ fn inspect_mapping_sources_returns_empty_catalog_for_csv_and_parquet() {
 }
 
 #[test]
+fn inspect_mapping_sources_lists_excel_sheets() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("mapping.xlsx");
+    write_xlsx(&path, &[("First", &[&["a"]]), ("Second", &[&["b"]])]);
+    // Default options: the .xlsx extension picks the format.
+    let catalog = inspect_mapping_sources(&path, &MappingReadOptions::default()).unwrap();
+    assert_eq!(catalog.sheets, vec!["First", "Second"]);
+    assert!(catalog.sql_tables.is_empty());
+}
+
+#[test]
 fn sqlite_valid_custom_sql_query_is_accepted() {
     let dir = tempdir().unwrap();
     let path = write_sqlite(
@@ -824,6 +835,70 @@ fn parquet_preview_reads_columns_and_rows() {
     assert_eq!(preview.rows.len(), 2);
     assert_eq!(preview.rows[0], vec!["a.jpg", "out-a"]);
     assert_eq!(preview.rows[1], vec!["b.jpg", "out-b"]);
+}
+
+/// A group holds two leaf columns but yields one value per row. Headers taken from the leaves
+/// named three columns for two values, and every value after the group sat under the wrong one.
+#[test]
+fn parquet_headers_follow_top_level_fields_through_a_nested_group() {
+    use ::parquet::{
+        basic::{ConvertedType, Repetition, Type as PhysicalType},
+        column::writer::ColumnWriter,
+        data_type::ByteArray,
+        file::{properties::WriterProperties, writer::SerializedFileWriter},
+        schema::types::Type,
+    };
+    use std::sync::Arc;
+
+    let text = |name: &str| {
+        Arc::new(
+            Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
+                .with_repetition(Repetition::REQUIRED)
+                .with_converted_type(ConvertedType::UTF8)
+                .build()
+                .unwrap(),
+        )
+    };
+    let group = Arc::new(
+        Type::group_type_builder("g")
+            .with_repetition(Repetition::REQUIRED)
+            .with_fields(vec![text("a"), text("b")])
+            .build()
+            .unwrap(),
+    );
+    let schema = Arc::new(
+        Type::group_type_builder("schema")
+            .with_fields(vec![group, text("c")])
+            .build()
+            .unwrap(),
+    );
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("nested.parquet");
+    let props = Arc::new(WriterProperties::builder().build());
+    let mut writer =
+        SerializedFileWriter::new(fs::File::create(&path).unwrap(), schema, props).unwrap();
+    let mut rg = writer.next_row_group().unwrap();
+    // Leaf columns in schema order: g.a, g.b, c.
+    for value in ["x", "y", "z"] {
+        let mut col = rg.next_column().unwrap().unwrap();
+        match col.untyped() {
+            ColumnWriter::ByteArrayColumnWriter(typed) => {
+                typed
+                    .write_batch(&[ByteArray::from(value)], None, None)
+                    .unwrap();
+            }
+            _ => panic!("expected a byte array column"),
+        }
+        col.close().unwrap();
+    }
+    rg.close().unwrap();
+    writer.close().unwrap();
+
+    let preview = load_mapping_preview(&path, &MappingReadOptions::default()).unwrap();
+    assert_eq!(preview.columns, vec!["g", "c"]);
+    assert_eq!(preview.rows[0].len(), 2);
+    assert_eq!(preview.rows[0][1], "z", "c's value must sit under c");
 }
 
 #[test]

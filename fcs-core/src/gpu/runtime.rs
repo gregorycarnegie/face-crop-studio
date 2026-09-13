@@ -39,10 +39,7 @@ struct GpuYuNetWorkspace {
 const MAX_IN_FLIGHT: usize = 4;
 
 fn max_in_flight() -> usize {
-    std::env::var("FCS_MAX_IN_FLIGHT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|n: &usize| *n > 0)
+    crate::model_config::positive_count(std::env::var("FCS_MAX_IN_FLIGHT").ok().as_deref())
         .unwrap_or(MAX_IN_FLIGHT)
 }
 
@@ -713,10 +710,10 @@ fn estimate_required_bytes(total_weight_bytes: u64, input_size: InputSize) -> u6
 /// This provides a safe upper bound for the `GpuBufferPool` limit.
 fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize) -> u64 {
     // 1. Calculate static weight size
-    let mut total_weight_bytes = 0;
-    for tensor in weights.values() {
-        total_weight_bytes += std::mem::size_of_val(tensor.data()) as u64;
-    }
+    let total_weight_bytes: u64 = weights
+        .values()
+        .map(|tensor| std::mem::size_of_val(tensor.data()) as u64)
+        .sum();
 
     // 2. Estimate activation memory
     // YuNet (ResNet-ish) downsamples spatially.
@@ -748,7 +745,7 @@ fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize
 
     // If we can query the actual VRAM budget, we use it to intelligently set the limit.
     if let Some(hardware_available) = fcs_utils::gpu::get_available_vram() {
-        let hardware_limit = hardware_available.saturating_mul(80) / 100; // 80% usage safe zone
+        let hardware_limit = hardware_pool_limit(hardware_available);
 
         if hardware_limit < required {
             log::warn!(
@@ -772,9 +769,29 @@ fn estimate_inference_memory(weights: &OnnxInitializerMap, input_size: InputSize
     required
 }
 
+/// The share of reported VRAM the buffer pool may use: 80%, leaving room for the driver and
+/// other applications.
+fn hardware_pool_limit(available: u64) -> u64 {
+    available.saturating_mul(80) / 100
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pool_may_use_four_fifths_of_the_reported_vram() {
+        assert_eq!(hardware_pool_limit(1_000), 800);
+        // Saturates rather than overflowing.
+        assert_eq!(hardware_pool_limit(u64::MAX), u64::MAX / 100);
+    }
+
+    #[test]
+    fn the_in_flight_limit_defaults_when_not_overridden() {
+        if std::env::var_os("FCS_MAX_IN_FLIGHT").is_none() {
+            assert_eq!(max_in_flight(), MAX_IN_FLIGHT);
+        }
+    }
 
     // --- memory estimate ---
 

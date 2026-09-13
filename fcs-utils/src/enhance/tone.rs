@@ -28,12 +28,6 @@ pub(super) fn apply_lut_in_place(buf: &mut RgbaImage, lut: &[u8; 256]) {
     }
 }
 
-fn apply_lut_rgb(img: &DynamicImage, lut: &[u8; 256]) -> DynamicImage {
-    let mut buf = img.to_rgba8();
-    apply_lut_in_place(&mut buf, lut);
-    DynamicImage::ImageRgba8(buf)
-}
-
 /// Compose two LUTs into one: `out[i] = second[first[i]]`.
 fn compose_luts(first: &[u8; 256], second: &[u8; 256]) -> [u8; 256] {
     let mut out = [0u8; 256];
@@ -119,11 +113,7 @@ pub(super) fn build_equalization_lut(hist: &[u32; 256], total: u32) -> [u8; 256]
     let mut lut = [0u8; 256];
     for i in 0..=255 {
         let cdf_val = cdf[i];
-        let numerator = if cdf_val > cdf_min {
-            (cdf_val - cdf_min) as f32
-        } else {
-            0.0
-        };
+        let numerator = cdf_val.saturating_sub(cdf_min) as f32;
         let mapped = (numerator / denom * 255.0).round().clamp(0.0, 255.0) as u8;
         lut[i] = mapped;
     }
@@ -132,11 +122,8 @@ pub(super) fn build_equalization_lut(hist: &[u32; 256], total: u32) -> [u8; 256]
 }
 
 pub(super) fn equalize_histogram_in_place(buf: &mut RgbaImage) {
+    // An empty image has total 0, for which the LUTs are the identity.
     let (w, h) = buf.dimensions();
-    if w == 0 || h == 0 {
-        return;
-    }
-
     let mut hist_r = [0u32; 256];
     let mut hist_g = [0u32; 256];
     let mut hist_b = [0u32; 256];
@@ -164,37 +151,7 @@ pub(super) fn apply_histogram_equalization(img: &DynamicImage) -> DynamicImage {
     DynamicImage::ImageRgba8(buf)
 }
 
-pub(super) fn apply_exposure(img: &DynamicImage, stops: f32) -> DynamicImage {
-    if stops.abs() < EPSILON {
-        return img.clone();
-    }
-    apply_lut_rgb(img, &exposure_lut(stops))
-}
-
-pub(super) fn apply_brightness(img: &DynamicImage, offset: i32) -> DynamicImage {
-    if offset == 0 {
-        return img.clone();
-    }
-    apply_lut_rgb(img, &brightness_lut(offset))
-}
-
-pub(super) fn apply_contrast(img: &DynamicImage, multiplier: f32) -> DynamicImage {
-    if (multiplier - 1.0).abs() < EPSILON {
-        return img.clone();
-    }
-    apply_lut_rgb(img, &contrast_lut(multiplier))
-}
-
 /// Adjust saturation by mixing with per-pixel luminance: new = gray*(1-s) + orig*s.
-pub(super) fn apply_saturation(img: &DynamicImage, saturation: f32) -> DynamicImage {
-    if (saturation - 1.0).abs() < EPSILON {
-        return img.clone();
-    }
-    let mut buf = img.to_rgba8();
-    saturation_in_place(&mut buf, saturation);
-    DynamicImage::ImageRgba8(buf)
-}
-
 pub(super) fn saturation_in_place(buf: &mut RgbaImage, saturation: f32) {
     let multiplier = saturation.clamp(0.0, 2.5);
     // ponytail: plain ops + saturating float->u8 cast so LLVM autovectorizes;

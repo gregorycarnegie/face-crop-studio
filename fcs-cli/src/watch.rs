@@ -207,7 +207,69 @@ fn process_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ProgressCounters;
+    use fcs_utils::QualityFilter;
     use std::io::Write;
+    use workflow::tests::{
+        batch_ctx, build_test_detector, crop_settings_app, no_gpu_runtime, parse_args,
+        write_sample_png,
+    };
+
+    /// A path that is not a directory is refused before any watcher starts. `run` otherwise
+    /// blocks forever, which is why nothing called it.
+    #[test]
+    fn watching_a_file_is_refused() {
+        let Some(detector) = build_test_detector() else {
+            return;
+        };
+        let (settings, runtime) = (crop_settings_app(), no_gpu_runtime());
+        let filter = Arc::new(QualityFilter::new(None));
+        let args = parse_args(&["--input", "x.jpg"]);
+        let counters = ProgressCounters::default();
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("not-a-dir.png");
+        write_sample_png(&file);
+        let err = run(
+            &file,
+            &ctx,
+            &detector,
+            &Arc::new(None),
+            false,
+            &Arc::new(None),
+        )
+        .expect_err("a file cannot be watched");
+        assert!(format!("{err:#}").contains("needs a directory"), "{err:#}");
+    }
+
+    /// A settled batch goes through the ordinary per-image path and its counters.
+    #[test]
+    fn a_settled_batch_is_processed_like_a_one_shot_run() {
+        let Some(detector) = build_test_detector() else {
+            return;
+        };
+        let (settings, runtime) = (crop_settings_app(), no_gpu_runtime());
+        let filter = Arc::new(QualityFilter::new(None));
+        let args = parse_args(&["--input", "x.jpg"]);
+        let counters = ProgressCounters::default();
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let image = dir.path().join("dropped.png");
+        write_sample_png(&image);
+        process_batch(
+            vec![image],
+            &ctx,
+            &detector,
+            &Arc::new(None),
+            false,
+            &Arc::new(None),
+        );
+        assert_eq!(counters.snapshot().images_processed, 1);
+    }
 
     #[test]
     fn only_supported_image_extensions_are_picked_up() {

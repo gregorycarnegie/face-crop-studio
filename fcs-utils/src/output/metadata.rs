@@ -6,7 +6,7 @@ use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use crc32fast::Hasher as Crc32;
 use image::metadata::Orientation;
-use log::{debug, warn};
+use log::warn;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use std::{fs, path::Path};
 
@@ -29,7 +29,7 @@ pub(super) fn load_png_exif_chunks(source: Option<&Path>) -> Vec<Vec<u8>> {
         warn!("Failed to read source PNG metadata from {}", path.display());
         return Vec::new();
     };
-    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Vec::new();
     }
 
@@ -68,7 +68,7 @@ pub(super) fn load_jpeg_exif(source: Option<&Path>) -> Option<Vec<u8>> {
     }
 
     let bytes = fs::read(path).ok()?;
-    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
         return None;
     }
 
@@ -114,20 +114,12 @@ pub(super) fn load_jpeg_exif(source: Option<&Path>) -> Option<Vec<u8>> {
     None
 }
 
+/// `segment` is a whole APP1 segment: marker (2), length (2), then `Exif\0\0` and the TIFF body.
+/// Its only caller builds exactly that, so only the Exif header needs checking.
 fn clear_jpeg_exif_orientation(segment: &mut [u8]) {
-    if segment.len() < 10 {
-        return;
+    if segment.get(4..10) == Some(b"Exif\0\0".as_slice()) {
+        let _ = Orientation::remove_from_exif_chunk(&mut segment[10..]);
     }
-    if !(segment[0] == 0xFF && segment[1] == 0xE1) {
-        return;
-    }
-
-    let payload = &mut segment[4..];
-    if payload.len() < 6 || &payload[..6] != b"Exif\0\0" {
-        return;
-    }
-
-    let _ = Orientation::remove_from_exif_chunk(&mut payload[6..]);
 }
 
 pub(super) fn inject_png_metadata(
@@ -135,41 +127,28 @@ pub(super) fn inject_png_metadata(
     exif_chunks: &[Vec<u8>],
     custom_json: Option<&str>,
 ) -> Vec<u8> {
-    if encoded.len() < 8 {
-        return encoded;
-    }
     if exif_chunks.is_empty() && custom_json.is_none() {
         return encoded;
     }
-
-    let signature = &encoded[..8];
-    let cursor = 8usize;
-    if cursor + 8 > encoded.len() {
+    // New chunks go straight after IHDR: signature (8), then IHDR's length, type, data and CRC.
+    // ponytail: `ihdr_len + 20` could wrap on a 32-bit target; the release matrix is 64-bit only.
+    let Some(ihdr_len) = encoded
+        .get(8..12)
+        .map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize)
+    else {
+        return encoded;
+    };
+    let ihdr_end = 8 + 4 + 4 + ihdr_len + 4;
+    if ihdr_end > encoded.len() {
         return encoded;
     }
-    let ihdr_length = u32::from_be_bytes(encoded[cursor..cursor + 4].try_into().unwrap()) as usize;
-    let ihdr_total = 8 + ihdr_length + 4;
-    if cursor + ihdr_total > encoded.len() {
-        return encoded;
-    }
 
-    let mut output = Vec::with_capacity(
-        encoded.len()
-            + exif_chunks.iter().map(|c| c.len()).sum::<usize>()
-            + custom_json.map(|_| 64).unwrap_or_default(),
-    );
-    output.extend_from_slice(signature);
-    output.extend_from_slice(&encoded[cursor..cursor + ihdr_total]);
-
-    for chunk in exif_chunks {
-        output.extend_from_slice(chunk);
-    }
-
+    let mut inserted = exif_chunks.concat();
     if let Some(chunk) = custom_json.and_then(|json| build_png_text_chunk("IronCropper", json)) {
-        output.extend_from_slice(&chunk);
+        inserted.extend_from_slice(&chunk);
     }
-
-    output.extend_from_slice(&encoded[cursor + ihdr_total..]);
+    let mut output = encoded;
+    output.splice(ihdr_end..ihdr_end, inserted);
     output
 }
 
@@ -261,29 +240,6 @@ fn build_jpeg_xmp_segment(json: &str) -> Option<Vec<u8>> {
     segment.extend_from_slice(&(total_len as u16).to_be_bytes());
     segment.extend_from_slice(&payload);
     Some(segment)
-}
-
-pub(super) fn inject_webp_exif(
-    encoded: Vec<u8>,
-    exif_segment: Option<Vec<u8>>,
-    custom_json: Option<&str>,
-) -> Vec<u8> {
-    if exif_segment.is_none() && custom_json.is_none() {
-        return encoded;
-    }
-
-    // WebP metadata requires a RIFF container; we simply append EXIF/XMP chunks when possible.
-    let output = encoded;
-    if exif_segment.as_ref().is_some_and(|exif| !exif.is_empty()) {
-        debug!("Preserving EXIF in WebP is not yet implemented; skipping");
-    }
-    if let Some(json) = custom_json {
-        debug!(
-            "Custom metadata for WebP is not implemented; skipping payload {} bytes",
-            json.len()
-        );
-    }
-    output
 }
 
 pub(super) fn build_custom_metadata_payload(

@@ -116,10 +116,8 @@ impl GpuShapeMask {
         let queue = self.context.queue();
         let buffer_size = (pixels_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
 
-        let storage_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST;
-        let readback_usage = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let storage_usage = super::buffer_pool::STORAGE_RW;
+        let readback_usage = super::buffer_pool::READBACK;
 
         let storage = self
             .pool
@@ -142,10 +140,13 @@ impl GpuShapeMask {
             samples: 4,
             vignette_softness,
             vignette_intensity,
-            vignette_color: ((vignette_color.alpha as u32) << 24)
-                | ((vignette_color.blue as u32) << 16)
-                | ((vignette_color.green as u32) << 8)
-                | (vignette_color.red as u32),
+            // Same byte layout as pack_rgba_pixels.
+            vignette_color: u32::from_le_bytes([
+                vignette_color.red,
+                vignette_color.green,
+                vignette_color.blue,
+                vignette_color.alpha,
+            ]),
             ..Default::default()
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

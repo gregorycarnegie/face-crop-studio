@@ -100,10 +100,8 @@ impl GpuPixelAdjust {
 
         let buffer_size_bytes =
             (data_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
-        let storage_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC;
-        let readback_usage = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let storage_usage = super::buffer_pool::STORAGE_RW;
+        let readback_usage = super::buffer_pool::READBACK;
 
         let storage_buffer = self.pool.acquire(
             buffer_size_bytes,
@@ -461,13 +459,13 @@ mod tests {
         let result = adjust.apply(&image, &settings).expect("apply");
         assert_changed(&result, &image, "apply (saturation)");
 
-        // A partially-dispatched image shows up as a run of identical trailing
-        // pixels where the gradient should still be varying.
+        // The storage buffer is read_write and starts out holding the input, so a short
+        // dispatch leaves the final row as the input rather than as anything uniform.
         let after = result.to_rgba8();
-        let last_row: Vec<_> = (0..37).map(|x| after.get_pixel(x, 18)[0]).collect();
+        let before = image.to_rgba8();
         assert!(
-            last_row.iter().any(|&v| v != last_row[0]),
-            "final row is uniform, so the dispatch did not cover the whole image"
+            (0..37).any(|x| after.get_pixel(x, 18) != before.get_pixel(x, 18)),
+            "final row still holds the input, so the dispatch did not reach it"
         );
     }
 

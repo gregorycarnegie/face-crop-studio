@@ -110,11 +110,8 @@ fn grid_size_for(detections: &[Detection], bounds: SceneBounds) -> usize {
         return NMS_GRID_SIZE;
     }
     let longest = bounds.width().max(bounds.height());
-    let fitted = (longest / mean_extent).ceil();
-    if !fitted.is_finite() || fitted < 1.0 {
-        return 1;
-    }
-    (fitted as usize).clamp(1, NMS_GRID_SIZE)
+    // 0 and NaN cast to 0 and clamp to one cell; +inf (subnormal boxes) saturates to the cap.
+    ((longest / mean_extent).ceil() as usize).clamp(1, NMS_GRID_SIZE)
 }
 
 fn build_spatial_grid(detections: &[Detection], bounds: SceneBounds) -> SpatialGrid {
@@ -884,6 +881,28 @@ mod tests {
             .collect();
         let bounds = compute_scene_bounds(&spread).expect("bounds");
         assert_eq!(grid_size_for(&spread, bounds), NMS_GRID_SIZE);
+    }
+
+    /// Cells are sized to the mean box: longest sides 6, 10 and 14 average 10, and a scene 73
+    /// long needs ceil(73 / 10) = 8 of them. Not the cap and not 1, so the arithmetic has
+    /// nowhere to hide.
+    #[test]
+    fn grid_size_is_the_scene_span_over_the_mean_box_extent() {
+        let boxed = |width, height| detection_with_score(0.9, bbox(0.0, 0.0, width, height));
+        let bounds = || SceneBounds {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 73.0,
+            max_y: 41.0,
+        };
+        let boxes = [boxed(6.0, 2.0), boxed(3.0, 10.0), boxed(14.0, 5.0)];
+        assert_eq!(grid_size_for(&boxes, bounds()), 8);
+
+        // A non-finite box leaves nothing to size a cell by: the cap, not a NaN cast to one cell.
+        assert_eq!(
+            grid_size_for(&[boxed(f32::NAN, f32::NAN)], bounds()),
+            NMS_GRID_SIZE
+        );
     }
 
     #[test]

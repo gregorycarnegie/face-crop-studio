@@ -112,5 +112,10 @@ mod tests {
         assert_eq!(t.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
         assert_eq!(t.len(), 4);
         assert!(!t.is_empty());
+        assert!(
+            Tensor::from_vec(&[0, 15], Vec::new())
+                .expect("empty tensor")
+                .is_empty()
+        );
     }
 }

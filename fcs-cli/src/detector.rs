@@ -41,8 +41,9 @@ fn select_detector(
     gpu_runtime: &CliGpuRuntime,
     gpu: &GpuSettings,
 ) -> Result<YuNetDetector> {
-    let use_gpu_inference = gpu.enabled && gpu.inference;
-    let use_gpu_preprocessing = gpu.enabled && gpu.preprocessing;
+    // A disabled GPU leaves the runtime without a context, which the branch below already checks.
+    let use_gpu_inference = gpu.inference;
+    let use_gpu_preprocessing = gpu.preprocessing;
 
     if use_gpu_inference {
         if let Some(gpu_ctx) = gpu_runtime.context() {

@@ -495,8 +495,13 @@ impl AppSettings {
         let total = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
-        (total / 2).clamp(1, 4)
+        auto_batch_parallelism(total)
     }
+}
+
+/// The automatic batch worker count for a machine with `cpus` logical processors.
+fn auto_batch_parallelism(cpus: usize) -> usize {
+    (cpus / 2).clamp(1, 4)
 }
 
 impl Default for AppSettings {
@@ -849,6 +854,12 @@ mod tests {
                 "level {text:?}"
             );
         }
+    }
+
+    #[test]
+    fn auto_batch_parallelism_is_half_the_cpus_between_one_and_four() {
+        // 7 is odd and non-dividing: `*` and `+` both clamp to 4, `-` gives 5 → 4, `%` gives 1.
+        assert_eq!([1, 7, 16].map(auto_batch_parallelism), [1, 3, 4]);
     }
 
     #[test]

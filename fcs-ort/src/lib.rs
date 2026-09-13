@@ -188,6 +188,17 @@ fn resolve(path: &Path) -> PathBuf {
     }
 }
 
+/// Mirror ort's rule exactly: it compares only the minor component and rejects anything lower,
+/// and its rejection aborts the process. An unparseable version counts as too old.
+fn too_old(version: &str) -> bool {
+    let minor = version
+        .split('.')
+        .nth(1)
+        .and_then(|m| m.parse::<u32>().ok())
+        .unwrap_or(0);
+    minor < REQUIRED_API_VERSION
+}
+
 fn validate(candidate: &Path) -> Result<Runtime, Rejected> {
     let path = resolve(candidate);
 
@@ -211,14 +222,7 @@ fn validate(candidate: &Path) -> Result<Runtime, Rejected> {
             .to_string_lossy()
             .into_owned();
 
-        // Mirror ort's rule exactly: it compares only the minor component and
-        // rejects anything lower, and its rejection aborts the process.
-        let minor = version
-            .split('.')
-            .nth(1)
-            .and_then(|m| m.parse::<u32>().ok())
-            .unwrap_or(0);
-        if minor < REQUIRED_API_VERSION {
+        if too_old(&version) {
             return Err(Rejected::TooOld(version));
         }
 
@@ -293,5 +297,29 @@ mod tests {
             PathBuf::from("/some/where/libonnxruntime.so")
         };
         assert_eq!(resolve(&absolute), absolute);
+    }
+
+    #[test]
+    fn a_bare_name_resolves_beside_the_executable_only_when_the_file_is_there() {
+        let exe = std::env::current_exe().unwrap();
+        let own_name = Path::new(exe.file_name().unwrap());
+        // The test binary certainly exists beside itself...
+        assert_eq!(resolve(own_name), exe.parent().unwrap().join(own_name));
+        // ...and a name that is not there is left for the platform loader.
+        let absent = Path::new("definitely-not-beside-the-exe.dll");
+        assert_eq!(resolve(absent), absent);
+    }
+
+    #[test]
+    fn only_the_minor_version_decides_whether_a_runtime_is_too_old() {
+        assert!(too_old("1.23.2"));
+        assert!(!too_old("1.24.0"));
+        assert!(!too_old("1.30.1"));
+        assert!(too_old("garbage"), "an unparseable version is treated as too old");
+    }
+
+    #[test]
+    fn a_rejection_names_the_offending_version() {
+        assert!(Rejected::TooOld("1.20.0".into()).to_string().contains("1.20.0"));
     }
 }

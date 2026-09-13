@@ -1572,7 +1572,6 @@ mod tests {
 #[cfg(test)]
 mod gpu_parity_tests {
     use super::*;
-    use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
     use image::{DynamicImage, RgbaImage};
 
     /// The GPU-native path must produce exactly what the readback path produces.
@@ -1705,10 +1704,7 @@ mod gpu_parity_tests {
     }
 
     fn gpu_preprocessor() -> Option<WgpuPreprocessor> {
-        match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-            GpuAvailability::Available(ctx) => WgpuPreprocessor::new(ctx).ok(),
-            _ => None,
-        }
+        crate::gpu::test_context().and_then(|ctx| WgpuPreprocessor::new(ctx).ok())
     }
 
     /// Distinct value per pixel and channel, so a transposed axis or a
@@ -1883,6 +1879,53 @@ mod gpu_parity_tests {
             floats.iter().any(|&v| v > 1.0),
             "fallback produced an empty tensor"
         );
+    }
+
+    /// The GPU takes a source exactly at the device's texture limit and declines one pixel past
+    /// it. Asked of the setup step directly: the public entry points route large sources to the
+    /// CPU resize first, so they never reach this check with a thin one.
+    #[test]
+    fn the_gpu_takes_sources_up_to_the_texture_limit_and_no_further() {
+        let Some(gpu) = gpu_preprocessor() else {
+            return;
+        };
+        let max = gpu.context().device().limits().max_texture_dimension_2d;
+        let config = config_for(8, 8);
+        let fits = |w, h| {
+            gpu_preprocess_setup(&gradient(w, h), &config, gpu.context())
+                .expect("setup")
+                .is_some()
+        };
+        assert!(fits(max, 1), "exactly max wide");
+        assert!(fits(1, max), "exactly max tall");
+        assert!(
+            !fits(1, max + 1),
+            "one row past the limit must fall back to the CPU"
+        );
+    }
+
+    /// A pooled buffer reused for a larger input must grow. A reuse that kept the small buffers
+    /// would copy and map past their end. Sources at exactly the input size need no resampling,
+    /// so the GPU and CPU agree exactly.
+    #[test]
+    fn a_reused_preprocessor_grows_its_buffers_for_a_larger_input() {
+        let Some(gpu) = gpu_preprocessor() else {
+            return;
+        };
+        for (w, h) in [(20, 10), (40, 30)] {
+            let image = gradient(w, h);
+            let config = config_for(w, h);
+            let got = gpu
+                .preprocess(&image, &config)
+                .expect("gpu preprocess")
+                .tensor
+                .into_vec();
+            let want = cpu_preprocess(&image, &config)
+                .expect("cpu preprocess")
+                .tensor
+                .into_vec();
+            assert_eq!(got, want, "{w}x{h} after a smaller input");
+        }
     }
 
     #[test]

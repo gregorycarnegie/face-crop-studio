@@ -1,7 +1,7 @@
 //! CSV and delimited mapping reader.
 
 use super::{
-    common::{MappingTable, ensure_columns, format_header, normalize_row, sanitize_value},
+    common::{MappingTable, ensure_columns, format_header, sanitize_value},
     types::MappingReadOptions,
 };
 use anyhow::{Context, Result};
@@ -37,12 +37,12 @@ pub(super) fn table_csv_internal(
     let mut total_rows = 0usize;
     for record in reader.records() {
         let record = record?;
-        let mut row: Vec<String> = record.iter().map(sanitize_value).collect();
+        let row: Vec<String> = record.iter().map(sanitize_value).collect();
         if row.iter().all(|v| v.is_empty()) {
             continue;
         }
+        // The reader is not flexible, so every record already has the header's field count.
         ensure_columns(&mut columns, row.len());
-        normalize_row(&mut row, columns.len());
         if row_limit.is_none_or(|limit| rows.len() < limit) {
             rows.push(row);
         }

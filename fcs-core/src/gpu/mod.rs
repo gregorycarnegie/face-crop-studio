@@ -22,6 +22,27 @@ pub mod utils;
 #[cfg(test)]
 mod tests;
 
+/// One GPU context for the whole test binary, or `None` when there is no usable adapter.
+///
+/// Every GPU test here used to build its own, and `cargo test` starts dozens at once, which is
+/// the many-devices pile-up that wedges the NVIDIA driver (experiment 94; `fcs-utils` shares one
+/// through its `test_support` for the same reason). Under cargo-mutants it showed up as roughly
+/// one `fcs-core` test run in five hanging until the timeout with only GPU tests still running.
+#[cfg(test)]
+pub(crate) fn test_context() -> Option<std::sync::Arc<fcs_utils::gpu::GpuContext>> {
+    use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
+    static CONTEXT: std::sync::OnceLock<Option<std::sync::Arc<GpuContext>>> =
+        std::sync::OnceLock::new();
+    CONTEXT
+        .get_or_init(
+            || match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+                GpuAvailability::Available(ctx) => Some(ctx),
+                _ => None,
+            },
+        )
+        .clone()
+}
+
 pub use activation::ActivationKind;
 pub use conv2d::{Conv2dConfig, Conv2dOptions};
 pub use ops::GpuInferenceOps;

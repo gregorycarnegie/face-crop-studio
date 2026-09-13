@@ -14,15 +14,20 @@ use crate::{
 
 const MAX_RADIUS: u32 = 8;
 
-gpu_uniforms!(BilateralUniforms, 1, {
+gpu_uniforms!(BilateralUniforms, 2, {
     width: u32,
     height: u32,
     radius: u32,
-    pixel_count: u32,
     sigma_space: f32,
     sigma_color: f32,
     amount: f32,
 });
+
+/// Pixels sampled either side of the centre: two standard deviations of the (floored) spatial
+/// sigma, at least one and at most [`MAX_RADIUS`], the WGSL loop's own bound.
+fn sampling_radius(sigma_space: f32) -> u32 {
+    ((sigma_space.max(0.1) * 2.0).ceil() as u32).clamp(1, MAX_RADIUS)
+}
 
 /// Reusable GPU bilateral filter for smoothing while preserving color edges.
 #[derive(Clone)]
@@ -87,9 +92,9 @@ impl GpuBilateralFilter {
             return Ok(image.clone());
         }
 
+        let radius = sampling_radius(sigma_space);
         let sigma_space = sigma_space.max(0.1);
         let sigma_color = sigma_color.max(0.1);
-        let radius = ((sigma_space * 2.0).ceil() as u32).clamp(1, MAX_RADIUS);
 
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();
@@ -99,10 +104,8 @@ impl GpuBilateralFilter {
         let queue = self.context.queue();
         let buffer_size = (data_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
 
-        let storage_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST;
-        let readback_usage = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let storage_usage = super::buffer_pool::STORAGE_RW;
+        let readback_usage = super::buffer_pool::READBACK;
 
         let input_buffer =
             self.pool
@@ -121,11 +124,10 @@ impl GpuBilateralFilter {
             width,
             height,
             radius,
-            pixel_count: width * height,
             sigma_space,
             sigma_color,
             amount,
-            __padding: [0; 1],
+            __padding: [0; 2],
         };
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("bilateral_filter_uniforms"),
@@ -188,6 +190,13 @@ mod tests {
     use image::RgbaImage;
 
     use crate::gpu::test_support::test_context;
+
+    /// Output parity cannot see a radius off by one ring: the outermost weights are small, and
+    /// flat test images make the radius irrelevant. So pin the radius itself.
+    #[test]
+    fn the_sampling_radius_is_two_sigmas_clamped_to_the_shader_bound() {
+        assert_eq!([0.0, 1.2, 3.0, 9.0].map(sampling_radius), [1, 3, 6, 8]);
+    }
 
     #[test]
     fn smooth_zero_amount_returns_clone() {
@@ -283,8 +292,9 @@ mod tests {
             return;
         };
         let filter = GpuBilateralFilter::new(ctx).expect("init");
-        // memory_usage should not panic on a fresh filter
-        let _ = filter.memory_usage();
+        let image = crate::gpu::test_support::gradient_image(8, 8);
+        filter.smooth(&image, 0.5, 3.0, 50.0).expect("smooth");
+        assert!(filter.memory_usage() > 0, "a pass pools its buffers");
         filter.clear_cache();
         assert_eq!(filter.memory_usage(), 0);
     }

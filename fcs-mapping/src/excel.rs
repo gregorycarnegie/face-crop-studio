@@ -1,7 +1,7 @@
 //! Excel mapping reader.
 
 use super::{
-    common::{MappingTable, ensure_columns, format_excel_cell, format_excel_header, normalize_row},
+    common::{MappingTable, ensure_columns, format_excel_cell, format_excel_header},
     types::MappingReadOptions,
 };
 use anyhow::{Context, Result, anyhow};
@@ -53,12 +53,12 @@ pub(super) fn table_excel_internal(
     let mut rows = Vec::new();
     let mut total_rows = 0usize;
     for row in rows_iter {
-        let mut values: Vec<String> = row.iter().map(format_excel_cell).collect();
+        let values: Vec<String> = row.iter().map(format_excel_cell).collect();
         if values.iter().all(|v| v.is_empty()) {
             continue;
         }
+        // Calamine ranges are rectangular, header row included, so every row is already full width.
         ensure_columns(&mut columns, values.len());
-        normalize_row(&mut values, columns.len());
         if row_limit.is_none_or(|limit| rows.len() < limit) {
             rows.push(values);
         }

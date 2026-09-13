@@ -170,25 +170,11 @@ impl YuNetModel {
     /// `[x, y, w, h, re_x, re_y, le_x, le_y, nt_x, nt_y, rcm_x, rcm_y, lcm_x, lcm_y, score]`
     /// in the resized input coordinate space.
     pub fn run(&self, input: Tensor) -> Result<Tensor> {
-        let mut tensors: Vec<Tensor> = match &self.backend {
+        let tensors: Vec<Tensor> = match &self.backend {
             Backend::Ort(session) => session.run(&input, self.input_size)?,
             Backend::CpuGraph(graph) => graph.head_tensors(&input)?,
         };
-
-        match tensors.len() {
-            0 => anyhow::bail!("YuNet model produced no outputs"),
-            1 => Ok(tensors
-                .pop()
-                .ok_or_else(|| anyhow::anyhow!("YuNet model produced no outputs"))?),
-            len if len == STRIDES.len() * OUTPUTS_PER_STRIDE => {
-                decode_yunet_outputs(&tensors, self.input_size)
-            }
-            other => anyhow::bail!(
-                "unexpected number of YuNet outputs: expected 1 or {}, got {}",
-                STRIDES.len() * OUTPUTS_PER_STRIDE,
-                other
-            ),
-        }
+        finish_outputs(tensors, self.input_size)
     }
 
     /// Name of the runtime actually in use, for logging and telemetry.
@@ -202,6 +188,17 @@ impl YuNetModel {
     /// Return the configured model input width and height in pixels.
     pub fn input_size(&self) -> InputSize {
         self.input_size
+    }
+}
+
+/// The model's outputs as one detection tensor. A single output is taken as already decoded;
+/// anything else must be the per-stride heads, and the decoder checks the count and names it.
+/// A free function so both arms can be tested without a model that produces either.
+fn finish_outputs(mut tensors: Vec<Tensor>, input_size: InputSize) -> Result<Tensor> {
+    match tensors.len() {
+        0 => anyhow::bail!("YuNet model produced no outputs"),
+        1 => Ok(tensors.remove(0)),
+        _ => decode_yunet_outputs(&tensors, input_size),
     }
 }
 
@@ -530,6 +527,42 @@ mod tests {
     fn loading_missing_model_fails() {
         let result = YuNetModel::load("missing.onnx", InputSize::default());
         assert!(result.is_err());
+    }
+
+    /// Threshold 0.5 gives an activated floor of exactly 0.25. A cell is rejected only when one
+    /// probability is strictly below it: at the floor, score² = 0.25 × obj can still reach 0.25,
+    /// which postprocessing keeps.
+    #[test]
+    fn the_score_gate_rejects_only_cells_strictly_below_the_floor() {
+        let gate = ScoreGate::new(Some(0.5), HeadLayout::CellMajorActivated).expect("0.5 prunes");
+        assert!(gate.rejects(0.2, 0.9), "cls below the floor");
+        assert!(gate.rejects(0.9, 0.1), "obj below the floor");
+        assert!(
+            !gate.rejects(0.25, 0.9),
+            "cls exactly on the floor can still reach the threshold"
+        );
+        assert!(
+            !gate.rejects(0.9, 0.25),
+            "obj exactly on the floor can still reach the threshold"
+        );
+        assert!(!gate.rejects(0.9, 0.9));
+    }
+
+    /// One output passes through untouched; none at all is refused by name rather than handed to
+    /// the decoder, whose count check would name a different problem.
+    #[test]
+    fn a_single_output_passes_through_and_no_output_is_refused() {
+        let size = InputSize::new(640, 640);
+        let decoded = Tensor::from_vec(
+            &[2, DETECTION_OUTPUT_COLS],
+            vec![0.25; 2 * DETECTION_OUTPUT_COLS],
+        )
+        .expect("tensor");
+        let passed = finish_outputs(vec![decoded], size).expect("a single output passes through");
+        assert_eq!(passed.shape(), &[2, DETECTION_OUTPUT_COLS]);
+
+        let err = finish_outputs(Vec::new(), size).expect_err("nothing to decode");
+        assert!(format!("{err}").contains("produced no outputs"), "{err}");
     }
 
     #[test]

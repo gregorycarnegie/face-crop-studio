@@ -9,7 +9,6 @@ use crate::{
 };
 
 use super::{
-    EPSILON,
     detail::{
         apply_background_blur, apply_background_blur_with_preblur, apply_unsharp_mask,
         apply_unsharp_with_preblur,
@@ -17,10 +16,7 @@ use super::{
     red_eye::apply_red_eye_removal,
     settings::EnhancementSettings,
     skin::apply_skin_smoothing,
-    tone::{
-        apply_brightness, apply_contrast, apply_exposure, apply_histogram_equalization,
-        apply_saturation,
-    },
+    tone::apply_histogram_equalization,
 };
 use anyhow::{Context, Result};
 use image::DynamicImage;
@@ -95,24 +91,13 @@ impl WgpuEnhancer {
             }
         }
 
+        // `needs_adjustment` covers exposure, brightness, contrast and saturation, so when it
+        // is false there is nothing for a CPU fallback to do.
         if GpuPixelAdjust::needs_adjustment(settings) {
             out = self
                 .pixel_adjust
                 .apply(&out, settings)
                 .context("gpu pixel adjust failed")?;
-        } else {
-            if settings.exposure_stops.abs() >= EPSILON {
-                out = apply_exposure(&out, settings.exposure_stops);
-            }
-            if settings.brightness != 0 {
-                out = apply_brightness(&out, settings.brightness);
-            }
-            if (settings.contrast - 1.0).abs() >= EPSILON {
-                out = apply_contrast(&out, settings.contrast);
-            }
-            if (settings.saturation - 1.0).abs() >= EPSILON {
-                out = apply_saturation(&out, settings.saturation);
-            }
         }
 
         if settings.skin_smooth_amount > 0.0 {
@@ -183,9 +168,6 @@ impl WgpuEnhancer {
         settings: &EnhancementSettings,
         image: &DynamicImage,
     ) -> Result<Option<DynamicImage>> {
-        if settings.skin_smooth_amount <= 0.0 {
-            return Ok(None);
-        }
         match self.bilateral_filter.smooth(
             image,
             settings.skin_smooth_amount,
@@ -205,9 +187,7 @@ impl WgpuEnhancer {
         image: &DynamicImage,
         settings: &EnhancementSettings,
     ) -> Result<Option<DynamicImage>> {
-        if !settings.background_blur || settings.background_blur_radius <= 0.0 {
-            return Ok(None);
-        }
+        // A zero radius comes back from `try_gpu_blur` as None, which falls through to the CPU.
         let blurred = match self.try_gpu_blur(image, settings.background_blur_radius)? {
             Some(b) => b,
             None => return Ok(None),
@@ -475,6 +455,18 @@ mod tests {
         let enhancer = WgpuEnhancer::new(ctx).expect("init");
         let image = gradient_image(32, 32);
 
+        // Sharpening fills only the gaussian pool, so a product of the two pools would be 0.
+        let sharpen = EnhancementSettings {
+            unsharp_amount: 1.2,
+            unsharp_radius: 2.0,
+            ..neutral()
+        };
+        enhancer.apply(&image, &sharpen, None).expect("apply");
+        assert!(
+            enhancer.memory_usage() > 0,
+            "the gaussian pool alone must count"
+        );
+
         // background_blur exercises both the gaussian and background pools,
         // which are the two that memory_usage sums.
         let settings = EnhancementSettings {
@@ -489,6 +481,82 @@ mod tests {
 
         enhancer.clear_caches();
         assert_eq!(enhancer.memory_usage(), 0, "clear_caches must empty them");
+    }
+
+    #[test]
+    fn gpu_stages_run_on_the_gpu_rather_than_falling_back() {
+        // Each try_gpu_* returning None silently routes to the CPU filter, whose output is
+        // close enough that apply()-level tests cannot tell. Ask the helpers directly.
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(16, 16);
+        let s = EnhancementSettings {
+            skin_smooth_amount: 0.8,
+            background_blur: true,
+            ..neutral()
+        };
+        // The size, not just `is_some`: a defaulted empty image is also Some.
+        let dims = |result: Result<Option<DynamicImage>>| {
+            result.unwrap().map(|img| (img.width(), img.height()))
+        };
+        assert_eq!(dims(enhancer.try_gpu_skin_smoothing(&s, &image)), Some((16, 16)));
+        assert_eq!(dims(enhancer.try_gpu_background_blur(&image, &s)), Some((16, 16)));
+        assert_eq!(
+            dims(enhancer.try_gpu_red_eye(&image, s.red_eye_threshold, None)),
+            Some((16, 16))
+        );
+    }
+
+    #[test]
+    fn gpu_bilateral_matches_the_cpu_filter() {
+        // Same exponentials both sides; the CPU rounds the filtered value before blending, so
+        // allow 2 levels. gradient_image wraps mod 256, giving hard edges where the sampling
+        // radius changes the answer.
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(29, 23);
+        let gpu = enhancer
+            .bilateral_filter
+            .smooth(&image, 1.0, 3.0, 25.0)
+            .unwrap()
+            .to_rgba8();
+        let cpu = crate::enhance::skin::skin_smooth_rgba(&image.to_rgba8(), 1.0, 3.0, 25.0);
+        let worst = gpu
+            .as_raw()
+            .iter()
+            .zip(cpu.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 2, "GPU and CPU bilateral differ by {worst}");
+    }
+
+    #[test]
+    fn gpu_histogram_equalization_matches_the_cpu_lut() {
+        // Every pixel compared, so a wrong pixel total or a short histogram buffer both show.
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = gradient_image(41, 23);
+        let gpu = enhancer
+            .histogram_equalizer
+            .equalize(&image)
+            .unwrap()
+            .to_rgba8();
+        let cpu = crate::enhance::tone::apply_histogram_equalization(&image).to_rgba8();
+        let worst = gpu
+            .as_raw()
+            .iter()
+            .zip(cpu.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst <= 1, "GPU and CPU equalization differ by {worst}");
     }
 
     #[test]

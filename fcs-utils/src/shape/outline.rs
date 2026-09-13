@@ -104,18 +104,10 @@ fn fit_points_to_bounds(points: &mut [Point], width: f32, height: f32) {
     let mut max_points = points[0];
 
     for p in points.iter().skip(1) {
-        if p.x < min_points.x {
-            min_points.x = p.x;
-        }
-        if p.x > max_points.x {
-            max_points.x = p.x;
-        }
-        if p.y < min_points.y {
-            min_points.y = p.y;
-        }
-        if p.y > max_points.y {
-            max_points.y = p.y;
-        }
+        min_points.x = min_points.x.min(p.x);
+        max_points.x = max_points.x.max(p.x);
+        min_points.y = min_points.y.min(p.y);
+        max_points.y = max_points.y.max(p.y);
     }
 
     let bbox = max_points - min_points;

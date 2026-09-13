@@ -4,11 +4,11 @@ struct BilateralUniforms {
     width : u32,
     height : u32,
     radius : u32,
-    pixel_count : u32,
     sigma_space : f32,
     sigma_color : f32,
     amount : f32,
-    _pad : f32,
+    _pad0 : f32,
+    _pad1 : f32,
 }
 
 @group(0) @binding(0)

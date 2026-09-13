@@ -120,9 +120,8 @@ pub fn init_logging(default_filter: LevelFilter) -> Result<()> {
     );
     builder.filter_module("fcs::telemetry", LevelFilter::Trace);
 
-    if builder.try_init().is_err() {
-        // Logger already initialized; nothing to do.
-    }
+    // An earlier call already installed a logger: nothing to do.
+    let _ = builder.try_init();
     Ok(())
 }
 
@@ -213,5 +212,14 @@ mod path_tests {
         let path = Path::new("definitely/not/here.onnx");
         let resolved = resolve_data_path(path);
         assert_eq!(resolved, path);
+    }
+
+    #[test]
+    fn normalize_path_canonicalizes_existing_and_rejects_missing() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("model.onnx");
+        fs::write(&file, b"").unwrap();
+        assert_eq!(normalize_path(&file).unwrap(), file.canonicalize().unwrap());
+        assert!(normalize_path(dir.path().join("missing.onnx")).is_err());
     }
 }

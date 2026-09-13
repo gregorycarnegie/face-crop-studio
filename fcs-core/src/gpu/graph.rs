@@ -131,7 +131,7 @@ pub fn encode_backbone_features(
             current = encode_pool_tensor(encoder, ops, &current)?;
         }
         current = encode_stage_blocks(encoder, ops, weights, &current, stage.blocks)?;
-        if index + NECK_INPUTS >= stage_count {
+        if index >= stage_count.saturating_sub(NECK_INPUTS) {
             features.push(current.clone());
         }
     }
@@ -358,7 +358,7 @@ fn encode_separable_block(
         depth_kernel_h,
         depth_kernel_w
     );
-    let pad = depth_kernel_w / 2;
+    let pad = crate::model_config::same_padding(depth_kernel_w as usize) as u32;
 
     let depth_cfg = Conv2dConfig::new(
         batch,

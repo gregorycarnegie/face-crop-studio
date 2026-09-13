@@ -475,7 +475,7 @@ fn build_custom_metadata_payload_includes_crop_quality_and_custom_tags() {
 
 // `output` re-exports only what it calls; these are `pub(super)` in the
 // metadata module and reachable from here as a descendant of `output`.
-use super::metadata::{build_png_text_chunk, inject_webp_exif};
+use super::metadata::build_png_text_chunk;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 /// Pull the XMP APP1 segment out of an injected JPEG.
@@ -747,18 +747,18 @@ fn injectors_pass_through_when_there_is_nothing_to_add() {
 }
 
 #[test]
-fn inject_webp_exif_returns_the_input_unchanged() {
-    // WebP metadata is not implemented; the contract is that the encoded
-    // bytes come back untouched whether or not metadata was supplied.
-    let encoded = vec![b'R', b'I', b'F', b'F', 1, 2, 3, 4];
-    assert_eq!(inject_webp_exif(encoded.clone(), None, None), encoded);
-    assert_eq!(
-        inject_webp_exif(encoded.clone(), Some(vec![0xFF, 0xE1]), None),
-        encoded
-    );
-    assert_eq!(
-        inject_webp_exif(encoded.clone(), None, Some("{\"a\":1}")),
-        encoded
+fn png_compression_level_changes_the_encoded_size() {
+    // Ramps compress well, so the strategies must actually differ in size.
+    let image = DynamicImage::ImageRgb8(image::RgbImage::from_fn(96, 64, |x, y| {
+        image::Rgb([(x * 2) as u8, (y * 3) as u8, (x + y) as u8])
+    }));
+    let fast = encode_png(&image, PngCompression::Fast).unwrap();
+    let best = encode_png(&image, PngCompression::Best).unwrap();
+    assert!(
+        best.len() < fast.len(),
+        "best {} bytes, fast {} bytes",
+        best.len(),
+        fast.len()
     );
 }
 
@@ -937,10 +937,24 @@ fn inject_jpeg_metadata_needs_both_soi_bytes_to_match() {
 
 #[test]
 fn xmp_segment_length_prefix_counts_its_own_two_bytes() {
-    let segment = xmp_segment_of(vec![0xFF, 0xD8], "{\"k\":\"v\"}").expect("segment");
-    let declared = u16::from_be_bytes(segment[2..4].try_into().unwrap()) as usize;
+    // The declared length covers the prefix and payload but not the marker, so the original EOI
+    // must follow straight after. Checked against the untouched bytes: xmp_segment_of slices by
+    // the declared length, so a wrong prefix would still look self-consistent through it.
+    let injected = inject_jpeg_metadata(vec![0xFF, 0xD8, 0xFF, 0xD9], None, Some("{\"k\":\"v\"}"));
+    let declared = u16::from_be_bytes(injected[4..6].try_into().unwrap()) as usize;
+    assert_eq!(&injected[2 + 2 + declared..], &[0xFF, 0xD9]);
+}
 
-    // marker (2) + length prefix (2) + payload, where the prefix counts itself.
-    assert_eq!(segment.len(), declared + 2);
-    assert_eq!(declared, segment.len() - 4 + 2);
+#[test]
+fn xmp_segment_fits_exactly_at_the_u16_limit_and_not_one_block_past_it() {
+    // 48 882 JSON bytes base64 to 65 176 chars, making the declared length exactly u16::MAX.
+    // If the XMP template changes these numbers move; the assert_eq names the drift.
+    let at_limit =
+        xmp_segment_of(vec![0xFF, 0xD8], &"x".repeat(48_882)).expect("exactly u16::MAX fits");
+    assert_eq!(
+        u16::from_be_bytes(at_limit[2..4].try_into().unwrap()),
+        u16::MAX
+    );
+    // One more byte adds a whole base64 block, four chars over.
+    assert!(xmp_segment_of(vec![0xFF, 0xD8], &"x".repeat(48_883)).is_none());
 }

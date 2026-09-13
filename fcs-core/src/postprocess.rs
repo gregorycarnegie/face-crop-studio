@@ -239,7 +239,8 @@ pub fn apply_postprocess(
 
     sort_by_score_desc(&mut detections, config.top_k);
 
-    if config.nms_threshold > 0.0 && detections.len() > 1 {
+    // apply_nms_in_place returns at once for a single detection.
+    if config.nms_threshold > 0.0 {
         apply_nms_in_place(&mut detections, config.nms_threshold);
     }
 
@@ -277,21 +278,18 @@ fn detection_rows(output: &Tensor) -> Result<impl Iterator<Item = &[f32; DETECTI
         .iter())
 }
 
-/// Apply non-maximum suppression to a list of detections.
+/// Sort detections best score first, keeping at most `top_k` of them (`0` keeps all).
 fn sort_by_score_desc(detections: &mut Vec<Detection>, top_k: usize) {
     fn cmp(a: &Detection, b: &Detection) -> Ordering {
         b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal)
     }
 
     if top_k > 0 && detections.len() > top_k {
-        let nth = top_k - 1;
-        detections.select_nth_unstable_by(nth, cmp);
-        let (head, _) = detections.split_at_mut(top_k);
-        head.sort_unstable_by(cmp);
+        // Partition around the first detection to drop, so only the kept ones pay for the sort.
+        detections.select_nth_unstable_by(top_k, cmp);
         detections.truncate(top_k);
-    } else {
-        detections.sort_unstable_by(cmp);
     }
+    detections.sort_unstable_by(cmp);
 }
 
 impl From<DetectionSettings> for PostprocessConfig {
@@ -549,6 +547,12 @@ mod tests {
         assert!((detections[0].score - 0.9).abs() < f32::EPSILON);
         assert!((detections[1].score - 0.5).abs() < f32::EPSILON);
         assert!((detections[2].score - 0.1).abs() < f32::EPSILON);
+
+        // Exactly top_k: nothing to drop, and still sorted best first.
+        detections.reverse();
+        sort_by_score_desc(&mut detections, 3);
+        let scores: Vec<f32> = detections.iter().map(|d| d.score).collect();
+        assert_eq!(scores, [0.9, 0.5, 0.1]);
     }
 
     #[test]

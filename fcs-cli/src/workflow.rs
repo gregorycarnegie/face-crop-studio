@@ -67,8 +67,8 @@ pub(crate) fn process_single_image(
 
     // Decode once and reuse for detection, annotation, and cropping. Detection
     // must see the same EXIF-oriented pixels the crops are taken from.
-    let img_opt = load_source_image(image_path);
-    let output = detect_image(detector, img_opt.as_ref()?, image_path)?;
+    let img = load_source_image(image_path)?;
+    let output = detect_image(detector, &img, image_path)?;
     ctx.counters
         .faces_detected
         .fetch_add(output.detections.len(), Ordering::Relaxed);
@@ -78,34 +78,21 @@ pub(crate) fn process_single_image(
         image_path.display(),
         output.detections.len()
     );
-    let annotated_path = annotate_image_if_requested(
-        img_opt.as_ref(),
-        image_path,
-        &output.detections,
-        annotate_dir,
-    );
+    let annotated_path =
+        annotate_image_if_requested(Some(&img), image_path, &output.detections, annotate_dir);
 
-    match (crop_enabled, crop_output_dir.as_ref(), img_opt.as_ref()) {
-        (true, Some(out_dir), Some(img)) => {
-            process_crops(
-                ctx,
-                img,
-                image_path,
-                &output.detections,
-                out_dir,
-                override_target,
-            );
-        }
-        (true, Some(_), None) => {
-            warn!(
-                "Cannot crop {} because the source image failed to load",
-                image_path.display()
-            );
-        }
-        _ => {}
+    if let (true, Some(out_dir)) = (crop_enabled, crop_output_dir.as_ref()) {
+        process_crops(
+            ctx,
+            &img,
+            image_path,
+            &output.detections,
+            out_dir,
+            override_target,
+        );
     }
 
-    let detection_records = build_detection_records(&output.detections, img_opt.as_ref());
+    let detection_records = build_detection_records(&output.detections, Some(&img));
 
     Some(ImageDetections {
         image: image_path.display().to_string(),
@@ -416,8 +403,8 @@ fn filter_faces_for_export(
         return filtered;
     }
 
+    // No length guard: the best of one face is that face.
     if quality_filter.auto_select
-        && exports.len() > 1
         && let Some(best_rel) = select_best_quality_index(&exports, quality_filter)
     {
         let best_idx = exports[best_rel].index;
@@ -445,7 +432,7 @@ fn select_best_quality_index(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use clap::Parser;
     use fcs_core::{FillColor, InputSize, Landmark};
@@ -500,19 +487,19 @@ mod tests {
         ))
     }
 
-    fn parse_args(args: &[&str]) -> DetectArgs {
+    pub(crate) fn parse_args(args: &[&str]) -> DetectArgs {
         let mut full = vec!["fcs-cli"];
         full.extend_from_slice(args);
         DetectArgs::try_parse_from(full).expect("test CLI arguments should parse")
     }
 
-    fn no_gpu_runtime() -> Arc<gpu::CliGpuRuntime> {
+    pub(crate) fn no_gpu_runtime() -> Arc<gpu::CliGpuRuntime> {
         let mut settings = AppSettings::default();
         settings.gpu.enabled = false;
         Arc::new(init_cli_gpu_runtime(&settings).expect("disabled GPU runtime should initialize"))
     }
 
-    fn crop_settings_app() -> Arc<AppSettings> {
+    pub(crate) fn crop_settings_app() -> Arc<AppSettings> {
         let mut settings = AppSettings::default();
         settings.gpu.enabled = false;
         settings.crop.output_width = 16;
@@ -522,18 +509,21 @@ mod tests {
         Arc::new(settings)
     }
 
-    fn build_test_detector() -> Option<Arc<fcs_core::YuNetDetector>> {
-        let model_path = Path::new("models/face_detection_yunet_2023mar_640.onnx");
-        if !model_path.exists() {
-            return None;
-        }
+    /// `None` only when the model is absent, which `model_path` turns into a failure under
+    /// FCS_STRICT_TESTS. Resolved against the manifest: `cargo test` runs from the crate
+    /// directory, where a bare `models/...` does not exist, and every test using this used to
+    /// return early having tested nothing.
+    pub(crate) fn build_test_detector() -> Option<Arc<fcs_core::YuNetDetector>> {
+        let model_path = fcs_utils::model_path("models/face_detection_yunet_2023mar_640.onnx")
+            .expect("resolve model")?;
+        // 640, the bundled model's size: ONNX Runtime refuses any other at construction.
         let preprocess = PreprocessConfig {
-            input_size: InputSize::new(32, 32),
+            input_size: InputSize::new(640, 640),
             resize_quality: ResizeQuality::Quality,
         };
         let postprocess = PostprocessConfig::default();
         let detector = build_cli_detector(
-            model_path,
+            &model_path,
             &preprocess,
             &postprocess,
             no_gpu_runtime().as_ref(),
@@ -542,13 +532,13 @@ mod tests {
                 ..Default::default()
             },
         )
-        .ok()?;
+        .expect("the bundled model builds a CPU detector");
         Some(Arc::new(detector))
     }
 
     /// Assemble the per-run context the workflow functions take. Every field is a reference,
     /// so the caller's locals must outlive it -- which they do, being test-body locals.
-    fn batch_ctx<'a>(
+    pub(crate) fn batch_ctx<'a>(
         settings: &'a Arc<AppSettings>,
         quality_filter: &'a Arc<QualityFilter>,
         enhancement_settings: &'a Option<Arc<fcs_utils::EnhancementSettings>>,
@@ -566,7 +556,7 @@ mod tests {
         }
     }
 
-    fn write_sample_png(path: &Path) {
+    pub(crate) fn write_sample_png(path: &Path) {
         sample_image(32, 32)
             .save(path)
             .expect("sample PNG should be written");
@@ -600,6 +590,52 @@ mod tests {
             10,
         );
         assert_eq!(rect, None);
+    }
+
+    /// The per-face suffix on an override name only applies with more than one face, and the
+    /// existing override test has one, where `1 > 1` and `1 < 1` agree.
+    #[test]
+    fn two_faces_with_one_override_write_two_distinct_crops() {
+        let settings = crop_settings_app();
+        let runtime = no_gpu_runtime();
+        let filter = Arc::new(QualityFilter::new(None));
+        let args = parse_args(&["--input", "x.jpg"]);
+        let dir = tempdir().expect("temp directory should be created");
+        let counters = ProgressCounters::default();
+        let detections = vec![
+            sample_detection(2.0, 2.0, 8.0, 8.0, 0.9),
+            sample_detection(12.0, 12.0, 8.0, 8.0, 0.8),
+        ];
+        let override_target = PathBuf::from("nested/custom-name.jpg");
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+        process_crops(
+            &ctx,
+            &sample_image(24, 24),
+            Path::new("input.png"),
+            &detections,
+            dir.path(),
+            Some(&override_target),
+        );
+        assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 2);
+        // Without the per-face suffix both crops would land on one path, leaving one file.
+        let written = fs::read_dir(dir.path().join("nested"))
+            .expect("nested dir")
+            .count();
+        assert_eq!(written, 2);
+    }
+
+    #[test]
+    fn a_box_overrunning_only_the_right_edge_has_no_crop_rect() {
+        // x rounds to 10 on a 10-wide image, so the 1-pixel minimum width runs one column
+        // past it; y fits, so an `||` between the two axis checks would accept it.
+        let bbox = BoundingBox {
+            x: 9.6,
+            y: 2.0,
+            width: 0.4,
+            height: 1.0,
+        };
+        assert_eq!(detection_crop_rect(&bbox, 10, 10), None);
     }
 
     #[test]

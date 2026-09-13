@@ -1,6 +1,6 @@
 //! Parquet mapping reader.
 
-use super::common::{MappingTable, ensure_columns, format_parquet_field, normalize_row};
+use super::common::{MappingTable, ensure_columns, format_parquet_field};
 use anyhow::{Context, Result};
 use parquet::{
     file::reader::{FileReader, SerializedFileReader},
@@ -17,11 +17,15 @@ pub(super) fn table_parquet_internal(
     let reader =
         SerializedFileReader::new(file).with_context(|| "failed to create parquet reader")?;
 
-    let schema = reader.metadata().file_metadata().schema_descr();
-    let mut columns: Vec<String> = schema
-        .columns()
+    // Headers from the same level the row iterator yields values at: top-level fields, not leaf
+    // columns, or a nested group shifts every later value under the wrong header.
+    let mut columns: Vec<String> = reader
+        .metadata()
+        .file_metadata()
+        .schema()
+        .get_fields()
         .iter()
-        .map(|c| c.name().to_string())
+        .map(|field| field.name().to_string())
         .collect();
     if columns.is_empty() {
         anyhow::bail!("parquet file {} has no columns", path.display());
@@ -34,7 +38,7 @@ pub(super) fn table_parquet_internal(
         .with_context(|| "failed to build parquet row iterator")?;
     for row in iter {
         let row: Row = row?;
-        let mut values: Vec<String> = row
+        let values: Vec<String> = row
             .get_column_iter()
             .map(|(_, field)| format_parquet_field(field))
             .collect();
@@ -42,7 +46,6 @@ pub(super) fn table_parquet_internal(
             continue;
         }
         ensure_columns(&mut columns, values.len());
-        normalize_row(&mut values, columns.len());
         if row_limit.is_none_or(|limit| rows.len() < limit) {
             rows.push(values);
         }

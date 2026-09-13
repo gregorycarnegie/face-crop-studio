@@ -211,4 +211,13 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn model_path_walks_manifest_ancestors() {
+        // Cargo.toml sits beside the manifest, so the ancestor walk has to find it.
+        let found = model_path("Cargo.toml")
+            .expect("resolve")
+            .expect("Cargo.toml is beside the manifest");
+        assert!(found.ends_with("Cargo.toml") && found.exists(), "{found:?}");
+    }
 }

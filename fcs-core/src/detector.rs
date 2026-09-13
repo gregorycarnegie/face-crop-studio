@@ -394,6 +394,48 @@ mod tests {
         assert_eq!(detections[0].bbox.height, 50.0);
     }
 
+    /// A GPU model and a GPU preprocessor on one device must take the fused path. Falling back to
+    /// the ordinary path finds the same faces, so only asking `detect_on_device` shows it was
+    /// skipped.
+    #[test]
+    fn a_shared_device_detects_without_leaving_the_gpu() {
+        let Some(ctx) = crate::gpu::test_context() else {
+            return;
+        };
+        let strict = std::env::var("FCS_STRICT_TESTS").is_ok();
+        let Some(model) = fcs_utils::model_path("models/face_detection_yunet_2023mar_640.onnx")
+            .expect("resolve model")
+        else {
+            assert!(!strict, "model missing under FCS_STRICT_TESTS");
+            return;
+        };
+        let preprocessor: Arc<dyn Preprocessor> =
+            Arc::new(crate::WgpuPreprocessor::new(ctx).expect("GPU preprocessor"));
+        let preprocess = PreprocessConfig {
+            input_size: crate::InputSize::new(640, 640),
+            resize_quality: fcs_utils::config::ResizeQuality::Quality,
+        };
+        let detector = YuNetDetector::with_gpu_preprocessor(
+            &model,
+            preprocess,
+            PostprocessConfig::default(),
+            preprocessor,
+        )
+        .expect("GPU detector");
+        // Small, so preprocess_into_tensor never declines for size.
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            64,
+            48,
+            image::Rgb([90, 120, 150]),
+        ));
+        assert!(
+            detector
+                .detect_on_device(&image)
+                .expect("fused detection")
+                .is_some()
+        );
+    }
+
     #[test]
     fn a_source_that_needs_no_bars_is_left_alone() {
         let fit = fit_input((640, 640), (640, 640)).expect("fit");

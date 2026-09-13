@@ -89,10 +89,10 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
 
     if let Some(preset_name) = args.preset.as_ref() {
         settings.crop.preset = preset_name.to_ascii_lowercase();
-        if settings.crop.preset != "custom"
-            && let Some(preset) = preset_by_name(preset_name)
+        // Custom is the one preset with no size of its own, and the presets keep width and
+        // height both zero or both positive.
+        if let Some(preset) = preset_by_name(preset_name)
             && preset.width > 0
-            && preset.height > 0
         {
             settings.crop.output_width = preset.width;
             settings.crop.output_height = preset.height;

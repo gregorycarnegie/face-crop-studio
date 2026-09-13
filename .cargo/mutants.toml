@@ -19,6 +19,12 @@
 # heic/raw loaders in image_utils.
 all_features = true
 
+# The scratch copy must include gitignored inputs: `fixtures/images/` (the
+# detection corpus) and the 320 model. Without them the model- and
+# fixture-driven tests skip themselves, pass, and every mutant they guard is
+# recorded as missed. `target/` is governed by `copy_target`, not this.
+gitignore = false
+
 exclude_globs = [
     # egui immediate-mode UI: painting, layout, and widget state only exist
     # inside a live frame. 1608 mutants, 8 caught at the time this was written.
@@ -53,4 +59,7 @@ exclude_globs = [
     # wgpu adapter. Every mutant survives because the code never runs in CI.
     "fcs-cli/src/webcam.rs",
     "fcs-cli/src/gpu.rs",
+    # Same reason as the CLI's webcam module: the capture tests are #[ignore]d
+    # without a camera, so its mutants all survive.
+    "fcs-utils/src/webcam.rs",
 ]

@@ -31,9 +31,8 @@ use {
     red_eye::apply_red_eye_removal,
     skin::{apply_skin_smoothing, skin_kernel},
     tone::{
-        apply_brightness, apply_contrast, apply_exposure, apply_histogram_equalization,
-        apply_lut_in_place, apply_saturation, build_equalization_lut, saturation_in_place,
-        tone_lut,
+        apply_histogram_equalization, apply_lut_in_place, build_equalization_lut,
+        saturation_in_place, tone_lut,
     },
 };
 

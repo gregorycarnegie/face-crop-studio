@@ -140,7 +140,7 @@ fn separable(
         depth_w.kernel_h,
         depth_w.kernel_w
     );
-    let pad = depth_w.kernel_w / 2;
+    let pad = crate::model_config::same_padding(depth_w.kernel_w);
     conv2d(
         &point,
         depth_w,
@@ -343,6 +343,14 @@ pub fn forward(input: &Tensor, weights: &Weights) -> Result<Vec<HeadOutput>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weights_debug_reports_the_conv_count_rather_than_the_tensors() {
+        let weights = Weights {
+            convs: HashMap::new(),
+        };
+        assert_eq!(format!("{weights:?}"), "Weights { convs: 0 }");
+    }
 
     #[test]
     fn to_hwc_interleaves_channels_and_can_apply_sigmoid() {

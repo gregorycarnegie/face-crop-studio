@@ -190,11 +190,7 @@ fn apply_analytical_mask(
 }
 
 fn raster_mask_scale(width: u32, height: u32) -> f32 {
-    if width.max(height) > MAX_MASK_RESOLUTION as u32 {
-        MAX_MASK_RESOLUTION / width.max(height) as f32
-    } else {
-        1.0
-    }
+    (MAX_MASK_RESOLUTION / width.max(height) as f32).min(1.0)
 }
 
 fn build_raster_hard_mask(mask_w: u32, mask_h: u32, shape: &CropShape) -> Option<RgbaImage> {
@@ -278,10 +274,6 @@ fn apply_raster_mask_optimized(
 ) {
     let width = image.width();
     let height = image.height();
-    if width == 0 || height == 0 {
-        return;
-    }
-
     let scale = raster_mask_scale(width, height);
 
     let mask_w = (width as f32 * scale).ceil() as u32;
@@ -289,6 +281,7 @@ fn apply_raster_mask_optimized(
 
     let hard_mask = match build_raster_hard_mask(mask_w, mask_h, shape) {
         Some(mask) => mask,
+        // Also how a zero-sized image exits: tiny-skia refuses a zero-size pixmap.
         None => return,
     };
 
@@ -328,19 +321,17 @@ fn process_pixel(
     vignette_intensity: f32,
     vignette_color: &RgbaColor,
 ) {
-    let inv_mask = 1.0 - mask_alpha;
-
     let vign_helper = |pixel: u8, vig: u8, mix_factor: f32| {
         (pixel as f32 + mix_factor * (vig as f32 - pixel as f32)).clamp(0.0, 255.0) as u8
     };
 
-    if vignette_intensity > 0.0 && inv_mask > 0.0 {
-        let mix_factor = inv_mask * vignette_intensity;
-
-        pixel[0] = vign_helper(pixel[0], vignette_color.red, mix_factor);
-        pixel[1] = vign_helper(pixel[1], vignette_color.green, mix_factor);
-        pixel[2] = vign_helper(pixel[2], vignette_color.blue, mix_factor);
-    }
+    // A zero factor writes each channel back exactly, so no branch is needed. The floors keep
+    // negative or NaN intensities inert, and a bilinear alpha an ulp above 1 from truncating a
+    // channel down a level.
+    let mix_factor = (1.0 - mask_alpha).max(0.0) * vignette_intensity.max(0.0);
+    pixel[0] = vign_helper(pixel[0], vignette_color.red, mix_factor);
+    pixel[1] = vign_helper(pixel[1], vignette_color.green, mix_factor);
+    pixel[2] = vign_helper(pixel[2], vignette_color.blue, mix_factor);
 
     pixel[3] = (pixel[3] as f32 * mask_alpha).round() as u8;
 }

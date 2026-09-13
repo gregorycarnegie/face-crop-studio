@@ -3,8 +3,8 @@
 use super::{
     encoders::{encode_avif, encode_bmp, encode_jpeg, encode_png, encode_tiff, encode_webp},
     metadata::{
-        build_custom_metadata_payload, inject_jpeg_metadata, inject_png_metadata, inject_webp_exif,
-        load_jpeg_exif, load_png_exif_chunks,
+        build_custom_metadata_payload, inject_jpeg_metadata, inject_png_metadata, load_jpeg_exif,
+        load_png_exif_chunks,
     },
     types::{ImageFormatHint, MetadataContext, OutputOptions},
 };
@@ -63,45 +63,28 @@ pub fn save_dynamic_image(
     // Prepare metadata payload if applicable.
     let custom_payload = build_custom_metadata_payload(&options.metadata, metadata)?;
 
+    // Strip mode needs no guard here: the payload is None and no EXIF is loaded, so the
+    // injectors hand the encoded bytes straight back.
+    let preserve = matches!(options.metadata.mode, MetadataMode::Preserve);
     match format {
         ImageFormatHint::Png => {
-            if !matches!(options.metadata.mode, MetadataMode::Strip) {
-                let mut exif_chunks = Vec::new();
-                if matches!(options.metadata.mode, MetadataMode::Preserve) {
-                    exif_chunks = load_png_exif_chunks(metadata.source_path);
-                }
-                encoded = inject_png_metadata(encoded, &exif_chunks, custom_payload.as_deref());
-            }
+            let exif_chunks = if preserve {
+                load_png_exif_chunks(metadata.source_path)
+            } else {
+                Vec::new()
+            };
+            encoded = inject_png_metadata(encoded, &exif_chunks, custom_payload.as_deref());
         }
         ImageFormatHint::Jpeg => {
-            encoded = inject_jpeg_metadata(
-                encoded,
-                if matches!(options.metadata.mode, MetadataMode::Preserve) {
-                    load_jpeg_exif(metadata.source_path)
-                } else {
-                    None
-                },
-                if matches!(options.metadata.mode, MetadataMode::Strip) {
-                    None
-                } else {
-                    custom_payload.as_deref()
-                },
-            );
+            let exif = preserve
+                .then(|| load_jpeg_exif(metadata.source_path))
+                .flatten();
+            encoded = inject_jpeg_metadata(encoded, exif, custom_payload.as_deref());
         }
-        ImageFormatHint::Webp => {
-            if matches!(options.metadata.mode, MetadataMode::Preserve) {
-                if let Some(exif) = load_jpeg_exif(metadata.source_path) {
-                    encoded = inject_webp_exif(encoded, Some(exif), custom_payload.as_deref());
-                } else {
-                    encoded = inject_webp_exif(encoded, None, custom_payload.as_deref());
-                }
-            } else if matches!(options.metadata.mode, MetadataMode::Strip) {
-                // Nothing extra to embed.
-            } else {
-                encoded = inject_webp_exif(encoded, None, custom_payload.as_deref());
-            }
-        }
-        ImageFormatHint::Tiff | ImageFormatHint::Bmp | ImageFormatHint::Avif => {
+        ImageFormatHint::Webp
+        | ImageFormatHint::Tiff
+        | ImageFormatHint::Bmp
+        | ImageFormatHint::Avif => {
             // Metadata injection not yet implemented for these formats
         }
     }

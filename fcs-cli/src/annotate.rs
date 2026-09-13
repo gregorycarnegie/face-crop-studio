@@ -241,10 +241,10 @@ mod tests {
         let dir = tempdir().expect("temp directory");
         for (w, h) in [(0u32, 4u32), (4, 0), (0, 0)] {
             let image = DynamicImage::ImageRgba8(RgbaImage::new(w, h));
-            assert!(
-                annotate_image(&image, Path::new("input.png"), &[], dir.path()).is_err(),
-                "{w}x{h} should be refused"
-            );
+            // Which error matters: past the guard, saving a zero-sized PNG fails too.
+            let err = annotate_image(&image, Path::new("input.png"), &[], dir.path())
+                .expect_err(&format!("{w}x{h} should be refused"));
+            assert!(format!("{err}").contains("zero dimensions"), "{w}x{h}: {err}");
         }
     }
 }

@@ -66,9 +66,6 @@ fn correct_red_eye_region(out: &mut RgbaImage, threshold: f32, eye: &RedEye) {
     let max_x = ((eye.x + eye.radius).ceil() as u32).min(w - 1);
     let min_y = (eye.y - eye.radius).floor().max(0.0) as u32;
     let max_y = ((eye.y + eye.radius).ceil() as u32).min(h - 1);
-    if min_x > max_x || min_y > max_y {
-        return;
-    }
 
     let radius_sq = eye.radius * eye.radius;
     let row_stride = w as usize * 4;
@@ -150,6 +147,15 @@ mod tests {
     }
 
     #[test]
+    fn correct_red_pixel_leaves_a_ratio_exactly_at_the_threshold() {
+        // avg_gb = 50.0 exactly (the 1e-6 epsilon is under half an f32 ulp at 50 and rounds
+        // away), so 100 sits on the line at threshold 2.0, not over it.
+        let mut px = [100u8, 40, 60, 255];
+        correct_red_pixel(&mut px, 2.0);
+        assert_eq!(px, [100, 40, 60, 255]);
+    }
+
+    #[test]
     fn correct_red_pixel_floor_is_strictly_above_eighty() {
         // Exactly 80 must not qualify — the guard is `>`, not `>=`.
         let mut boundary = [80u8, 10, 10, 255];
@@ -160,8 +166,7 @@ mod tests {
     #[test]
     fn correct_red_eye_region_handles_a_zero_radius_eye() {
         // A radius of zero collapses the bounding box to a single pixel, where
-        // min and max coincide. The early return has to trigger on min being
-        // strictly greater than max, not on equality.
+        // min and max coincide, and that one-pixel range must still be walked.
         let mut img = canvas(5, 5);
         correct_red_eye_region(&mut img, 1.5, &eye(0.0, 0.0, 0.0));
         assert_eq!(img.get_pixel(0, 0).0, [50, 20, 80, 255], "the single pixel");

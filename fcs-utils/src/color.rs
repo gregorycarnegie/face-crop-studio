@@ -45,32 +45,42 @@ impl Default for RgbaColor {
     }
 }
 
-/// Convert RGB channels (0-255) to HSV (hue in degrees 0-360, saturation/value 0-1).
-pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
-    let rf = r as f32 / 255.0;
-    let gf = g as f32 / 255.0;
-    let bf = b as f32 / 255.0;
-
-    let max = rf.max(gf).max(bf);
-    let min = rf.min(gf).min(bf);
-    let delta = max - min;
-
-    let hue = if delta.abs() < f32::EPSILON {
+/// Hue in degrees `[0, 360)` with the largest and smallest channel as 0-1 values, shared by the
+/// HSV and HSL conversions.
+///
+/// The channel comparisons are made on the `u8` inputs, so ties are exact without an epsilon.
+fn hue_max_min(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let [rf, gf, bf, maxf, minf] = [r, g, b, max, min].map(|c| f32::from(c) / 255.0);
+    let delta = maxf - minf;
+    let hue = if max == min {
         0.0
-    } else if (max - rf).abs() < f32::EPSILON {
+    } else if max == r {
         60.0 * (((gf - bf) / delta) % 6.0)
-    } else if (max - gf).abs() < f32::EPSILON {
+    } else if max == g {
         60.0 * (((bf - rf) / delta) + 2.0)
     } else {
         60.0 * (((rf - gf) / delta) + 4.0)
     };
+    (if hue < 0.0 { hue + 360.0 } else { hue }, maxf, minf)
+}
 
-    let hue = if hue < 0.0 { hue + 360.0 } else { hue };
-    let saturation = if max.abs() < f32::EPSILON {
-        0.0
-    } else {
-        delta / max
-    };
+/// Split chroma `c` and the intermediate component `x` into the RGB arm for `hue`'s sextant.
+fn sextant(hue: f32, c: f32, x: f32) -> (f32, f32, f32) {
+    match (hue / 60.0) as u8 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    }
+}
+
+/// Convert RGB channels (0-255) to HSV (hue in degrees 0-360, saturation/value 0-1).
+pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (hue, max, min) = hue_max_min(r, g, b);
+    let saturation = if max == 0.0 { 0.0 } else { (max - min) / max };
     (hue, saturation, max)
 }
 
@@ -86,14 +96,7 @@ pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
     let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
     let m = v - c;
 
-    let (r1, g1, b1) = match hue {
-        h if h < 60.0 => (c, x, 0.0),
-        h if h < 120.0 => (x, c, 0.0),
-        h if h < 180.0 => (0.0, c, x),
-        h if h < 240.0 => (0.0, x, c),
-        h if h < 300.0 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
+    let (r1, g1, b1) = sextant(hue, c, x);
 
     let to_byte = |value: f32| -> u8 { ((value + m) * 255.0) as u8 };
 
@@ -163,34 +166,17 @@ fn parse_byte(slice: &str) -> Option<u8> {
 
 fn replicate_nibble(slice: &str) -> Option<u8> {
     let nib = u8::from_str_radix(slice, 16).ok()?;
-    Some((nib << 4) | nib)
+    Some(nib * 0x11)
 }
 
 /// Convert RGB channels (0-255) to HSL (hue in degrees 0-360, saturation 0-1, lightness 0-1).
 pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
-    let rf = r as f32 / 255.0;
-    let gf = g as f32 / 255.0;
-    let bf = b as f32 / 255.0;
-
-    let max = rf.max(gf).max(bf);
-    let min = rf.min(gf).min(bf);
+    let (hue, max, min) = hue_max_min(r, g, b);
     let delta = max - min;
-
-    let hue = if delta.abs() < f32::EPSILON {
-        0.0
-    } else if (max - rf).abs() < f32::EPSILON {
-        60.0 * (((gf - bf) / delta) % 6.0)
-    } else if (max - gf).abs() < f32::EPSILON {
-        60.0 * (((bf - rf) / delta) + 2.0)
-    } else {
-        60.0 * (((rf - gf) / delta) + 4.0)
-    };
-
-    let hue = if hue < 0.0 { hue + 360.0 } else { hue };
 
     let lightness = (max + min) * 0.5;
 
-    let saturation = if delta.abs() < f32::EPSILON {
+    let saturation = if delta == 0.0 {
         0.0
     } else {
         delta / (1.0 - (lightness.mul_add(2.0, -1.0)).abs())
@@ -206,14 +192,7 @@ pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
     let m = l - c * 0.5;
 
-    let (r1, g1, b1) = match hue {
-        h if h < 60.0 => (c, x, 0.0),
-        h if h < 120.0 => (x, c, 0.0),
-        h if h < 180.0 => (0.0, c, x),
-        h if h < 240.0 => (0.0, x, c),
-        h if h < 300.0 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
+    let (r1, g1, b1) = sextant(hue, c, x);
 
     let to_byte = |value: f32| -> u8 { ((value + m) * 255.0) as u8 };
 
@@ -222,14 +201,12 @@ pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 
 /// Convert RGB channels (0-255) to CMYK (0-1 for all channels).
 pub fn rgb_to_cmyk(r: u8, g: u8, b: u8) -> (f32, f32, f32, f32) {
-    let rf = r as f32 / 255.0;
-    let gf = g as f32 / 255.0;
-    let bf = b as f32 / 255.0;
-
-    let k = 1.0 - rf.max(gf).max(bf);
-    if (1.0 - k).abs() < f32::EPSILON {
+    let max = r.max(g).max(b);
+    if max == 0 {
         return (0.0, 0.0, 0.0, 1.0);
     }
+    let [rf, gf, bf] = [r, g, b].map(|c| f32::from(c) / 255.0);
+    let k = 1.0 - f32::from(max) / 255.0;
 
     let rgb_channel_to_cymk = |value: f32| -> f32 { (1.0 - value - k) / (1.0 - k) };
 

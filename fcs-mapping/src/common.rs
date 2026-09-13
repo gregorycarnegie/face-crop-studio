@@ -61,10 +61,6 @@ pub(super) fn ensure_columns(columns: &mut Vec<String>, desired: usize) {
     }
 }
 
-pub(super) fn normalize_row(row: &mut Vec<String>, len: usize) {
-    row.resize(len, String::new());
-}
-
 pub(super) fn format_excel_header(cell: &ExcelData, idx: usize) -> String {
     let text = format_excel_cell(cell);
     if text.is_empty() {

@@ -141,20 +141,18 @@ impl ConvWeights {
 /// most expensive layer in the network. Splitting rows as well gives every
 /// thread work. The result always divides `out_h`, so a chunk never straddles
 /// two channel planes — which would silently mix channels.
-fn rows_per_task(out_h: usize, planes: usize) -> usize {
-    let threads = rayon::current_num_threads().max(1);
+///
+/// `threads` is a parameter rather than read here so the arithmetic can be tested; callers pass
+/// `rayon::current_num_threads()`.
+fn rows_per_task(out_h: usize, planes: usize, threads: usize) -> usize {
     // Several tasks per thread so rayon can balance a ragged tail.
-    let target_tasks = threads * 4;
-    if out_h <= 1 || planes >= target_tasks {
-        return out_h.max(1);
-    }
-    let wanted_per_plane = (target_tasks / planes).max(1);
-    let mut rows = out_h.div_ceil(wanted_per_plane).max(1);
-    // Round up to the next divisor of out_h so chunks stay plane-aligned.
-    while rows < out_h && !out_h.is_multiple_of(rows) {
-        rows += 1;
-    }
-    rows.min(out_h).max(1)
+    let target_tasks = threads.max(1) * 4;
+    let wanted_per_plane = (target_tasks / planes.max(1)).max(1);
+    let rows = out_h.div_ceil(wanted_per_plane);
+    // The next divisor of out_h at or above that, so a chunk never straddles two channel planes.
+    (rows.max(1)..=out_h)
+        .find(|r| out_h.is_multiple_of(*r))
+        .unwrap_or(1)
 }
 
 /// Output spatial size for a given input, kernel, stride and padding.
@@ -242,7 +240,7 @@ fn conv_pointwise(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) ->
     // Tasks are (plane, row-block) rather than whole planes: a 16-channel layer
     // would otherwise leave most threads idle, and those are the layers running
     // at the largest spatial sizes.
-    let rpt = rows_per_task(h, n * c_out);
+    let rpt = rows_per_task(h, n * c_out, rayon::current_num_threads());
     let rows_per_plane = h / rpt;
 
     output
@@ -312,7 +310,7 @@ fn conv_depthwise(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) ->
     let act = config.activation;
     let kernel_area = kh * kw;
 
-    let rpt = rows_per_task(out_h, n * c);
+    let rpt = rows_per_task(out_h, n * c, rayon::current_num_threads());
     let rows_per_plane = out_h / rpt;
 
     output
@@ -408,7 +406,7 @@ fn conv_general(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> R
     };
     let x_interior_lo = pad.div_ceil(stride).min(x_interior_hi);
 
-    let rpt = rows_per_task(out_h, n * c_out);
+    let rpt = rows_per_task(out_h, n * c_out, rayon::current_num_threads());
     let rows_per_plane = out_h / rpt;
 
     output
@@ -491,12 +489,9 @@ mod tests {
     /// correct in the middle of an image and goes wrong at an edge, and a
     /// handful of golden pixels would not catch that.
     fn reference(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> Tensor {
-        let (n, c_in, h, w) = (
-            input.batch(),
-            input.channels(),
-            input.height(),
-            input.width(),
-        );
+        // `dims()` reads the fields directly: going through `batch()` and friends would let a
+        // broken accessor corrupt the reference and the code under test identically.
+        let [n, c_in, h, w] = input.dims();
         let c_out = weights.out_channels;
         let (kh, kw) = (weights.kernel_h, weights.kernel_w);
         let (stride, pad) = (config.stride, config.padding);
@@ -553,6 +548,80 @@ mod tests {
                 (x - y).abs() <= 1e-4 * x.abs().max(1.0),
                 "{what}: element {i} is {x} but reference says {y}"
             );
+        }
+    }
+
+    #[test]
+    fn rows_per_task_divides_the_output_and_scales_with_threads() {
+        // 4 threads -> 16 tasks; 16 / 5 planes = 3 per plane; ceil(36 / 3) = 12, which divides 36.
+        assert_eq!(rows_per_task(36, 5, 4), 12);
+        assert_eq!(
+            rows_per_task(37, 5, 4),
+            37,
+            "a prime height has no smaller divisor to round to"
+        );
+        assert_eq!(
+            rows_per_task(36, 20, 4),
+            36,
+            "more planes than tasks: one task per plane"
+        );
+        assert_eq!(rows_per_task(0, 5, 4), 1);
+        assert_eq!(rows_per_task(1, 5, 4), 1);
+    }
+
+    /// Whatever path `conv2d` picks must agree with the reference. Each fast path is valid only
+    /// for some shapes: a 3x1 kernel, an unpadded or strided 1x1, a strided depthwise layer or a
+    /// depth multiplier of 2 routed to one of them computes the wrong thing, and YuNet's own
+    /// layers never try those combinations.
+    #[test]
+    fn every_layer_shape_matches_the_reference_whichever_path_runs() {
+        let c_in = 4usize;
+        // (groups, out_channels): dense to 1 or 6 channels, depthwise with multiplier 1 or 2.
+        let layers = [(1, 1), (1, 6), (c_in, c_in), (c_in, c_in * 2)];
+        // 5x7 is non-square so axis swaps show; 3x3 is small enough that interior/border
+        // bounds go wrong visibly.
+        for (h, w) in [(5usize, 7usize), (3, 3)] {
+            // Batch of 2 with the second item negated: batch 0 alone makes every
+            // `batch * ...` offset 0.
+            let mut data = ramp(2 * c_in * h * w, 30);
+            for v in data[c_in * h * w..].iter_mut() {
+                *v = -*v;
+            }
+            let input = Tensor::new(2, c_in, h, w, data).expect("input");
+            for (groups, c_out) in layers {
+                for (kh, kw) in [(1, 1), (1, 3), (3, 1), (3, 3)] {
+                    for stride in [1, 2] {
+                        for padding in [0, 1, 2] {
+                            let per_group = c_in / groups;
+                            let weights = ConvWeights::new(
+                                c_out,
+                                per_group,
+                                kh,
+                                kw,
+                                ramp(c_out * per_group * kh * kw, 31),
+                                ramp(c_out, 32),
+                            )
+                            .expect("weights");
+                            let cfg = ConvConfig {
+                                stride,
+                                padding,
+                                groups,
+                                activation: Activation::None,
+                            };
+                            let what = format!(
+                                "{h}x{w} groups {groups} out {c_out} kernel {kh}x{kw} \
+                                 stride {stride} pad {padding}"
+                            );
+                            assert_close(
+                                &conv2d(&input, &weights, &cfg)
+                                    .unwrap_or_else(|e| panic!("{what}: {e:#}")),
+                                &reference(&input, &weights, &cfg),
+                                &what,
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

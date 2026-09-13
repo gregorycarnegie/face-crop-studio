@@ -127,9 +127,16 @@ mod tests {
 
     #[test]
     fn plane_slice_offsets_by_batch_as_well_as_channel() {
-        // Batch 1 must not alias batch 0: 2 batches x 1 channel x 1x2 plane.
-        let t = Tensor::new(2, 1, 1, 2, vec![1.0, 2.0, 3.0, 4.0]).expect("valid");
-        assert_eq!(t.plane_slice(0, 0), &[1.0, 2.0]);
-        assert_eq!(t.plane_slice(1, 0), &[3.0, 4.0]);
+        // Batch 1 must not alias batch 0, and with 3 channels a batch offset of
+        // batch / channels would be 0.
+        let t = Tensor::new(2, 3, 1, 2, (0..12).map(|i| i as f32).collect()).expect("valid");
+        assert_eq!(t.plane_slice(0, 0), &[0.0, 1.0]);
+        assert_eq!(t.plane_slice(1, 2), &[10.0, 11.0]); // (1 * 3 + 2) * 2 = 10
+    }
+
+    #[test]
+    fn into_data_hands_back_the_buffer() {
+        let t = Tensor::new(1, 1, 1, 2, vec![3.0, 7.0]).expect("tensor");
+        assert_eq!(t.into_data(), vec![3.0, 7.0]);
     }
 }

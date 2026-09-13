@@ -140,19 +140,29 @@ fn load_heic_image(path: &Path) -> Result<DynamicImage> {
         .context("HEIC decode returned no interleaved RGB plane")?;
     let width = plane.width as usize;
     let height = plane.height as usize;
-    let stride = plane.stride;
-
-    // libheif's row stride is padded and generally exceeds width*3, so copy row by row
-    // into a tightly packed RGB buffer.
-    let mut buf = Vec::with_capacity(width * height * 3);
-    for row in 0..height {
-        let start = row * stride;
-        buf.extend_from_slice(&plane.data[start..start + width * 3]);
-    }
+    let buf = pack_rows(plane.data, width, height, plane.stride)
+        .context("HEIC plane is shorter than its stride and size claim")?;
 
     let rgb = RgbImage::from_raw(width as u32, height as u32, buf)
         .context("HEIC decode produced a mismatched buffer")?;
     Ok(DynamicImage::ImageRgb8(rgb))
+}
+
+/// Copy `height` rows of `width` RGB pixels out of a buffer whose rows are padded to `stride` bytes.
+///
+/// libheif pads each row, so only the first `width * 3` bytes of every `stride` are pixels. `None`
+/// when the buffer is shorter than that claim, which a crafted file can arrange: slicing it
+/// unchecked panicked.
+#[cfg(any(feature = "heic", test))]
+fn pack_rows(data: &[u8], width: usize, height: usize, stride: usize) -> Option<Vec<u8>> {
+    let row_bytes = width.checked_mul(3)?;
+    (0..height)
+        .map(|row| {
+            let start = row.checked_mul(stride)?;
+            data.get(start..start.checked_add(row_bytes)?)
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|rows| rows.concat())
 }
 
 /// Returns `true` if the given path's extension is in [`SUPPORTED_IMAGE_EXTENSIONS`].
@@ -337,13 +347,22 @@ pub fn resize_image(image: &DynamicImage, width: u32, height: u32, filter: Filte
 /// showed to be ~60% of the whole `Quality` detection pipeline. The kernels below are the same
 /// filters, so output is equivalent up to rounding.
 fn fir_alg(filter: FilterType) -> fir::ResizeAlg {
+    let experiment = std::env::var_os("FCS_RESIZE_ALG");
+    fir_alg_with(
+        filter,
+        experiment.as_deref().map(|v| v.to_string_lossy()).as_deref(),
+    )
+}
+
+/// [`fir_alg`] with the experiment variable passed in, so it can be tested without setting a
+/// process-wide environment variable while other tests resize in parallel.
+fn fir_alg_with(filter: FilterType, experiment: Option<&str>) -> fir::ResizeAlg {
     // Experiment 51: FCS_RESIZE_ALG swaps the algorithm used for the `Quality` filter so a
     // candidate can be evaluated against production without a second build. Candidates are
     // quality-changing and none is adopted; `examples/resize_quality.rs` is what decides.
     if filter == FilterType::Triangle
-        && let Some(alg) = std::env::var_os("FCS_RESIZE_ALG")
+        && let Some(alg) = experiment
     {
-        let alg = alg.to_string_lossy();
         if let Some(multiplicity) = alg.strip_prefix("super") {
             let m: u8 = multiplicity.parse().unwrap_or(2);
             return fir::ResizeAlg::SuperSampling(fir::FilterType::Bilinear, m);
@@ -1052,6 +1071,11 @@ mod tests {
         assert!((fit.scale - 3.0).abs() < 1e-6);
         // 1080 / 3.0 = 360, and the bars are (640 - 360) / 2 either side.
         assert_eq!(fit.origin.1 * 2 + fit.drawn.1, 640);
+
+        // Portrait into a landscape target: bars left and right, so origin.x is the computed one.
+        let fit = fit_input((1000, 2000), (640, 480)).unwrap();
+        assert_eq!(fit.drawn, (240, 480));
+        assert_eq!(fit.origin, (200, 0)); // `%` would give 0, and 640 / 240 / 2 would give 1
     }
 
     #[test]
@@ -1087,6 +1111,70 @@ mod tests {
     fn fit_input_rejects_zero() {
         assert!(fit_input((0, 480), (320, 240)).is_err());
         assert!(fit_input((640, 480), (0, 240)).is_err());
+    }
+
+    #[test]
+    fn pack_rows_drops_the_stride_padding_and_rejects_a_short_plane() {
+        // Two pixels (6 bytes) per row padded to a stride of 7: every seventh byte is padding.
+        let data: Vec<u8> = (0..21).collect();
+        let expected: Vec<u8> = [0..6, 7..13, 14..20].into_iter().flatten().collect();
+        assert_eq!(pack_rows(&data, 2, 3, 7), Some(expected));
+        assert_eq!(pack_rows(&data, 2, 4, 7), None, "a fourth row runs past the end");
+    }
+
+    #[test]
+    fn the_resize_experiment_only_overrides_the_quality_filter() {
+        use fir::{FilterType as Fir, ResizeAlg as Alg};
+        let alg = fir_alg_with;
+        assert!(matches!(alg(FilterType::Triangle, None), Alg::Convolution(Fir::Bilinear)));
+        assert!(matches!(alg(FilterType::Triangle, Some("interp")), Alg::Interpolation(Fir::Bilinear)));
+        assert!(matches!(alg(FilterType::Triangle, Some("nearest")), Alg::Nearest));
+        assert!(matches!(alg(FilterType::Triangle, Some("super3")), Alg::SuperSampling(Fir::Bilinear, 3)));
+        assert!(matches!(alg(FilterType::Triangle, Some("unknown")), Alg::Convolution(Fir::Bilinear)));
+        // Triangle is the Quality filter; the experiment leaves every other filter alone.
+        assert!(matches!(alg(FilterType::Nearest, Some("interp")), Alg::Nearest));
+        assert!(matches!(alg(FilterType::CatmullRom, Some("nearest")), Alg::Convolution(Fir::CatmullRom)));
+    }
+
+    #[test]
+    fn jpegs_decode_through_libjpeg_turbo_in_both_loaders() {
+        // High-frequency content, where libjpeg-turbo's IDCT and the image crate's differ; the
+        // assert_ne at the end proves this fixture can tell the two decoders apart at all.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("noise.jpg");
+        let noise = RgbImage::from_fn(64, 48, |x, y| {
+            image::Rgb([
+                ((x * 37 + y * 91) % 256) as u8,
+                ((x * 53 + y * 17) % 256) as u8,
+                ((x * 11 + y * 29) % 256) as u8,
+            ])
+        });
+        DynamicImage::ImageRgb8(noise).save(&path).expect("encode jpeg");
+
+        let turbo = decode_jpeg_turbo(&path, false)
+            .expect("libjpeg-turbo decodes a plain JPEG")
+            .to_rgb8();
+        assert_eq!(turbo.dimensions(), (64, 48));
+        assert_eq!(load_image(&path).expect("load_image").to_rgb8(), turbo);
+        assert_eq!(load_image_raw(&path).expect("load_image_raw").to_rgb8(), turbo);
+
+        let image_crate = ImageReader::open(&path)
+            .expect("open")
+            .decode()
+            .expect("decode")
+            .to_rgb8();
+        assert_ne!(turbo, image_crate, "the fixture must separate the two decoders");
+    }
+
+    #[test]
+    fn the_fast_resizer_and_its_single_thread_pool_are_available() {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_fn(37, 23, |x, y| {
+            image::Rgb([x as u8, y as u8, (x ^ y) as u8])
+        }));
+        let out = resize_image_fast(&image, 11, 7, fir::ResizeAlg::Convolution(fir::FilterType::Bilinear))
+            .expect("fast resize handles RGB8");
+        assert_eq!(out.dimensions(), (11, 7));
+        assert_eq!(single_thread_pool().expect("pool").current_num_threads(), 1);
     }
 
     #[test]

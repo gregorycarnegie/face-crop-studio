@@ -61,7 +61,19 @@ thread_local! {
 /// ponytail: one fixed ceiling for every device. Deriving it from actual VRAM would suit a 24 GB
 /// discrete card and a shared-memory integrated GPU better, if this ever proves too tight or too
 /// slack in practice.
-const DEFAULT_MAX_IDLE_BYTES: u64 = 512 * 1024 * 1024;
+const DEFAULT_MAX_IDLE_BYTES: u64 = 512 << 20;
+
+/// Pixel buffers: uploaded to, read and written by a shader, and copied out for readback.
+///
+/// One definition for every filter, because the pool is keyed by usage: an acquire and a
+/// recycle that spelled the flags differently would file the buffer where it is never reused.
+pub(crate) const STORAGE_RW: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE
+    .union(wgpu::BufferUsages::COPY_SRC)
+    .union(wgpu::BufferUsages::COPY_DST);
+
+/// Host-mappable copy targets for reading results back.
+pub(crate) const READBACK: wgpu::BufferUsages =
+    wgpu::BufferUsages::MAP_READ.union(wgpu::BufferUsages::COPY_DST);
 
 /// Best-fit GPU buffer pool, grouped by usage flags.
 ///
@@ -301,10 +313,9 @@ impl GpuBufferPool {
         }
         drop(idle);
 
-        if freed > 0 {
-            self.idle_bytes.fetch_sub(freed, Relaxed);
-            self.total_allocated_bytes.fetch_sub(freed, Relaxed);
-        }
+        // Both are no-ops when nothing was freed, so no guard.
+        self.idle_bytes.fetch_sub(freed, Relaxed);
+        self.total_allocated_bytes.fetch_sub(freed, Relaxed);
     }
 
     /// Return the number of idle buffers, excluding buffers parked in execution scopes.
@@ -521,7 +532,8 @@ mod tests {
             eprintln!("Skipping buffer_pool test: no GPU");
             return;
         };
-        let cap = 64 * 1024;
+        // The sequence below retains up to 49 KiB, so this ceiling makes eviction actually run.
+        let cap = 32 * 1024;
         let pool = GpuBufferPool::with_idle_limit(ctx, None, cap);
 
         // Mixed sizes in a repeating order, which is what ratcheted the pool upward before.
@@ -669,8 +681,12 @@ mod tests {
         };
         let pool = GpuBufferPool::new(ctx, None);
 
-        for size in [512u64, 2048, 8192] {
-            let b = pool.acquire(size, STORAGE, None).expect("acquire");
+        // Held together so each is a fresh allocation, then recycled largest first: stopping at
+        // the first sufficient buffer would then take 8192 rather than 2048.
+        let held: Vec<_> = [8192u64, 2048, 512]
+            .map(|size| (pool.acquire(size, STORAGE, None).expect("acquire"), size))
+            .into();
+        for (b, size) in held {
             pool.recycle(b, size, STORAGE);
         }
         assert_eq!(pool.available(), 3);
@@ -702,7 +718,7 @@ mod tests {
         pool.recycle(storage, 1024, STORAGE);
 
         // A different usage cannot bind the same buffer.
-        let other = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let other = READBACK;
         let mapped = pool.acquire(1024, other, None).expect("acquire");
         assert_eq!(
             pool.available(),
@@ -758,6 +774,110 @@ mod tests {
         assert!(
             pool.acquire(4096, STORAGE, None).is_err(),
             "a request larger than the whole limit must be refused"
+        );
+    }
+
+    /// Three 4096-byte buffers against an 8192 ceiling: exactly one is evicted, not zero or two.
+    #[test]
+    fn eviction_stops_as_soon_as_idle_bytes_fit_the_ceiling() {
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let pool = GpuBufferPool::with_idle_limit(ctx, None, 8192);
+        // Held together so each is a fresh allocation, then returned together.
+        let held: Vec<_> = (0..3)
+            .map(|_| pool.acquire(4096, STORAGE, None).expect("acquire"))
+            .collect();
+        for buffer in held {
+            pool.recycle(buffer, 4096, STORAGE);
+        }
+        assert_eq!(
+            pool.available(),
+            2,
+            "12288 idle bytes over an 8192 ceiling evicts exactly one buffer"
+        );
+        assert_eq!(
+            pool.memory_usage(),
+            8192,
+            "the evicted buffer's bytes are released too"
+        );
+    }
+
+    /// A request landing exactly on the budget keeps idle buffers; one that overshoots clears
+    /// them first and is then allowed if it fits exactly.
+    #[test]
+    fn the_budget_clears_idle_buffers_only_on_an_overshoot() {
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, Some(2048));
+        // Parked under another usage, so it can never be reused for a STORAGE request.
+        let parked = pool.acquire(1024, READBACK, None).expect("acquire");
+        pool.recycle(parked, 1024, READBACK);
+
+        // 1024 held + 1024 asked = 2048, exactly the budget.
+        let a = pool
+            .acquire(1024, STORAGE, None)
+            .expect("an exact fit is allowed");
+        assert_eq!(
+            pool.available(),
+            1,
+            "reaching the budget exactly must not clear idle buffers"
+        );
+        pool.recycle(a, 1024, STORAGE);
+
+        // 2048 held + 2048 asked overshoots; clearing both idle buffers makes it an exact fit.
+        let b = pool
+            .acquire(2048, STORAGE, None)
+            .expect("fits once idle buffers are cleared");
+        assert_eq!(pool.available(), 0);
+        pool.recycle(b, 2048, STORAGE);
+    }
+
+    /// Buffers released inside a scope are parked until it ends, and only for the pool that
+    /// opened it.
+    #[test]
+    fn a_scope_parks_its_own_pools_buffers_until_it_ends() {
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx.clone(), None);
+        let bystander = GpuBufferPool::new(ctx, None);
+
+        let scope = pool.execution_scope();
+        let b = pool.acquire(1024, STORAGE, None).expect("acquire");
+        pool.recycle(b, 1024, STORAGE);
+        assert_eq!(
+            pool.available(),
+            0,
+            "released inside the scope, so parked rather than idle"
+        );
+
+        // The scope belongs to `pool`; another pool on the same thread recycles straight to idle.
+        let o = bystander.acquire(1024, STORAGE, None).expect("acquire");
+        bystander.recycle(o, 1024, STORAGE);
+        assert_eq!(
+            bystander.available(),
+            1,
+            "a scope must not capture another pool's buffers"
+        );
+
+        // The parked list mixes usages; a MAP_READ buffer must not be handed out for STORAGE.
+        let readback = pool.acquire(1024, READBACK, None).expect("acquire");
+        pool.recycle(readback, 1024, READBACK);
+        let storage = pool.acquire(1024, STORAGE, None).expect("acquire");
+        assert_eq!(
+            storage.usage(),
+            STORAGE,
+            "a parked buffer of another usage was reused"
+        );
+        pool.recycle(storage, 1024, STORAGE);
+
+        drop(scope);
+        assert_eq!(
+            pool.available(),
+            2,
+            "ending the scope returns its parked buffers to idle"
         );
     }
 }

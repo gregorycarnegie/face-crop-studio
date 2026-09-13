@@ -98,7 +98,12 @@ pub(super) fn skin_smooth_rgba(
 
     let mut out_buffer = ImageBuffer::new(w, h);
 
-    let radius = (sigma_space * 2.0).ceil() as i32;
+    // Same floors and radius cap as gpu/bilateral_filter.rs, so a hand-edited config neither
+    // divides by zero, nor wraps a negative radius into a huge allocation, nor diverges by
+    // backend. The floors also make the centre weigh exp(0) * exp(0) = 1, so sum_weight >= 1.
+    let sigma_space = sigma_space.max(0.1);
+    let sigma_color = sigma_color.max(0.1);
+    let radius = ((sigma_space * 2.0).ceil() as i32).clamp(1, 8);
     let kernel = skin_kernel(radius, sigma_space, sigma_color);
     let spatial_weights = kernel.spatial_weights.clone();
     let color_lut = kernel.color_lut.clone();
@@ -149,27 +154,22 @@ pub(super) fn skin_smooth_rgba(
                     }
                 }
 
-                if sum_weight > 0.0 {
-                    let filtered_r = (sum_r / sum_weight + 0.5) as u8;
-                    let filtered_g = (sum_g / sum_weight + 0.5) as u8;
-                    let filtered_b = (sum_b / sum_weight + 0.5) as u8;
+                let filtered_r = (sum_r / sum_weight + 0.5) as u8;
+                let filtered_g = (sum_g / sum_weight + 0.5) as u8;
+                let filtered_b = (sum_b / sum_weight + 0.5) as u8;
 
-                    let center_r = center[0] as f32;
-                    let center_g = center[1] as f32;
-                    let center_b = center[2] as f32;
-                    let final_r = (center_r + amount * (filtered_r as f32 - center_r) + 0.5) as u8;
-                    let final_g = (center_g + amount * (filtered_g as f32 - center_g) + 0.5) as u8;
-                    let final_b = (center_b + amount * (filtered_b as f32 - center_b) + 0.5) as u8;
+                let center_r = center[0] as f32;
+                let center_g = center[1] as f32;
+                let center_b = center[2] as f32;
+                let final_r = (center_r + amount * (filtered_r as f32 - center_r) + 0.5) as u8;
+                let final_g = (center_g + amount * (filtered_g as f32 - center_g) + 0.5) as u8;
+                let final_b = (center_b + amount * (filtered_b as f32 - center_b) + 0.5) as u8;
 
-                    let out_idx = x * 4;
-                    row[out_idx] = final_r;
-                    row[out_idx + 1] = final_g;
-                    row[out_idx + 2] = final_b;
-                    row[out_idx + 3] = center[3];
-                } else {
-                    let out_idx = x * 4;
-                    row[out_idx..out_idx + 4].copy_from_slice(center);
-                }
+                let out_idx = x * 4;
+                row[out_idx] = final_r;
+                row[out_idx + 1] = final_g;
+                row[out_idx + 2] = final_b;
+                row[out_idx + 3] = center[3];
             }
         });
 
@@ -355,6 +355,20 @@ mod tests {
         let src = RgbaImage::from_pixel(5, 5, image::Rgba([150u8, 120, 100, 173]));
         assert_eq!(skin_smooth_rgba(&src, 1.0, 1.0, 25.0), src);
         assert_eq!(skin_smooth_rgba(&src, 0.3, 2.0, 60.0), src);
+    }
+
+    #[test]
+    fn degenerate_sigmas_clamp_like_the_gpu_filter_instead_of_panicking() {
+        let src = sample_image();
+        let at_floor = skin_smooth_rgba(&src, 0.8, 0.1, 0.1);
+        for sigma in [0.0, -3.0, f32::NAN] {
+            assert_eq!(skin_smooth_rgba(&src, 0.8, sigma, sigma), at_floor, "sigma {sigma}");
+        }
+        // Radius capped at 8: an unbounded one overflows computing the kernel side.
+        assert_eq!(
+            skin_smooth_rgba(&src, 0.8, f32::INFINITY, 25.0).dimensions(),
+            src.dimensions()
+        );
     }
 
     #[test]

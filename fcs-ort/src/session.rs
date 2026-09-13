@@ -203,7 +203,10 @@ pub struct SessionOptions {
 /// machine with four logical processors keeps today's single thread, which is the
 /// configuration this change was *not* able to test.
 fn default_intra_threads() -> i32 {
-    let logical = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    intra_threads_for(std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get))
+}
+
+fn intra_threads_for(logical: usize) -> i32 {
     (logical / 4).clamp(1, 4) as i32
 }
 
@@ -444,28 +447,17 @@ impl Session {
             ((*api).ReleaseValue)(value);
             check(api, status)?;
 
-            // Every output produced so far is released whatever happens next,
-            // so an error partway through does not leak the earlier ones.
-            let mut collected = Vec::with_capacity(outputs.len());
-            let mut failure = None;
-            for out in &outputs {
-                if failure.is_some() || out.is_null() {
-                    continue;
-                }
-                match Self::read_tensor(api, *out) {
-                    Ok(tensor) => collected.push(tensor),
-                    Err(err) => failure = Some(err),
-                }
-            }
+            let collected = outputs
+                .iter()
+                .filter(|out| !out.is_null())
+                .map(|&out| Self::read_tensor(api, out))
+                .collect::<Result<Vec<_>>>();
+            // Every output is released whatever happened, so an error partway through leaks
+            // nothing. Release* accepts null.
             for out in outputs {
-                if !out.is_null() {
-                    ((*api).ReleaseValue)(out);
-                }
+                ((*api).ReleaseValue)(out);
             }
-            match failure {
-                Some(err) => Err(err),
-                None => Ok(collected),
-            }
+            collected
         }
     }
 
@@ -543,6 +535,15 @@ mod option_tests {
             (1..=4).contains(&n),
             "intra_threads {n} outside the intended 1..=4"
         );
+    }
+
+    #[test]
+    fn intra_threads_are_a_quarter_of_the_logical_cores_within_one_to_four() {
+        // 13 separates `/` (3) from `*` (4, clamped) and `%` (1).
+        assert_eq!([3, 13, 64].map(intra_threads_for), [1, 3, 4]);
+        // The default is that rule applied to this machine, not a fixed count.
+        let logical = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        assert_eq!(default_intra_threads(), intra_threads_for(logical));
     }
 
     #[test]

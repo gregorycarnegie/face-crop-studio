@@ -179,6 +179,17 @@ pub fn crop_face_from_image(
 mod tests {
     use super::*;
 
+    /// Clipped to zero width but not zero height: without the early return the row loop would
+    /// slice far past the end of the canvas.
+    #[test]
+    fn a_region_placed_past_the_canvas_writes_nothing() {
+        let src = DynamicImage::ImageRgba8(RgbaImage::from_pixel(3, 3, Rgba([1, 2, 3, 4])));
+        let fill = Rgba([9, 8, 7, 200]);
+        let mut canvas = RgbaImage::from_pixel(4, 4, fill);
+        blit_region(&src, (0, 0, 3, 3), &mut canvas, (40, 1));
+        assert!(canvas.pixels().all(|p| *p == fill));
+    }
+
     /// The RGB and RGBA fast paths must produce exactly what the generic `get_pixel` loop
     /// produced, including at the clipped edges and with a non-zero source offset, because
     /// the crops they feed are compared byte for byte against previous releases
@@ -727,7 +738,8 @@ mod tests {
         // term of the "no landmarks at all" guard is exercised on its own. The
         // tilts are chosen to be quarter or half turns, which are unmistakable
         // in the output; an eye line that is merely horizontal would rotate by
-        // zero and look exactly like skipping the alignment.
+        // zero and look exactly like skipping the alignment. That is why the
+        // left eye's x is negative: a positive one alone is a level eye line.
         let img = coded_source(32, 32);
         let bbox = BoundingBox {
             x: 8.0,
@@ -755,6 +767,7 @@ mod tests {
             ("right eye x only", (7.0, 0.0), (0.0, 0.0)),
             ("right eye y only", (0.0, 7.0), (0.0, 0.0)),
             ("left eye y only", (0.0, 0.0), (0.0, 7.0)),
+            ("left eye x only", (0.0, 0.0), (-7.0, 0.0)),
         ] {
             let mut detection = detection_at(bbox);
             detection.landmarks[0] = crate::postprocess::Landmark {

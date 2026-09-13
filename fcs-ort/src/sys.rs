@@ -122,8 +122,7 @@ pub enum OrtAllocatorType {
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrtMemType {
-    CpuInput = -2,
-    CpuOutput = -1,
+    // CpuInput (-2) and CpuOutput (-1) exist upstream; only what the crate uses is named.
     Default = 0,
 }
 

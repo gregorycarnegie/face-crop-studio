@@ -45,6 +45,18 @@ fn loads_a_model_and_reads_its_signature() {
     // YuNet takes one input and emits cls/obj/bbox/kps for strides 8/16/32.
     assert_eq!(session.input_names().len(), 1);
     assert_eq!(session.output_names().len(), 12);
+    assert!(
+        !session.input_names()[0].as_bytes().is_empty(),
+        "input name must be read from the model"
+    );
+    assert!(
+        Environment::shared().is_some(),
+        "a runtime loaded, so the shared environment must too"
+    );
+    assert!(env.runtime().version().starts_with("1."));
+    // Environment's Debug nests Runtime's, which carries the version.
+    assert!(format!("{env:?}").contains("version"), "{env:?}");
+    assert!(format!("{session:?}").contains("inputs"), "{session:?}");
     eprintln!(
         "runtime {} at {}",
         env.runtime().version(),

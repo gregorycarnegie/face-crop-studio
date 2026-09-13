@@ -5,7 +5,11 @@ use bytemuck::{bytes_of, cast_slice};
 use image::{DynamicImage, RgbaImage};
 use wgpu::util::DeviceExt;
 
-use super::{GpuBufferPool, GpuContext, HIST_EQUALIZE_WGSL, pack_rgba_pixels, unpack_rgba_pixels};
+use super::{
+    GpuBufferPool, GpuContext, HIST_EQUALIZE_WGSL,
+    buffer_pool::{READBACK, STORAGE_RW},
+    pack_rgba_pixels, unpack_rgba_pixels,
+};
 use crate::{gpu_readback, gpu_uniforms, storage_buffer_entry, uniform_buffer_entry};
 
 gpu_uniforms!(HistogramUniforms, 3, {
@@ -31,14 +35,6 @@ pub struct GpuHistogramEqualizer {
     cdf_bgl: wgpu::BindGroupLayout,
     apply_bgl: wgpu::BindGroupLayout,
     pool: Arc<GpuBufferPool>,
-}
-
-fn hist_pixel_usage() -> wgpu::BufferUsages {
-    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST
-}
-
-fn hist_readback_usage() -> wgpu::BufferUsages {
-    wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST
 }
 
 impl GpuHistogramEqualizer {
@@ -172,15 +168,14 @@ impl GpuHistogramEqualizer {
         let pixel_buffer_size = std::mem::size_of_val(pixels) as wgpu::BufferAddress;
         let pixel_buffer =
             self.pool
-                .acquire(pixel_buffer_size, hist_pixel_usage(), Some("hist_pixels"))?;
+                .acquire(pixel_buffer_size, STORAGE_RW, Some("hist_pixels"))?;
         queue.write_buffer(&pixel_buffer, 0, cast_slice(pixels));
+        // 256 bins per channel, three channels; the LUT below has the same shape.
         let histogram_size = (256 * 3 * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
         let histogram_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("histogram_buffer"),
             size: histogram_size,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
+            usage: STORAGE_RW,
             mapped_at_creation: false,
         });
         queue.write_buffer(
@@ -220,10 +215,8 @@ impl GpuHistogramEqualizer {
 
         let lut_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hist_lut_buffer"),
-            size: (256 * 3 * std::mem::size_of::<u32>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
+            size: histogram_size,
+            usage: STORAGE_RW,
             mapped_at_creation: false,
         });
 
@@ -340,11 +333,9 @@ impl GpuHistogramEqualizer {
             pass.dispatch_workgroups(dispatch, 1, 1);
         }
 
-        let readback = self.pool.acquire(
-            buffer_size,
-            hist_readback_usage(),
-            Some("hist_apply_readback"),
-        )?;
+        let readback = self
+            .pool
+            .acquire(buffer_size, READBACK, Some("hist_apply_readback"))?;
         encoder.copy_buffer_to_buffer(&pixel_buffer, 0, &readback, 0, buffer_size);
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -352,10 +343,8 @@ impl GpuHistogramEqualizer {
         let packed = gpu_readback!(readback, device, expected_len, "histogram equalization")?;
         let bytes = unpack_rgba_pixels(&packed);
 
-        self.pool
-            .recycle(pixel_buffer, buffer_size, hist_pixel_usage());
-        self.pool
-            .recycle(readback, buffer_size, hist_readback_usage());
+        self.pool.recycle(pixel_buffer, buffer_size, STORAGE_RW);
+        self.pool.recycle(readback, buffer_size, READBACK);
 
         let result =
             RgbaImage::from_raw(width, height, bytes).context("failed to build equalized image")?;
@@ -367,52 +356,22 @@ impl GpuHistogramEqualizer {
 mod tests {
     use super::*;
 
-    // The buffer usage flags decide what wgpu will let the histogram buffers
-    // do. Getting one wrong surfaces as a validation error deep inside a
-    // dispatch, so pin them here where the failure is legible.
-
-    #[test]
-    fn pixel_buffers_are_storage_and_copyable_both_ways() {
-        let usage = hist_pixel_usage();
-        assert!(usage.contains(wgpu::BufferUsages::STORAGE), "shader access");
-        assert!(
-            usage.contains(wgpu::BufferUsages::COPY_SRC),
-            "readback source"
-        );
-        assert!(
-            usage.contains(wgpu::BufferUsages::COPY_DST),
-            "upload target"
-        );
-        // Exactly those three: combining with `&` or `^` instead of `|` would
-        // silently drop or cancel flags rather than accumulate them.
-        assert_eq!(
-            usage,
-            wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST
-        );
-    }
-
-    #[test]
-    fn readback_buffers_are_mappable_copy_targets() {
-        let usage = hist_readback_usage();
-        assert!(usage.contains(wgpu::BufferUsages::MAP_READ));
-        assert!(usage.contains(wgpu::BufferUsages::COPY_DST));
-        assert_eq!(
-            usage,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST
-        );
-        // Readback buffers must not be storage-bound.
-        assert!(!usage.contains(wgpu::BufferUsages::STORAGE));
-    }
-
-    // ------------------------------------------------------------------
-    // `equalize` itself had no test at all: the coverage above is entirely
-    // buffer-usage bookkeeping. That is why the whole operation could be
-    // replaced with `Ok(Default::default())` unnoticed.
-    // ------------------------------------------------------------------
-
     use crate::gpu::test_support::{assert_plausible_output, gradient_image, test_context};
+
+    #[test]
+    fn memory_usage_grows_after_a_pass_and_resets_when_cleared() {
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let eq = GpuHistogramEqualizer::new(ctx).expect("init");
+        eq.equalize(&gradient_image(16, 16)).expect("equalize");
+        assert!(
+            eq.memory_usage() > 0,
+            "the pixel and readback buffers are pooled after a pass"
+        );
+        eq.clear_cache();
+        assert_eq!(eq.memory_usage(), 0, "clear_cache must release them");
+    }
 
     #[test]
     fn equalize_expands_a_low_contrast_image() {

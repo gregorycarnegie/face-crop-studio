@@ -66,12 +66,7 @@ macro_rules! test_backbone_stage {
 }
 
 fn gpu_ops() -> Option<GpuInferenceOps> {
-    match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(ctx) => {
-            Some(GpuInferenceOps::new(ctx, None).expect("build ops"))
-        }
-        _ => None,
-    }
+    test_context().map(|ctx| GpuInferenceOps::new(ctx, None).expect("build ops"))
 }
 
 fn synthetic_input() -> Vec<f32> {
@@ -564,6 +559,63 @@ fn conv2d_matches_cpu_groups() {
             .all(|(a, b)| (a - b).abs() < 1e-3),
         "conv2d mismatch"
     );
+}
+
+/// Overwriting a tensor in place and reading it back returns exactly what was written. Six
+/// distinct values, none of them 0, 1 or -1, so no constant stands in for the download.
+#[test]
+fn a_tensor_overwritten_in_place_downloads_what_was_written() {
+    let Some(ops) = gpu_ops() else {
+        return;
+    };
+    let tensor = ops
+        .upload_tensor([1usize, 1, 2, 3], &[0.0; 6], Some("overwrite"))
+        .expect("upload");
+    let data = [2.5, -3.25, 4.0, 7.5, -8.0, 9.75];
+    ops.upload_to_tensor(&tensor, &data).expect("overwrite");
+    assert_eq!(ops.download_tensor(&tensor).expect("download"), data);
+    assert!(format!("{tensor:?}").contains("dims"), "{tensor:?}");
+}
+
+/// A tensor from another device cannot be written through these ops, even though its own queue
+/// would accept it. One deliberate second device, not the per-test pile-up.
+#[test]
+fn ops_reject_a_tensor_from_a_different_gpu_context() {
+    let Some(ops) = gpu_ops() else {
+        return;
+    };
+    let GpuAvailability::Available(other) =
+        GpuContext::init_with_fallback(&GpuContextOptions::default())
+    else {
+        return;
+    };
+    let foreign = GpuTensor::from_slice(other, [1usize, 1, 1, 2], &[1.5, 2.5], Some("foreign"))
+        .expect("foreign tensor");
+    let err = ops
+        .upload_to_tensor(&foreign, &[3.5, 4.5])
+        .expect_err("a foreign tensor must be refused");
+    assert!(format!("{err}").contains("different GPU context"), "{err}");
+}
+
+/// Grouped on purpose: two groups halve the weights per output, so a count that ignored groups
+/// would differ.
+#[test]
+fn conv2d_config_validate_checks_every_buffer_length() {
+    let config = Conv2dConfig::new(
+        1,
+        Conv2dChannels::new(4, 4),
+        SpatialDims::new(4, 4),
+        SpatialDims::new(3, 3),
+        SpatialDims::new(1, 1),
+        SpatialDims::new(1, 1),
+        Conv2dOptions::new(2, None),
+    )
+    .expect("valid grouped config");
+    // input 1*4*4*4 = 64, weights 4 * (4/2) * 3*3 = 72, bias 4.
+    assert!(config.validate(64, 72, 4).is_ok());
+    assert!(config.validate(63, 72, 4).is_err(), "input length");
+    assert!(config.validate(64, 71, 4).is_err(), "weight length");
+    assert!(config.validate(64, 72, 3).is_err(), "bias length");
 }
 
 #[test]
@@ -1315,14 +1367,12 @@ fn concurrent_inference_matches_sequential() {
         eprintln!("skipping concurrent inference test (model missing)");
         return;
     };
-    let model =
-        match crate::gpu::runtime::GpuYuNet::new(&model_path, crate::InputSize::new(640, 640)) {
-            Ok(model) => model,
-            Err(err) => {
-                eprintln!("skipping concurrent inference test (no adapter: {err})");
-                return;
-            }
-        };
+    let Some(context) = test_context() else {
+        eprintln!("skipping concurrent inference test (no adapter)");
+        return;
+    };
+    let model = GpuYuNet::with_context(context, &model_path, crate::InputSize::new(640, 640))
+        .expect("build GPU model");
 
     let input = synthetic_input();
     let tensor =
@@ -1380,12 +1430,9 @@ fn conv2d_bind_groups_are_reused_across_inferences() {
     let Some(model_path) = model_file_path() else {
         return;
     };
-    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(ctx) => ctx,
-        other => {
-            eprintln!("Skipping bind cache test: {other:?}");
-            return;
-        }
+    let Some(context) = test_context() else {
+        eprintln!("Skipping bind cache test (no adapter)");
+        return;
     };
     let model = GpuYuNet::with_context(context, &model_path, crate::InputSize::new(640, 640))
         .expect("build GPU model");
@@ -1414,12 +1461,9 @@ fn postprocess_swap_applies_new_thresholds_to_the_same_model() {
     let Some(model_path) = model_file_path() else {
         return;
     };
-    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(ctx) => ctx,
-        other => {
-            eprintln!("Skipping postprocess swap test: {other:?}");
-            return;
-        }
+    let Some(context) = test_context() else {
+        eprintln!("Skipping postprocess swap test (no adapter)");
+        return;
     };
     let preprocessor: std::sync::Arc<dyn crate::Preprocessor> =
         std::sync::Arc::new(crate::WgpuPreprocessor::new(context).expect("GPU preprocessor"));
@@ -1469,16 +1513,23 @@ fn profiled_and_merged_inference_match() {
     };
     let mut baseline = None;
     for profiling in [false, true] {
-        let options = GpuContextOptions {
-            profiling,
-            ..Default::default()
-        };
-        let context = match GpuContext::init_with_fallback(&options) {
-            GpuAvailability::Available(ctx) => ctx,
-            other => {
-                eprintln!("Skipping pass-mode parity test: {other:?}");
-                return;
+        // Profiling is fixed when the device is created, so that pass needs a context of its own;
+        // the plain pass shares the binary's.
+        let context = if profiling {
+            let options = GpuContextOptions {
+                profiling,
+                ..Default::default()
+            };
+            match GpuContext::init_with_fallback(&options) {
+                GpuAvailability::Available(ctx) => Some(ctx),
+                _ => None,
             }
+        } else {
+            test_context()
+        };
+        let Some(context) = context else {
+            eprintln!("Skipping pass-mode parity test (no adapter)");
+            return;
         };
         let model = GpuYuNet::with_context(
             context.clone(),
@@ -1522,10 +1573,7 @@ fn profiled_and_merged_inference_match() {
 fn conv2d_reuses_one_uniform_buffer_per_distinct_config() {
     use crate::gpu::conv2d::Conv2dPipeline;
 
-    let Some(ctx) = (match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(ctx) => Some(ctx),
-        _ => None,
-    }) else {
+    let Some(ctx) = test_context() else {
         eprintln!("Skipping conv2d uniform cache test (no adapter)");
         return;
     };

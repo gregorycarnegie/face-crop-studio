@@ -102,10 +102,8 @@ impl GpuRedEyeRemoval {
         let queue = self.context.queue();
 
         let buffer_size = (data_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
-        let storage_usage = wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST;
-        let readback_usage = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let storage_usage = super::buffer_pool::STORAGE_RW;
+        let readback_usage = super::buffer_pool::READBACK;
 
         let storage = self
             .pool

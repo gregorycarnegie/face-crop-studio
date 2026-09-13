@@ -493,7 +493,6 @@ impl GpuContext {
         let adapter = block_on(instance.request_adapter(&RequestAdapterOptions {
             power_preference,
             force_fallback_adapter: options.force_fallback_adapter,
-            compatible_surface: None,
             // apply_limit_buckets defaults to false: bucketing rounds adapter limits
             // down to anti-fingerprinting presets, which only matters when wgpu is
             // exposed to untrusted content. A desktop app wants the real limits.
@@ -512,29 +511,19 @@ impl GpuContext {
             });
         }
 
-        let mut features = options.required_features;
         // Asked for opportunistically: an adapter without it still builds a context, the
         // profiler just stays absent.
         let mut wanted_optional = options.optional_features;
         if options.profiling {
-            wanted_optional |= Features::TIMESTAMP_QUERY;
+            wanted_optional.insert(Features::TIMESTAMP_QUERY);
         }
-        let optional = wanted_optional & supported_features;
-        if !optional.is_empty() {
-            debug!(
-                target: "fcs::gpu",
-                "Enabling optional GPU features: {:?}", optional
-            );
-            features |= optional;
-        }
-
-        let missing_optional = wanted_optional & !supported_features;
-        if !missing_optional.is_empty() {
-            debug!(
-                target: "fcs::gpu",
-                "Skipping unsupported optional GPU features: {:?}", missing_optional
-            );
-        }
+        let optional = wanted_optional.intersection(supported_features);
+        let features = options.required_features.union(optional);
+        debug!(
+            target: "fcs::gpu",
+            "Optional GPU features enabled {optional:?}, unsupported {:?}",
+            wanted_optional.difference(supported_features)
+        );
 
         let limits = options
             .required_limits
@@ -564,15 +553,18 @@ impl GpuContext {
 
         let profiler = options
             .profiling
-            .then(|| GpuProfiler::new(&device, &queue, features, DEFAULT_PROFILER_PASSES))
+            .then(|| {
+                let profiler = GpuProfiler::new(&device, &queue, features, DEFAULT_PROFILER_PASSES);
+                if profiler.is_none() {
+                    warn!(
+                        target: "fcs::gpu",
+                        "GPU profiling requested but adapter '{}' has no TIMESTAMP_QUERY support",
+                        info.name
+                    );
+                }
+                profiler
+            })
             .flatten();
-        if options.profiling && profiler.is_none() {
-            warn!(
-                target: "fcs::gpu",
-                "GPU profiling requested but adapter '{}' has no TIMESTAMP_QUERY support",
-                info.name
-            );
-        }
 
         Ok(Self {
             instance: Some(instance),
@@ -588,12 +580,8 @@ impl GpuContext {
 
     /// Attempt to create a GPU context and gracefully fall back to CPU if that fails.
     pub fn init_with_fallback(options: &GpuContextOptions) -> GpuAvailability {
-        if !options.enabled {
-            return GpuAvailability::Disabled {
-                reason: "GPU acceleration disabled via configuration".to_string(),
-            };
-        }
-
+        // `initialize` refuses a disabled configuration first thing, and the arm below turns
+        // that into `Disabled`.
         match Self::initialize(options) {
             Ok(ctx) => GpuAvailability::Available(Arc::new(ctx)),
             Err(GpuInitError::Disabled) => GpuAvailability::Disabled {
@@ -961,6 +949,84 @@ mod tests {
             !report.summary.is_empty(),
             "generate_report must produce a non-empty summary"
         );
+
+        // The downlevel defaults also clear the 2048 floor above, so compare with the device.
+        assert_eq!(ctx.limits(), &ctx.device().limits());
+        // `Instance` compares by identity: a freshly made one would not equal this.
+        assert_eq!(ctx.instance(), ctx.instance());
+    }
+
+    /// Every GPU test here skips itself when the shared context fails to build, so a broken
+    /// `initialize` would look like a machine without a GPU. Enumerate adapters independently.
+    #[test]
+    fn initialize_succeeds_whenever_an_adapter_exists() {
+        let options = GpuContextOptions::default();
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
+        if block_on(instance.enumerate_adapters(options.backends)).is_empty() {
+            return;
+        }
+        assert!(
+            test_support::test_context().is_some(),
+            "an adapter exists but the GPU context failed to initialize"
+        );
+    }
+
+    #[test]
+    fn optional_features_are_enabled_only_when_asked_for_and_supported() {
+        let Some(plain) = test_support::test_context() else {
+            return;
+        };
+        assert_eq!(
+            plain.features(),
+            Features::empty(),
+            "default options ask for nothing optional, so nothing else may be enabled"
+        );
+        let adapter = plain.adapter().expect("context should own its adapter");
+        if !adapter.features().contains(Features::TIMESTAMP_QUERY) {
+            return;
+        }
+        let Some(profiled) = test_support::profiling_context() else {
+            return;
+        };
+        assert!(profiled.features().contains(Features::TIMESTAMP_QUERY));
+        assert!(profiled.profiler().is_some());
+    }
+
+    /// Only meaningful on a machine with both an integrated and a discrete adapter.
+    #[test]
+    fn power_preference_picks_the_matching_adapter_kind() {
+        let options = GpuContextOptions::default();
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
+        let adapters = block_on(instance.enumerate_adapters(options.backends));
+        let has = |kind| adapters.iter().any(|a| a.get_info().device_type == kind);
+        if !(has(wgpu::DeviceType::IntegratedGpu) && has(wgpu::DeviceType::DiscreteGpu)) {
+            return;
+        }
+        for (preference, kind) in [
+            (PowerPreference::LowPower, wgpu::DeviceType::IntegratedGpu),
+            (PowerPreference::HighPerformance, wgpu::DeviceType::DiscreteGpu),
+        ] {
+            let ctx = GpuContext::initialize(&GpuContextOptions {
+                respect_env: false,
+                power_preference: preference,
+                ..GpuContextOptions::default()
+            })
+            .expect("an adapter of the preferred kind exists");
+            assert_eq!(ctx.adapter_info().device_type, kind, "{preference:?}");
+        }
+    }
+
+    #[test]
+    fn a_forced_fallback_adapter_is_the_software_one() {
+        let options = GpuContextOptions {
+            respect_env: false,
+            force_fallback_adapter: true,
+            ..GpuContextOptions::default()
+        };
+        // Not every platform ships a software adapter; where one exists it must be the one used.
+        if let Ok(ctx) = GpuContext::initialize(&options) {
+            assert_eq!(ctx.adapter_info().device_type, wgpu::DeviceType::Cpu);
+        }
     }
 
     #[test]

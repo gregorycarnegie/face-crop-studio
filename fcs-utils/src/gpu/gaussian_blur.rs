@@ -5,7 +5,11 @@ use bytemuck::{bytes_of, cast_slice};
 use image::{DynamicImage, RgbaImage};
 use wgpu::util::DeviceExt;
 
-use super::{GAUSSIAN_BLUR_WGSL, GpuBufferPool, GpuContext, pack_rgba_pixels, unpack_rgba_pixels};
+use super::{
+    GAUSSIAN_BLUR_WGSL, GpuBufferPool, GpuContext,
+    buffer_pool::{READBACK, STORAGE_RW},
+    pack_rgba_pixels, unpack_rgba_pixels,
+};
 use crate::{
     create_gpu_pipeline, gpu_readback, gpu_uniforms, storage_buffer_entry, uniform_buffer_entry,
 };
@@ -77,20 +81,15 @@ impl GpuGaussianBlur {
         let buffer_size = (data_u32.len() * std::mem::size_of::<u32>()) as wgpu::BufferAddress;
 
         // Acquire buffers from pool
-        let input_buffer = self.pool.acquire(
-            buffer_size,
-            wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            Some("gaussian_blur_input"),
-        )?;
+        let input_buffer =
+            self.pool
+                .acquire(buffer_size, STORAGE_RW, Some("gaussian_blur_input"))?;
         queue.write_buffer(&input_buffer, 0, cast_slice(&data_u32));
 
-        let weights_buffer = self.pool.acquire(
-            (weights.len() * std::mem::size_of::<f32>()) as u64,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            Some("gaussian_blur_weights"),
-        )?;
+        let weights_size = std::mem::size_of_val(&weights) as u64;
+        let weights_buffer =
+            self.pool
+                .acquire(weights_size, STORAGE_RW, Some("gaussian_blur_weights"))?;
         queue.write_buffer(&weights_buffer, 0, cast_slice(&weights));
 
         let temp_buffer = self.pool.acquire(
@@ -99,11 +98,9 @@ impl GpuGaussianBlur {
             Some("gaussian_blur_temp"),
         )?;
 
-        let readback = self.pool.acquire(
-            buffer_size,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            Some("gaussian_blur_readback"),
-        )?;
+        let readback = self
+            .pool
+            .acquire(buffer_size, READBACK, Some("gaussian_blur_readback"))?;
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("gaussian_blur_encoder"),
@@ -203,25 +200,11 @@ impl GpuGaussianBlur {
         let out_bytes = unpack_rgba_pixels(&out_pixels);
 
         // Recycle buffers
-        self.pool.recycle(
-            input_buffer,
-            buffer_size,
-            wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-        );
-        self.pool.recycle(
-            weights_buffer,
-            (weights.len() * std::mem::size_of::<f32>()) as u64,
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        );
+        self.pool.recycle(input_buffer, buffer_size, STORAGE_RW);
+        self.pool.recycle(weights_buffer, weights_size, STORAGE_RW);
         self.pool
             .recycle(temp_buffer, buffer_size, wgpu::BufferUsages::STORAGE);
-        self.pool.recycle(
-            readback,
-            buffer_size,
-            wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        );
+        self.pool.recycle(readback, buffer_size, READBACK);
 
         let image = RgbaImage::from_raw(width, height, out_bytes)
             .context("failed to build blurred image")?;
@@ -270,10 +253,9 @@ fn build_kernel(radius: u32) -> [f32; MAX_KERNEL_SIZE] {
         weights[i as usize] = weight;
         sum += weight;
     }
-    if sum > 0.0 {
-        for weight in weights.iter_mut().take(kernel_size as usize) {
-            *weight /= sum;
-        }
+    // The centre tap is gaussian(0) = 1, so sum >= 1.
+    for weight in weights.iter_mut().take(kernel_size as usize) {
+        *weight /= sum;
     }
     weights
 }
@@ -476,9 +458,8 @@ mod tests {
         let image =
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])));
         blurrer.blur(&image, 1.0).expect("blur");
-        // clear_cache should not panic
+        assert!(blurrer.memory_usage() > 0, "a pass pools its buffers");
         blurrer.clear_cache();
-        // memory_usage is u64, no specific value required
-        let _ = blurrer.memory_usage();
+        assert_eq!(blurrer.memory_usage(), 0, "clear_cache must release them");
     }
 }

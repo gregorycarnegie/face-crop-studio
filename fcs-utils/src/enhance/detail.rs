@@ -80,21 +80,13 @@ pub(super) fn background_blur_from_rgba(
                 let dx_sq_norm = (dx * dx) / rx_sq;
                 let dist_sq = dx_sq_norm + dy_sq_norm;
 
-                let blend = if dist_sq < inner_thresh_sq {
-                    0.0
-                } else if dist_sq > outer_thresh_sq {
-                    1.0
-                } else {
-                    let dist = dist_sq.sqrt();
-                    (dist - 0.9) * 5.0
-                };
-
                 let idx = x * 4;
-                if blend <= 0.0 {
+                if dist_sq < inner_thresh_sq {
                     row[idx..idx + 4].copy_from_slice(&sharp_row[idx..idx + 4]);
-                } else if blend >= 1.0 {
+                } else if dist_sq > outer_thresh_sq {
                     row[idx..idx + 4].copy_from_slice(&blur_row[idx..idx + 4]);
                 } else {
+                    let blend = (dist_sq.sqrt() - 0.9) * 5.0;
                     let sharp_px = &sharp_row[idx..idx + 4];
                     let blur_px = &blur_row[idx..idx + 4];
                     for c in 0..4 {

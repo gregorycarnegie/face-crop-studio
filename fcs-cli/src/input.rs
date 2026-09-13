@@ -71,6 +71,23 @@ pub fn collect_standard_targets(input_path: &Path) -> Result<Vec<ProcessingItem>
         .collect())
 }
 
+/// The reader options the `--mapping-*` flags ask for; the format stays `None` when not given.
+fn mapping_read_options(args: &DetectArgs) -> Result<MappingReadOptions> {
+    Ok(MappingReadOptions {
+        format: args
+            .mapping_format
+            .as_deref()
+            .map(parse_mapping_format_token)
+            .transpose()?,
+        has_headers: args.mapping_has_headers,
+        delimiter: args.mapping_delimiter.map(|c| c as u8),
+        sheet_name: args.mapping_sheet.clone(),
+        sql_table: args.mapping_sql_table.clone(),
+        sql_query: args.mapping_sql_query.clone(),
+        ..Default::default()
+    })
+}
+
 pub fn collect_mapping_targets(
     mapping_file: &Path,
     args: &DetectArgs,
@@ -87,19 +104,7 @@ pub fn collect_mapping_targets(
             .ok_or_else(|| anyhow!("--mapping-output-col is required with --mapping-file"))?,
     )?;
 
-    let user_format = match args.mapping_format.as_deref() {
-        Some(token) => Some(parse_mapping_format_token(token)?),
-        None => None,
-    };
-    let mut read_options = MappingReadOptions {
-        format: user_format,
-        has_headers: args.mapping_has_headers,
-        delimiter: args.mapping_delimiter.map(|c| c as u8),
-        sheet_name: args.mapping_sheet.clone(),
-        sql_table: args.mapping_sql_table.clone(),
-        sql_query: args.mapping_sql_query.clone(),
-        ..Default::default()
-    };
+    let mut read_options = mapping_read_options(args)?;
     let resolved_format = read_options
         .format
         .unwrap_or_else(|| detect_mapping_format(&mapping_path));
@@ -333,6 +338,39 @@ mod tests {
             .to_string();
 
         assert!(err.contains("no images found"));
+    }
+
+    /// Field by field, so dropping any one flag from the options is visible. The collect tests
+    /// only reach the delimiter, and their `.csv` files auto-detect to the format they name.
+    #[test]
+    fn every_mapping_flag_reaches_the_read_options() {
+        let args = parse_detect_args([
+            "fcs-cli",
+            "--input",
+            "x.jpg",
+            "--mapping-format",
+            "sqlite",
+            "--mapping-has-headers",
+            "false",
+            "--mapping-delimiter",
+            ";",
+            "--mapping-sheet",
+            "Second",
+            "--mapping-sql-table",
+            "photos",
+            "--mapping-sql-query",
+            "SELECT source, output FROM photos",
+        ]);
+        let options = mapping_read_options(&args).expect("options");
+        assert_eq!(options.format, Some(MappingFormat::Sqlite));
+        assert_eq!(options.has_headers, Some(false));
+        assert_eq!(options.delimiter, Some(b';'));
+        assert_eq!(options.sheet_name.as_deref(), Some("Second"));
+        assert_eq!(options.sql_table.as_deref(), Some("photos"));
+        assert_eq!(
+            options.sql_query.as_deref(),
+            Some("SELECT source, output FROM photos")
+        );
     }
 
     #[test]

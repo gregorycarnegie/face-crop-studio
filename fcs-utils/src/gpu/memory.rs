@@ -100,4 +100,17 @@ mod tests {
             println!("VRAM query returned None (expected on some platforms/configs)");
         }
     }
+
+    #[test]
+    fn vram_is_reported_whenever_a_gpu_is_present() {
+        // Only meaningful with a real adapter; hosted runners without one may get None.
+        if crate::gpu::test_support::test_context().is_none() {
+            return;
+        }
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            let bytes = get_available_vram().expect("a GPU is present, so a VRAM budget should be");
+            assert!(bytes > 16 << 20, "implausibly small VRAM budget: {bytes} bytes");
+        }
+    }
 }
