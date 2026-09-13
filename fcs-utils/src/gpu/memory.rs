@@ -110,7 +110,10 @@ mod tests {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             let bytes = get_available_vram().expect("a GPU is present, so a VRAM budget should be");
-            assert!(bytes > 16 << 20, "implausibly small VRAM budget: {bytes} bytes");
+            assert!(
+                bytes > 16 << 20,
+                "implausibly small VRAM budget: {bytes} bytes"
+            );
         }
     }
 }

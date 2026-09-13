@@ -23,6 +23,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.98.0"
+  # Match the runtime shipped by release.yml.
+  ORT_VERSION: "1.24.4"
   # Keep these checksums in sync with release.yml.
   YUNET_ORIGINAL_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
   YUNET_640_SHA256: d2c5a887db77802389261b13d2b9f5e1171b9d5787cb315d0add225812ff4d96
@@ -98,12 +100,18 @@ jobs:
           # explanation. Linux ARM64 below is unaffected and builds natively.
           - name: macOS
             os: macos-latest
+            ort-platform: osx-arm64
+            ort-library: libonnxruntime.dylib
           # 22.04 matches the release job's glibc baseline, so a link error here
           # is the same link error the release build would hit.
           - name: Linux
             os: ubuntu-22.04
+            ort-platform: linux-x64
+            ort-library: libonnxruntime.so
           - name: Linux ARM64
             os: ubuntu-22.04-arm
+            ort-platform: linux-aarch64
+            ort-library: libonnxruntime.so
 
     steps:
       - uses: actions/checkout@v4
@@ -176,6 +184,35 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-build-deps
 
+      - name: Fetch ONNX Runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Zip = "$env:RUNNER_TEMP/onnxruntime.zip"
+          $Name = "onnxruntime-win-x64-$env:ORT_VERSION"
+          Invoke-WebRequest -Uri "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$Name.zip" -OutFile $Zip
+          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP/ort" -Force
+          $Lib = "$env:RUNNER_TEMP/ort/$Name/lib/onnxruntime.dll"
+          if (-not (Test-Path $Lib)) { throw "ONNX Runtime missing at $Lib" }
+          "ORT_DYLIB_PATH=$Lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Fetch ONNX Runtime (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ORT_PLATFORM: ${{ matrix.ort-platform }}
+          ORT_LIBRARY: ${{ matrix.ort-library }}
+        run: |
+          set -euo pipefail
+          Name="onnxruntime-${ORT_PLATFORM}-${ORT_VERSION}"
+          curl -fsSL -o "$RUNNER_TEMP/onnxruntime.tgz" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${Name}.tgz"
+          mkdir -p "$RUNNER_TEMP/ort"
+          tar -xzf "$RUNNER_TEMP/onnxruntime.tgz" -C "$RUNNER_TEMP/ort"
+          Lib="$RUNNER_TEMP/ort/$Name/lib/$ORT_LIBRARY"
+          test -f "$Lib"
+          echo "ORT_DYLIB_PATH=$Lib" >> "$GITHUB_ENV"
+
       # ── Toolchain ────────────────────────────────────────────────────────
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -198,7 +235,8 @@ jobs:
         run: cargo check --workspace
 
       # FCS_STRICT_TESTS turns "model/fixture missing, skipping" into a failure:
-      # the models arrive via artifact and fixtures are in-tree, so a skip here
+      # the models arrive via artifact, the runtime is downloaded above, and
+      # the sample images are in-tree, so a skip here
       # means a broken path, not an unavailable asset. GPU-dependent tests still
       # self-skip when no adapter is present — the hosted macOS and Linux runners
       # have no usable GPU, so those legs cover the CPU paths only.

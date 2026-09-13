@@ -1478,7 +1478,11 @@ fn postprocess_swap_applies_new_thresholds_to_the_same_model() {
         preprocessor,
     )
     .expect("GPU detector");
-    let image = fcs_utils::load_fixture_image("images/006.jpg").expect("fixture");
+    let image = image::open(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../samples/sample_01.jpg"
+    ))
+    .expect("sample image");
     let base = detector.detect_image(&image).expect("detect").detections;
     assert!(!base.is_empty(), "the fixture should contain a face");
 

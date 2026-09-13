@@ -350,7 +350,10 @@ fn fir_alg(filter: FilterType) -> fir::ResizeAlg {
     let experiment = std::env::var_os("FCS_RESIZE_ALG");
     fir_alg_with(
         filter,
-        experiment.as_deref().map(|v| v.to_string_lossy()).as_deref(),
+        experiment
+            .as_deref()
+            .map(|v| v.to_string_lossy())
+            .as_deref(),
     )
 }
 
@@ -1119,21 +1122,46 @@ mod tests {
         let data: Vec<u8> = (0..21).collect();
         let expected: Vec<u8> = [0..6, 7..13, 14..20].into_iter().flatten().collect();
         assert_eq!(pack_rows(&data, 2, 3, 7), Some(expected));
-        assert_eq!(pack_rows(&data, 2, 4, 7), None, "a fourth row runs past the end");
+        assert_eq!(
+            pack_rows(&data, 2, 4, 7),
+            None,
+            "a fourth row runs past the end"
+        );
     }
 
     #[test]
     fn the_resize_experiment_only_overrides_the_quality_filter() {
         use fir::{FilterType as Fir, ResizeAlg as Alg};
         let alg = fir_alg_with;
-        assert!(matches!(alg(FilterType::Triangle, None), Alg::Convolution(Fir::Bilinear)));
-        assert!(matches!(alg(FilterType::Triangle, Some("interp")), Alg::Interpolation(Fir::Bilinear)));
-        assert!(matches!(alg(FilterType::Triangle, Some("nearest")), Alg::Nearest));
-        assert!(matches!(alg(FilterType::Triangle, Some("super3")), Alg::SuperSampling(Fir::Bilinear, 3)));
-        assert!(matches!(alg(FilterType::Triangle, Some("unknown")), Alg::Convolution(Fir::Bilinear)));
+        assert!(matches!(
+            alg(FilterType::Triangle, None),
+            Alg::Convolution(Fir::Bilinear)
+        ));
+        assert!(matches!(
+            alg(FilterType::Triangle, Some("interp")),
+            Alg::Interpolation(Fir::Bilinear)
+        ));
+        assert!(matches!(
+            alg(FilterType::Triangle, Some("nearest")),
+            Alg::Nearest
+        ));
+        assert!(matches!(
+            alg(FilterType::Triangle, Some("super3")),
+            Alg::SuperSampling(Fir::Bilinear, 3)
+        ));
+        assert!(matches!(
+            alg(FilterType::Triangle, Some("unknown")),
+            Alg::Convolution(Fir::Bilinear)
+        ));
         // Triangle is the Quality filter; the experiment leaves every other filter alone.
-        assert!(matches!(alg(FilterType::Nearest, Some("interp")), Alg::Nearest));
-        assert!(matches!(alg(FilterType::CatmullRom, Some("nearest")), Alg::Convolution(Fir::CatmullRom)));
+        assert!(matches!(
+            alg(FilterType::Nearest, Some("interp")),
+            Alg::Nearest
+        ));
+        assert!(matches!(
+            alg(FilterType::CatmullRom, Some("nearest")),
+            Alg::Convolution(Fir::CatmullRom)
+        ));
     }
 
     #[test]
@@ -1149,21 +1177,29 @@ mod tests {
                 ((x * 11 + y * 29) % 256) as u8,
             ])
         });
-        DynamicImage::ImageRgb8(noise).save(&path).expect("encode jpeg");
+        DynamicImage::ImageRgb8(noise)
+            .save(&path)
+            .expect("encode jpeg");
 
         let turbo = decode_jpeg_turbo(&path, false)
             .expect("libjpeg-turbo decodes a plain JPEG")
             .to_rgb8();
         assert_eq!(turbo.dimensions(), (64, 48));
         assert_eq!(load_image(&path).expect("load_image").to_rgb8(), turbo);
-        assert_eq!(load_image_raw(&path).expect("load_image_raw").to_rgb8(), turbo);
+        assert_eq!(
+            load_image_raw(&path).expect("load_image_raw").to_rgb8(),
+            turbo
+        );
 
         let image_crate = ImageReader::open(&path)
             .expect("open")
             .decode()
             .expect("decode")
             .to_rgb8();
-        assert_ne!(turbo, image_crate, "the fixture must separate the two decoders");
+        assert_ne!(
+            turbo, image_crate,
+            "the fixture must separate the two decoders"
+        );
     }
 
     #[test]
@@ -1171,8 +1207,13 @@ mod tests {
         let image = DynamicImage::ImageRgb8(RgbImage::from_fn(37, 23, |x, y| {
             image::Rgb([x as u8, y as u8, (x ^ y) as u8])
         }));
-        let out = resize_image_fast(&image, 11, 7, fir::ResizeAlg::Convolution(fir::FilterType::Bilinear))
-            .expect("fast resize handles RGB8");
+        let out = resize_image_fast(
+            &image,
+            11,
+            7,
+            fir::ResizeAlg::Convolution(fir::FilterType::Bilinear),
+        )
+        .expect("fast resize handles RGB8");
         assert_eq!(out.dimensions(), (11, 7));
         assert_eq!(single_thread_pool().expect("pool").current_num_threads(), 1);
     }

@@ -1004,7 +1004,10 @@ mod tests {
         }
         for (preference, kind) in [
             (PowerPreference::LowPower, wgpu::DeviceType::IntegratedGpu),
-            (PowerPreference::HighPerformance, wgpu::DeviceType::DiscreteGpu),
+            (
+                PowerPreference::HighPerformance,
+                wgpu::DeviceType::DiscreteGpu,
+            ),
         ] {
             let ctx = GpuContext::initialize(&GpuContextOptions {
                 respect_env: false,

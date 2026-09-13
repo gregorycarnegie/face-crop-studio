@@ -315,11 +315,18 @@ mod tests {
         assert!(too_old("1.23.2"));
         assert!(!too_old("1.24.0"));
         assert!(!too_old("1.30.1"));
-        assert!(too_old("garbage"), "an unparseable version is treated as too old");
+        assert!(
+            too_old("garbage"),
+            "an unparseable version is treated as too old"
+        );
     }
 
     #[test]
     fn a_rejection_names_the_offending_version() {
-        assert!(Rejected::TooOld("1.20.0".into()).to_string().contains("1.20.0"));
+        assert!(
+            Rejected::TooOld("1.20.0".into())
+                .to_string()
+                .contains("1.20.0")
+        );
     }
 }

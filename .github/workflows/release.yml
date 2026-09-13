@@ -319,7 +319,7 @@ jobs:
             throw "onnxruntime.dll missing from the package"
           }
           $env:RUST_LOG = "info"
-          $Out = & "$DistDir/fcs-cli.exe" --input fixtures/images/001.jpg `
+          $Out = & "$DistDir/fcs-cli.exe" --input "$DistDir/samples/sample_01.jpg" `
                    --output-dir "$env:RUNNER_TEMP/ort-smoke" --no-gpu 2>&1 | Out-String
           Write-Host $Out
           if ($Out -notmatch "Detection backend: onnxruntime") {

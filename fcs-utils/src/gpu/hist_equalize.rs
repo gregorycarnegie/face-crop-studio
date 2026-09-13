@@ -166,9 +166,9 @@ impl GpuHistogramEqualizer {
         let queue = self.context.queue();
 
         let pixel_buffer_size = std::mem::size_of_val(pixels) as wgpu::BufferAddress;
-        let pixel_buffer =
-            self.pool
-                .acquire(pixel_buffer_size, STORAGE_RW, Some("hist_pixels"))?;
+        let pixel_buffer = self
+            .pool
+            .acquire(pixel_buffer_size, STORAGE_RW, Some("hist_pixels"))?;
         queue.write_buffer(&pixel_buffer, 0, cast_slice(pixels));
         // 256 bins per channel, three channels; the LUT below has the same shape.
         let histogram_size = (256 * 3 * std::mem::size_of::<u32>()) as wgpu::BufferAddress;

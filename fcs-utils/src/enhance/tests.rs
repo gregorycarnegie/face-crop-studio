@@ -9,7 +9,10 @@ fn solid(color: [u8; 4]) -> DynamicImage {
 /// The folded tone LUT for `settings`, applied the way `apply_enhancements` runs it.
 fn tone(img: &DynamicImage, settings: EnhancementSettings) -> RgbaImage {
     let mut buf = img.to_rgba8();
-    apply_lut_in_place(&mut buf, &tone_lut(&settings).expect("an active tone stage"));
+    apply_lut_in_place(
+        &mut buf,
+        &tone_lut(&settings).expect("an active tone stage"),
+    );
     buf
 }
 
@@ -50,7 +53,13 @@ fn histogram_equalization_stretches_levels() {
 #[test]
 fn exposure_positive_increases_values() {
     let img = solid([64, 64, 64, 255]);
-    let buf = tone(&img, EnhancementSettings { exposure_stops: 1.0, ..Default::default() });
+    let buf = tone(
+        &img,
+        EnhancementSettings {
+            exposure_stops: 1.0,
+            ..Default::default()
+        },
+    );
     let px = buf.get_pixel(0, 0);
     assert_eq!(px[0], 128);
 }
@@ -58,7 +67,13 @@ fn exposure_positive_increases_values() {
 #[test]
 fn exposure_negative_darkens_values() {
     let img = solid([200, 200, 200, 255]);
-    let buf = tone(&img, EnhancementSettings { exposure_stops: -1.0, ..Default::default() });
+    let buf = tone(
+        &img,
+        EnhancementSettings {
+            exposure_stops: -1.0,
+            ..Default::default()
+        },
+    );
     let px = buf.get_pixel(0, 0);
     assert_eq!(px[0], 100);
 }
@@ -66,7 +81,13 @@ fn exposure_negative_darkens_values() {
 #[test]
 fn brightness_offsets_channels() {
     let img = solid([100, 100, 100, 255]);
-    let buf = tone(&img, EnhancementSettings { brightness: 20, ..Default::default() });
+    let buf = tone(
+        &img,
+        EnhancementSettings {
+            brightness: 20,
+            ..Default::default()
+        },
+    );
     let px = buf.get_pixel(0, 0);
     assert_eq!(px[0], 120);
 }
@@ -78,7 +99,10 @@ fn contrast_multiplier_expands_range() {
     img.put_pixel(3, 0, image::Rgba([180, 180, 180, 255]));
     let buf = tone(
         &DynamicImage::ImageRgba8(img),
-        EnhancementSettings { contrast: 1.5, ..Default::default() },
+        EnhancementSettings {
+            contrast: 1.5,
+            ..Default::default()
+        },
     );
     assert!(buf.get_pixel(0, 0)[0] < 80);
     assert!(buf.get_pixel(3, 0)[0] > 180);
@@ -609,9 +633,18 @@ fn tone_lut_composes_stages_in_pipeline_order() {
     // Same three stages applied one image pass at a time.
     let mut staged = source.to_rgba8();
     for stage in [
-        EnhancementSettings { exposure_stops: 1.0, ..EnhancementSettings::default() },
-        EnhancementSettings { brightness: 10, ..EnhancementSettings::default() },
-        EnhancementSettings { contrast: 1.5, ..EnhancementSettings::default() },
+        EnhancementSettings {
+            exposure_stops: 1.0,
+            ..EnhancementSettings::default()
+        },
+        EnhancementSettings {
+            brightness: 10,
+            ..EnhancementSettings::default()
+        },
+        EnhancementSettings {
+            contrast: 1.5,
+            ..EnhancementSettings::default()
+        },
     ] {
         apply_lut_in_place(&mut staged, &tone_lut(&stage).expect("one active stage"));
     }
@@ -778,8 +811,14 @@ fn colourful_rgb() -> DynamicImage {
 
 #[test]
 fn tone_lut_is_absent_for_neutral_settings_and_present_from_epsilon() {
-    assert!(tone_lut(&EnhancementSettings::default()).is_none(), "defaults are tone-neutral");
-    let at_epsilon = EnhancementSettings { exposure_stops: EPSILON, ..Default::default() };
+    assert!(
+        tone_lut(&EnhancementSettings::default()).is_none(),
+        "defaults are tone-neutral"
+    );
+    let at_epsilon = EnhancementSettings {
+        exposure_stops: EPSILON,
+        ..Default::default()
+    };
     assert!(
         tone_lut(&at_epsilon).is_some(),
         "epsilon is the smallest exposure that still applies"

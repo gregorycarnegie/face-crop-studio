@@ -14,7 +14,7 @@ use fcs_core::{
     InputSize, PostprocessConfig, PreprocessConfig, cpu::runtime::CpuYuNet,
     preprocess_dynamic_image,
 };
-use fcs_utils::{fixtures_dir, model_path};
+use fcs_utils::model_path;
 
 const MODEL: &str = "models/face_detection_yunet_2023mar_640.onnx";
 // Same budget the GPU parity suite allows: both are "a different implementation
@@ -41,9 +41,10 @@ fn cpu_graph_matches_tract_detections() {
     };
     let post = PostprocessConfig::default();
 
-    let dir = fixtures_dir().expect("fixtures dir").join("images");
+    // Committed synthetic portraits are available on a clean checkout too.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples");
     let mut paths: Vec<_> = std::fs::read_dir(&dir)
-        .expect("read fixtures/images")
+        .expect("read samples")
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg")))
         .collect();

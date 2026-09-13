@@ -244,7 +244,10 @@ mod tests {
             // Which error matters: past the guard, saving a zero-sized PNG fails too.
             let err = annotate_image(&image, Path::new("input.png"), &[], dir.path())
                 .expect_err(&format!("{w}x{h} should be refused"));
-            assert!(format!("{err}").contains("zero dimensions"), "{w}x{h}: {err}");
+            assert!(
+                format!("{err}").contains("zero dimensions"),
+                "{w}x{h}: {err}"
+            );
         }
     }
 }

@@ -12,7 +12,7 @@ mod common;
 
 use common::TractOracle;
 use fcs_core::{InferenceBackend, InputSize, PostprocessConfig, PreprocessConfig, YuNetModel};
-use fcs_utils::{fixtures_dir, model_path};
+use fcs_utils::model_path;
 
 const MODEL: &str = "models/face_detection_yunet_2023mar_640.onnx";
 // The GPU parity suite allows 1e-3 on score and 5 px on geometry; the same
@@ -61,11 +61,10 @@ fn every_backend_matches_tract_detections() {
     let post = PostprocessConfig::default();
     let mut compared = 0usize;
 
-    // A spread across the set rather than all 275: parity is a property of the
-    // runtime, not of any one image, and the suite should stay quick.
-    let dir = fixtures_dir().expect("fixtures dir").join("images");
+    // Committed synthetic portraits are available on a clean checkout too.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples");
     let mut paths: Vec<_> = std::fs::read_dir(&dir)
-        .expect("read fixtures/images")
+        .expect("read samples")
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jpg")))
         .collect();

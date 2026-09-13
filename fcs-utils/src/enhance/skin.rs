@@ -362,7 +362,11 @@ mod tests {
         let src = sample_image();
         let at_floor = skin_smooth_rgba(&src, 0.8, 0.1, 0.1);
         for sigma in [0.0, -3.0, f32::NAN] {
-            assert_eq!(skin_smooth_rgba(&src, 0.8, sigma, sigma), at_floor, "sigma {sigma}");
+            assert_eq!(
+                skin_smooth_rgba(&src, 0.8, sigma, sigma),
+                at_floor,
+                "sigma {sigma}"
+            );
         }
         // Radius capped at 8: an unbounded one overflows computing the kernel side.
         assert_eq!(

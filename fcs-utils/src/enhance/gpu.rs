@@ -501,8 +501,14 @@ mod tests {
         let dims = |result: Result<Option<DynamicImage>>| {
             result.unwrap().map(|img| (img.width(), img.height()))
         };
-        assert_eq!(dims(enhancer.try_gpu_skin_smoothing(&s, &image)), Some((16, 16)));
-        assert_eq!(dims(enhancer.try_gpu_background_blur(&image, &s)), Some((16, 16)));
+        assert_eq!(
+            dims(enhancer.try_gpu_skin_smoothing(&s, &image)),
+            Some((16, 16))
+        );
+        assert_eq!(
+            dims(enhancer.try_gpu_background_blur(&image, &s)),
+            Some((16, 16))
+        );
         assert_eq!(
             dims(enhancer.try_gpu_red_eye(&image, s.red_eye_threshold, None)),
             Some((16, 16))
