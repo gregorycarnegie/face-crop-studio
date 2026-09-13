@@ -24,17 +24,16 @@ Face Crop Studio is a Rust workspace that wraps the YuNet face detector with det
 ## Architecture Diagrams
 
 High-level views of how the workspace fits together. Each image links to its editable
-[`.drawio`](docs/diagrams/) source (the PNGs also embed the diagram XML, so opening them
-in [draw.io](https://www.drawio.com/) recovers the editable diagram).
+[`.drawio`](docs/diagrams/) source for editing in [draw.io](https://www.drawio.com/).
 
 <p align="center">
-  <a href="docs/diagrams/architecture.drawio"><img src="docs/diagrams/architecture.drawio.png" alt="Workspace architecture: fcs-cli and fcs-gui entry points depend on fcs-core (YuNet detection and cropping pipeline), which depends on fcs-utils, over external dependencies (YuNet ONNX model, wgpu/Metal GPU, nokhwa camera, image codecs)" width="900"/></a><br/>
+  <a href="docs/diagrams/workspace-architecture.drawio"><img src="docs/diagrams/workspace-architecture.drawio.svg" alt="Workspace architecture: CLI and GUI entry points, shared detection, mapping, ONNX Runtime, and image-processing crates, and external dependencies" width="900"/></a><br/>
   <sub><strong>Workspace architecture</strong> - crate dependency layers and the key modules in each crate.</sub>
 </p>
 
 <p align="center">
-  <a href="docs/diagrams/detection-sequence.drawio"><img src="docs/diagrams/detection-sequence.drawio.png" alt="Runtime sequence of YuNetDetector::detect_path: load image, preprocess to a 640x640 BGR CHW tensor, run ONNX inference on the CPU or GPU backend, postprocess (decode, score filter, NMS, dedup, top_k), and crop each detected face" width="900"/></a><br/>
-  <sub><strong>Detection pipeline</strong> - runtime sequence of <code>YuNetDetector::detect_path</code>, from image load through preprocessing, inference, postprocessing, and per-face cropping.</sub>
+  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, preprocess on CPU or GPU, run inference, postprocess detections, and crop faces" width="900"/></a><br/>
+  <sub><strong>Detection pipeline</strong> - per-image flow from image load through preprocessing, inference, postprocessing, and per-face cropping.</sub>
 </p>
 
 ## Crop Features Overview
@@ -300,7 +299,7 @@ Mutation testing is deliberately not in CI: every mutant is a fresh incremental 
 ## Documentation
 
 - [Architecture overview](ARCHITECTURE.md) – how the four crates collaborate, including the GPU inference graph.
-- [Architecture diagrams](docs/diagrams/) – editable `.drawio` sources (plus PNG/SVG/PDF exports) for the workspace and detection-pipeline diagrams shown above.
+- [Architecture diagrams](docs/diagrams/) – editable `.drawio` sources and SVG exports for the workspace and detection-pipeline diagrams shown above.
 - [Contributing guide](CONTRIBUTING.md) – workspace layout and how to get from clone to a working build.
 - [Changelog](CHANGELOG.md) – release history and notable changes.
 - [CLI recipes](docs/cli_recipes.md) – common `fcs-cli` invocations for detection, cropping, filtering, and enhancement.

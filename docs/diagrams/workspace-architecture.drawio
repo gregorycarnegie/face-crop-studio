@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="30.2.4">
+  <diagram name="Workspace architecture">
+    <mxGraphModel grid="1" gridSize="10" guides="1" page="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="gui" value="&lt;b&gt;fcs-gui&lt;/b&gt;&lt;br&gt;Desktop app · eframe / egui&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;app · core/ · interaction/ · rendering/ · ui/&lt;br&gt;clipboard (arboard) · file dialogs (rfd)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="160" y="60" width="560" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="cli" value="&lt;b&gt;fcs-cli&lt;/b&gt;&lt;br&gt;Command line · clap&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;workflow · watch mode (notify) · webcam&lt;br&gt;benchmark · annotate · output paths&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="900" y="60" width="560" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mapping" value="&lt;b&gt;fcs-mapping&lt;/b&gt;&lt;br&gt;Batch mapping tables&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;source path → output name&lt;br&gt;CSV · Excel (calamine)&lt;br&gt;Parquet · SQLite (rusqlite)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="160" y="280" width="300" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="core" value="fcs-core — face detection and cropping pipeline" style="swimlane;startSize=30;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=13;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="520" y="280" width="660" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="pre" value="&lt;b&gt;preprocess.rs&lt;/b&gt;&lt;br&gt;letterbox fit&lt;br&gt;CPU or WGSL resize" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="20" y="50" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="model" value="&lt;b&gt;model.rs&lt;/b&gt;&lt;br&gt;one inference backend:&lt;br&gt;ONNX Runtime (ort_backend.rs)&lt;br&gt;built-in CPU graph (cpu/)&lt;br&gt;WGSL GPU graph (gpu/)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="235" y="50" width="190" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="post" value="&lt;b&gt;postprocess.rs · nms.rs&lt;/b&gt;&lt;br&gt;decode · score gate&lt;br&gt;non-max suppression" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="450" y="50" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="crop" value="&lt;b&gt;cropper.rs · face_cropper.rs&lt;/b&gt;&lt;br&gt;crop region · padding&lt;br&gt;eye-line alignment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="450" y="170" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="yunet" value="&lt;b&gt;yunet/&lt;/b&gt;&lt;br&gt;ONNX initializer parsing&lt;br&gt;(prost)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="20" y="170" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="misc" value="&lt;b&gt;detector.rs&lt;/b&gt; — YuNetDetector facade · presets · model_config · tensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="20" y="290" width="620" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="models" value="&lt;b&gt;models/*.onnx&lt;/b&gt;&lt;br&gt;YuNet 2023mar · 640 and 320" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="280" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ort" value="&lt;b&gt;fcs-ort&lt;/b&gt;&lt;br&gt;ONNX Runtime discovery&lt;br&gt;and C API bindings&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;libloading · validates API ≥ 1.24&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1240" y="460" width="300" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="dll" value="&lt;b&gt;onnxruntime.dll&lt;/b&gt;&lt;br&gt;ORT_DYLIB_PATH&lt;br&gt;or beside the executable" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1660" y="500" width="260" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="utils" value="&lt;b&gt;fcs-utils&lt;/b&gt; — image I/O, enhancement, crop shapes, export, GPU helpers&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;image_utils (image · mozjpeg · fast_image_resize) · enhance/ · shape/ (tiny-skia) · output/ (EXIF · XMP · PNG · ravif) · quality · config · telemetry&lt;br&gt;gpu/ — shared GpuContext · buffer pool · blur · bilateral · pixel adjust · histogram · shape mask · red-eye · profiler&lt;br&gt;optional features: webcam (nokhwa) · raw (imagepipe) · heic (libheif)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="160" y="760" width="1380" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sources" value="&lt;b&gt;Mapping files&lt;/b&gt;&lt;br&gt;.csv · .xlsx · .parquet · .db" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="160" y="1040" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="gpudrv" value="&lt;b&gt;GPU driver via wgpu&lt;/b&gt;&lt;br&gt;DX12 · Vulkan · Metal" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1040" width="360" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="codecs" value="&lt;b&gt;Native codecs&lt;/b&gt;&lt;br&gt;libjpeg-turbo (mozjpeg) · dav1d · libheif" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="1040" width="360" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="&lt;b&gt;Legend&lt;/b&gt;&lt;br&gt;solid arrow — crate dependency (Cargo)&lt;br&gt;dashed arrow — runtime, file or system input&lt;br&gt;dashed box — outside the workspace" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="1500" y="1040" width="380" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.1333;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.4667;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="mapping">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5893;exitY=1;exitDx=0;exitDy=0;entryX=0.2391;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="utils">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.7879;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="mapping">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1180" y="20" />
+              <mxPoint x="120" y="20" />
+              <mxPoint x="120" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="utils">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1960" y="125" />
+              <mxPoint x="1960" y="850" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="utils">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.679;exitDx=0;exitDy=0;entryX=0;entryY=0.39;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="ort">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="weights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.1316;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="models">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="loads at runtime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ort" target="dll">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="reads" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="mapping" target="sources">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="80" y="440" />
+              <mxPoint x="80" y="1090" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="compute + upload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.4638;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="gpudrv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" value="decode + encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.7826;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="codecs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="i1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.2647;entryDx=0;entryDy=0;" edge="1" parent="core" source="pre" target="model">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="i2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.2647;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="core" source="model" target="post">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="i3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="core" source="post" target="crop">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="i4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.97;entryDx=0;entryDy=0;" edge="1" parent="core" source="yunet" target="model">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
