@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-09-13
+
 ### Added
+
+- **Batch reports.** `Export batch report…` under the queue writes one row per
+  image -- path, outcome (`succeeded`, `failed`, `no_faces`, `filtered`,
+  `pending`), faces found, faces exported and the error -- as CSV, or as JSON
+  with success and failure totals, chosen by the file's extension.
+
+- **`Export every face` beside `Run batch`.** The batch already exported every
+  detected face whenever the `Auto-select best face` quality rule was off, but
+  that switch lived in the Settings menu and the shipped `config/gui_settings.json`
+  turns it on. The checkbox is the same setting, so the two stay in step;
+  `Skip if no high-quality face` still applies.
 
 - **Watch-folder mode in the CLI.** `fcs-cli --watch <dir>` monitors a directory
   and runs the ordinary batch crop/export path on images as they arrive, so a
@@ -34,6 +47,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that wants them.
 
 ### Changed
+
+- **Queue rows say what happened to each image.** A finished row read
+  `Done · N exported` whatever the result, so `0 exported` covered an image with
+  no faces, one whose faces the quality rules all held back, and one whose crops
+  failed to save. Rows now read `Exported 2 of 3 face(s)` in green,
+  `No faces found` or `N found, none passed quality rules` in orange, and
+  `Failed` in red with the reason on hover.
+
+- **Charcoal and orange GUI theme.** The palette now matches the Face Crop Studio
+  website -- charcoal surfaces with orange accents -- in place of the navy
+  mockup palette.
 
 - **Cropping no longer copies the source region twice.** Extracting the crop went
   through `crop_imm(..).to_image()`, which allocates a second copy of the region
@@ -80,6 +104,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not from where the boundary sits.
 
 ### Fixed
+
+- **Mapping files matched image names case-sensitively.** Windows and macOS treat
+  `Photo.JPG` and `photo.jpg` as one file, and spreadsheet exports recase names,
+  but the queue compared mapping rows byte for byte. A 1239-row mapping over the
+  reference folder matched 497 images, and the other 547 crops kept their
+  original names; by the new rule 1238 rows match (the last names no file). Rows
+  match by file name and then stem, each trying the exact spelling before
+  ignoring case, so a file name also now wins over an earlier row that only
+  shares its stem. Applying a mapping clears names an earlier mapping left on
+  files it no longer matches.
+
+- **A crop that failed to save still counted as done.** The error was logged and
+  the image reported `Completed` with a lower count. It now fails with the paths
+  and errors, so the queue, the batch report and the batch totals all show it.
+
+- **The GPU pill said `GPU · wgpu` with the GPU off.** The label came from the
+  preprocessing status alone and fell back to that fixed text whenever it carried
+  no adapter, including when the GPU was disabled; inference on the GPU with
+  preprocessing off meanwhile read as CPU in the status bar. Both now show where
+  detection runs: `GPU · <adapter>`, `GPU · inference only`, or `CPU`.
 
 - **Every wait for the GPU now has a deadline.** All five blocking `device.poll`
   calls asked to wait indefinitely, so a submission that never completed would
@@ -1693,7 +1737,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.2...v1.5.3
