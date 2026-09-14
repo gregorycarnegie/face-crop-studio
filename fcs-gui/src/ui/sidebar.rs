@@ -16,26 +16,23 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
     tab_bar(ui, app);
 
-    const ACTION_BAR_H: f32 = 96.0;
-    let queue_has_files = app.sidebar_tab == SidebarTab::Queue && !app.batch_files.is_empty();
-    let scroll_max_h = if queue_has_files {
-        (ui.available_height() - ACTION_BAR_H).max(80.0)
-    } else {
-        f32::INFINITY
-    };
+    // A panel sizes itself to the bar, so the list scrolls in whatever is left. A fixed
+    // height reserve went stale as buttons were added and clipped the last one off.
+    if app.sidebar_tab == SidebarTab::Queue && !app.batch_files.is_empty() {
+        egui::Panel::bottom("queue_action_bar")
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(egui::Frame::new())
+            .show(ui, |ui| queue_action_bar(ui, app));
+    }
 
     egui::ScrollArea::vertical()
         .id_salt("sidebar_scroll")
-        .max_height(scroll_max_h)
         .show(ui, |ui| match app.sidebar_tab {
             SidebarTab::Queue => show_queue(ui, app),
             SidebarTab::Mapping => show_mapping(ui, app),
             SidebarTab::History => show_history(ui, app),
         });
-
-    if queue_has_files {
-        queue_action_bar(ui, app);
-    }
 }
 
 fn tab_bar(ui: &mut Ui, app: &mut App2) {

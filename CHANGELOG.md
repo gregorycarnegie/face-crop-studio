@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Export batch report…` is visible again.** The queue's action bar sat in a
+  fixed 96 px reserve at the bottom of the sidebar, and once the bar grew past it
+  the report button was drawn below the window edge. The bar is now a bottom panel
+  that sizes itself to its buttons, with the file list scrolling in the rest.
+
 ## [1.7.0] - 2026-09-13
 
 ### Added
