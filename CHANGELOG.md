@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster test builds.** Dependencies in the dev profile now carry line tables
+  instead of full debuginfo. They are built at opt-level 3, so their locals were
+  mostly optimized out anyway, but the debuginfo doubled every PDB -- and a test
+  build links around 60 binaries, 34 of them fcs-core examples. `fcs_gui.pdb`
+  drops from 515 MB to 288 MB, and `cargo test --workspace --no-run` after
+  touching fcs-core from 86-92 s to 65-80 s. Backtraces keep file and line, the
+  workspace crates keep full debuginfo, and release builds are untouched.
+  Swapping MSVC `link.exe` for `rust-lld` was measured too and made no difference.
+- Removed dependencies nothing used: `thiserror` from fcs-core, `predicates` from
+  fcs-cli's tests and `sha2` from fcs-gui's. Test builds compile eight fewer
+  crates (`sha2`, `digest`, `block-buffer`, `crypto-common`, `const-oid`,
+  `hybrid-array`, `float-cmp` 0.10, `normalize-line-endings`).
+- Dependency bumps: `clap` 4.6.6 → 4.6.7, `crc32fast` 1.5.1 → 1.5.2.
+
 ### Fixed
 
 - **`Export batch report…` is visible again.** The queue's action bar sat in a

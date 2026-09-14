@@ -13,6 +13,11 @@ incremental = true
 
 [profile.dev.package."*"]
 opt-level = 3
+# Dependencies are built at opt-level 3, so full debuginfo buys little (locals are
+# optimized out) but roughly doubles every PDB. Line tables keep file:line in
+# backtraces. Measured: fcs-gui.pdb 515 MB -> 288 MB, and a `cargo test --no-run`
+# after touching fcs-core 86-92 s -> 65-80 s. Workspace crates keep full debuginfo.
+debug = "line-tables-only"
 
 [workspace]
 members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-ort", "fcs-cli", "fcs-gui"]
@@ -56,7 +61,7 @@ thiserror = "2.0.20"
 
 # CLI and desktop UI
 arboard = "3.6.1"
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 eframe = { version = "0.36.2", features = ["wgpu"] }
 egui = "0.36.2"
 egui_extras = "0.36.2"
@@ -134,7 +139,7 @@ winresource = "0.1.31"
 # Data formats and storage
 base64 = "0.23.1"
 calamine = "0.36.1"
-crc32fast = "1.5.1"
+crc32fast = "1.5.2"
 csv = "1.4.0"
 parquet = { version = "59.3.0", default-features = false, features = [
     "arrow",
@@ -147,7 +152,6 @@ parquet = { version = "59.3.0", default-features = false, features = [
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-sha2 = "0.11.0"
 
 # Concurrency and utilities
 # Global allocator for the shipped binaries. tract allocates and frees an intermediate
@@ -161,7 +165,6 @@ walkdir = "2.5.0"
 # Testing and benchmarking
 assert_cmd = "2.2.2"
 criterion = "0.8.2"
-predicates = "3.1.4"
 proptest = "1.11.0"
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features

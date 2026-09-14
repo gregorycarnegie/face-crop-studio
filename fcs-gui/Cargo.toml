@@ -30,7 +30,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true
-sha2.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true
