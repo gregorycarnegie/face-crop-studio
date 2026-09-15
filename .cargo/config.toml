@@ -22,3 +22,10 @@ rustflags = ["-C", "target-cpu=x86-64-v3"]
 
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+# The suite without fcs-core's examples, which are about half of a test build after touching
+# fcs-core (39-45 s -> 22 s). CI's default target selection still compiles them. Doctests are
+# not included; run `cargo test --workspace --doc` for those.
+[alias]
+test-fast = "test --workspace --all-features --lib --bins --tests"
+nextest-fast = "nextest run --workspace --all-features --lib --bins --tests"

@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crates (`sha2`, `digest`, `block-buffer`, `crypto-common`, `const-oid`,
   `hybrid-array`, `float-cmp` 0.10, `normalize-line-endings`).
 - Dependency bumps: `clap` 4.6.6 → 4.6.7, `crc32fast` 1.5.1 → 1.5.2.
+- **`cargo nextest-fast` and `cargo test-fast`.** Aliases that run the suite with
+  `--lib --bins --tests`, leaving out fcs-core's 35 examples. A test build after
+  touching fcs-core drops from 39-45 s to 22 s. CI still compiles the examples.
+- **Shaders are translated for Vulkan and Metal on every CI leg.** The WGSL
+  validation test now also lowers each shader to SPIR-V and to MSL 2.3. The macOS
+  and Linux runners have no GPU adapter, so until now nothing there reached the
+  translation step that fails for a shader those backends cannot take.
 
 ### Fixed
 

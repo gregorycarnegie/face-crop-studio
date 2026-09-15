@@ -80,10 +80,28 @@ fn validate_wgsl_file(path: &Path) -> Result<(), String> {
     let module = naga::front::wgsl::parse_str(&source)
         .map_err(|err| err.emit_to_string_with_path(&source, &path_display))?;
 
-    Validator::new(ValidationFlags::all(), Capabilities::all())
+    let info = Validator::new(ValidationFlags::all(), Capabilities::all())
         .subgroup_stages(ShaderStages::all())
         .subgroup_operations(SubgroupOperationSet::all())
         .validate(&module)
-        .map(|_| ())
-        .map_err(|err| err.emit_to_string_with_path(&source, &path_display))
+        .map_err(|err| err.emit_to_string_with_path(&source, &path_display))?;
+
+    // The macOS and Linux CI legs have no GPU adapter, so no test there ever creates a
+    // pipeline. Lowering to SPIR-V (Vulkan) and MSL (Metal) here is the part of pipeline
+    // creation that fails for a shader those backends cannot take, and it needs no adapter.
+    naga::back::spv::write_vec(&module, &info, &naga::back::spv::Options::default(), None)
+        .map_err(|err| format!("SPIR-V translation failed: {err}"))?;
+    let msl = naga::back::msl::Options {
+        // wgpu's MSL version on macOS 11, Rust's default deployment target for Apple Silicon.
+        lang_version: (2, 3),
+        ..Default::default()
+    };
+    naga::back::msl::write_string(
+        &module,
+        &info,
+        &msl,
+        &naga::back::msl::PipelineOptions::default(),
+    )
+    .map_err(|err| format!("MSL translation failed: {err}"))?;
+    Ok(())
 }
