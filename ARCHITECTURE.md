@@ -119,22 +119,23 @@ graph TD
 
 ### GPU Inference Determinism
 
-The custom WGSL YuNet inference path (`gpu.inference: true`) is **not bit-deterministic across runs**. GPU compute shaders perform parallel float reductions during convolution and the accumulation order is scheduler-dependent. Most of the time this manifests as sub-ULP wobble in detection scores and bbox coordinates, but occasionally — especially on borderline detections or images with multiple face-like patterns — it produces visibly different outputs.
+The custom WGSL YuNet inference path (`gpu.inference: true`) is deterministic on a given adapter and driver: two rayon batch runs over the 1239-image reference folder (RTX 4090, DX12) produce bit-identical detections, every score and box. Each shader invocation evaluates its loops in a fixed order, so there is no run-to-run float wobble to absorb.
 
-Empirically on a 1239-image batch, with `gpu.inference: true`:
+Builds before 2026-08-29 varied on about 1% of images. The cause was not float ordering but a race in `GpuBufferPool`: buffers released while a command encoder was still being built went straight back to the shared pool, so another worker could encode into memory the first submission still referenced. `GpuBufferPool::execution_scope` fixed it, and `concurrent_inference_matches_sequential` in `fcs-core/src/gpu/tests.rs` guards it.
 
-- **~99%** of images produce identical detection sets across batch runs.
-- **~1%** show variance in their detection list. The breakdown of that 1%:
-  - About half are *secondary* detections around a single face (near-duplicate boxes from YuNet's stride-8/16/32 anchors). NMS and the post-NMS centroid dedup pass catch most of these.
-  - About a third are *threshold-boundary flicker* — a borderline detection's score wobbles across `score_threshold`, so it's included in some runs and not others.
-  - The remainder is genuine model-level wobble where a clear face produces meaningfully different scores between runs.
+GPU and CPU (`tract`) inference are not bit-identical to each other. On the same folder, 791 of 1239 images differ in the low bits of a score or box, and one borderline detection appears on only one path (1130 vs 1129 detections).
 
-With `quality_rules.auto_select_best_face: true` (the GUI default), only the top detection per image affects output, so the user-visible drift is closer to **~0.3% of images**. CPU inference (`gpu.inference: false`) routes through `tract` and removes the GPU-side source of wobble — recommended when reproducibility matters more than batch throughput.
+#### Duplicate suppression
 
-#### Mitigations in code
+`apply_postprocess` runs IoU NMS, then `fcs-core::nms::dedup_close_centers`, which drops detections whose centers sit within 50% of the larger box's longest edge (8 px floor). YuNet's stride-8/16/32 anchors can place boxes around one face that overlap too little for NMS to merge. Measured on the reference folder (GPU, 2026-09-15):
 
-- `nms_threshold: 0.2` (down from the YuNet upstream 0.3) — more aggressive overlap suppression absorbs IoU jitter for clearly-overlapping boxes.
-- `fcs-core::nms::dedup_close_centers` — post-NMS pass that drops detections whose centers are within 50% of the larger bbox's longest edge. Catches the multi-scale duplicates that low-IoU NMS lets through. Wired into `apply_postprocess`.
+| Score threshold   | Detections | Removed by dedup | NMS 0.2 vs 0.3 |
+|-------------------|------------|------------------|----------------|
+| 0.8 (GUI default) | 1130       | 0                | no change      |
+| 0.5               | 1342       | 3                | no change      |
+| 0.3               | 1593       | 34               | no change      |
+
+Dedup matters once the confidence floor is lowered: 30 of the 34 boxes it removes at 0.3 are centred on a box that is kept. The GUI settings' `nms_threshold: 0.2` (the library default is 0.3) changed nothing at any of these thresholds, because dedup already removes what the lower threshold would.
 
 ## Testing Matrix
 
