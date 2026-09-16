@@ -145,6 +145,10 @@ python tools/dataset/eval_yunet.py det.json images/
 
 # Audit: contact sheet of the detections that matched no box, to judge by eye
 python tools/dataset/sample_unmatched.py . det.json unmatched.html 60
+
+# Label eye points, which Open Images has none of: click-through page, resumable,
+# appending to eye_labels.jsonl
+python tools/dataset/label_eyes.py . --count 2000
 ```
 
 A by-product of the first full run: 7 of these images are CMYK JPEGs, which used to kill
