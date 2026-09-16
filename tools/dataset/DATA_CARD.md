@@ -123,6 +123,31 @@ A converter should read screen order from the coordinates and anatomy from the f
 The 401 skips are a signal worth keeping rather than a loss: they mark boxes where no landmark
 head should be supervised, since a second eye is not visible to supervise it with.
 
+### Training labels
+
+`to_coco_keypoints.py` turns those clicks into `face_keypoints_coco.json`: 1,859 images and
+2,000 annotations, with a `face` category carrying five keypoints in RetinaFace/YuNet order
+(right_eye, left_eye, nose, right_mouth, left_mouth) in the subject's own frame. Nose and
+mouth are never set; nobody has clicked them.
+
+| Annotation kind | Count |
+|---|---|
+| Both eyes, side known, face upright | 1,549 |
+| Both eyes, side known, face inverted | 13 |
+| Points kept but side unknown (`steep_roll`) | 37 |
+| Box only, eyes not visible | 401 |
+
+COCO rather than the RetinaFace `label.txt` that SCRFD's own scripts read, because these
+labels are partial: `label.txt` has no way to say "two of five known" -- a face carries all
+five points or a placeholder -- so writing it would discard every eye point. COCO keypoints
+carry per-point visibility, mmdetection and mmpose read the format directly, and it is the
+same shape as COCO's own eye points in section 3, so the two sources can merge.
+
+Checked at generation, on all 2,000: no keypoint falls outside its box, every upright face
+puts the subject's right eye to the left of its left eye on screen, every inverted face puts
+it to the right, and every `steep_roll` face stores its pair under `fcs.eyes_unordered` with
+no keypoints set.
+
 ## 5. Caveats before anyone trains on this
 
 1. **CC BY means attribution.** Every image needs crediting. Open Images records the
@@ -174,6 +199,9 @@ python tools/dataset/sample_unmatched.py . det.json unmatched.html 60
 # Label eye points, which Open Images has none of: click-through page, resumable,
 # appending to eye_labels.jsonl
 python tools/dataset/label_eyes.py . --count 2000
+
+# Convert those clicks into COCO keypoint annotations
+python tools/dataset/to_coco_keypoints.py .
 ```
 
 A by-product of the first full run: 7 of these images are CMYK JPEGs, which used to kill
