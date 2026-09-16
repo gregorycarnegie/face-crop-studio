@@ -33,10 +33,22 @@ height and 0.96 of the width, with centres aligned (median y shift -0.00). Train
 Open Images boxes would therefore not move the crop framing that `face_height_pct` and
 the crop presets are tuned against.
 
-**Unmatched detections are not a false-positive rate.** There are 5,376 at 0.8 and 11,823
-at 0.5, but Open Images does not guarantee every face in an image is boxed, so an unknown
-share of those are real faces nobody labelled. Auditing a sample by hand is the only way
-to turn this into a precision number.
+**Most unmatched detections are unlabelled faces, not false positives.** 60 of the 5,376
+detections that matched no box at 0.8 were sampled at random and reviewed by eye: 58 were
+real faces Open Images never boxed (96.7%, 95% Wilson interval 88.6-99.1%). The two
+exceptions were a spurious second box on a statue's neck, below a face the labels flag as
+a depiction, and a puppy. Correcting the totals for that rate:
+
+|           | Against the labels | Corrected for unlabelled faces |
+|-----------|--------------------|--------------------------------|
+| Recall, all faces | 69.5%      | ~76.0% (95% CI 75.6-76.1%)     |
+| Precision | 71.5% apparent     | **~99.0%** (95% CI 96.8-99.7%) |
+
+Recall barely moves, because a face YuNet found that nobody labelled adds to both sides of
+the fraction. Precision moves a long way: the detector is right nearly every time it fires,
+and it is the labels that are incomplete. A further 1,202 detections overlapped an ignore
+region and are excluded from both columns as unjudgeable. Rebuild the contact sheet this
+came from with `sample_unmatched.py`.
 
 ## 2. Open Images V7 — the training pool
 
@@ -93,8 +105,12 @@ with no labelling work.
    photos will have been deleted.
 2. **The licences were recorded in 2018.** Photos may have been relicensed or removed
    since. Re-check availability at download time and keep the manifest with the weights.
-3. **Open Images boxes are not guaranteed exhaustive.** Audit a few hundred images before
-   trusting an unboxed region as background.
+3. **Open Images boxes are not exhaustive, and this is now measured rather than feared.**
+   About 5,200 faces across these 12,416 images carry no box at all (section 1). Training
+   on them as they stand teaches a detector that an unlabelled face is background. Either
+   treat everything the labels do not cover as an ignore region, or complete the labels
+   first -- YuNet's own output at 0.8 is a reasonable draft for that, being right ~99% of
+   the time, and the same audit script checks any such pass.
 4. **The lenient COCO tier is a legal judgement call**, not a technical one: whether a
    model trained on ShareAlike images is an adaptation of them is unsettled. The strict
    tier avoids the question.
@@ -126,6 +142,9 @@ python tools/dataset/oi_faces.py .        # argument is the directory holding th
 #   https://open-images-dataset.s3.amazonaws.com/{validation,test}/<ImageID>.jpg
 fcs-cli --input images/ --json det.json --gpu --gpu-inference --score-threshold 0.8
 python tools/dataset/eval_yunet.py det.json images/
+
+# Audit: contact sheet of the detections that matched no box, to judge by eye
+python tools/dataset/sample_unmatched.py . det.json unmatched.html 60
 ```
 
 A by-product of the first full run: 7 of these images are CMYK JPEGs, which used to kill
