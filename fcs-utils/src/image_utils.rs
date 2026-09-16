@@ -264,6 +264,20 @@ fn decode_jpeg_turbo(path: &Path, apply_exif_orientation: bool) -> Option<Dynami
     };
 
     let decompress = mozjpeg::Decompress::new_mem(&bytes).ok()?;
+
+    // libjpeg has no CMYK/YCCK -> RGB conversion, so `rgb()` below trips its fatal error
+    // handler, and mozjpeg installs that handler as `extern "C-unwind"`: it unwinds out of C
+    // instead of returning an error, so the panic escapes this function's `Option` and takes
+    // the process down with it -- no message, no output file. One such image killed a batch
+    // of 12,416 after 12,387 of them had been processed. The `image` crate decodes these, so
+    // leave them to the fallback below.
+    if matches!(
+        decompress.color_space(),
+        mozjpeg::ColorSpace::JCS_CMYK | mozjpeg::ColorSpace::JCS_YCCK
+    ) {
+        return None;
+    }
+
     let mut started = decompress.rgb().ok()?;
     let (width, height) = (started.width(), started.height());
     let pixels: Vec<u8> = started.read_scanlines().ok()?;
@@ -804,6 +818,37 @@ pub fn fit_input(original: (u32, u32), target: (u32, u32)) -> Result<InputFit> {
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
+
+    /// A four-component JPEG must not take the process down.
+    ///
+    /// `decode_jpeg_turbo` returns `Option` so an awkward file falls through to the `image`
+    /// crate, but a CMYK/YCCK source made libjpeg's fatal error handler unwind through C
+    /// before that could happen: the whole run died with no message and wrote no output.
+    /// Without the colour-space check this test fails on that panic; in the CLI, where
+    /// nothing catches it, the same panic ends the run and writes no output at all.
+    #[test]
+    fn cmyk_jpeg_falls_back_instead_of_crashing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cmyk.jpg");
+        let (width, height) = (16usize, 8usize);
+
+        let mut encoder = mozjpeg::Compress::new(mozjpeg::ColorSpace::JCS_CMYK);
+        encoder.set_size(width, height);
+        encoder.set_quality(90.0);
+        let mut started = encoder
+            .start_compress(std::fs::File::create(&path).expect("create fixture"))
+            .expect("start CMYK compress");
+        started
+            .write_scanlines(&vec![128u8; width * height * 4])
+            .expect("write CMYK scanlines");
+        started.finish().expect("finish CMYK fixture");
+
+        let image = load_image(&path).expect("a CMYK JPEG must decode via the fallback");
+        assert_eq!(
+            (image.width(), image.height()),
+            (width as u32, height as u32)
+        );
+    }
 
     /// Every element of the output must be written, on an awkward size.
     ///
