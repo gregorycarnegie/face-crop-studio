@@ -1,10 +1,17 @@
 """Click two eye points per face, to turn Open Images boxes into training labels.
 
-  label_eyes.py <data_dir> [--port 8765] [--count 2000]
+  label_eyes.py <data_dir> [--split train] [--port 8765] [--count 2000]
 
 Open Images has hand-drawn face boxes but no landmarks, and `fcs-core::face_cropper` aligns
 crops on the eyes, so a replacement detector needs eye points. This serves the boxes one at a
 time, zoomed, and records two clicks each.
+
+`--split` picks which Open Images boxes to queue, defaulting to `validation,test`. Those two
+splits are the held-out test set, so once they are labelled, training labels should come from
+`--split train` instead -- otherwise the only clean yardstick gets spent. Images absent from
+<data_dir>/images are fetched from the public mirror as they come up and cached there, which
+is what makes the train split usable without downloading all 278,655 of its images first.
+Each saved record carries the split it came from, so train and test labels stay separable.
 
 Labels append to <data_dir>/eye_labels.jsonl as you go, so a refresh, a crash or a week off
 loses nothing: on restart, anything already answered is dropped from the queue. The last line
@@ -41,19 +48,30 @@ import csv
 import json
 import random
 import re
+import urllib.error
+import urllib.request
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 IMAGE_ID = re.compile(r"^[0-9a-f]{16}$")
 MIN_WIDTH_AT_640 = 32 / 640  # faces too small to crop are not worth labelling
+SPLIT_FILES = {
+    "validation": "faces-validation-annotations-bbox.csv",
+    "test": "faces-test-annotations-bbox.csv",
+    "train": "faces-oidv6-train-annotations-bbox.csv",
+}
+MIRROR = "https://open-images-dataset.s3.amazonaws.com/{split}/{image}.jpg"
+PREFETCH = 8  # images pulled ahead of the one on screen, so clicking never waits on a download
 
 
-def build_queue(data: Path, count: int) -> list[dict]:
+def build_queue(data: Path, count: int, splits: list[str]) -> list[dict]:
     faces = []
-    for split in ("validation", "test"):
-        path = data / f"faces-{split}-annotations-bbox.csv"
+    for split in splits:
+        path = data / SPLIT_FILES[split]
         if not path.exists():
+            print(f"no {split} boxes at {path.name}, skipping that split", flush=True)
             continue
         with open(path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
@@ -62,14 +80,15 @@ def build_queue(data: Path, count: int) -> list[dict]:
                 xmin, xmax = float(row["XMin"]), float(row["XMax"])
                 if xmax - xmin < MIN_WIDTH_AT_640:
                     continue
-                if not (data / "images" / f"{row['ImageID']}.jpg").exists():
-                    continue
                 faces.append({
                     "id": f"{row['ImageID']}:{xmin:.6f},{float(row['YMin']):.6f}",
                     "image": row["ImageID"],
+                    "split": split,
                     "box": [xmin, float(row["YMin"]), xmax, float(row["YMax"])],
                 })
-    random.Random(0).shuffle(faces)  # seeded: the same queue every run
+    # Seeded, so the queue is the same every run -- and deliberately not filtered by which
+    # images happen to be on disk, which would make the order depend on the download history.
+    random.Random(0).shuffle(faces)
     return faces[:count]
 
 
@@ -186,6 +205,40 @@ class Handler(BaseHTTPRequestHandler):
     queue: list[dict]
     out: Path
     total: int
+    splits: dict[str, str]  # image id -> Open Images split, which the mirror path needs
+    order: dict[str, int]   # image id -> queue position, for prefetching what comes next
+    fetcher: ThreadPoolExecutor
+
+    @classmethod
+    def fetch(cls, stem: str) -> bytes | None:
+        """One image's bytes, downloading and caching it when it is not on disk yet."""
+        file = cls.data / "images" / f"{stem}.jpg"
+        if file.exists():
+            return file.read_bytes()
+        split = cls.splits.get(stem)
+        if split is None:
+            return None
+        try:
+            with urllib.request.urlopen(MIRROR.format(split=split, image=stem), timeout=30) as r:
+                body = r.read()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return None
+        file.parent.mkdir(parents=True, exist_ok=True)
+        # Write then rename: a download cut halfway must not leave a broken image cached, which
+        # would then be served from disk forever.
+        part = file.with_suffix(".part")
+        part.write_bytes(body)
+        part.replace(file)
+        return body
+
+    @classmethod
+    def prefetch_after(cls, stem: str) -> None:
+        position = cls.order.get(stem)
+        if position is None:
+            return
+        for face in cls.queue[position + 1: position + 1 + PREFETCH]:
+            if not (cls.data / "images" / f"{face['image']}.jpg").exists():
+                cls.fetcher.submit(cls.fetch, face["image"])
 
     def _send(self, code, body, ctype):
         self.send_response(code)
@@ -205,10 +258,11 @@ class Handler(BaseHTTPRequestHandler):
             stem = path[len("/img/"):].removesuffix(".jpg")
             if not IMAGE_ID.match(stem):
                 return self._send(404, b"no", "text/plain")
-            file = self.data / "images" / f"{stem}.jpg"
-            if not file.exists():
-                return self._send(404, b"no", "text/plain")
-            return self._send(200, file.read_bytes(), "image/jpeg")
+            self.prefetch_after(stem)
+            body = self.fetch(stem)
+            if body is None:
+                return self._send(404, b"image not available", "text/plain")
+            return self._send(200, body, "image/jpeg")
         self._send(404, b"no", "text/plain")
 
     def do_POST(self):
@@ -216,6 +270,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, b"no", "text/plain")
         length = int(self.headers.get("Content-Length", 0))
         rec = json.loads(self.rfile.read(length) or b"{}")
+        # Stamped here rather than taken from the page: the split decides whether a label is
+        # training data or test data, so it comes from the queue the server built.
+        rec["split"] = self.splits.get(rec.get("image", ""), "unknown")
         with open(self.out, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec) + "\n")
         self._send(200, b"ok", "text/plain")
@@ -227,21 +284,38 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("data_dir")
+    ap.add_argument("--split", default="validation,test",
+                    help="comma-separated splits to queue from: validation, test, train. "
+                         "Default validation,test -- the held-out test set, so use train "
+                         "once those are labelled")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--count", type=int, default=2000)
     args = ap.parse_args()
 
+    splits = [s.strip() for s in args.split.split(",") if s.strip()]
+    unknown = [s for s in splits if s not in SPLIT_FILES]
+    if unknown:
+        ap.error(f"unknown split {', '.join(unknown)}; pick from {', '.join(SPLIT_FILES)}")
+
     data = Path(args.data_dir).resolve()
     out = data / "eye_labels.jsonl"
-    queue = build_queue(data, args.count)
+    queue = build_queue(data, args.count, splits)
     done = load_done(out)
     remaining = [f for f in queue if f["id"] not in done]
 
     Handler.data, Handler.queue, Handler.out, Handler.total = data, remaining, out, len(queue)
+    Handler.splits = {f["image"]: f["split"] for f in queue}
+    Handler.order = {f["image"]: i for i, f in enumerate(remaining)}
+    Handler.fetcher = ThreadPoolExecutor(max_workers=4, thread_name_prefix="prefetch")
+    to_fetch = sum(1 for f in remaining
+                   if not (data / "images" / f"{f['image']}.jpg").exists())
     labelled = sum(1 for r in done.values() if not r.get("skipped"))
     # flush: stdout is block-buffered when redirected, and the URL below is the whole point.
-    print(f"{len(queue)} faces in the queue, {len(done)} already answered "
-          f"({labelled} with eye points), {len(remaining)} to go", flush=True)
+    print(f"{len(queue)} faces in the queue from {'+'.join(splits)}, {len(done)} already "
+          f"answered ({labelled} with eye points), {len(remaining)} to go", flush=True)
+    if to_fetch:
+        print(f"{to_fetch} of those images are not local yet and will be fetched as they "
+              f"come up, {PREFETCH} ahead of the screen", flush=True)
     print(f"labels append to {out}", flush=True)
     print(f"open http://127.0.0.1:{args.port}/  (ctrl-c to stop; progress is saved)", flush=True)
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

@@ -96,7 +96,11 @@ with no labelling work.
 - The remaining labelling work is eye points, not boxes: about two clicks per face.
   COCO's 13,194 strict-tier faces with hand-labelled eyes are a free head start.
 - Open Images' own validation and test splits (12,416 images) are a ready-made held-out
-  test set, which is what section 1 measures.
+  test set, which is what section 1 measures. They hold 15,475 labelable faces, 2,000 of
+  which now carry eye points, so they are spent as a test set and must not be trained on.
+  Training labels come from the train split instead -- 571,247 labelable faces across
+  278,655 images -- which `label_eyes.py --split train` queues without needing the images
+  downloaded first.
 
 ### First eye-point pass, 2026-09-16
 
@@ -197,8 +201,10 @@ python tools/dataset/eval_yunet.py det.json images/
 python tools/dataset/sample_unmatched.py . det.json unmatched.html 60
 
 # Label eye points, which Open Images has none of: click-through page, resumable,
-# appending to eye_labels.jsonl
-python tools/dataset/label_eyes.py . --count 2000
+# appending to eye_labels.jsonl. validation+test is the held-out test set, so training
+# labels come from --split train, whose images are pulled from the mirror as they come up.
+python tools/dataset/label_eyes.py . --count 2000                 # test set (done)
+python tools/dataset/label_eyes.py . --split train --count 2500   # training labels
 
 # Convert those clicks into COCO keypoint annotations
 python tools/dataset/to_coco_keypoints.py .
