@@ -15,10 +15,22 @@ size the image is served at. Clicks are recorded as viewer-left and viewer-right
 what the labeller sees, and nothing here converts them to a model's ordering.
 
 For whoever writes that conversion: measured over 10,880 large detections, YuNet's
-`landmarks[0]` sits left of `landmarks[1]` on screen in 99.8% of them, so `viewer_left`
-corresponds to `landmarks[0]` and `viewer_right` to `landmarks[1]`. That is the usual
-RetinaFace/YuNet order (index 0 is the subject's own right eye) and it contradicts the
-comment at `fcs-core/src/face_cropper.rs:126`, which calls index 0 the viewer's right.
+`landmarks[0]` sits left of `landmarks[1]` on screen in 99.8% of them -- the usual
+RetinaFace/YuNet order, where index 0 is the subject's own right eye. So on an upright face
+`viewer_left` is `landmarks[0]`.
+
+That mapping holds only while the head's roll stays within +/-90 degrees. Rotate a face far
+enough and the subject's right eye crosses to the viewer's right, so the two exchange places;
+screen position stops implying which eye it is. Records with `"upside_down": true` are those
+faces -- spotted because the clicks arrived right-to-left on screen, then confirmed by eye --
+and their points are stored in screen order like all the others. A converter therefore takes
+screen order from the coordinates and anatomy from that flag. 34 of the first 1,599 labelled
+faces needed it, so it is not a rare edge case worth ignoring.
+
+A second flag, `"steep_roll": true`, marks pairs whose eyes sit within 8% of the box width of
+each other horizontally. There the x-order carries almost no information about which side is
+which, however the head is turned, so read left/right identity as unknown rather than
+guessing. The points themselves are real and still worth training a landmark head on.
 
 ponytail: single user, no auth, binds to localhost only. If two people ever label at once,
 give each their own port and jsonl and merge afterwards.

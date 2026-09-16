@@ -98,6 +98,31 @@ with no labelling work.
 - Open Images' own validation and test splits (12,416 images) are a ready-made held-out
   test set, which is what section 1 measures.
 
+### First eye-point pass, 2026-09-16
+
+2,000 boxes from those splits went through `label_eyes.py`:
+
+| | Count |
+|---|---|
+| Faces with two eye points | 1,599 |
+| Skipped: no two visible eyes | 401 |
+| ...of which screen order equals anatomical order | 1,549 |
+| `upside_down`: roll past 90 degrees, so the subject's right eye is on the viewer's right | 34 |
+| `steep_roll`: eyes within 8% of box width horizontally, so x-order means little | 37 (21 also `upside_down`) |
+
+Quality checks on the 1,599: every point landed inside its box, horizontal eye separation came
+out at a median 0.40 of box width, and the eye line at 0.39 of box height from the top. Those
+are what real faces look like, not what careless clicking looks like.
+
+The two flags exist because screen position only implies which eye is which while the head's
+roll stays within +/-90 degrees, and 34 of these faces are past that. Candidates were found
+automatically -- clicks arriving right-to-left, or eyes nearly in vertical line -- and all 50
+were then checked by eye: the right-to-left ones were genuinely inverted faces, not misclicks.
+A converter should read screen order from the coordinates and anatomy from the flags.
+
+The 401 skips are a signal worth keeping rather than a loss: they mark boxes where no landmark
+head should be supervised, since a second eye is not visible to supervise it with.
+
 ## 5. Caveats before anyone trains on this
 
 1. **CC BY means attribution.** Every image needs crediting. Open Images records the
