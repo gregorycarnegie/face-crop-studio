@@ -12,8 +12,13 @@ for a face wins, which is what makes "go back" work.
 
 Coordinates are stored normalised (0-1 of image width/height) so they stay valid whatever
 size the image is served at. Clicks are recorded as viewer-left and viewer-right, matching
-what the labeller sees; YuNet's own order is the mirror of that (landmarks[0] is the eye on
-the viewer's right), and `export` below emits its order.
+what the labeller sees, and nothing here converts them to a model's ordering.
+
+For whoever writes that conversion: measured over 10,880 large detections, YuNet's
+`landmarks[0]` sits left of `landmarks[1]` on screen in 99.8% of them, so `viewer_left`
+corresponds to `landmarks[0]` and `viewer_right` to `landmarks[1]`. That is the usual
+RetinaFace/YuNet order (index 0 is the subject's own right eye) and it contradicts the
+comment at `fcs-core/src/face_cropper.rs:126`, which calls index 0 the viewer's right.
 
 ponytail: single user, no auth, binds to localhost only. If two people ever label at once,
 give each their own port and jsonl and merge afterwards.

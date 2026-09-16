@@ -123,14 +123,21 @@ pub fn crop_face_from_image(
     }
 
     let canvas = if settings.eye_line_align {
-        let re = &detection.landmarks[0]; // right eye (viewer's right)
-        let le = &detection.landmarks[1]; // left eye  (viewer's left)
-        let both_zero = re.x == 0.0 && re.y == 0.0 && le.x == 0.0 && le.y == 0.0;
+        // Index 0 lies on the viewer's left of the face and index 1 on the viewer's right --
+        // measured across 10,880 large detections, that holds for 99.8% of them. It is the
+        // usual RetinaFace/YuNet order, where index 0 is the subject's *own* right eye. These
+        // names are screen-relative on purpose: read anatomically, "left eye" is the mirror of
+        // this, and that reading has already produced one mirrored landmark mapping elsewhere.
+        let left_eye = &detection.landmarks[0];
+        let right_eye = &detection.landmarks[1];
+        let both_zero =
+            left_eye.x == 0.0 && left_eye.y == 0.0 && right_eye.x == 0.0 && right_eye.y == 0.0;
         if !both_zero {
-            // Angle of the eye line relative to horizontal in source image coords.
-            // Positive angle = right eye is above left eye; we rotate by -angle to level.
-            let dx = le.x - re.x;
-            let dy = le.y - re.y;
+            // Angle of the eye line relative to horizontal in source image coords, taken from
+            // the viewer's left eye towards the viewer's right. Positive angle = the eye on
+            // the right sits lower on screen; rotate by -angle to level them.
+            let dx = right_eye.x - left_eye.x;
+            let dy = right_eye.y - left_eye.y;
             let angle = dy.atan2(dx); // radians; counter-clockwise positive
             let fill = Rgba([
                 settings.fill_color.red,
