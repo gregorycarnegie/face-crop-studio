@@ -162,11 +162,16 @@ Ids are numbered within each file, so either is valid COCO on its own. Keypoints
 RetinaFace/YuNet order (right_eye, left_eye, nose, right_mouth, left_mouth) in the subject's
 own frame; nose and mouth are never set, because nobody has clicked them.
 
-COCO rather than the RetinaFace `label.txt` that SCRFD's own scripts read, because these
-labels are partial: `label.txt` has no way to say "two of five known" -- a face carries all
-five points or a placeholder -- so writing it would discard every eye point. COCO keypoints
-carry per-point visibility, mmdetection and mmpose read the format directly, and it is the
-same shape as COCO's own eye points in section 3, so the two sources can merge.
+COCO is the interchange format here because mmdetection and mmpose read it directly and it is
+the same shape as COCO's own eye points in section 3, so the two sources can merge.
+
+An earlier version of this card claimed SCRFD's own format could not express partial labels.
+That is wrong, and reading `RetinaFaceDataset._parse_ann_line` settled it: SCRFD trains from
+`labelv2.txt`, where each of the five landmarks carries its own weight and a point written as
+`-1 -1 -1` is dropped from the landmark loss while its box still trains. Partial labels are
+therefore native to it. `to_labelv2.py` emits that format from these COCO files, writing the
+two eyes and ignoring nose and mouth, and ignoring both eyes on `steep_roll` faces rather than
+guessing which side is which.
 
 Checked at generation over all 4,500 annotations: no keypoint falls outside its box, every
 upright face puts the subject's right eye to the left of its left eye on screen and every
@@ -230,6 +235,9 @@ python tools/dataset/label_eyes.py . --split train --count 2500   # training lab
 
 # Convert those clicks into COCO keypoint annotations
 python tools/dataset/to_coco_keypoints.py .
+
+# And into SCRFD's own labelv2.txt, for training (see TRAINING_SETUP.md)
+python tools/dataset/to_labelv2.py .
 ```
 
 A by-product of the first full run: 7 of these images are CMYK JPEGs, which used to kill
