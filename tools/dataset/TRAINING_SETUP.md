@@ -55,6 +55,19 @@ cd insightface && git sparse-checkout set detection/scrfd
 1. **`numpy<2`.** torch 2.1 and mmcv 1.7.2 are both compiled against numpy 1.x. With numpy 2.x
    torch still imports but prints `Failed to initialize NumPy: _ARRAY_API not found` and the
    numpy bridge is dead.
+
+   **Anything installed later can undo this.** `pip install opencv-python-headless` pulls
+   OpenCV 5.x, which requires numpy 2 and silently upgrades it, breaking torch and mmcv again
+   while every import still appears to succeed. Pin the pair together:
+
+   ```sh
+   uv pip install 'numpy<2' 'opencv-python-headless==4.10.0.84'
+   ```
+
+   A run already in flight survives this, because its interpreter loaded the old numpy at
+   startup and its dataloader workers are forks of it -- but the next run to start will pick
+   up the broken combination. Re-check `numpy.__version__` and the torch bridge after adding
+   any package to this venv.
 2. **`setuptools<70`.** torch 2.1's `cpp_extension` imports `pkg_resources`, which setuptools
    removed in v81. Without it, `import mmcv` fails outright.
 3. **`wheel`.** Needed for any source build once `--no-build-isolation` is in play, since
@@ -109,6 +122,36 @@ cd <scrfd>
 ~/work/scrfd-venv/bin/python -c "from mmcv import Config; from mmdet.models import build_detector; \
   print(build_detector(Config.fromfile('configs/scrfd/scrfd_500m.py').model).__class__.__name__)"
 ```
+
+## Measuring a trained model
+
+`eval_eye_error.py <checkpoint.pth> <data_dir> --thresh 0.02` reports detection recall and
+eye-point error against `face_keypoints_test.json`. Three things about it are worth knowing
+before reading any number it prints.
+
+**It reads the checkpoint directly, not an ONNX export.** `tools/scrfd2onnx.py` fails under
+torch 2.x: its tracer rejects the numpy arrays mmdet's input builder passes through, with
+`Only tuples, lists and Variables are supported as JIT inputs`. It also expects
+`tests/data/t1.jpg`, which a sparse checkout does not fetch. Since the keypoint decoding in
+`tools/scrfd.py` is plain numpy over raw per-stride outputs, the evaluator reuses that decode
+against the head's own tensors and skips the export altogether. Two details the head leaves to
+the caller: outside an ONNX export it returns raw `(N, C, H, W)` maps with **no sigmoid**, and
+with two anchors per location the class map is `(1, 2, H, W)`, so anchor centres are duplicated
+per anchor exactly as the wrapper does.
+
+**Use `--thresh 0.02`, which is what SCRFD's own evaluation uses.** These models score low in
+absolute terms. On a 50-image slice, the 400-label model found 48.9% of faces at 0.5 and
+**91.5%** of the same faces at 0.02. A curve compared across thresholds would measure
+calibration rather than labelling, so every model must be scored at the same one.
+
+**Error is normalised by box width, not interocular distance.** The usual 5-point NME divides
+by eye separation, which collapses towards zero on the steeply rolled faces in this corpus and
+inflates their error arbitrarily.
+
+One upstream asymmetry to keep in mind when reading recall: training resizes with
+`keep_ratio=False`, squashing to 640x640, while the test pipeline and `SCRFD.detect` letterbox
+with the aspect preserved. That is upstream's own choice, not something introduced here, but it
+plausibly costs some recall.
 
 ## Training on this project's labels
 
