@@ -1,10 +1,14 @@
 """Turn clicked eye points into COCO-format keypoint annotations.
 
-  to_coco_keypoints.py <data_dir> [out.json]
+  to_coco_keypoints.py <data_dir> [out_dir]
 
 Reads <data_dir>/eye_labels.jsonl (from label_eyes.py) plus the Open Images box CSVs, and
-writes a COCO keypoint file: images, one annotation per labelled face, and a `face` category
-with five keypoints.
+writes two COCO keypoint files: `face_keypoints_train.json` from the train split and
+`face_keypoints_test.json` from validation+test. Each has its own images, one annotation per
+labelled face, and a `face` category with five keypoints.
+
+Two files rather than one because validation+test is the held-out test set: a single file
+containing both is one careless glob away from training on the only yardstick there is.
 
 Why COCO and not RetinaFace's label.txt, which is what SCRFD's own training scripts read:
 these labels are partial. Eyes are clicked, nose and mouth corners are not, and label.txt has
@@ -40,6 +44,11 @@ from pathlib import Path
 
 KEYPOINT_NAMES = ["right_eye", "left_eye", "nose", "right_mouth", "left_mouth"]
 LICENSE = {"id": 1, "name": "CC BY 2.0", "url": "https://creativecommons.org/licenses/by/2.0/"}
+SPLIT_FILES = {
+    "validation": "faces-validation-annotations-bbox.csv",
+    "test": "faces-test-annotations-bbox.csv",
+    "train": "faces-oidv6-train-annotations-bbox.csv",
+}
 
 
 def jpeg_size(path: Path):
@@ -90,14 +99,18 @@ def eye_keypoints(record: dict) -> tuple[list[float], int, list | None]:
 
 def main() -> None:
     data = Path(sys.argv[1]).resolve()
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else data / "face_keypoints_coco.json"
+    out_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else data
     labels = load_labels(data / "eye_labels.jsonl")
 
     # Boxes are stored normalised, so every image needs its pixel size, and the CSVs carry the
-    # occlusion flags worth passing through.
+    # occlusion flags worth passing through. The train CSV holds a million rows, so it is only
+    # read when the labels actually reference that split.
+    referenced = {r.get("split") for r in labels} - {None}
     flags: dict[tuple[str, str], dict] = {}
-    for split in ("validation", "test"):
-        path = data / f"faces-{split}-annotations-bbox.csv"
+    for split, name in SPLIT_FILES.items():
+        if split == "train" and "train" not in referenced:
+            continue
+        path = data / name
         if not path.exists():
             continue
         with open(path, newline="", encoding="utf-8") as f:
@@ -109,15 +122,25 @@ def main() -> None:
                     "split": split,
                 }
 
-    images: dict[str, dict] = {}
-    annotations = []
-    counts = {"with_eyes": 0, "side_unknown": 0, "skipped": 0, "no_size": 0}
+    # Ids are numbered within each file, so either is valid COCO on its own.
+    groups: dict[str, dict] = {}
+    tallies: dict[str, dict] = {}
+    dropped = 0
     for record in sorted(labels, key=lambda r: r["id"]):
         stem = record["image"]
+        x0, y0, x1, y1 = record["box"]
+        extra = flags.get((stem, f"{x0:.6f}"), {})
+        # The record's own split wins: it was stamped by the server that queued the face, while
+        # the CSV lookup is a best effort that can miss on a rounding difference.
+        split = record.get("split") or extra.get("split") or "unknown"
+        target = "train" if split == "train" else "test"
+        group = groups.setdefault(target, {"images": {}, "annotations": []})
+        tally = tallies.setdefault(target, {"with_eyes": 0, "side_unknown": 0, "skipped": 0})
+        images = group["images"]
         if stem not in images:
             size = jpeg_size(data / "images" / f"{stem}.jpg")
             if size is None:
-                counts["no_size"] += 1
+                dropped += 1
                 continue
             images[stem] = {
                 "id": len(images) + 1,
@@ -129,7 +152,6 @@ def main() -> None:
             }
         image = images[stem]
         iw, ih = image["width"], image["height"]
-        x0, y0, x1, y1 = record["box"]
         keypoints, num, unordered = eye_keypoints(record)
         for index in range(0, len(keypoints), 3):
             if keypoints[index + 2]:
@@ -137,9 +159,8 @@ def main() -> None:
                 keypoints[index + 1] = round(keypoints[index + 1] * ih, 1)
         box = [round(x0 * iw, 1), round(y0 * ih, 1), round((x1 - x0) * iw, 1),
                round((y1 - y0) * ih, 1)]
-        extra = flags.get((stem, f"{x0:.6f}"), {})
-        annotations.append({
-            "id": len(annotations) + 1,
+        group["annotations"].append({
+            "id": len(group["annotations"]) + 1,
             "image_id": image["id"],
             "category_id": 1,
             "bbox": box,
@@ -154,39 +175,46 @@ def main() -> None:
                 "eyes_unordered": [[round(p[0] * iw, 1), round(p[1] * ih, 1)]
                                    for p in unordered] if unordered else None,
                 **extra,
+                "split": split,
             },
         })
         if record.get("skipped"):
-            counts["skipped"] += 1
+            tally["skipped"] += 1
         elif unordered:
-            counts["side_unknown"] += 1
+            tally["side_unknown"] += 1
         else:
-            counts["with_eyes"] += 1
+            tally["with_eyes"] += 1
 
-    document = {
-        "info": {
-            "description": "Open Images face boxes with eye keypoints clicked for Face Crop Studio",
-            "source": "Open Images V7 validation+test, /m/0dzct Human face",
-            "keypoint_order": "RetinaFace/YuNet, in the subject's own frame",
-        },
-        "licenses": [LICENSE],
-        "images": list(images.values()),
-        "annotations": annotations,
-        "categories": [{
-            "id": 1,
-            "name": "face",
-            "supercategory": "person",
-            "keypoints": KEYPOINT_NAMES,
-            "skeleton": [[1, 2]],
-        }],
-    }
-    out.write_text(json.dumps(document), encoding="utf-8")
-    print(f"{len(images)} images, {len(annotations)} annotations -> {out}")
-    print(f"  both eyes, side known: {counts['with_eyes']}")
-    print(f"  points kept but side unknown (steep_roll): {counts['side_unknown']}")
-    print(f"  box only, eyes not visible: {counts['skipped']}")
-    if counts["no_size"]:
-        print(f"  dropped, image missing or unreadable: {counts['no_size']}")
+    for target, group in sorted(groups.items()):
+        document = {
+            "info": {
+                "description": "Open Images face boxes with eye keypoints clicked for "
+                               "Face Crop Studio",
+                "source": "Open Images V7, /m/0dzct Human face",
+                "keypoint_order": "RetinaFace/YuNet, in the subject's own frame",
+                "role": "training labels" if target == "train" else "held-out test set",
+            },
+            "licenses": [LICENSE],
+            "images": list(group["images"].values()),
+            "annotations": group["annotations"],
+            "categories": [{
+                "id": 1,
+                "name": "face",
+                "supercategory": "person",
+                "keypoints": KEYPOINT_NAMES,
+                "skeleton": [[1, 2]],
+            }],
+        }
+        path = out_dir / f"face_keypoints_{target}.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        tally = tallies[target]
+        print(f"{target}: {len(group['images'])} images, "
+              f"{len(group['annotations'])} annotations -> {path}")
+        print(f"   both eyes, side known: {tally['with_eyes']}")
+        print(f"   points kept but side unknown (steep_roll): {tally['side_unknown']}")
+        print(f"   box only, eyes not visible: {tally['skipped']}")
+    if dropped:
+        print(f"dropped, image missing or unreadable: {dropped}")
 
 
 if __name__ == "__main__":

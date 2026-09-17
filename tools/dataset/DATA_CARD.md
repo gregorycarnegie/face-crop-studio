@@ -127,19 +127,40 @@ A converter should read screen order from the coordinates and anatomy from the f
 The 401 skips are a signal worth keeping rather than a loss: they mark boxes where no landmark
 head should be supervised, since a second eye is not visible to supervise it with.
 
+### Second pass, train split, 2026-09-17
+
+2,500 more boxes, this time from the train split via `label_eyes.py --split train`, whose
+images were pulled from the mirror as they came up rather than downloaded in advance:
+
+| | Count |
+|---|---|
+| Faces with two eye points | 2,006 |
+| Skipped: no two visible eyes | 494 |
+| `upside_down` | 17 |
+| `steep_roll` | 18 (11 of them also `upside_down`) |
+
+Yield rose slightly, 80% against 78%, and eye separation and eye-line height landed on the
+same medians as the first pass -- 0.40 of box width and 0.39 of box height -- which is what
+consistent clicking looks like across two sittings on different images. Candidates were found
+by the same two rules and shown by `review_flagged.py`; as in the first pass, every
+right-to-left pair turned out to be an inverted face rather than a slip.
+
 ### Training labels
 
-`to_coco_keypoints.py` turns those clicks into `face_keypoints_coco.json`: 1,859 images and
-2,000 annotations, with a `face` category carrying five keypoints in RetinaFace/YuNet order
-(right_eye, left_eye, nose, right_mouth, left_mouth) in the subject's own frame. Nose and
-mouth are never set; nobody has clicked them.
+`to_coco_keypoints.py` writes two files, one per role, because validation+test is the held-out
+set and a single file holding both is one careless glob away from training on it:
 
-| Annotation kind | Count |
-|---|---|
-| Both eyes, side known, face upright | 1,549 |
-| Both eyes, side known, face inverted | 13 |
-| Points kept but side unknown (`steep_roll`) | 37 |
-| Box only, eyes not visible | 401 |
+| | `face_keypoints_train.json` | `face_keypoints_test.json` |
+|---|---|---|
+| Images | 2,482 | 1,859 |
+| Annotations | 2,500 | 2,000 |
+| Both eyes, side known | 1,988 | 1,562 |
+| Points kept, side unknown (`steep_roll`) | 18 | 37 |
+| Box only, eyes not visible | 494 | 401 |
+
+Ids are numbered within each file, so either is valid COCO on its own. Keypoints are in
+RetinaFace/YuNet order (right_eye, left_eye, nose, right_mouth, left_mouth) in the subject's
+own frame; nose and mouth are never set, because nobody has clicked them.
 
 COCO rather than the RetinaFace `label.txt` that SCRFD's own scripts read, because these
 labels are partial: `label.txt` has no way to say "two of five known" -- a face carries all
@@ -147,10 +168,11 @@ five points or a placeholder -- so writing it would discard every eye point. COC
 carry per-point visibility, mmdetection and mmpose read the format directly, and it is the
 same shape as COCO's own eye points in section 3, so the two sources can merge.
 
-Checked at generation, on all 2,000: no keypoint falls outside its box, every upright face
-puts the subject's right eye to the left of its left eye on screen, every inverted face puts
-it to the right, and every `steep_roll` face stores its pair under `fcs.eyes_unordered` with
-no keypoints set.
+Checked at generation over all 4,500 annotations: no keypoint falls outside its box, every
+upright face puts the subject's right eye to the left of its left eye on screen and every
+inverted face puts it to the right, every `steep_roll` face stores its pair under
+`fcs.eyes_unordered` with no keypoints set, no annotation references a missing image, and no
+image appears in both files.
 
 ## 5. Caveats before anyone trains on this
 
