@@ -139,10 +139,16 @@ the caller: outside an ONNX export it returns raw `(N, C, H, W)` maps with **no 
 with two anchors per location the class map is `(1, 2, H, W)`, so anchor centres are duplicated
 per anchor exactly as the wrapper does.
 
-**Use `--thresh 0.02`, which is what SCRFD's own evaluation uses.** These models score low in
-absolute terms. On a 50-image slice, the 400-label model found 48.9% of faces at 0.5 and
-**91.5%** of the same faces at 0.02. A curve compared across thresholds would measure
-calibration rather than labelling, so every model must be scored at the same one.
+**It sweeps the score threshold, and a single low one is a trap.** These models score low in
+absolute terms: on a 50-image slice the 400-label model found 48.9% of faces at 0.5 and 91.5%
+at 0.02, which looks like an argument for 0.02 -- the value SCRFD's own evaluation uses. It is
+not. At 0.02 that model also emitted **39.4 boxes per image matching no annotation at all**,
+so its 96.7% recall over the full test set measured almost nothing. It flatters the keypoints
+as well, since matching picks the best-IoU box from ~40 candidates per face and reads the eye
+points off whichever fits best. The evaluator therefore reports recall, false positives per
+image and angle error at every threshold from 0.02 to 0.7, from one forward pass per image.
+Pick an operating point where false positives are sane, then hold it fixed across models --
+comparing each model at its own best threshold would measure calibration, not labelling.
 
 **Error is normalised by box width, not interocular distance.** The usual 5-point NME divides
 by eye separation, which collapses towards zero on the steeply rolled faces in this corpus and

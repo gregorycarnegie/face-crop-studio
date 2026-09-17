@@ -1,9 +1,16 @@
 """Measure a trained SCRFD model's eye-point error on the held-out test set.
 
-  eval_eye_error.py <checkpoint.pth> <data_dir> [--thresh 0.5] [--limit N]
+  eval_eye_error.py <checkpoint.pth> <data_dir> [--thresh 0.02] [--limit N]
 
-Reports detection recall and eye-point error against face_keypoints_test.json, so models
-trained on different numbers of eye labels can be compared on the same footing.
+Sweeps the score threshold and reports, at each one, detection recall, false positives per
+image and eye-line angle error against face_keypoints_test.json, so models trained on
+different numbers of eye labels can be compared at a sane operating point.
+
+The sweep exists because a single low threshold is misleading. At 0.02 -- the value SCRFD's own
+evaluation uses -- the 400-label model reached 96.7% recall while emitting **39.4 boxes per
+image that match no annotation at all**. Recall measured there says almost nothing, and it
+flatters the keypoints too: matching picks the best-IoU box out of forty candidates per face,
+so the eye points are read off whichever proposal happens to fit best.
 
 Straight from the PyTorch checkpoint, deliberately. SCRFD's own inference wrapper reads an
 exported ONNX model, and `tools/scrfd2onnx.py` fails under torch 2.x: its tracer refuses the
@@ -180,54 +187,93 @@ def main() -> None:
 
     detector = Detector(args.config, args.checkpoint, args.scrfd_tools)
 
-    scored = matched = 0
-    errors_px, errors_rel = [], []
+    thresholds = [t for t in (0.02, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7) if t >= args.thresh]
+    stats = {t: {"scored": 0, "matched": 0, "spurious": 0, "px": [], "rel": [], "deg": []}
+             for t in thresholds}
+    images_seen = 0
     order = sorted(images.values(), key=lambda i: i["file_name"])
     if args.limit:
         order = order[: args.limit]
 
     for image in order:
-        faces = [a for a in by_image.get(image["id"], [])
+        annotations = by_image.get(image["id"], [])
+        faces = [a for a in annotations
                  if a["num_keypoints"] == 2 and not a["fcs"]["steep_roll"]]
         if not faces:
             continue
         frame = cv2.imread(str(data / "images" / image["file_name"]))
         if frame is None:
             continue
-        dets, kpss = detector.detect(frame, thresh=args.thresh)
-        for annotation in faces:
-            scored += 1
-            x, y, w, h = annotation["bbox"]
-            truth = (x, y, x + w, y + h)
-            best, best_iou = -1, 0.5
-            for index in range(len(dets)):
-                overlap = iou(truth, dets[index][:4])
-                if overlap >= best_iou:
-                    best, best_iou = index, overlap
-            if best < 0:
-                continue
-            matched += 1
-            keypoints = annotation["keypoints"]
-            for slot in (0, 1):  # right_eye, left_eye, in the subject's own frame
-                gx, gy = keypoints[slot * 3], keypoints[slot * 3 + 1]
-                px, py = kpss[best][slot]
-                distance = math.dist((gx, gy), (float(px), float(py)))
-                errors_px.append(distance)
-                errors_rel.append(distance / w if w else 0.0)
+        images_seen += 1
+        # One forward pass per image at the lowest threshold; every higher threshold is a
+        # filter on the scores that come back, so the sweep costs one pass, not eight.
+        dets, kpss = detector.detect(frame, thresh=min(thresholds))
+
+        # Spurious is judged against *every* box in the file, not just the scorable ones: a
+        # detection landing on a face whose eyes were skipped, or whose side is unknown, is
+        # right rather than spurious. It remains an upper bound, because Open Images boxes are
+        # not exhaustive -- an audit of YuNet put ~97% of its unmatched detections on real
+        # faces nobody had labelled (DATA_CARD.md section 1).
+        every_box = [(a["bbox"][0], a["bbox"][1],
+                      a["bbox"][0] + a["bbox"][2], a["bbox"][1] + a["bbox"][3])
+                     for a in annotations]
+
+        for threshold in thresholds:
+            keep = [i for i in range(len(dets)) if dets[i][4] >= threshold]
+            tally = stats[threshold]
+            for index in keep:
+                if all(iou(dets[index][:4], box) < 0.5 for box in every_box):
+                    tally["spurious"] += 1
+            for annotation in faces:
+                tally["scored"] += 1
+                x, y, w, h = annotation["bbox"]
+                truth = (x, y, x + w, y + h)
+                best, best_iou = -1, 0.5
+                for index in keep:
+                    overlap = iou(truth, dets[index][:4])
+                    if overlap >= best_iou:
+                        best, best_iou = index, overlap
+                if best < 0:
+                    continue
+                tally["matched"] += 1
+                keypoints = annotation["keypoints"]
+                truth_eyes, pred_eyes = [], []
+                for slot in (0, 1):  # right_eye, left_eye, in the subject's own frame
+                    gx, gy = keypoints[slot * 3], keypoints[slot * 3 + 1]
+                    px, py = (float(v) for v in kpss[best][slot])
+                    truth_eyes.append((gx, gy))
+                    pred_eyes.append((px, py))
+                    distance = math.dist((gx, gy), (px, py))
+                    tally["px"].append(distance)
+                    tally["rel"].append(distance / w if w else 0.0)
+                # The tilt of the eye line, which is what face_cropper's alignment consumes.
+                # Two eye points can each be a few pixels out and still give the right angle,
+                # or be close and give the wrong one, so this is what maps to a crop.
+                truth_angle = math.atan2(truth_eyes[1][1] - truth_eyes[0][1],
+                                         truth_eyes[1][0] - truth_eyes[0][0])
+                pred_angle = math.atan2(pred_eyes[1][1] - pred_eyes[0][1],
+                                        pred_eyes[1][0] - pred_eyes[0][0])
+                difference = abs(math.degrees(truth_angle - pred_angle)) % 360
+                tally["deg"].append(min(difference, 360 - difference))
 
     print(f"checkpoint: {Path(args.checkpoint).name}")
-    print(f"faces scored: {scored} (eyes clicked, side known)")
-    if scored:
-        print(f"  detected at IoU>=0.5: {matched} ({matched / scored:.1%})")
-    if errors_px:
-        print(f"  eye error median: {median(errors_px):.2f} px "
-              f"= {median(errors_rel):.3f} of box width")
-        print(f"  eye error mean:   {sum(errors_px) / len(errors_px):.2f} px "
-              f"= {sum(errors_rel) / len(errors_rel):.3f} of box width")
-        within = sum(1 for e in errors_rel if e <= 0.05) / len(errors_rel)
-        print(f"  within 5% of box width: {within:.1%} of eye points")
-    else:
-        print("  no eye points scored: nothing matched, so there is no error to report")
+    print(f"scorable faces: {stats[thresholds[0]]['scored']} (eyes clicked, side known) "
+          f"over {images_seen} images")
+    print(f"{'thresh':>7} {'recall':>8} {'FP/image':>9} {'angle med':>10} {'<=5 deg':>8} "
+          f"{'eye err':>9}")
+    for threshold in thresholds:
+        tally = stats[threshold]
+        recall = tally["matched"] / tally["scored"] if tally["scored"] else 0.0
+        per_image = tally["spurious"] / images_seen if images_seen else 0.0
+        angle = median(tally["deg"]) if tally["deg"] else float("nan")
+        share = (sum(1 for a in tally["deg"] if a <= 5) / len(tally["deg"])
+                 if tally["deg"] else 0.0)
+        relative = median(tally["rel"]) if tally["rel"] else float("nan")
+        print(f"{threshold:>7.2f} {recall:>7.1%} {per_image:>9.2f} {angle:>9.2f}d "
+              f"{share:>7.1%} {relative:>8.3f}w")
+    print("  recall is of scorable faces at IoU>=0.5; FP/image counts detections matching no")
+    print("  box at all; angle is eye-line error in degrees; eye err is median distance as a")
+    print("  fraction of box width. Compare models at one threshold, not at their best each.")
 
 
 if __name__ == "__main__":
