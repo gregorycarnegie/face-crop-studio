@@ -6,8 +6,8 @@ models are trained on 400, 800, 1600 and 1988 labelled eye pairs, every run seei
 and every box so that only the landmark supervision varies (see `subsample_labels.py`), then
 scored on the held-out test set of 1,562 faces whose eyes were clicked and whose side is known.
 
-**Status: one of four models trained.** The 400 point and the baseline are below; 800, 1600 and
-1988 follow at roughly seven hours each.
+**Status: complete.** All four trained 640 epochs on an RTX 4090, 17-18 September 2026, about
+six and a half hours each. The answer is in "What the curve says" at the end.
 
 ## The baseline to beat
 
@@ -56,21 +56,47 @@ SCRFD's own evaluation uses, and reported 96.7% recall. At that threshold the mo
 boxes per image matching no annotation at all, so the figure measured nothing. Recall without a
 false-positive count beside it is not a result.
 
-## Where 400 labels leaves us
+## The curve
 
-| At threshold 0.20 | SCRFD, 400 labels | YuNet 2023 |
-|---|---|---|
-| Recall | 86.1% | 88.5% |
-| Angle error, median | 5.72 deg | **4.05 deg** |
-| Within 5 deg | 45.5% | **57.6%** |
-| Eye distance | 0.111w | **0.043w** |
+All four models at the fixed 0.20 threshold, against the shipping detector:
 
-Worse than the shipping detector on every axis, and by a wide margin on eye-point accuracy --
-about 2.6 times the distance error. That is the expected shape of a first curve point, not a
-verdict on the approach: it establishes that 400 eye labels is not enough and gives the three
-remaining runs something concrete to close.
+| Eye labels | Recall | FP/image | Angle median | Within 5 deg | Eye distance |
+|-----------:|--------|----------|--------------|--------------|--------------|
+| 400 | 86.1% | 0.98 | 5.72 deg | 45.5% | 0.111w |
+| 800 | 88.3% | 1.03 | 5.50 deg | 46.8% | 0.079w |
+| 1600 | 89.2% | 1.22 | 5.28 deg | 48.5% | 0.083w |
+| 1988 | 89.9% | 1.31 | 5.31 deg | 47.9% | 0.068w |
+| **YuNet 2023** | 88.5% | -- | **4.05 deg** | **57.6%** | **0.043w** |
 
-The interesting possibility is that they will not close it. Every run trains on the same 2,482
-images, while upstream's schedule was tuned for WIDER FACE's 12,880. If 1988 labels land near
-400, the binding constraint is images rather than eye points on those images -- which would be
-a more useful answer than any number, and cheaper to act on than another labelling session.
+## What the curve says
+
+**More eye labels are not the constraint.** Five times the labels, 400 to 1988, cut eye-point
+*distance* error by 39% (0.111w to 0.068w) but left *angle* error flat: 5.72 to 5.31 degrees,
+with 1988 fractionally worse than 1600, which is inside the noise. Faces within 5 degrees
+stayed at roughly 48% throughout.
+
+That split is the finding. The points land closer to the truth, but the vector between them
+does not improve -- and the vector is what `fcs-core::face_cropper` consumes to level a crop.
+More labels on the same 2,482 images teach the model what an eye looks like; they cannot teach
+it the range of head poses and rolls needed to get the eye *line* right.
+
+**The constraint is images.** Every run saw the same 2,482, while upstream's schedule was tuned
+for WIDER FACE's 12,880. Open Images holds 571,247 more labelled faces across 278,655 images
+whose boxes are already drawn by hand (DATA_CARD.md section 2), which costs downloading rather
+than clicking.
+
+**So the honest recommendation is to stop labelling eyes and add images.** A run over tens of
+thousands of images, with the 3,550 eye pairs already clicked supervising the landmark head on
+the fraction that has them, is the experiment worth doing next. If angle error still sits near
+5 degrees after that, the architecture or the schedule is the problem and no amount of data
+will fix it.
+
+**YuNet stays in front for now**, at 4.05 degrees against 5.31, and 57.6% of faces within 5
+degrees against 47.9%. It was trained on roughly 85,000 landmark-annotated faces over far more
+images, so this is a fair reflection of a 40-to-1 difference in supervision rather than a
+verdict on SCRFD.
+
+One number not to over-read: recall rises across the curve (86.1% to 89.9%) while false
+positives rise with it (0.98 to 1.31 per image). Both moves are small, and the box head saw
+identical supervision in every run -- every image and every box -- so the difference is
+training noise, not an effect of eye labels.
