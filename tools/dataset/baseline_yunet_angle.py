@@ -29,6 +29,17 @@ def iou(a, b):
     return inter / union if union > 0 else 0.0
 
 
+def stem_of(path: str) -> str:
+    """Basename without extension, for a path recorded on Windows and possibly read on Linux.
+
+    `fcs-cli --json` writes `image` as a Windows path, backslashes and all. `PurePath` on Linux
+    does not treat those as separators, so `Path(...).stem` hands back the whole string and
+    every lookup misses -- silently, as an empty result rather than an error. This script ran
+    correctly only because it happened to be run under Windows Python.
+    """
+    return path.replace("\\", "/").rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+
 def main() -> None:
     data = Path(sys.argv[1]).resolve()
     dump = Path(sys.argv[2]) if len(sys.argv) > 2 else data / "det_0.8.json"
@@ -39,7 +50,7 @@ def main() -> None:
     for annotation in truth["annotations"]:
         by_image.setdefault(annotation["image_id"], []).append(annotation)
 
-    detected = {Path(record["image"]).stem: record["detections"]
+    detected = {stem_of(record["image"]): record["detections"]
                 for record in json.loads(dump.read_text(encoding="utf-8"))}
 
     scored = matched = 0

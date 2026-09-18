@@ -100,3 +100,41 @@ One number not to over-read: recall rises across the curve (86.1% to 89.9%) whil
 positives rise with it (0.98 to 1.31 per image). Both moves are small, and the box head saw
 identical supervision in every run -- every image and every box -- so the difference is
 training noise, not an effect of eye labels.
+
+## Postscript: the labels were enough, for a narrower problem
+
+The curve showed that 3,550 eye labels over 2,482 images cannot train a detector to beat YuNet.
+It does not follow that they cannot solve the task those labels were collected for. Detection
+was never the weakness -- the eye *line* was -- so `train_eye_refiner.py` attacks that alone:
+given a face box, where are the two eyes. No detection, no anchors, 1.5 M parameters, a few
+minutes to train on the same 1,988 pairs.
+
+Paired on the 1,382 test faces YuNet detects, with the refiner reading YuNet's own boxes,
+which is what would actually ship:
+
+| | Refiner | YuNet 2023 |
+|---|---|---|
+| Angle error, median | **1.22 deg** | 4.05 deg |
+| Within 2 deg | **70.5%** | 28.7% |
+| Within 5 deg | **93.0%** | 57.6% |
+| Eye distance, median | **0.019w** | 0.043w |
+
+Closer on 80.4% of faces individually, not merely in aggregate.
+
+Two design choices came straight from what the curve exposed, and both look load-bearing.
+**Rotation augmentation of up to 30 degrees** manufactures the roll variety 2,482 images do not
+contain, which is what the angle metric was starving for. **An explicit angle term in the loss**
+optimises the tilt of the line directly, rather than hoping it follows from regressing two
+points -- the curve's central finding was that point accuracy improved while angle did not.
+
+### What this does not establish
+
+* The test faces have been used for checkpoint selection (best of 30 evaluations), so the
+  figure is mildly optimistic. The final epoch gives 1.46 deg on ground-truth boxes against a
+  best of 1.44, so the effect is small but real.
+* Recall is untouched. The refiner reads boxes; it cannot find a face YuNet missed, and YuNet
+  still misses 11.5% of these faces.
+* `steep_roll` faces and those whose eyes were never clicked are excluded throughout, so the
+  refiner is unmeasured on the hardest poses in the corpus.
+* Trained from scratch, no pretrained backbone, so nothing here depends on weights with
+  awkward terms -- but equally, nothing here has been tested outside this corpus.
