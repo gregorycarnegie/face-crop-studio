@@ -185,6 +185,15 @@ fn main() -> Result<()> {
     let quality_filter = Arc::new(quality_filter);
     let enhancement_settings = build_enhancement_settings(&args).map(Arc::new);
 
+    // Loaded only when it would be used: the refiner's single job is the eye line, and nothing
+    // reads that unless crops are being levelled. `None` here is ordinary rather than an error
+    // -- see `fcs_core::EyeRefiner::load`.
+    let eye_refiner = shared_settings
+        .crop
+        .eye_line_align
+        .then(fcs_core::EyeRefiner::load)
+        .flatten();
+
     let counters = ProgressCounters::default();
 
     let batch_ctx = workflow::BatchContext {
@@ -194,6 +203,7 @@ fn main() -> Result<()> {
         runtime: &gpu_runtime,
         args: &args,
         counters: &counters,
+        eye_refiner: &eye_refiner,
     };
 
     // ponytail: Rayon's default pool, one worker per logical processor, and on this machine

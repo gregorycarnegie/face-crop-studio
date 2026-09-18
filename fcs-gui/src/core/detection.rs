@@ -28,6 +28,7 @@ pub fn build_detector(
     GpuStatusIndicator,
     Option<Arc<GpuContext>>,
     Result<YuNetDetector>,
+    Option<fcs_core::EyeRefiner>,
 ) {
     let (preprocessor, gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
         info!("Using shared GPU context from egui renderer");
@@ -41,6 +42,7 @@ pub fn build_detector(
             gpu_status,
             gpu_context,
             Err(anyhow::anyhow!("no model path configured")),
+            None,
         );
     };
     let model_path = resolve_data_path(configured_model_path);
@@ -101,7 +103,15 @@ pub fn build_detector(
         info!("Detection backend: {}", detector.inference_backend());
     }
 
-    (gpu_status, gpu_context, detector_result)
+    // Built here so it lands on the same background thread as the detector (experiment 81):
+    // it opens an ONNX session, which has no business on the UI thread. Skipped when the
+    // detector failed, since nothing will produce boxes for it to refine.
+    let eye_refiner = detector_result
+        .is_ok()
+        .then(fcs_core::EyeRefiner::load)
+        .flatten();
+
+    (gpu_status, gpu_context, detector_result, eye_refiner)
 }
 
 fn maybe_build_gpu_preprocessor(
@@ -245,6 +255,7 @@ fn rotate_image(image: Arc<DynamicImage>, rotation_deg: f32) -> Arc<DynamicImage
 
 pub fn perform_detection(
     detector: Arc<YuNetDetector>,
+    eye_refiner: Option<&fcs_core::EyeRefiner>,
     path: PathBuf,
     rotation_deg: f32,
     auto_orient_exif: bool,
@@ -257,10 +268,16 @@ pub fn perform_detection(
     .with_context(|| format!("failed to load {}", path.display()))?;
     let image = rotate_image(Arc::new(raw), rotation_deg);
     let t0 = Instant::now();
-    let detection_output = detector
+    let mut detection_output = detector
         .detect_image(&image)
         .with_context(|| format!("detection failed for {}", path.display()))?;
     let detect_ms = t0.elapsed().as_millis() as u64;
+    // Refine here rather than at crop time: these landmarks are drawn on the canvas, carried
+    // in undo snapshots and read by export, so refining once at the source keeps all three
+    // showing the same eyes.
+    if let Some(refiner) = eye_refiner {
+        refiner.refine(&image, &mut detection_output.detections);
+    }
 
     let detections: Vec<DetectionWithQuality> = detection_output
         .detections
@@ -303,14 +320,20 @@ pub fn perform_detection(
 
 pub fn perform_detection_from_image(
     detector: Arc<YuNetDetector>,
+    eye_refiner: Option<&fcs_core::EyeRefiner>,
     image: Arc<DynamicImage>,
     synthetic_path: PathBuf,
 ) -> Result<DetectionJobSuccess> {
     let t0 = Instant::now();
-    let detection_output = detector
+    let mut detection_output = detector
         .detect_image(&image)
         .context("webcam detection failed")?;
     let detect_ms = t0.elapsed().as_millis() as u64;
+    // Same reasoning as `perform_detection`: one refinement at the source, shared by the
+    // canvas, the snapshots and export.
+    if let Some(refiner) = eye_refiner {
+        refiner.refine(&image, &mut detection_output.detections);
+    }
 
     let detections: Vec<DetectionWithQuality> = detection_output
         .detections
@@ -397,6 +420,14 @@ pub fn spawn_webcam_stream(
 /// over a texture the frame poller has already uploaded. Quality is left at its default
 /// because nothing reads it for a live overlay, and computing it would mean cropping and
 /// scoring every face at frame rate.
+///
+/// The eye refiner is skipped for the same reason, and this is deliberate rather than an
+/// oversight: it costs a forward pass per face, and nothing downstream of a live overlay reads
+/// the eye line. Landmarks here are drawn, never used to level a crop. The moment the user
+/// freezes a frame, `detect_webcam_faces` runs the one-shot path through
+/// `perform_detection_from_image`, which does refine -- so anything that gets exported carries
+/// refined eyes. A sweep for `detect_image` call sites finds six; this is the one without a
+/// refiner, on purpose.
 pub fn spawn_webcam_detection(
     frame_number: u32,
     image: Arc<DynamicImage>,
@@ -440,6 +471,7 @@ pub fn spawn_detection_job_from_image(
     image: Arc<DynamicImage>,
     synthetic_path: PathBuf,
     detector: Option<Arc<YuNetDetector>>,
+    eye_refiner: Option<Arc<fcs_core::EyeRefiner>>,
     job_tx: mpsc::Sender<JobMessage>,
 ) {
     let Some(detector) = detector else {
@@ -451,7 +483,12 @@ pub fn spawn_detection_job_from_image(
     };
 
     rayon::spawn(move || {
-        let payload = match perform_detection_from_image(detector, image, synthetic_path.clone()) {
+        let payload = match perform_detection_from_image(
+            detector,
+            eye_refiner.as_deref(),
+            image,
+            synthetic_path.clone(),
+        ) {
             Ok(data) => JobMessage::DetectionFinished { job_id, data },
             Err(err) => JobMessage::DetectionFailed {
                 job_id,
@@ -468,6 +505,7 @@ pub fn spawn_detection_job(
     job_id: u64,
     path: PathBuf,
     detector: Option<Arc<YuNetDetector>>,
+    eye_refiner: Option<Arc<fcs_core::EyeRefiner>>,
     rotation_deg: f32,
     auto_orient_exif: bool,
     job_tx: mpsc::Sender<JobMessage>,
@@ -481,14 +519,19 @@ pub fn spawn_detection_job(
     };
 
     rayon::spawn(move || {
-        let payload =
-            match perform_detection(detector, path.clone(), rotation_deg, auto_orient_exif) {
-                Ok(data) => JobMessage::DetectionFinished { job_id, data },
-                Err(err) => JobMessage::DetectionFailed {
-                    job_id,
-                    error: format!("{err:#}"),
-                },
-            };
+        let payload = match perform_detection(
+            detector,
+            eye_refiner.as_deref(),
+            path.clone(),
+            rotation_deg,
+            auto_orient_exif,
+        ) {
+            Ok(data) => JobMessage::DetectionFinished { job_id, data },
+            Err(err) => JobMessage::DetectionFailed {
+                job_id,
+                error: format!("{err:#}"),
+            },
+        };
         if job_tx.send(payload).is_err() {
             error!("GUI dropped detection result for {}", path.display());
         }

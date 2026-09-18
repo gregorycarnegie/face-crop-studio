@@ -155,6 +155,8 @@ impl App2 {
             settings_path,
             gpu,
             detector,
+            // Arrives with the detector, on the same channel.
+            eye_refiner: None,
             detector_rx: Some(detector_rx),
             job_tx,
             job_rx,
@@ -495,9 +497,10 @@ impl App2 {
             return;
         };
         match rx.try_recv() {
-            Ok((status, context, result)) => {
+            Ok((status, context, result, eye_refiner)) => {
                 self.detector_rx = None;
                 self.gpu = GpuPipeline::from_context(status, context);
+                self.eye_refiner = eye_refiner.map(Arc::new);
                 self.detector = match result {
                     Ok(d) => {
                         info!("YuNet model loaded");
@@ -546,13 +549,15 @@ impl App2 {
         // A rebuild reads the current thresholds and re-detects anyway.
         self.needs_postprocess_update = false;
         let shared = self.gpu.context.clone();
-        let (status, new_gpu_ctx, result) = build_detector(&self.settings, shared);
+        let (status, new_gpu_ctx, result, eye_refiner) = build_detector(&self.settings, shared);
         if new_gpu_ctx.is_some() {
             // New context: adopt it (and its status) as the active GPU unit.
             self.gpu = GpuPipeline::from_context(status, new_gpu_ctx);
         } else {
             self.gpu.status = status;
         }
+        // Replaced along with the detector, or a rebuild would leave the previous one behind.
+        self.eye_refiner = eye_refiner.map(Arc::new);
         self.detector = match result {
             Ok(d) => {
                 info!("Detector rebuilt");
@@ -831,7 +836,14 @@ impl App2 {
         let job_id = self.job_counter;
         self.job_counter += 1;
         self.current_job = Some(job_id);
-        spawn_detection_job_from_image(job_id, image, path, Some(detector), self.job_tx.clone());
+        spawn_detection_job_from_image(
+            job_id,
+            image,
+            path,
+            Some(detector),
+            self.eye_refiner.clone(),
+            self.job_tx.clone(),
+        );
     }
 
     pub fn load_image_path(&mut self, path: PathBuf) {
@@ -856,6 +868,7 @@ impl App2 {
             job_id,
             path,
             self.detector.clone(),
+            self.eye_refiner.clone(),
             rotation,
             auto_orient_exif,
             self.job_tx.clone(),
@@ -952,6 +965,7 @@ impl App2 {
             source_image,
             path,
             self.detector.clone(),
+            self.eye_refiner.clone(),
             self.job_tx.clone(),
         );
     }
@@ -980,6 +994,7 @@ impl App2 {
             image,
             path,
             self.detector.clone(),
+            self.eye_refiner.clone(),
             self.job_tx.clone(),
         );
     }

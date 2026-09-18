@@ -499,10 +499,15 @@ impl MappingUiState {
 }
 
 /// What `build_detector` produces, as it crosses back from the thread that built it.
+///
+/// The eye refiner rides along because it opens an ONNX session, and the reason the detector
+/// is built off the UI thread (experiment 81) applies equally to it. `None` is ordinary: no
+/// runtime, or no model file -- see `fcs_core::EyeRefiner::load`.
 pub type DetectorBuild = (
     GpuStatusIndicator,
     Option<Arc<GpuContext>>,
     anyhow::Result<fcs_core::YuNetDetector>,
+    Option<fcs_core::EyeRefiner>,
 );
 
 // ── GPU pipeline ──────────────────────────────────────────────────────────────
@@ -532,6 +537,13 @@ pub struct App2 {
     pub settings_path: PathBuf,
     pub gpu: GpuPipeline,
     pub detector: Option<Arc<fcs_core::YuNetDetector>>,
+    /// Better eye points for levelling crops, when a runtime and the model are both present.
+    ///
+    /// Applied to every detection rather than gated on `settings.crop.eye_line_align`:
+    /// detections are computed once when an image loads, but the toggle can be flipped at any
+    /// time afterwards, and gating would leave stale unrefined landmarks behind whenever it
+    /// was. One small forward pass per face against a detector pass that dominates it.
+    pub eye_refiner: Option<Arc<fcs_core::EyeRefiner>>,
     /// Set while the detector is still being built on a background thread.
     ///
     /// Experiment 81: building it took 150 ms of a 890 ms launch and ran before the first

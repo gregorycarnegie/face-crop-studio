@@ -55,6 +55,8 @@ pub mod cpu;
 pub mod cropper;
 /// High-level face detection runner.
 pub mod detector;
+/// Optional refinement of a detector's two eye points, for eye-line alignment.
+pub mod eye_refiner;
 /// Utilities to extract and resize face crops from images.
 pub mod face_cropper;
 /// GPU inference building blocks and the complete YuNet runtime.
@@ -83,6 +85,7 @@ pub use crate::{
 };
 
 pub use detector::{DetectionOutput, YuNetDetector};
+pub use eye_refiner::EyeRefiner;
 pub use model::{InferenceBackend, YuNetModel, decode_yunet_outputs};
 pub use postprocess::{BoundingBox, Detection, Landmark, PostprocessConfig, apply_postprocess};
 pub use preprocess::{

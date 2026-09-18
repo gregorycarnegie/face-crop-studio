@@ -189,6 +189,12 @@ found in the original photographs.
   `refiner_contact_sheet.py` builds the latter: aligned crops from each model side by side,
   ordered by disagreement so the worst cases come first rather than being buried.
 
+  **Settled by inspection, 18 September 2026.** On the corrected sheet -- the 40 faces of 1,096
+  where the two models disagree most, so the hardest cases by construction -- the refiner's
+  column is upright and YuNet's is visibly rolled, on every pair. That is the check rotation
+  tracking could not perform, and it closes the last open question: absolute placement holds on
+  photographs the model never trained on.
+
 ### A trap in the contact sheet itself
 
 The first sheet rendered every crop at *twice* its measured tilt, so both columns looked
@@ -205,3 +211,26 @@ compare eye-line angles arithmetically and never render a crop. Only the one art
 for human judgement was wrong, which is precisely the artefact with no automated check
 behind it. `refiner_contact_sheet.py` now runs `_self_check` before it renders anything: a
 synthetic eye line at a known tilt must come out level.
+
+### And a second one, in the export
+
+Wiring the refiner into the application turned up a worse version of the same class of bug.
+The ONNX file in `models/` had been exported by hand in a shell, and the command named
+`eye_refiner.pt` -- the checkpoint chosen by the best of thirty evaluations against the *test*
+set -- rather than `eye_refiner_val.pt`, the retrained one selected on held-out validation that
+every figure above comes from. The selection bias this document describes measuring and
+removing was still sitting in the file about to ship.
+
+Nothing would have caught it. Both checkpoints load, both run, both produce plausible eyes
+about five pixels apart on a 500-pixel face. It surfaced only because the Rust preprocessing
+was checked against the *checkpoint* rather than against the exported file, which made the two
+disagree for a reason that had nothing to do with the code under test.
+
+The fix is `export_eye_refiner.py`: the export is a committed script, it prints the provenance
+the checkpoint carries (`val_stats`, `test_stats`, epoch), and it refuses to leave behind a
+file it has not verified against torch. The shipped model reports
+`val_stats 1.197 deg, test_stats 1.386 deg, epoch 280` and matches torch to 8.9e-08.
+
+Both traps share a shape worth naming: the artefact that ends a measurement chain -- a
+contact sheet for a human, an ONNX file for an application -- is the one with no automated
+check behind it, and is therefore where the error lands.

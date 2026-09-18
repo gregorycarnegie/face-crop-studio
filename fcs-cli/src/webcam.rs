@@ -75,6 +75,15 @@ pub fn run_webcam_mode(
         None
     };
 
+    // Built once, outside the frame loop: opening an ONNX session per frame would cost far
+    // more than the detection it refines. `None` when alignment is off, or when no runtime or
+    // model is present -- see `fcs_core::EyeRefiner::load`.
+    let eye_refiner = settings
+        .crop
+        .eye_line_align
+        .then(fcs_core::EyeRefiner::load)
+        .flatten();
+
     let max_frames = args.webcam_frames;
     let continuous_mode = max_frames == 0;
     let mut frame_count = 0u32;
@@ -105,13 +114,18 @@ pub fn run_webcam_mode(
         frame_count += 1;
 
         // Run detection on the frame
-        let output = match detector.detect_image(&frame) {
+        let mut output = match detector.detect_image(&frame) {
             Ok(out) => out,
             Err(e) => {
                 warn!("Detection failed on frame {}: {}", frame_count, e);
                 continue;
             }
         };
+        // Before the landmarks are logged, annotated or cropped, so every consumer in this
+        // loop sees the same points.
+        if let Some(refiner) = eye_refiner.as_ref() {
+            refiner.refine(&frame, &mut output.detections);
+        }
 
         let num_faces = output.detections.len();
         total_faces += num_faces;

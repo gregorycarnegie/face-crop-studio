@@ -37,6 +37,10 @@ pub(crate) struct BatchContext<'a> {
     pub(crate) runtime: &'a Arc<gpu::CliGpuRuntime>,
     pub(crate) args: &'a DetectArgs,
     pub(crate) counters: &'a ProgressCounters,
+    /// Better eye points for levelling crops, when the model and a runtime are both present.
+    /// `None` is ordinary -- the detector's own landmarks are used instead. Built once and
+    /// shared: `fcs_ort::Session` allows concurrent runs, so the parallel loop needs no lock.
+    pub(crate) eye_refiner: &'a Option<fcs_core::EyeRefiner>,
 }
 
 #[derive(Clone, Debug)]
@@ -68,7 +72,12 @@ pub(crate) fn process_single_image(
     // Decode once and reuse for detection, annotation, and cropping. Detection
     // must see the same EXIF-oriented pixels the crops are taken from.
     let img = load_source_image(image_path)?;
-    let output = detect_image(detector, &img, image_path)?;
+    let mut output = detect_image(detector, &img, image_path)?;
+    // Before anything reads the landmarks: annotation draws them, the JSON records them, and
+    // cropping levels by them, so refining here keeps all three consistent.
+    if let Some(refiner) = ctx.eye_refiner {
+        refiner.refine(&img, &mut output.detections);
+    }
     ctx.counters
         .faces_detected
         .fetch_add(output.detections.len(), Ordering::Relaxed);
@@ -116,6 +125,10 @@ fn process_crops(
         runtime,
         args,
         counters,
+        // Refinement already happened in `process_single_image`, before annotation, the JSON
+        // records and this. Running it again here would pay for a second forward pass per face
+        // to produce the points the detections already carry.
+        eye_refiner: _,
     } = ctx;
     let output_options = OutputOptions::from_crop_settings(&settings.crop);
     let core_settings: fcs_core::CropSettings = (&settings.crop).into();
@@ -536,6 +549,12 @@ pub(crate) mod tests {
         Some(Arc::new(detector))
     }
 
+    /// No test here exercises the refiner: it needs an ONNX Runtime and a model file, and
+    /// these tests are about the plumbing around detection. A `static` rather than a parameter
+    /// so `batch_ctx`'s signature and every caller stay untouched; `'static` coerces to any
+    /// `'a`, and `EyeRefiner` is `Sync` because `fcs_ort::Session` is.
+    static NO_EYE_REFINER: Option<fcs_core::EyeRefiner> = None;
+
     /// Assemble the per-run context the workflow functions take. Every field is a reference,
     /// so the caller's locals must outlive it -- which they do, being test-body locals.
     pub(crate) fn batch_ctx<'a>(
@@ -553,6 +572,7 @@ pub(crate) mod tests {
             runtime,
             args,
             counters,
+            eye_refiner: &NO_EYE_REFINER,
         }
     }
 

@@ -11,6 +11,11 @@ env:
   # Keep these checksums in sync with ci.yml.
   YUNET_ORIGINAL_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
   YUNET_640_SHA256: d2c5a887db77802389261b13d2b9f5e1171b9d5787cb315d0add225812ff4d96
+  # The eye refiner cannot be regenerated from a public URL the way YuNet can -- it is our
+  # own export (tools/dataset/export_eye_refiner.py), so it is fetched from a release asset
+  # and this digest is the only thing standing between a swapped upload and a shipped build.
+  EYE_REFINER_SHA256: b01dd218b46a7466eb13125b011e81b57e2e2e252794c403029db1d7c7628e76
+  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1/eye_refiner.onnx
 
 jobs:
   shader-validation:
@@ -58,12 +63,14 @@ jobs:
           curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
           uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
             || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --input-shape "1,3,640,640"
+          curl -fsSL -o models/eye_refiner.onnx "$EYE_REFINER_URL"
 
       - name: Verify model checksums
         uses: ./.github/actions/verify-models
         with:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
 
       - name: Upload prepared models
         uses: actions/upload-artifact@v4
@@ -132,6 +139,7 @@ jobs:
         with:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -276,6 +284,7 @@ jobs:
           Copy-Item target/release/fcs-gui.exe "$DistDir/fcs-gui.exe"
           Copy-Item fcs-gui/assets/app_icon.ico "$DistDir/app_icon.ico"
           Copy-Item models/face_detection_yunet_2023mar_640.onnx "$DistDir/models/face_detection_yunet_2023mar_640.onnx"
+          Copy-Item models/eye_refiner.onnx "$DistDir/models/eye_refiner.onnx"
           if (Test-Path samples) {
             Copy-Item -Recurse samples "$DistDir/samples"
           }
@@ -300,10 +309,15 @@ jobs:
       - name: Verify packaged model path
         shell: pwsh
         run: |
-          $ModelPath = "dist/$env:DIST_NAME/models/face_detection_yunet_2023mar_640.onnx"
-          if (-not (Test-Path $ModelPath)) {
-            Write-Error "Expected packaged model missing at $ModelPath"
-            exit 1
+          $ModelPaths = @(
+            "dist/$env:DIST_NAME/models/face_detection_yunet_2023mar_640.onnx",
+            "dist/$env:DIST_NAME/models/eye_refiner.onnx"
+          )
+          foreach ($ModelPath in $ModelPaths) {
+            if (-not (Test-Path $ModelPath)) {
+              Write-Error "Expected packaged model missing at $ModelPath"
+              exit 1
+            }
           }
 
       - name: Verify the packaged build uses ONNX Runtime
@@ -586,6 +600,7 @@ jobs:
         with:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -742,6 +757,7 @@ jobs:
         with:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
 
       - name: Install build dependencies
         uses: ./.github/actions/linux-build-deps

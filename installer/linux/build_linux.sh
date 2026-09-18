@@ -4,6 +4,7 @@
 # Run from the repo root. Assumes:
 #   - target/release/fcs-gui exists (built by caller, x86_64-unknown-linux-gnu)
 #   - models/face_detection_yunet_2023mar_640.onnx exists (downloaded by caller)
+#   - models/eye_refiner.onnx exists (fetched by caller from a release asset)
 #   - rsvg-convert, appimagetool, cargo-deb available on PATH
 #
 # Optional: set FCS_ORT_LIB to a libonnxruntime.so to bundle it, which makes
@@ -26,6 +27,10 @@ BINARY_NAME="fcs-gui"
 SVG_SOURCE="fcs-gui/assets/app_logo.svg"
 BIN_SRC="target/release/${BINARY_NAME}"
 MODEL_FILE="models/face_detection_yunet_2023mar_640.onnx"
+# Better eye points for levelling crops. Required rather than optional: the packages are
+# what users get, and a release that quietly shipped without it would level by YuNet's
+# landmarks while the release notes claimed otherwise.
+REFINER_FILE="models/eye_refiner.onnx"
 DESKTOP_FILE="installer/linux/face-crop-studio.desktop"
 ICON_PNG="installer/linux/face-crop-studio.png"
 
@@ -39,7 +44,7 @@ DIST_DIR="dist/linux"
 APPDIR="$DIST_DIR/${APP_NAME}.AppDir"
 APPIMAGE_PATH="$DIST_DIR/face-crop-studio-${VERSION}-${ARCH}.AppImage"
 
-for f in "$BIN_SRC" "$MODEL_FILE" "$SVG_SOURCE" "$DESKTOP_FILE"; do
+for f in "$BIN_SRC" "$MODEL_FILE" "$REFINER_FILE" "$SVG_SOURCE" "$DESKTOP_FILE"; do
     if [ ! -f "$f" ]; then
         echo "error: required file missing at $f" >&2
         exit 1
@@ -62,6 +67,7 @@ mkdir -p "$APPDIR/usr/share/face-crop-studio/models"
 cp "$BIN_SRC" "$APPDIR/usr/bin/$BINARY_NAME"
 chmod +x "$APPDIR/usr/bin/$BINARY_NAME"
 cp "$MODEL_FILE" "$APPDIR/usr/share/face-crop-studio/models/"
+cp "$REFINER_FILE" "$APPDIR/usr/share/face-crop-studio/models/"
 # Beside the executable, which is the first place fcs-ort looks. Putting it in a
 # lib directory instead would rely on the loader's search path and could collide
 # with a distro-provided onnxruntime.

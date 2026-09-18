@@ -142,9 +142,10 @@ Section "Uninstall"
   Delete "$INSTDIR\*.ico"
   Delete "$INSTDIR\*.md"
   Delete "$INSTDIR\LICENSE-*"
-  ; Remove only the bundled model; RMDir (no /r) leaves the directory intact
+  ; Remove only the bundled models; RMDir (no /r) leaves the directory intact
   ; if the user placed additional models there.
   Delete "$INSTDIR\models\face_detection_yunet_2023mar_640.onnx"
+  Delete "$INSTDIR\models\eye_refiner.onnx"
   RMDir "$INSTDIR\models"
   ; Remove bundled sample images and docs; RMDir (no /r) preserves any extra
   ; files the user dropped into the samples folder.

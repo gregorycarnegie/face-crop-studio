@@ -228,6 +228,10 @@ pub fn start_batch_export(app: &mut App2) {
         app.show_error("Batch export failed", "No detector loaded");
         return;
     };
+    // Batch export detects for itself rather than reusing the canvas's detections, so it needs
+    // the refiner too. Without this, exported crops would be levelled by YuNet's eye points
+    // while the preview beside them shows refined ones.
+    let eye_refiner = app.eye_refiner.clone();
 
     let Some(output_dir) = FileDialog::new()
         .set_title("Export batch crops")
@@ -282,6 +286,7 @@ pub fn start_batch_export(app: &mut App2) {
                 run_batch_sequential(
                     tasks,
                     detector.as_ref(),
+                    eye_refiner.as_deref(),
                     output_dir.as_path(),
                     settings.as_ref(),
                     &tx,
@@ -301,6 +306,7 @@ pub fn start_batch_export(app: &mut App2) {
         // the outer `tx` survives for the final `BatchComplete` send.
         let inner_tx = tx.clone();
         let inner_detector = detector.clone();
+        let inner_eye_refiner = eye_refiner.clone();
         let inner_output_dir = output_dir.clone();
         let inner_settings = settings.clone();
         let inner_completed = completed.clone();
@@ -319,6 +325,7 @@ pub fn start_batch_export(app: &mut App2) {
 
                     let status = run_batch_job_panic_safe(
                         inner_detector.as_ref(),
+                        inner_eye_refiner.as_deref(),
                         path,
                         inner_output_dir.as_path(),
                         inner_settings.as_ref(),
@@ -346,6 +353,7 @@ pub fn start_batch_export(app: &mut App2) {
 /// One corrupt/edge-case image must not abort the rest of the batch.
 fn run_batch_job_panic_safe(
     detector: &YuNetDetector,
+    eye_refiner: Option<&fcs_core::EyeRefiner>,
     path: PathBuf,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
@@ -353,7 +361,14 @@ fn run_batch_job_panic_safe(
 ) -> BatchFileStatus {
     let path_display = path.display().to_string();
     let result = catch_unwind(AssertUnwindSafe(move || {
-        run_batch_job(detector, path, output_dir, settings, output_override)
+        run_batch_job(
+            detector,
+            eye_refiner,
+            path,
+            output_dir,
+            settings,
+            output_override,
+        )
     }));
     match result {
         Ok(status) => status,
@@ -379,9 +394,14 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 }
 
 /// Sequential fallback used only if building the rayon pool fails.
+// Eight arguments, one over the lint. The codebase's usual answer is a context struct (see
+// `BatchContext` in fcs-cli), but this is the only caller and the only callee, so that struct
+// would exist to satisfy a counter rather than to remove repetition.
+#[allow(clippy::too_many_arguments)]
 fn run_batch_sequential(
     tasks: Vec<(usize, PathBuf, Option<PathBuf>)>,
     detector: &YuNetDetector,
+    eye_refiner: Option<&fcs_core::EyeRefiner>,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
     tx: &std::sync::mpsc::Sender<JobMessage>,
@@ -393,8 +413,14 @@ fn run_batch_sequential(
             index,
             status: BatchFileStatus::Processing,
         });
-        let status =
-            run_batch_job_panic_safe(detector, path, output_dir, settings, output_override);
+        let status = run_batch_job_panic_safe(
+            detector,
+            eye_refiner,
+            path,
+            output_dir,
+            settings,
+            output_override,
+        );
         if matches!(status, BatchFileStatus::Failed { .. }) {
             failed.fetch_add(1, AtomicOrdering::Relaxed);
         } else {
@@ -406,6 +432,7 @@ fn run_batch_sequential(
 
 fn run_batch_job(
     detector: &YuNetDetector,
+    eye_refiner: Option<&fcs_core::EyeRefiner>,
     path: PathBuf,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
@@ -420,7 +447,7 @@ fn run_batch_job(
         }
     };
 
-    let detections = match detector.detect_image(&source_image) {
+    let mut detections = match detector.detect_image(&source_image) {
         Ok(output) => output.detections,
         Err(err) => {
             return BatchFileStatus::Failed {
@@ -428,6 +455,10 @@ fn run_batch_job(
             };
         }
     };
+    // Before cropping, so batch output is levelled by the same eye points the canvas shows.
+    if let Some(refiner) = eye_refiner {
+        refiner.refine(&source_image, &mut detections);
+    }
 
     let faces_detected = detections.len();
     if detections.is_empty() {
