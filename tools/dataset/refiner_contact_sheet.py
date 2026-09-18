@@ -50,10 +50,20 @@ def to_local(path: str) -> str:
     return path
 
 
-def level(image, centre, side, angle_degrees, size=160):
-    """The crop face_cropper would produce: centred, scaled, rotated to level the eyes."""
+def level(image, centre, side, tilt_degrees, size=160):
+    """The crop face_cropper would produce: centred, scaled, rotated to level the eyes.
+
+    `tilt_degrees` is the measured eye-line tilt, and is passed through to OpenCV
+    unnegated. That is not the sign `face_cropper` uses, and the difference is not a
+    bug in either: `imageproc::rotate_about_center` is documented as rotating
+    *clockwise* for positive theta, so Rust negates; `cv2.getRotationMatrix2D` is
+    counter-clockwise-positive, so Python must not. Reasoning by analogy from the Rust
+    call site produced exactly that error once, and it is invisible in the output --
+    the wrong sign turns a tilt of theta into 2*theta, which still looks like a
+    plausibly-rotated face rather than anything obviously broken. Hence `_self_check`.
+    """
     matrix = cv2.getRotationMatrix2D((float(centre[0]), float(centre[1])),
-                                     angle_degrees, size / side)
+                                     tilt_degrees, size / side)
     matrix[0, 2] += size / 2 - centre[0]
     matrix[1, 2] += size / 2 - centre[1]
     return cv2.warpAffine(image, matrix, (size, size), flags=cv2.INTER_LINEAR)
@@ -66,7 +76,24 @@ def as_data_uri(image) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buffer.tobytes()).decode("ascii")
 
 
+def _self_check() -> None:
+    """A synthetic tilted eye line must come out level, not twice as tilted."""
+    size, half, tilt = 160, 40.0, 25.0
+    centre = np.array([size / 2, size / 2], dtype=np.float32)
+    radians = math.radians(tilt)
+    offset = np.array([half * math.cos(radians), half * math.sin(radians)], dtype=np.float32)
+    eyes = np.stack([centre - offset, centre + offset])
+
+    measured = math.degrees(math.atan2(eyes[1][1] - eyes[0][1], eyes[1][0] - eyes[0][0]))
+    matrix = cv2.getRotationMatrix2D((float(centre[0]), float(centre[1])), measured, 1.0)
+    turned = (eyes @ matrix[:, :2].T) + matrix[:, 2]
+    residual = math.degrees(math.atan2(turned[1][1] - turned[0][1],
+                                       turned[1][0] - turned[0][0]))
+    assert abs(residual) < 1e-4, f"rotation sign is wrong: {tilt} deg tilt left {residual} deg"
+
+
 def main() -> None:
+    _self_check()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("detections")
     ap.add_argument("checkpoint")
@@ -120,10 +147,8 @@ def main() -> None:
             rows.append({
                 "name": stem_of(record["image"])[:24],
                 "gap": gap,
-                # rotate_about_center turns counter-clockwise, so pass the negated tilt, the
-                # same convention face_cropper uses.
-                "yunet": as_data_uri(level(frame, centre, side, -yunet_angle)),
-                "refiner": as_data_uri(level(frame, centre, side, -refiner_angle)),
+                "yunet": as_data_uri(level(frame, centre, side, yunet_angle)),
+                "refiner": as_data_uri(level(frame, centre, side, refiner_angle)),
                 "yunet_angle": yunet_angle,
                 "refiner_angle": refiner_angle,
             })

@@ -188,3 +188,20 @@ found in the original photographs.
   on those images, or a human looking at aligned crops, can settle that.
   `refiner_contact_sheet.py` builds the latter: aligned crops from each model side by side,
   ordered by disagreement so the worst cases come first rather than being buried.
+
+### A trap in the contact sheet itself
+
+The first sheet rendered every crop at *twice* its measured tilt, so both columns looked
+wrong and neither model could be judged. The cause was reasoning by analogy across two
+libraries with opposite conventions: `imageproc::rotate_about_center` is documented as
+rotating **clockwise** for positive theta, so `fcs-core::face_cropper` correctly passes
+`-angle`; `cv2.getRotationMatrix2D` is **counter-clockwise**-positive, so the Python must
+pass `+angle`. Copying the Rust negation turned a tilt of theta into 2*theta.
+
+It is worth recording because of how it failed. A doubled tilt still produces a
+plausibly-rotated face -- not a blank image, not an exception, just a portrait at the wrong
+angle -- and every *number* in this document was unaffected, because the evaluation scripts
+compare eye-line angles arithmetically and never render a crop. Only the one artefact meant
+for human judgement was wrong, which is precisely the artefact with no automated check
+behind it. `refiner_contact_sheet.py` now runs `_self_check` before it renders anything: a
+synthetic eye line at a known tilt must come out level.
