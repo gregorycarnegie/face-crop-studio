@@ -44,16 +44,34 @@ def usable(annotation: dict) -> bool:
 
 
 class Faces(Dataset):
-    """Face crops with their two eye points, in crop-relative coordinates."""
+    """Face crops with their two eye points, in crop-relative coordinates.
 
-    def __init__(self, data: Path, split: str, size: int, train: bool):
+    `hold_out` carves a slice off the training split for checkpoint selection: pass a fraction
+    and `part="fit"` or `part="val"`. The division is by *image*, not by face, because two
+    faces from one photo share a camera, a scene and often a subject -- splitting by face would
+    leak all of that across the boundary and flatter the very figure the split exists to keep
+    honest.
+    """
+
+    def __init__(self, data: Path, split: str, size: int, train: bool,
+                 hold_out: float = 0.0, part: str = "fit"):
         document = json.loads((data / f"face_keypoints_{split}.json").read_text(encoding="utf-8"))
         images = {image["id"]: image for image in document["images"]}
+
+        held = set()
+        if hold_out > 0:
+            names = sorted({image["file_name"] for image in images.values()})
+            random.Random(1234).shuffle(names)
+            held = set(names[: int(len(names) * hold_out)])
+
         self.items = []
         for annotation in document["annotations"]:
-            if usable(annotation):
-                self.items.append((images[annotation["image_id"]]["file_name"],
-                                   annotation["bbox"], annotation["keypoints"]))
+            if not usable(annotation):
+                continue
+            name = images[annotation["image_id"]]["file_name"]
+            if hold_out > 0 and ((part == "val") != (name in held)):
+                continue
+            self.items.append((name, annotation["bbox"], annotation["keypoints"]))
         self.dir = data / "images"
         self.size = size
         self.train = train
@@ -159,6 +177,8 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--size", type=int, default=112)
     ap.add_argument("--angle-weight", type=float, default=0.5)
+    ap.add_argument("--val-fraction", type=float, default=0.15,
+                    help="share of training IMAGES held out for checkpoint selection")
     ap.add_argument("--out", default="eye_refiner.pt")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
@@ -166,12 +186,18 @@ def main() -> None:
     torch.manual_seed(0)
     random.seed(0)
     data = Path(args.data_dir).resolve()
-    train = Faces(data, "train", args.size, train=True)
+    # Selection happens on a slice of the training split. The test set is read once, at the
+    # end: picking the best of thirty evaluations against it would report the luckiest epoch
+    # rather than the model, and that figure is the one quoted against YuNet.
+    train = Faces(data, "train", args.size, train=True, hold_out=args.val_fraction, part="fit")
+    val = Faces(data, "train", args.size, train=False, hold_out=args.val_fraction, part="val")
     test = Faces(data, "test", args.size, train=False)
-    print(f"{len(train)} training faces, {len(test)} test faces", flush=True)
+    print(f"{len(train)} fitting faces, {len(val)} validation faces (held out of training), "
+          f"{len(test)} test faces", flush=True)
 
     train_loader = DataLoader(train, batch_size=args.batch, shuffle=True, num_workers=6,
                               drop_last=True, persistent_workers=True)
+    val_loader = DataLoader(val, batch_size=args.batch, num_workers=4, persistent_workers=True)
     test_loader = DataLoader(test, batch_size=args.batch, num_workers=6,
                              persistent_workers=True)
 
@@ -200,24 +226,33 @@ def main() -> None:
             total += loss.item()
 
         if epoch % 10 == 0 or epoch == args.epochs:
-            stats = evaluate(model, test_loader, device)
+            stats = evaluate(model, val_loader, device)
             flag = ""
             if best is None or stats["angle_median"] < best["angle_median"]:
                 best = dict(stats, epoch=epoch)
                 torch.save({"model": model.state_dict(), "size": args.size,
-                            "stats": stats, "epoch": epoch}, args.out)
+                            "val_stats": stats, "epoch": epoch}, args.out)
                 flag = "  <- saved"
             print(f"epoch {epoch:>4}  loss {total / len(train_loader):.4f}  "
-                  f"angle {stats['angle_median']:.2f} deg  "
+                  f"val angle {stats['angle_median']:.2f} deg  "
                   f"within5 {stats['within_5deg']:.1%}  "
                   f"dist {stats['distance_median']:.4f} of box{flag}", flush=True)
 
     if best is None:  # only reachable with --epochs 0, but it should say so rather than crash
         print("no evaluation ran, so there is nothing to report", flush=True)
         return
-    print(f"\nbest: {best['angle_median']:.2f} deg median at epoch {best['epoch']}, "
-          f"{best['within_5deg']:.1%} within 5 deg, "
-          f"{best['distance_median']:.4f} of box width", flush=True)
+    print(f"\nselected on validation: {best['angle_median']:.2f} deg median at epoch "
+          f"{best['epoch']}, {best['within_5deg']:.1%} within 5 deg", flush=True)
+
+    # The one and only look at the test set, using the checkpoint validation chose.
+    model.load_state_dict(torch.load(args.out, map_location=device)["model"])
+    held = evaluate(model, test_loader, device)
+    state = torch.load(args.out, map_location="cpu")
+    state["test_stats"] = held
+    torch.save(state, args.out)
+    print(f"test set, selected checkpoint: {held['angle_median']:.2f} deg median, "
+          f"{held['within_5deg']:.1%} within 5 deg, "
+          f"{held['distance_median']:.4f} of box width", flush=True)
     print("YuNet on the same test faces: 4.05 deg, 57.6% within 5 deg, 0.043 of box width",
           flush=True)
 

@@ -114,12 +114,18 @@ which is what would actually ship:
 
 | | Refiner | YuNet 2023 |
 |---|---|---|
-| Angle error, median | **1.22 deg** | 4.05 deg |
-| Within 2 deg | **70.5%** | 28.7% |
-| Within 5 deg | **93.0%** | 57.6% |
-| Eye distance, median | **0.019w** | 0.043w |
+| Angle error, median | **1.18 deg** | 4.05 deg |
+| Within 2 deg | **70.8%** | 28.7% |
+| Within 5 deg | **93.3%** | 57.6% |
+| Eye distance, median | **0.018w** | 0.043w |
 
-Closer on 80.4% of faces individually, not merely in aggregate.
+Closer on 80.2% of faces individually, not merely in aggregate.
+
+Those figures come from a checkpoint chosen on a validation slice held out of the *training*
+split, with the test set read exactly once at the end. On ground-truth boxes the same
+checkpoint gives 1.39 deg; YuNet's own boxes score better than the hand-drawn ones because
+Open Images boxes vary in how much forehead and chin they include, and the same 0.2 deg gap
+appeared in both training runs.
 
 Two design choices came straight from what the curve exposed, and both look load-bearing.
 **Rotation augmentation of up to 30 degrees** manufactures the roll variety 2,482 images do not
@@ -129,9 +135,12 @@ points -- the curve's central finding was that point accuracy improved while ang
 
 ### What this does not establish
 
-* The test faces have been used for checkpoint selection (best of 30 evaluations), so the
-  figure is mildly optimistic. The final epoch gives 1.46 deg on ground-truth boxes against a
-  best of 1.44, so the effect is small but real.
+* Selection bias was measured rather than argued away. The first run chose its checkpoint by
+  the best of thirty evaluations against the test set -- 1.44 deg on ground-truth boxes.
+  Retraining with 15% of the training *images* held out for selection, and the test set read
+  once at the end, gives 1.39 deg. So the bias was worth roughly 0.05 deg, and the result
+  survives losing that training data as well. The split is by image rather than by face,
+  because two faces from one photo share a camera and a scene.
 * Recall is untouched. The refiner reads boxes; it cannot find a face YuNet missed, and YuNet
   still misses 11.5% of these faces.
 * `steep_roll` faces and those whose eyes were never clicked are excluded throughout, so the

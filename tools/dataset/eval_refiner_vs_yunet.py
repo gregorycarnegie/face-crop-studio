@@ -71,8 +71,16 @@ def main() -> None:
     model = Refiner().to(device)
     model.load_state_dict(state["model"])
     model.eval()
-    print(f"refiner from {Path(args.checkpoint).name}, trained to "
-          f"{state['stats']['angle_median']:.2f} deg on ground-truth boxes")
+    # Checkpoints from before the validation split carried a single "stats"; later ones carry
+    # "val_stats" for the epoch selection and "test_stats" for the one look at the test set.
+    selected = state.get("val_stats") or state.get("stats") or {}
+    held_out = state.get("test_stats") or {}
+    described = [f"refiner from {Path(args.checkpoint).name}"]
+    if selected:
+        described.append(f"selected at {selected['angle_median']:.2f} deg")
+    if held_out:
+        described.append(f"{held_out['angle_median']:.2f} deg on the test set, ground-truth boxes")
+    print(", ".join(described))
 
     document = json.loads((data / "face_keypoints_test.json").read_text(encoding="utf-8"))
     images = {image["id"]: image for image in document["images"]}
