@@ -133,6 +133,40 @@ contain, which is what the angle metric was starving for. **An explicit angle te
 optimises the tilt of the line directly, rather than hoping it follows from regressing two
 points -- the curve's central finding was that point accuracy improved while angle did not.
 
+### Does it hold outside Open Images?
+
+Every figure above comes from Open Images photographs. The application's real workload is
+different, so the refiner was run over the 1,239-image reference corpus in `Downloads\VinaSkyy`
+(1,129 faces, no eye labels) and compared against YuNet there.
+
+They disagree far more than they did on the labelled set: **13.09 deg median**, with only 24.9%
+agreeing within 5 deg and a smooth spread out to 90 deg. Two explanations were ruled out
+before reaching for a third. Box geometry is near-identical between the corpora (aspect 0.80
+against 0.75, box width as a share of image 0.163 against 0.127), so the refiner is not being
+handed oddly-framed crops. And disagreement does not shrink on large faces -- 13.2, 14.8 and
+12.3 deg across the 80-150px, 150-300px and 300px+ bands -- so it is not a hard-cases effect
+either. On a well-resolved portrait two competent models should converge; these do not, so one
+of them is substantially wrong on this distribution.
+
+Which one can be settled without labels. Rotate a face by a known angle: a model that truly
+locates eyes must report an eye line rotated by exactly that much, and one that is guessing
+will not track it.
+
+| Rotation tracking error, same faces | Median | 75th | 90th |
+|---|---|---|---|
+| **Refiner** | **1.20 deg** | 2.23 deg | 4.61 deg |
+| YuNet 2023 | 4.71 deg | 7.31 deg | 10.93 deg |
+
+The refiner tracks identically on Open Images (1.19 deg median), so this is not consistency on
+one distribution only -- it locates eyes just as well on photographs it was never trained on.
+YuNet is roughly 3.9 times worse, a ratio that mirrors the labelled comparison (4.05 against
+1.18 deg) closely enough that two independent methods, one with ground truth and one without,
+agree on direction and magnitude.
+
+A second thing fell out of the same test: YuNet detected only 565 of 600 rotated crops at its
+default 0.8 threshold, losing 21 of 120 faces at some rotation, on 320px faces it had already
+found in the original photographs.
+
 ### What this does not establish
 
 * Selection bias was measured rather than argued away. The first run chose its checkpoint by
@@ -146,4 +180,11 @@ points -- the curve's central finding was that point accuracy improved while ang
 * `steep_roll` faces and those whose eyes were never clicked are excluded throughout, so the
   refiner is unmeasured on the hardest poses in the corpus.
 * Trained from scratch, no pretrained backbone, so nothing here depends on weights with
-  awkward terms -- but equally, nothing here has been tested outside this corpus.
+  awkward terms.
+* Rotation self-consistency is necessary but not sufficient. A model could track rotation
+  perfectly while sitting on a systematic offset -- predicting an eye line that turns correctly
+  but starts from the wrong place. The test shows the refiner responds correctly to rotation on
+  a corpus it never saw; it cannot show that its absolute placement is right there. Only labels
+  on those images, or a human looking at aligned crops, can settle that.
+  `refiner_contact_sheet.py` builds the latter: aligned crops from each model side by side,
+  ordered by disagreement so the worst cases come first rather than being buried.
