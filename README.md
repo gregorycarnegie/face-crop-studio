@@ -42,6 +42,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 - **Face height targeting** – Configure how large the face should appear in the final crop (10–100%). The cropper preserves the requested aspect ratio and records any padding needed so crops can extend beyond the source image without distortion.
 - **Padding colour control** – Empty pixels introduced by out-of-bounds crops are filled with a configurable colour (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
+- **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner replaces the detector's eye points when ONNX Runtime is present, cutting median eye-line error from 4.05° to 1.18° against hand-clicked ground truth (93.3% of faces within 5° against 57.6%). Without the runtime the detector's own points are used, so the feature degrades rather than failing.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
 - **Enhancement pipeline** – Optional post-crop adjustments (auto colour, exposure, brightness, contrast, saturation, sharpening, skin smoothing, red-eye removal, and portrait background blur) with both CPU (pure Rust) and GPU (WGSL compute shaders) implementations.
 - **Camera RAW input** – DNG, CR2, CR3, NEF, ARW, RW2, ORF, RAF, SRW, and PEF decode via a pure-Rust pipeline in both CLI and GUI, alongside the standard formats (PNG, JPEG, WebP, TIFF, BMP, AVIF, HEIC). Unsupported DNG variants are skipped rather than crashing a batch.
@@ -248,6 +249,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 - `cargo run -p fcs-cli -- --input fixtures/ --gpu` – Run with explicit GPU acceleration.
 - `cargo run -p fcs-cli -- --input fixtures/ --no-gpu` – Run with CPU-only mode.
 - `cargo run -p fcs-cli -- --watch inbox/ --crop --output-dir out/` – Watch a folder and crop each image as it lands. Files already in `inbox/` are left alone; run the same command with `--input inbox/` to process those.
+- `cargo run -p fcs-cli -- --input portraits/ --crop --eye-line-align --output-dir out/` – Crop with the eyes levelled in every output.
 - `cargo run -p fcs-gui` – Launch the GUI with default settings (auto-detects GPU).
 - `cargo bench -p fcs-core crop_enhance` – Measure the crop + enhancement micro-benchmark.
 - `cargo fmt --all && cargo clippy --workspace -- -D warnings` – Formatting and linting hygiene. Note this only lints the platform you are on: code behind `#[cfg(target_os = ...)]` is invisible to the compiler everywhere else, which is why CI runs clippy on all three legs rather than just one. See [Cross-platform linting](#cross-platform-linting).

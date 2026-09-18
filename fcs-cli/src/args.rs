@@ -119,6 +119,14 @@ pub struct DetectArgs {
     #[arg(long)]
     pub crop: bool,
 
+    /// Rotate each crop so the eyes are level.
+    ///
+    /// Uses the bundled eye refiner when ONNX Runtime and `models/eye_refiner.onnx` are both
+    /// present, and the detector's own eye points otherwise. There is no negative form: the
+    /// setting defaults to off, so omitting this leaves it off.
+    #[arg(long)]
+    pub eye_line_align: bool,
+
     /// Output directory for cropped face images (required when --crop is used).
     #[arg(long)]
     pub output_dir: Option<PathBuf>,

@@ -68,6 +68,10 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
         }
     }
 
+    if args.eye_line_align {
+        settings.crop.eye_line_align = true;
+    }
+
     if let Some(width) = args.width {
         settings.input.width = width;
     }

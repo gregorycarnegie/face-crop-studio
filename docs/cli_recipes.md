@@ -63,6 +63,20 @@ cargo run -p fcs-cli -- \
 
 `--crop-fill-color` accepts `#RRGGBB`/`#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)`, or `hsv(h,s,v)` tokens. Any portion of the crop that extends beyond the source image is padded with the chosen colour (defaults to solid black).
 
+## Level the Eyes
+
+```bash
+cargo run -p fcs-cli -- \
+  --input portraits/ \
+  --crop \
+  --output-dir crops/ \
+  --eye-line-align
+```
+
+`--eye-line-align` rotates each crop so the subject's eyes sit horizontal, which is what makes a set of portraits look consistent rather than subtly tilted. There is no negative form: the setting is off unless asked for.
+
+The rotation is only as good as the eye points behind it, so the crop uses `models/eye_refiner.onnx` in preference to the detector's own landmarks — 1.18° median eye-line error against 4.05°, measured on 1,382 hand-clicked faces (`tools/dataset/CURVE_RESULTS.md`). The refiner needs ONNX Runtime, which every packaged release bundles. A build without it logs one line and falls back to the detector's landmarks, so crops are still levelled, just less precisely.
+
 ## Batch Pipeline with Metadata
 
 ```bash
