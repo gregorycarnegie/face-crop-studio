@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0-rc1] - 2026-09-19
+
+A release candidate: the eye refiner changes how the release itself is built --
+a second model fetched as a release asset and checksummed in every job -- and
+that path runs nowhere but a tagged build.
+
+### Added
+
+- **Levelled crops use better eye points.** Eye-line alignment rotates each crop
+  by the angle between the two eyes, and YuNet's eye landmarks are 4.05° out at
+  the median against hand-clicked truth, with only 57.6% of faces within 5°. A
+  new 1.5 M-parameter model, `models/eye_refiner.onnx`, reads the face box and
+  replaces those two points: 1.18° median, 93.3% within 5°, measured on 1,382
+  held-out faces (`tools/dataset/CURVE_RESULTS.md`). Checked by eye as well as by
+  number: on the 40 faces where the two disagree most, the refined crops were the
+  upright ones every time. It refines in the CLI batch and webcam paths and in the
+  GUI load, webcam and batch-export paths; the GUI's live webcam overlay is left
+  alone because it draws boxes and never levels anything. It needs ONNX Runtime,
+  which every package bundles; a build without it logs one line and keeps the
+  detector's own points.
+- **`--eye-line-align`** on the CLI. Eye-line alignment was a GUI toggle with no
+  command-line equivalent, reachable from `fcs-cli` only by hand-writing a JSON
+  config. Documented in the README and `docs/cli_recipes.md`, where it had not
+  been mentioned at all.
+
 ### Changed
 
 - **Faster test builds.** Dependencies in the dev profile now carry line tables
@@ -1776,7 +1801,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc1...HEAD
+[1.8.0-rc1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0-rc1
 [1.7.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.3...v1.5.4
