@@ -79,6 +79,7 @@ jobs:
           path: |
             models/face_detection_yunet_2023mar.onnx
             models/face_detection_yunet_2023mar_640.onnx
+            models/eye_refiner.onnx
           if-no-files-found: error
           retention-days: 1
 
