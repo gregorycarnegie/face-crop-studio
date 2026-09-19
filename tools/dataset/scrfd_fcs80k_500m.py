@@ -22,9 +22,13 @@ behind the label-count curve, and each is there because that run got it wrong or
    cost six times that; keeping the budget gives 100 epochs, with the learning-rate drops at the
    same fractions of the run (55/80 and 68/80).
 
-Batch 16 rather than 8: the curve run used 1.1 GB of a 24 GB card at 0.1 s an iteration, so
-the GPU was mostly waiting. The learning rate stays at upstream's 0.01, which upstream pairs
-with a much larger multi-GPU batch -- conservative rather than linearly scaled.
+**Batch 64, 12 loaders, and it is not about speed.** Measured on an RTX 4090 with 32 cores:
+batch 16 ran 0.167 s an iteration (96 images/s), batch 64 ran 0.62 s (103 images/s). Throughput
+is set by the data pipeline, not the card -- 2 GB of 24 used either way -- and 24 loaders were
+slower still, starting no iteration in four minutes (and crashing outright on `received 0 items
+of ancdata` until the open-file limit was raised). So the batch is chosen for optimisation:
+64 gives 125,000 steps, near upstream's WIDER recipe of ~64,000 steps at batch 128 with this
+same learning rate of 0.01, where batch 16 would have taken 500,000. About 23 hours.
 """
 
 _base_ = './scrfd_500m_bnkps.py'
@@ -54,8 +58,8 @@ model = dict(
 train_cfg = dict(assigner=dict(type='ATSSAssigner', topk=9, ignore_iof_thr=IGNORE_IOF))
 
 data = dict(
-    samples_per_gpu=16,
-    workers_per_gpu=8,
+    samples_per_gpu=64,
+    workers_per_gpu=12,
     train=dict(
         ann_file=data_root + 'labelv2_train_all.txt',
         img_prefix=data_root + 'images/',
