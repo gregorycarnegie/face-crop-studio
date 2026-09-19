@@ -9,6 +9,28 @@ scored on the held-out test set of 1,562 faces whose eyes were clicked and whose
 **Status: complete.** All four trained 640 epochs on an RTX 4090, 17-18 September 2026, about
 six and a half hours each. The answer is in "What the curve says" at the end.
 
+> **Correction, 19 September 2026: the boxes were not all there.** "Every run seeing every
+> image and every box" was true of the label *file* and false of the photographs. `to_labelv2.py`
+> builds from the eye-labelling JSON, which holds one entry per clicked face, so
+> `labelv2_train.txt` boxed 2,500 faces in images where Open Images drew 12,070, and
+> `labelv2_test.txt` boxed 2,000 where it drew 4,597.
+>
+> What that does and does not disturb:
+>
+> * **The curve's relative finding stands.** All four runs shared the same missing boxes, so
+>   "more eye labels did not improve the eye line" is still a fair comparison between them.
+> * **The absolute gap to YuNet is suspect.** Every run was taught that ~9,300 real faces were
+>   background. That alone could explain much of the recall and angle deficit, so "the
+>   constraint is images" was never actually isolated from "a fifth of the faces were labelled".
+> * **Every FP/image figure below is inflated.** They count detections that match no box in
+>   `labelv2_test.txt`, and 2,597 real faces had no box there.
+> * **Recall and angle figures are unaffected** -- both are scored only on the clicked faces,
+>   which were boxed correctly.
+>
+> `oi_to_labelv2.py` now writes every Open Images box (`labelv2_{train,test}_all.txt`), with
+> group-of boxes, depictions and unboxed YuNet detections as ignore regions, and the 80,000-image
+> run (`scrfd_fcs80k_500m.py`) trains and is scored on those.
+
 ## The baseline to beat
 
 YuNet 2023, the detector Face Crop Studio ships today, on the identical 1,562 faces with

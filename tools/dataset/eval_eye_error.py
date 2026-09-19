@@ -174,6 +174,10 @@ def main() -> None:
                     default="/home/grego/work/insightface/detection/scrfd/configs/scrfd/scrfd_fcs_500m.py")
     ap.add_argument("--scrfd-tools",
                     default="/home/grego/work/insightface/detection/scrfd/tools")
+    ap.add_argument("--all-boxes", type=Path,
+                    help="labelv2 file boxing every face (oi_to_labelv2.py). Without it, FP/image "
+                         "is judged against the clicked faces alone and is inflated -- 2,597 real "
+                         "test faces were never clicked")
     args = ap.parse_args()
 
     import cv2
@@ -185,10 +189,27 @@ def main() -> None:
     for annotation in doc["annotations"]:
         by_image.setdefault(annotation["image_id"], []).append(annotation)
 
+    # file name -> (every face and ignore region, real faces only). Ignore regions are group-of
+    # boxes and depictions: a detection there is not wrong, and not a face to count as found.
+    all_boxes: dict[str, tuple[list, list]] = {}
+    if args.all_boxes:
+        name = None
+        for line in args.all_boxes.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#"):
+                name = line.split()[1]
+                all_boxes[name] = ([], [])
+            elif line.strip():
+                values = line.split()
+                box = tuple(float(v) for v in values[:4])
+                all_boxes[name][0].append(box)
+                if len(values) > 5:
+                    all_boxes[name][1].append(box)
+
     detector = Detector(args.config, args.checkpoint, args.scrfd_tools)
 
     thresholds = [t for t in (0.02, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7) if t >= args.thresh]
-    stats = {t: {"scored": 0, "matched": 0, "spurious": 0, "px": [], "rel": [], "deg": []}
+    stats = {t: {"scored": 0, "matched": 0, "spurious": 0, "px": [], "rel": [], "deg": [],
+                 "faces": 0, "found": 0}
              for t in thresholds}
     images_seen = 0
     order = sorted(images.values(), key=lambda i: i["file_name"])
@@ -217,6 +238,9 @@ def main() -> None:
         every_box = [(a["bbox"][0], a["bbox"][1],
                       a["bbox"][0] + a["bbox"][2], a["bbox"][1] + a["bbox"][3])
                      for a in annotations]
+        real_faces = []
+        if image["file_name"] in all_boxes:
+            every_box, real_faces = all_boxes[image["file_name"]]
 
         for threshold in thresholds:
             keep = [i for i in range(len(dets)) if dets[i][4] >= threshold]
@@ -224,6 +248,10 @@ def main() -> None:
             for index in keep:
                 if all(iou(dets[index][:4], box) < 0.5 for box in every_box):
                     tally["spurious"] += 1
+            for truth in real_faces:
+                tally["faces"] += 1
+                if any(iou(truth, dets[index][:4]) >= 0.5 for index in keep):
+                    tally["found"] += 1
             for annotation in faces:
                 tally["scored"] += 1
                 x, y, w, h = annotation["bbox"]
@@ -259,8 +287,8 @@ def main() -> None:
     print(f"checkpoint: {Path(args.checkpoint).name}")
     print(f"scorable faces: {stats[thresholds[0]]['scored']} (eyes clicked, side known) "
           f"over {images_seen} images")
-    print(f"{'thresh':>7} {'recall':>8} {'FP/image':>9} {'angle med':>10} {'<=5 deg':>8} "
-          f"{'eye err':>9}")
+    print(f"{'thresh':>7} {'recall':>8} {'all-face':>9} {'FP/image':>9} {'angle med':>10} "
+          f"{'<=5 deg':>8} {'eye err':>9}")
     for threshold in thresholds:
         tally = stats[threshold]
         recall = tally["matched"] / tally["scored"] if tally["scored"] else 0.0
@@ -269,8 +297,10 @@ def main() -> None:
         share = (sum(1 for a in tally["deg"] if a <= 5) / len(tally["deg"])
                  if tally["deg"] else 0.0)
         relative = median(tally["rel"]) if tally["rel"] else float("nan")
-        print(f"{threshold:>7.2f} {recall:>7.1%} {per_image:>9.2f} {angle:>9.2f}d "
+        all_face = f"{tally['found'] / tally['faces']:>8.1%}" if tally["faces"] else f"{'-':>8}"
+        print(f"{threshold:>7.2f} {recall:>7.1%} {all_face} {per_image:>9.2f} {angle:>9.2f}d "
               f"{share:>7.1%} {relative:>8.3f}w")
+    print("  all-face is recall over every real Open Images face (needs --all-boxes).")
     print("  recall is of scorable faces at IoU>=0.5; FP/image counts detections matching no")
     print("  box at all; angle is eye-line error in degrees; eye err is median distance as a")
     print("  fraction of box width. Compare models at one threshold, not at their best each.")
