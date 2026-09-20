@@ -21,8 +21,8 @@ fn require(found: Option<PathBuf>, what: &str) -> Option<PathBuf> {
 
 pub fn find_model_path() -> Option<PathBuf> {
     let candidates = vec![
-        "models/face_detection_yunet_2023mar_640.onnx",
-        "../models/face_detection_yunet_2023mar_640.onnx",
+        "models/scrfd80k_500m_640.onnx",
+        "../models/scrfd80k_500m_640.onnx",
     ];
     require(
         candidates

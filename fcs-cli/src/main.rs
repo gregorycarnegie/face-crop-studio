@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use fcs_core::{PostprocessConfig, PreprocessConfig};
+use fcs_core::PreprocessConfig;
 use fcs_utils::{configure_telemetry, init_logging, normalize_path, resolve_data_path};
 use log::info;
 use rayon::prelude::*;
@@ -79,25 +79,13 @@ fn main() -> Result<()> {
     let quality_filter = build_quality_filter(&settings.crop.quality_rules);
     let gpu_runtime = Arc::new(init_cli_gpu_runtime(&settings)?);
 
+    // Only the preprocessing benchmark still needs this: the detector does its own
+    // preprocessing, on its own conventions.
     let preprocess_config: PreprocessConfig = settings.input.into();
-    let postprocess_config: PostprocessConfig = (&settings.detection).into();
-    let input_size = preprocess_config.input_size;
 
     // Check if webcam mode is enabled
     if args.webcam {
-        info!(
-            "YuNet fallback configured: {} at {}x{}",
-            model_path.display(),
-            input_size.width,
-            input_size.height
-        );
-        let detector = build_cli_detector(
-            &model_path,
-            &preprocess_config,
-            &postprocess_config,
-            gpu_runtime.as_ref(),
-            &settings.gpu,
-        )?;
+        let detector = build_cli_detector(&model_path, settings.detection.confidence)?;
         let detector = Arc::new(detector);
         let settings = Arc::new(settings);
         let quality_filter = Arc::new(quality_filter);
@@ -139,22 +127,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    info!(
-        // Says "configured", not "loading": SCRFD is preferred when it can run, and then this
-        // model is never opened at all. The detector that actually won is logged by
-        // `build_cli_detector`, after the choice is made.
-        "YuNet fallback configured: {} at {}x{}",
-        model_path.display(),
-        input_size.width,
-        input_size.height
-    );
-    let detector = build_cli_detector(
-        &model_path,
-        &preprocess_config,
-        &postprocess_config,
-        gpu_runtime.as_ref(),
-        &settings.gpu,
-    )?;
+    let detector = build_cli_detector(&model_path, settings.detection.confidence)?;
 
     if args.mapping_file.is_some() && !args.crop {
         info!(

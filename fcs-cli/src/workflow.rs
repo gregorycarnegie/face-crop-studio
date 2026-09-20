@@ -8,8 +8,6 @@ use std::{
 };
 
 use fcs_core::{BoundingBox, Detection, DetectionOutput, crop_face_from_image};
-#[cfg(test)]
-use fcs_core::{PostprocessConfig, PreprocessConfig};
 use fcs_utils::{OutputOptions, Quality, config::AppSettings, estimate_sharpness, load_image};
 use image::{DynamicImage, GenericImageView};
 use log::{debug, info, warn};
@@ -448,7 +446,7 @@ fn select_best_quality_index(
 pub(crate) mod tests {
     use super::*;
     use clap::Parser;
-    use fcs_core::{FillColor, InputSize, Landmark};
+    use fcs_core::{FillColor, Landmark};
     use fcs_utils::{QualityFilter, config::ResizeQuality};
     use image::{Rgba, RgbaImage};
     use std::{fs, sync::Arc};
@@ -527,25 +525,10 @@ pub(crate) mod tests {
     /// directory, where a bare `models/...` does not exist, and every test using this used to
     /// return early having tested nothing.
     pub(crate) fn build_test_detector() -> Option<Arc<fcs_core::FaceDetector>> {
-        let model_path = fcs_utils::model_path("models/face_detection_yunet_2023mar_640.onnx")
-            .expect("resolve model")?;
-        // 640, the bundled model's size: ONNX Runtime refuses any other at construction.
-        let preprocess = PreprocessConfig {
-            input_size: InputSize::new(640, 640),
-            resize_quality: ResizeQuality::Quality,
-        };
-        let postprocess = PostprocessConfig::default();
-        let detector = build_cli_detector(
-            &model_path,
-            &preprocess,
-            &postprocess,
-            no_gpu_runtime().as_ref(),
-            &fcs_utils::config::GpuSettings {
-                enabled: false,
-                ..Default::default()
-            },
-        )
-        .expect("the bundled model builds a CPU detector");
+        let model_path =
+            fcs_utils::model_path("models/scrfd80k_500m_640.onnx").expect("resolve model")?;
+        let detector = build_cli_detector(&model_path, fcs_utils::config::DEFAULT_CONFIDENCE)
+            .expect("the bundled model builds a detector");
         Some(Arc::new(detector))
     }
 

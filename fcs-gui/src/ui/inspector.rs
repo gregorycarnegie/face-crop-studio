@@ -294,7 +294,7 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
             ui,
             &format!(
                 "Confidence floor · {:.2}",
-                app.settings.detection.score_threshold
+                app.settings.detection.confidence
             ),
         );
         // Moving this used to change the setting and nothing else: the detector kept the
@@ -302,7 +302,7 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         if slider_with_label(
             ui,
             "Confidence floor",
-            &mut app.settings.detection.score_threshold,
+            &mut app.settings.detection.confidence,
             0.0,
             1.0,
             "conf",

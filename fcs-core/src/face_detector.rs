@@ -1,23 +1,21 @@
-//! Picks the best detector available and hides the choice from every caller.
+//! The detector the application uses.
 //!
-//! Two detectors ship. SCRFD, trained on this project's own licence-clean data, finds 86.0% of
-//! the faces in the Open Images test split at 0.11 false positives per image against YuNet's
-//! 71.6% at 0.14 (`tools/dataset/SCRFD_80K.md`), but runs only under ONNX Runtime. YuNet is
-//! compiled into the built-in CPU graph and the WGSL kernels, so it runs anywhere.
+//! One detector ships now: SCRFD, trained on this project's own licence-clean data, which finds
+//! 86.0% of the faces in the Open Images test split at 0.11 false positives per image against
+//! YuNet's 71.6% at 0.14 (`tools/dataset/SCRFD_80K.md`).
 //!
-//! So SCRFD is preferred and YuNet is the floor: a machine without a runtime gets a slower,
-//! older detector rather than none. Callers construct one of these and call [`Self::detect_image`]
-//! exactly as they called `YuNetDetector`'s.
+//! It used to be a pair, with YuNet as the floor for machines without ONNX Runtime. That floor
+//! is gone because it is no longer needed: SCRFD runs on the WGSL engine and the built-in CPU
+//! graph as well, agreeing with ONNX Runtime to about 1e-05 and producing identical detections.
+//! Keeping YuNet meant shipping weights trained on WIDER FACE, which is released for
+//! "non-commercial academic research only" (`tools/dataset/DATA_CARD.md`) -- the licence
+//! question this project set out to remove.
 
 use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::{path::Path, sync::Arc};
 
-use crate::{
-    detector::{DetectionOutput, YuNetDetector},
-    postprocess::PostprocessConfig,
-    scrfd::ScrfdDetector,
-};
+use crate::{detector::DetectionOutput, scrfd::ScrfdDetector};
 
 /// Score at which SCRFD is run.
 ///
@@ -31,49 +29,33 @@ pub const SCRFD_SCORE_THRESHOLD: f32 = 0.5;
 /// Upstream SCRFD's own `test_cfg.nms.iou_threshold`.
 pub const SCRFD_NMS_THRESHOLD: f32 = 0.4;
 
-/// A detector that is SCRFD where possible and YuNet otherwise.
+/// The application's detector.
 #[derive(Debug)]
 pub struct FaceDetector {
-    /// `None` when SCRFD loaded, because then nothing would ever call it. Building it anyway
-    /// costs what experiment 81 measured for the GPU path -- five compiled WGSL pipelines and
-    /// the VRAM they hold -- to produce a detector that is immediately shadowed.
-    yunet: Option<YuNetDetector>,
-    /// Behind an `Arc` so [`Self::with_postprocess`] can re-wrap without reloading a session.
-    scrfd: Option<Arc<ScrfdDetector>>,
+    /// Behind an `Arc` so [`Self::with_postprocess`] can re-wrap without reloading the model.
+    scrfd: Arc<ScrfdDetector>,
     score_threshold: f32,
     nms_threshold: f32,
 }
 
 impl FaceDetector {
-    /// Load SCRFD if it can run, and only build YuNet when it cannot.
+    /// Load the detector, or `None` when no model is present.
     ///
-    /// The builder is a closure rather than a value so the fallback is never constructed when
-    /// it would not be used: on the GPU path `YuNetDetector` compiles five WGSL pipelines and
-    /// holds VRAM for them.
-    pub fn load_or_build<F>(build_yunet: F) -> Result<Self>
-    where
-        F: FnOnce() -> Result<YuNetDetector>,
-    {
-        match ScrfdDetector::load() {
-            Some(scrfd) => Ok(Self::with_parts(None, Some(Arc::new(scrfd)))),
-            None => Ok(Self::with_parts(Some(build_yunet()?), None)),
-        }
+    /// `None` means detection cannot run at all now that there is no second detector to fall
+    /// back to, which is what the caller has always had to handle for a missing model file.
+    pub fn load() -> Option<Self> {
+        ScrfdDetector::load().map(Self::new)
     }
 
-    /// Wrap a YuNet detector, preferring SCRFD when its model and a runtime are both present.
-    pub fn new(yunet: YuNetDetector) -> Self {
-        Self::with_scrfd(yunet, ScrfdDetector::load().map(Arc::new))
+    /// Load from an explicit model path, as `--model` and the GUI's model setting supply.
+    pub fn load_from<P: AsRef<Path>>(path: P) -> Option<Self> {
+        ScrfdDetector::load_from(path).map(Self::new)
     }
 
-    /// Wrap a YuNet detector with an explicit SCRFD, or `None` to force YuNet.
-    pub fn with_scrfd(yunet: YuNetDetector, scrfd: Option<Arc<ScrfdDetector>>) -> Self {
-        Self::with_parts(Some(yunet), scrfd)
-    }
-
-    fn with_parts(yunet: Option<YuNetDetector>, scrfd: Option<Arc<ScrfdDetector>>) -> Self {
+    /// Wrap an already-loaded detector.
+    pub fn new(scrfd: ScrfdDetector) -> Self {
         Self {
-            yunet,
-            scrfd,
+            scrfd: Arc::new(scrfd),
             score_threshold: SCRFD_SCORE_THRESHOLD,
             nms_threshold: SCRFD_NMS_THRESHOLD,
         }
@@ -81,14 +63,13 @@ impl FaceDetector {
 
     /// Run detection on an in-memory image.
     pub fn detect_image(&self, image: &DynamicImage) -> Result<DetectionOutput> {
-        let Some(scrfd) = self.scrfd.as_ref() else {
-            return self.yunet_or_error()?.detect_image(image);
-        };
-        let detections = scrfd.detect(image, self.score_threshold, self.nms_threshold)?;
+        let detections = self
+            .scrfd
+            .detect(image, self.score_threshold, self.nms_threshold)?;
         Ok(DetectionOutput {
             detections,
-            // SCRFD's decoding has already undone its own letterbox, so these are the identity:
-            // a caller that rescaled by them would move every box a second time.
+            // The decoding has already undone the letterbox, so these are the identity: a
+            // caller that rescaled by them would move every box a second time.
             scale_x: 1.0,
             scale_y: 1.0,
             original_size: (image.width(), image.height()),
@@ -98,114 +79,60 @@ impl FaceDetector {
     /// Run detection on an image file.
     pub fn detect_path<P: AsRef<Path>>(&self, path: P) -> Result<DetectionOutput> {
         let path = path.as_ref();
-        if self.scrfd.is_none() {
-            return self.yunet_or_error()?.detect_path(path);
-        }
         let image = fcs_utils::load_image(path)
             .with_context(|| format!("failed to load image from {}", path.display()))?;
         self.detect_image(&image)
     }
 
-    /// The same detector with different YuNet post-processing, sharing this SCRFD session.
+    /// The same detector at a different score threshold, sharing the loaded model.
     ///
-    /// Only YuNet's settings change: SCRFD filters with its own threshold, for the reason given
-    /// on [`SCRFD_SCORE_THRESHOLD`].
-    pub fn with_postprocess(&self, postprocess: PostprocessConfig) -> Self {
+    /// Takes the threshold directly rather than a `PostprocessConfig`: that config's fields --
+    /// score, NMS, top-k -- were YuNet's, on YuNet's scale, and this model's scores are not
+    /// comparable to them.
+    pub fn with_score_threshold(&self, score_threshold: f32) -> Self {
         Self {
-            yunet: self.yunet.as_ref().map(|y| y.with_postprocess(postprocess)),
-            scrfd: self.scrfd.clone(),
-            score_threshold: self.score_threshold,
+            scrfd: Arc::clone(&self.scrfd),
+            score_threshold,
             nms_threshold: self.nms_threshold,
         }
     }
 
-    /// Which detector is actually running, for logs and the GUI's status line.
+    /// Which detector is running, for logs and the GUI.
     pub fn model_name(&self) -> &'static str {
-        if self.scrfd.is_some() {
-            "SCRFD-80k"
-        } else {
-            "YuNet 2023"
-        }
+        "SCRFD-80k"
     }
 
-    /// The inference backend underneath, for diagnostics.
+    /// Which engine it is running on: ONNX Runtime, the WGSL kernels, or the CPU graph.
     pub fn inference_backend(&self) -> &'static str {
-        match (&self.scrfd, &self.yunet) {
-            (Some(scrfd), _) => scrfd.engine(),
-            (None, Some(yunet)) => yunet.inference_backend(),
-            (None, None) => "none",
-        }
-    }
-
-    /// GPU memory held by the YuNet backend, or `None` on CPU.
-    pub fn gpu_memory_usage(&self) -> Option<u64> {
-        self.yunet
-            .as_ref()
-            .and_then(YuNetDetector::gpu_memory_usage)
-    }
-
-    /// The YuNet fallback, which is absent when SCRFD loaded and nothing would have used it.
-    fn yunet_or_error(&self) -> Result<&YuNetDetector> {
-        self.yunet
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("no detector: SCRFD is absent and YuNet was not built"))
-    }
-
-    /// The YuNet detector underneath, absent when SCRFD is doing the work.
-    pub fn yunet(&self) -> Option<&YuNetDetector> {
-        self.yunet.as_ref()
+        self.scrfd.engine()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PostprocessConfig, PreprocessConfig};
-
-    fn yunet() -> Option<YuNetDetector> {
-        let path = fcs_utils::model_path("models/face_detection_yunet_2023mar_640.onnx").ok()??;
-        YuNetDetector::new(
-            path,
-            PreprocessConfig::default(),
-            PostprocessConfig::default(),
-        )
-        .ok()
-    }
 
     #[test]
-    fn the_fallback_is_not_built_when_scrfd_is_there() {
-        // The point of the closure: on the GPU path building YuNet compiles five WGSL pipelines
-        // and holds VRAM for them, and when SCRFD loads nothing would ever call it.
-        let mut built = false;
-        let detector = FaceDetector::load_or_build(|| {
-            built = true;
-            anyhow::bail!("the fallback should not have been built")
-        });
-        match detector {
-            // With a runtime and the model present, SCRFD wins and the closure never runs.
-            Ok(detector) => {
-                assert_eq!(detector.model_name(), "SCRFD-80k");
-                assert!(!built, "the fallback was built despite SCRFD loading");
-                assert!(detector.yunet().is_none());
-            }
-            // Without them the closure is the only way to get a detector, so it must have run.
-            Err(_) => assert!(built, "neither SCRFD nor the fallback was attempted"),
-        }
-    }
-
-    #[test]
-    fn without_scrfd_it_is_yunet_and_says_so() {
-        let Some(yunet) = yunet() else {
-            eprintln!("skipped: the bundled YuNet model is not present");
+    fn the_threshold_change_shares_the_loaded_model() {
+        let Some(detector) = FaceDetector::load() else {
+            eprintln!("skipped: no detector model present");
             return;
         };
-        let detector = FaceDetector::with_scrfd(yunet, None);
-        assert_eq!(detector.model_name(), "YuNet 2023");
-        // The floor is the point: no runtime must still mean a working detector.
+        let stricter = detector.with_score_threshold(0.9);
+        assert_eq!(stricter.model_name(), "SCRFD-80k");
+        assert_eq!(stricter.inference_backend(), detector.inference_backend());
+        // Re-wrapping must not reload: both share one Arc.
+        assert!(Arc::ptr_eq(&detector.scrfd, &stricter.scrfd));
+    }
+
+    #[test]
+    fn detection_runs_on_whatever_engine_is_available() {
+        let Some(detector) = FaceDetector::load() else {
+            eprintln!("skipped: no detector model present");
+            return;
+        };
         let image = DynamicImage::ImageRgb8(image::RgbImage::new(64, 64));
-        let output = detector
-            .detect_image(&image)
-            .expect("YuNet runs without SCRFD");
+        let output = detector.detect_image(&image).expect("detection runs");
         assert_eq!(output.original_size, (64, 64));
     }
 }

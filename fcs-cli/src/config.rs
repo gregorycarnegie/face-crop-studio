@@ -82,7 +82,7 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
         settings.input.resize_quality = mode;
     }
     if let Some(score) = args.score_threshold {
-        settings.detection.score_threshold = score;
+        settings.detection.confidence = score;
     }
     if let Some(nms) = args.nms_threshold {
         settings.detection.nms_threshold = nms;
@@ -438,7 +438,7 @@ mod tests {
             "100",
         ]);
         apply_cli_overrides(&mut settings, &args);
-        assert!((settings.detection.score_threshold - 0.5).abs() < f32::EPSILON);
+        assert!((settings.detection.confidence - 0.5).abs() < f32::EPSILON);
         assert!((settings.detection.nms_threshold - 0.4).abs() < f32::EPSILON);
         assert_eq!(settings.detection.top_k, 100);
     }

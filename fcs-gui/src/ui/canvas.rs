@@ -72,7 +72,7 @@ fn canvas_header(ui: &mut Ui, app: &mut App2) {
         Stroke::new(1.0, P::RULE),
     );
 
-    let conf = app.settings.detection.score_threshold;
+    let conf = app.settings.detection.confidence;
     let preset = app.settings.crop.preset.as_str();
     let face_h = app.settings.crop.face_height_pct;
     let aspect = format!(

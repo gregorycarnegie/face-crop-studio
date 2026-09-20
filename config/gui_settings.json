@@ -1,14 +1,14 @@
 {
-  "model_path": "models/face_detection_yunet_2023mar_640.onnx",
+  "model_path": "models/scrfd80k_500m_640.onnx",
   "input": {
     "width": 640,
     "height": 640,
     "resize_quality": "quality"
   },
   "detection": {
-    "score_threshold": 0.8,
     "nms_threshold": 0.2,
-    "top_k": 5000
+    "top_k": 5000,
+    "confidence": 0.5
   },
   "crop": {
     "preset": "avatar",

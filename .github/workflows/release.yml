@@ -18,8 +18,8 @@ env:
   EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1/eye_refiner.onnx
   # The detector trained on this project's own data (tools/dataset/SCRFD_80K.md). Like the
   # refiner it cannot be regenerated from a public URL, so it is fetched and checksummed.
-  SCRFD_SHA256: 337dab7db27401fc35f1d48baa737f552d25e3198f62533038467d39e0d7a00b
-  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v1/scrfd80k_500m_640.onnx
+  SCRFD_SHA256: f31f1f01ca33d24184059bba0627a54b8351e6f2b167474a4d71f2361ea53c39
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2/scrfd80k_500m_640.onnx
 
 jobs:
   shader-validation:

@@ -295,7 +295,7 @@ fn sort_by_score_desc(detections: &mut Vec<Detection>, top_k: usize) {
 impl From<DetectionSettings> for PostprocessConfig {
     fn from(settings: DetectionSettings) -> Self {
         PostprocessConfig {
-            score_threshold: settings.score_threshold,
+            score_threshold: settings.confidence,
             nms_threshold: settings.nms_threshold,
             top_k: settings.top_k,
         }
@@ -305,7 +305,7 @@ impl From<DetectionSettings> for PostprocessConfig {
 impl From<&DetectionSettings> for PostprocessConfig {
     fn from(settings: &DetectionSettings) -> Self {
         PostprocessConfig {
-            score_threshold: settings.score_threshold,
+            score_threshold: settings.confidence,
             nms_threshold: settings.nms_threshold,
             top_k: settings.top_k,
         }
@@ -415,18 +415,18 @@ mod tests {
     #[test]
     fn converts_detection_settings_into_config() {
         let settings = DetectionSettings {
-            score_threshold: 0.75,
+            confidence: 0.75,
             nms_threshold: 0.25,
             top_k: 123,
         };
 
         let config: PostprocessConfig = settings.clone().into();
-        assert_eq!(config.score_threshold, settings.score_threshold);
+        assert_eq!(config.score_threshold, settings.confidence);
         assert_eq!(config.nms_threshold, settings.nms_threshold);
         assert_eq!(config.top_k, settings.top_k);
 
         let config_from_ref: PostprocessConfig = (&settings).into();
-        assert_eq!(config_from_ref.score_threshold, settings.score_threshold);
+        assert_eq!(config_from_ref.score_threshold, settings.confidence);
         assert_eq!(config_from_ref.nms_threshold, settings.nms_threshold);
         assert_eq!(config_from_ref.top_k, settings.top_k);
     }

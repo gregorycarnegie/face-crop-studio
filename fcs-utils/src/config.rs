@@ -26,25 +26,31 @@ pub const DEFAULT_INPUT_WIDTH: u32 = 640;
 /// Default input height in pixels.
 pub const DEFAULT_INPUT_HEIGHT: u32 = 640;
 /// Default minimum confidence score for a detection to be considered valid.
-pub const DEFAULT_SCORE_THRESHOLD: f32 = 0.9;
+/// Where the shipped detector is run, chosen by eye on a corpus it had never seen: at 0.4 the
+/// 60 largest detections it found and YuNet missed held 32 false positives, and at 0.5 seven,
+/// losing 2 of 25 real faces (`tools/dataset/SCRFD_80K.md`).
+pub const DEFAULT_CONFIDENCE: f32 = 0.5;
 /// Default threshold for non-maximum suppression.
 pub const DEFAULT_NMS_THRESHOLD: f32 = 0.3;
 /// Default maximum number of detections to return.
 pub const DEFAULT_TOP_K: usize = 5_000;
 /// Default path to the YuNet ONNX model.
-pub const DEFAULT_MODEL_PATH: &str = "models/face_detection_yunet_2023mar_640.onnx";
+pub const DEFAULT_MODEL_PATH: &str = "models/scrfd80k_500m_640.onnx";
 /// Default path for persisted GUI settings.
 pub const DEFAULT_SETTINGS_PATH: &str = "config/gui_settings.json";
 
-/// Shared detection parameters that should mirror YuNet defaults.
+/// Shared detection parameters.
 ///
-/// These settings directly control the behavior of the post-processing steps,
-/// such as non-maximum suppression (NMS) and score filtering.
+/// `confidence` is deliberately not called `score_threshold` any more. The detector changed,
+/// and detector scores are not comparable between models: the old setting held YuNet-era
+/// values around 0.8-0.9, which on this detector would discard almost every face. Renaming it
+/// means an existing settings file falls back to the new default rather than silently applying
+/// a number that no longer means what it did.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectionSettings {
-    /// Minimum confidence score for a detection to be considered valid.
-    pub score_threshold: f32,
+    /// Minimum confidence for a detection to be kept, on the current detector's scale.
+    pub confidence: f32,
     /// Threshold for non-maximum suppression to merge overlapping bounding boxes.
     pub nms_threshold: f32,
     /// The maximum number of detections to return.
@@ -54,7 +60,7 @@ pub struct DetectionSettings {
 impl Default for DetectionSettings {
     fn default() -> Self {
         Self {
-            score_threshold: DEFAULT_SCORE_THRESHOLD,
+            confidence: DEFAULT_CONFIDENCE,
             nms_threshold: DEFAULT_NMS_THRESHOLD,
             top_k: DEFAULT_TOP_K,
         }
@@ -64,10 +70,10 @@ impl Default for DetectionSettings {
 impl DetectionSettings {
     /// Clamp values to valid ranges, replacing NaN/infinity with defaults.
     pub fn sanitize(&mut self) {
-        if !self.score_threshold.is_finite() {
-            self.score_threshold = DEFAULT_SCORE_THRESHOLD;
+        if !self.confidence.is_finite() {
+            self.confidence = DEFAULT_CONFIDENCE;
         }
-        self.score_threshold = self.score_threshold.clamp(0.0, 1.0);
+        self.confidence = self.confidence.clamp(0.0, 1.0);
 
         if !self.nms_threshold.is_finite() {
             self.nms_threshold = DEFAULT_NMS_THRESHOLD;
@@ -635,7 +641,7 @@ mod tests {
         let file = NamedTempFile::new().expect("tempfile");
         let json = r#"{
             "input": { "width": 640, "height": 640 },
-            "detection": { "score_threshold": 0.8, "nms_threshold": 0.25, "top_k": 123 }
+            "detection": { "confidence": 0.8, "nms_threshold": 0.25, "top_k": 123 }
         }"#;
         fs::write(file.path(), json).expect("write custom settings");
 
@@ -662,22 +668,22 @@ mod tests {
     #[test]
     fn detection_settings_sanitize_clamps_and_fixes_nan() {
         let mut s = DetectionSettings {
-            score_threshold: f32::NAN,
+            confidence: f32::NAN,
             nms_threshold: 1.5,
             top_k: 1,
         };
         s.sanitize();
-        assert!(s.score_threshold.is_finite());
-        assert_eq!(s.score_threshold, DEFAULT_SCORE_THRESHOLD);
+        assert!(s.confidence.is_finite());
+        assert_eq!(s.confidence, DEFAULT_CONFIDENCE);
         assert_eq!(s.nms_threshold, 1.0);
 
         let mut s2 = DetectionSettings {
-            score_threshold: -0.1,
+            confidence: -0.1,
             nms_threshold: f32::INFINITY,
             top_k: 1,
         };
         s2.sanitize();
-        assert_eq!(s2.score_threshold, 0.0);
+        assert_eq!(s2.confidence, 0.0);
         assert_eq!(s2.nms_threshold, DEFAULT_NMS_THRESHOLD);
     }
 

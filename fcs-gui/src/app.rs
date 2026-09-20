@@ -823,8 +823,9 @@ impl App2 {
             return;
         };
         self.needs_postprocess_update = false;
-        let postprocess: fcs_core::PostprocessConfig = (&self.settings.detection).into();
-        let detector = Arc::new(detector.with_postprocess(postprocess));
+        // Re-wraps at the new confidence, sharing the loaded model: the detector's scores are
+        // its own, so this is the one number the slider still controls.
+        let detector = Arc::new(detector.with_score_threshold(self.settings.detection.confidence));
         self.detector = Some(Arc::clone(&detector));
         let Some(path) = self.preview.image_path.clone() else {
             return;

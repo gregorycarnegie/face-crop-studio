@@ -3,7 +3,7 @@
 use clap::{ArgAction, Parser, ValueEnum};
 use std::path::PathBuf;
 
-/// Run YuNet face detection over images or directories.
+/// Run face detection over images or directories.
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 pub struct DetectArgs {
@@ -43,12 +43,8 @@ pub struct DetectArgs {
     #[arg(long, default_value_t = 0, requires = "webcam")]
     pub webcam_frames: u32,
 
-    /// Path to the YuNet ONNX model.
-    #[arg(
-        short,
-        long,
-        default_value = "models/face_detection_yunet_2023mar_640.onnx"
-    )]
+    /// Path to the detector ONNX model.
+    #[arg(short, long, default_value = "models/scrfd80k_500m_640.onnx")]
     pub model: PathBuf,
 
     /// Optional settings JSON. Defaults to `config/gui_settings.json` when present, otherwise built-in parameters.
@@ -71,7 +67,7 @@ pub struct DetectArgs {
     #[arg(long = "no-gpu", action = ArgAction::SetTrue)]
     pub no_gpu: bool,
 
-    /// Run YuNet inference on the GPU (falls back to CPU if unavailable).
+    /// Run inference on the GPU (falls back to CPU if unavailable).
     #[arg(long = "gpu-inference", action = ArgAction::SetTrue)]
     pub gpu_inference: bool,
 

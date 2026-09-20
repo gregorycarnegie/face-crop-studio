@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tempfile::tempdir;
 
-const MODEL_REL_PATH: &str = "../models/face_detection_yunet_2023mar_640.onnx";
+const MODEL_REL_PATH: &str = "../models/scrfd80k_500m_640.onnx";
 /// How far a float in the CLI's JSON may drift from the snapshot.
 ///
 /// This has to be loose enough to span backends. Detection now runs on ONNX
@@ -102,75 +102,16 @@ fn detect_annotate_matches_fixture_when_no_detections() -> Result<(), Box<dyn Er
     Ok(())
 }
 
-#[test]
-fn cli_detections_match_opencv_parity_samples() -> Result<(), Box<dyn Error>> {
-    let Some(model) = ensure_model_path() else {
-        return Ok(());
-    };
-    if !fixtures_available() {
-        eprintln!("skipping: fixture images not available in this environment");
-        return Ok(());
-    }
-    // The third field is how many faces this detector finds that the OpenCV fixture does
-    // not. It is not slack: every entry is a face that was looked at. Letterboxing shows the
-    // model an undistorted face and so finds some that a squashed one hid (experiment 96
-    // counted 77 such images in 1239), and the count is pinned per fixture so that a *new*
-    // divergence fails here and has to be looked at rather than absorbed.
-    let cases = [
-        ("images/006.jpg", "opencv/006.json", 0),
-        ("images/190_g.jpg", "opencv/190_g.json", 0),
-        ("images/002_n.jpg", "opencv/002_n.json", 0),
-        ("images/168_o.jpg", "opencv/168_o.json", 0),
-        ("images/169_o.jpg", "opencv/169_o.json", 0),
-        ("images/250_o.jpg", "opencv/250_o.json", 0),
-        ("images/253_o.jpg", "opencv/253_o.json", 0),
-        ("images/255_o.jpg", "opencv/255_o.json", 0),
-        // A man holding a mask over his nose and mouth, eyes clear above it. OpenCV finds
-        // nothing here at 0.9; this detector finds the face at 0.912, and the annotated
-        // output puts the box and all five landmarks on it. A true positive the distortion
-        // was costing, not a hallucination.
-        ("images/258_o.webp", "opencv/258_o.json", 1),
-    ];
-
-    for (image_rel, fixture_rel, extra_faces) in cases {
-        let image_path = fixture_path(image_rel)?;
-        let fixture: FixtureFile = load_fixture_json(fixture_rel)?;
-        let work_dir = tempdir()?;
-        let json_path = work_dir.path().join("out.json");
-        let mut extra = Vec::new();
-        if let Some(score) = fixture.score_threshold
-            && (score - 0.9).abs() > f64::EPSILON
-        {
-            extra.push("--score-threshold".to_string());
-            extra.push(score.to_string());
-        }
-        if let Some(nms) = fixture.nms_threshold
-            && (nms - 0.3).abs() > f64::EPSILON
-        {
-            extra.push("--nms-threshold".to_string());
-            extra.push(nms.to_string());
-        }
-        if let Some(top_k) = fixture.top_k
-            && top_k != 5000
-        {
-            extra.push("--top-k".to_string());
-            extra.push(top_k.to_string());
-        }
-        let detections = run_cli_detection(&image_path, &json_path, &model, &extra)?;
-        assert_eq!(
-            detections.len(),
-            1,
-            "expected single CLI output entry for {}",
-            image_rel
-        );
-
-        let actual_list = &detections[0].detections;
-        assert_detections_close(actual_list, &fixture.detections, extra_faces, image_rel);
-    }
-
-    Ok(())
-}
-
+// `cli_detections_match_opencv_parity_samples` lived here. It compared this CLI against
+// OpenCV's YuNet output on nine fixtures, at YuNet's 0.9 threshold, with a pinned count of the
+// extra faces letterboxing recovered. The CLI does not run YuNet any more, and the comparison
+// cannot be carried over: the scores are on a different scale, and the current detector both
+// finds faces YuNet misses and misses some it found (`tools/dataset/SCRFD_80K.md`), so neither
+// equality nor "never worse" would be true.
+//
+// That is a real loss of coverage -- it was the only check against an implementation nobody
+// here wrote. What replaces it is the parity between this project's own three engines, and the
+// snapshot below.
 fn fixtures_available() -> bool {
     fcs_utils::fixture_path("images/006.jpg").is_ok()
 }
