@@ -55,7 +55,7 @@ pub(crate) struct ProcessedCrop {
 pub(crate) fn process_single_image(
     ctx: &BatchContext<'_>,
     target: &input::ProcessingItem,
-    detector: &Arc<fcs_core::YuNetDetector>,
+    detector: &Arc<fcs_core::FaceDetector>,
     annotate_dir: &Arc<Option<PathBuf>>,
     crop_enabled: bool,
     crop_output_dir: &Arc<Option<PathBuf>>,
@@ -228,7 +228,7 @@ fn process_crops(
 }
 
 fn detect_image(
-    detector: &Arc<fcs_core::YuNetDetector>,
+    detector: &Arc<fcs_core::FaceDetector>,
     image: &DynamicImage,
     image_path: &Path,
 ) -> Option<DetectionOutput> {
@@ -526,7 +526,7 @@ pub(crate) mod tests {
     /// FCS_STRICT_TESTS. Resolved against the manifest: `cargo test` runs from the crate
     /// directory, where a bare `models/...` does not exist, and every test using this used to
     /// return early having tested nothing.
-    pub(crate) fn build_test_detector() -> Option<Arc<fcs_core::YuNetDetector>> {
+    pub(crate) fn build_test_detector() -> Option<Arc<fcs_core::FaceDetector>> {
         let model_path = fcs_utils::model_path("models/face_detection_yunet_2023mar_640.onnx")
             .expect("resolve model")?;
         // 640, the bundled model's size: ONNX Runtime refuses any other at construction.

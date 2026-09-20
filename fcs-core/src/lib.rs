@@ -59,6 +59,8 @@ pub mod detector;
 pub mod eye_refiner;
 /// Utilities to extract and resize face crops from images.
 pub mod face_cropper;
+/// Picks SCRFD when it can run and YuNet otherwise.
+pub mod face_detector;
 /// GPU inference building blocks and the complete YuNet runtime.
 pub mod gpu;
 /// ONNX model loading and execution.
@@ -88,6 +90,7 @@ pub use crate::{
 
 pub use detector::{DetectionOutput, YuNetDetector};
 pub use eye_refiner::EyeRefiner;
+pub use face_detector::FaceDetector;
 pub use model::{InferenceBackend, YuNetModel, decode_yunet_outputs};
 pub use postprocess::{BoundingBox, Detection, Landmark, PostprocessConfig, apply_postprocess};
 pub use preprocess::{

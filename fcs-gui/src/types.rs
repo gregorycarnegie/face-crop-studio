@@ -506,7 +506,7 @@ impl MappingUiState {
 pub type DetectorBuild = (
     GpuStatusIndicator,
     Option<Arc<GpuContext>>,
-    anyhow::Result<fcs_core::YuNetDetector>,
+    anyhow::Result<fcs_core::FaceDetector>,
     Option<fcs_core::EyeRefiner>,
 );
 
@@ -536,7 +536,7 @@ pub struct App2 {
     pub default_settings: AppSettings,
     pub settings_path: PathBuf,
     pub gpu: GpuPipeline,
-    pub detector: Option<Arc<fcs_core::YuNetDetector>>,
+    pub detector: Option<Arc<fcs_core::FaceDetector>>,
     /// Better eye points for levelling crops, when a runtime and the model are both present.
     ///
     /// Applied to every detection rather than gated on `settings.crop.eye_line_align`:

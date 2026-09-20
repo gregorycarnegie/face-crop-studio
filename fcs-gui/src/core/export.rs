@@ -3,7 +3,7 @@
 use crate::types::{App2, BatchFile, BatchFileStatus, JobMessage};
 
 use fcs_core::{
-    CropSettings as CoreCropSettings, Detection, YuNetDetector, calculate_crop_region,
+    CropSettings as CoreCropSettings, Detection, FaceDetector, calculate_crop_region,
     crop_face_from_image,
 };
 use fcs_utils::{
@@ -352,7 +352,7 @@ pub fn start_batch_export(app: &mut App2) {
 /// Run one batch job and convert any panic into a [`BatchFileStatus::Failed`].
 /// One corrupt/edge-case image must not abort the rest of the batch.
 fn run_batch_job_panic_safe(
-    detector: &YuNetDetector,
+    detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
     path: PathBuf,
     output_dir: &Path,
@@ -400,7 +400,7 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 #[allow(clippy::too_many_arguments)]
 fn run_batch_sequential(
     tasks: Vec<(usize, PathBuf, Option<PathBuf>)>,
-    detector: &YuNetDetector,
+    detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
@@ -431,7 +431,7 @@ fn run_batch_sequential(
 }
 
 fn run_batch_job(
-    detector: &YuNetDetector,
+    detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
     path: PathBuf,
     output_dir: &Path,

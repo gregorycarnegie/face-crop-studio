@@ -23,7 +23,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use fcs_core::YuNetDetector;
+use fcs_core::FaceDetector;
 use fcs_utils::{SUPPORTED_IMAGE_EXTENSIONS, normalize_path};
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
@@ -85,7 +85,7 @@ fn take_settled(pending: &mut Pending, quiet: Duration) -> Vec<PathBuf> {
 pub fn run(
     dir: &Path,
     ctx: &workflow::BatchContext<'_>,
-    detector: &Arc<YuNetDetector>,
+    detector: &Arc<FaceDetector>,
     annotate_dir: &Arc<Option<PathBuf>>,
     crop_enabled: bool,
     crop_output_dir: &Arc<Option<PathBuf>>,
@@ -161,7 +161,7 @@ pub fn run(
 fn process_batch(
     paths: Vec<PathBuf>,
     ctx: &workflow::BatchContext<'_>,
-    detector: &Arc<YuNetDetector>,
+    detector: &Arc<FaceDetector>,
     annotate_dir: &Arc<Option<PathBuf>>,
     crop_enabled: bool,
     crop_output_dir: &Arc<Option<PathBuf>>,

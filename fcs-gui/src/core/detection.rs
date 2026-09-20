@@ -7,8 +7,8 @@ use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_c
 
 use anyhow::{Context as AnyhowContext, Result};
 use fcs_core::{
-    CpuPreprocessor, PostprocessConfig, PreprocessConfig, Preprocessor, WgpuPreprocessor,
-    YuNetDetector,
+    CpuPreprocessor, FaceDetector, PostprocessConfig, PreprocessConfig, Preprocessor,
+    WgpuPreprocessor, YuNetDetector,
 };
 use fcs_utils::{
     GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image,
@@ -27,7 +27,7 @@ pub fn build_detector(
 ) -> (
     GpuStatusIndicator,
     Option<Arc<GpuContext>>,
-    Result<YuNetDetector>,
+    Result<FaceDetector>,
     Option<fcs_core::EyeRefiner>,
 ) {
     let (preprocessor, gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
@@ -97,10 +97,16 @@ pub fn build_detector(
         build_cpu()
     };
 
-    // Reported once, after selection: which backend wins depends on what is
-    // installed and what the GPU offered, not on the settings alone.
+    // SCRFD when its model and a runtime are both present, YuNet otherwise, which is why the
+    // line below names the model as well as the backend: neither the settings nor the hardware
+    // alone say which one won. See `fcs_core::face_detector`.
+    let detector_result = detector_result.map(FaceDetector::new);
     if let Ok(detector) = &detector_result {
-        info!("Detection backend: {}", detector.inference_backend());
+        info!(
+            "Detector: {} on {}",
+            detector.model_name(),
+            detector.inference_backend()
+        );
     }
 
     // Built here so it lands on the same background thread as the detector (experiment 81):
@@ -254,7 +260,7 @@ fn rotate_image(image: Arc<DynamicImage>, rotation_deg: f32) -> Arc<DynamicImage
 }
 
 pub fn perform_detection(
-    detector: Arc<YuNetDetector>,
+    detector: Arc<FaceDetector>,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
     path: PathBuf,
     rotation_deg: f32,
@@ -319,7 +325,7 @@ pub fn perform_detection(
 }
 
 pub fn perform_detection_from_image(
-    detector: Arc<YuNetDetector>,
+    detector: Arc<FaceDetector>,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
     image: Arc<DynamicImage>,
     synthetic_path: PathBuf,
@@ -431,7 +437,7 @@ pub fn spawn_webcam_stream(
 pub fn spawn_webcam_detection(
     frame_number: u32,
     image: Arc<DynamicImage>,
-    detector: Arc<YuNetDetector>,
+    detector: Arc<FaceDetector>,
     job_tx: mpsc::Sender<JobMessage>,
 ) {
     rayon::spawn(move || {
@@ -470,7 +476,7 @@ pub fn spawn_detection_job_from_image(
     job_id: u64,
     image: Arc<DynamicImage>,
     synthetic_path: PathBuf,
-    detector: Option<Arc<YuNetDetector>>,
+    detector: Option<Arc<FaceDetector>>,
     eye_refiner: Option<Arc<fcs_core::EyeRefiner>>,
     job_tx: mpsc::Sender<JobMessage>,
 ) {
@@ -504,7 +510,7 @@ pub fn spawn_detection_job_from_image(
 pub fn spawn_detection_job(
     job_id: u64,
     path: PathBuf,
-    detector: Option<Arc<YuNetDetector>>,
+    detector: Option<Arc<FaceDetector>>,
     eye_refiner: Option<Arc<fcs_core::EyeRefiner>>,
     rotation_deg: f32,
     auto_orient_exif: bool,

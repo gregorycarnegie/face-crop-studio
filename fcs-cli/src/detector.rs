@@ -4,8 +4,8 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use fcs_core::{
-    CpuPreprocessor, PostprocessConfig, PreprocessConfig, Preprocessor, WgpuPreprocessor,
-    YuNetDetector,
+    CpuPreprocessor, FaceDetector, PostprocessConfig, PreprocessConfig, Preprocessor,
+    WgpuPreprocessor, YuNetDetector,
 };
 use fcs_utils::{config::GpuSettings, gpu::GpuStatusIndicator};
 use log::{info, warn};
@@ -24,11 +24,17 @@ pub fn build_cli_detector(
     postprocess: &PostprocessConfig,
     gpu_runtime: &CliGpuRuntime,
     gpu: &GpuSettings,
-) -> Result<YuNetDetector> {
-    let detector = select_detector(model_path, preprocess, postprocess, gpu_runtime, gpu)?;
-    // Reported once, after selection: the backend depends on what is installed
-    // and what the GPU offered, so the settings alone do not say which one won.
-    info!("Detection backend: {}", detector.inference_backend());
+) -> Result<FaceDetector> {
+    let yunet = select_detector(model_path, preprocess, postprocess, gpu_runtime, gpu)?;
+    // SCRFD when its model and a runtime are both there, YuNet otherwise -- see
+    // `fcs_core::face_detector`. Reported once, after selection, because neither the
+    // settings nor the hardware alone say which detector and backend won.
+    let detector = FaceDetector::new(yunet);
+    info!(
+        "Detector: {} on {}",
+        detector.model_name(),
+        detector.inference_backend()
+    );
     Ok(detector)
 }
 

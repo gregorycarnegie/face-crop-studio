@@ -3,7 +3,7 @@
 use std::{fs, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
-use fcs_core::{YuNetDetector, crop_face_from_image};
+use fcs_core::{FaceDetector, crop_face_from_image};
 use fcs_utils::{
     MetadataContext, OutputOptions, QualityFilter, WebcamCapture, append_suffix_to_filename,
     config::AppSettings, estimate_sharpness, list_webcam_devices, normalize_path,
@@ -16,7 +16,7 @@ use crate::{annotate::annotate_image, args::DetectArgs, gpu::CliGpuRuntime};
 /// Process frames from webcam in real-time.
 pub fn run_webcam_mode(
     args: &DetectArgs,
-    detector: Arc<YuNetDetector>,
+    detector: Arc<FaceDetector>,
     settings: Arc<AppSettings>,
     gpu_runtime: Arc<CliGpuRuntime>,
     quality_filter: Arc<QualityFilter>,
