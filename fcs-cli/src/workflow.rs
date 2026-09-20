@@ -447,7 +447,7 @@ pub(crate) mod tests {
     use super::*;
     use clap::Parser;
     use fcs_core::{FillColor, Landmark};
-    use fcs_utils::{QualityFilter, config::ResizeQuality};
+    use fcs_utils::QualityFilter;
     use image::{Rgba, RgbaImage};
     use std::{fs, sync::Arc};
     use tempfile::tempdir;

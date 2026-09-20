@@ -152,109 +152,22 @@ fn run_cli_detection(
     Ok(parsed)
 }
 
-/// Limits against the OpenCV fixtures, matching `fcs-core/tests/parity.rs`.
-///
-/// The fixtures come from OpenCV's YuNet, which stretches a source to the model input; this
-/// detector letterboxes it instead (experiment 96), so the answers differ by more than
-/// rounding and coordinate equality is no longer the property to assert. The core parity
-/// test carries the measurements these numbers come from. Note that the old form passed the
-/// same `40.0` for the score as for pixels, so scores were not really being checked at all.
-const MAX_SCORE_DELTA: f64 = 0.03;
-const MIN_BOX_IOU: f64 = 0.70;
-const MAX_LANDMARK_FRACTION: f64 = 0.15;
-
-/// `[x, y, width, height]` overlap, as both sides store boxes.
-fn box_iou(a: &[f64], b: &[f64]) -> f64 {
-    let ix = (a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0]);
-    let iy = (a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1]);
-    let inter = ix.max(0.0) * iy.max(0.0);
-    let union = a[2] * a[3] + b[2] * b[3] - inter;
-    if union <= 0.0 { 0.0 } else { inter / union }
-}
-
-fn assert_detections_close(
-    actual: &[Detection],
-    expected: &[Detection],
-    extra_faces: usize,
-    image: &str,
-) {
-    assert_eq!(
-        actual.len(),
-        expected.len() + extra_faces,
-        "detection count mismatch for {image} (actual={}, fixture={} plus {extra_faces} known extra)",
-        actual.len(),
-        expected.len()
-    );
-
-    // Pair each fixture face with the actual face that overlaps it most, rather than by
-    // score rank: the two pipelines' scores differ by up to 0.0175, which is enough to swap
-    // the order of two similar faces and produce a confusing failure about the wrong pair.
-    let mut taken = vec![false; actual.len()];
-    for e in expected {
-        let best = actual
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !taken[*i])
-            .map(|(i, a)| (i, box_iou(&a.bbox, &e.bbox)))
-            .max_by(|x, y| x.1.total_cmp(&y.1));
-        let Some((idx, iou)) = best else {
-            panic!(
-                "no detection left to pair with fixture face {:?} in {image}",
-                e.bbox
-            );
-        };
-        assert!(
-            iou >= MIN_BOX_IOU,
-            "box overlap {iou:.4} below {MIN_BOX_IOU} for {image}: {:?} against fixture {:?}",
-            actual[idx].bbox,
-            e.bbox
-        );
-        taken[idx] = true;
-        let a = &actual[idx];
-        let score_delta = (a.score - e.score).abs();
-        assert!(
-            score_delta <= MAX_SCORE_DELTA,
-            "score {} against fixture {} for {image} (delta {score_delta}, limit {MAX_SCORE_DELTA})",
-            a.score,
-            e.score
-        );
-
-        let face = a.bbox[2].max(a.bbox[3]);
-        for (landmark_idx, (al, el)) in a.landmarks.iter().zip(e.landmarks.iter()).enumerate() {
-            let delta = (al[0] - el[0]).abs().max((al[1] - el[1]).abs());
-            assert!(
-                delta <= face * MAX_LANDMARK_FRACTION,
-                "landmark {landmark_idx} moved {delta:.2} px on a {face:.0} px face in \
-                 {image} ({:.1}%, limit {:.0}%)",
-                100.0 * delta / face,
-                100.0 * MAX_LANDMARK_FRACTION
-            );
-        }
-    }
-}
-
+/// One image's entry in the CLI's JSON, as much of it as the remaining tests read.
 #[derive(Debug, Deserialize)]
 struct CliDetectionRecord {
     image: String,
-    detections: Vec<Detection>,
+    detections: Vec<serde_json::Value>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct Detection {
-    score: f64,
-    bbox: [f64; 4],
-    landmarks: [[f64; 2]; 5],
-}
-
+/// Enough of the OpenCV fixture format to ask how many faces it recorded.
+///
+/// It used to mirror the whole shape -- scores, boxes, landmarks, the thresholds the fixture
+/// was produced at -- because `cli_detections_match_opencv_parity_samples` compared against
+/// them field by field. That test went with YuNet, and the one remaining use only asks whether
+/// the fixture is empty.
 #[derive(Debug, Deserialize)]
 struct FixtureFile {
-    #[serde(default)]
-    score_threshold: Option<f64>,
-    #[serde(default)]
-    nms_threshold: Option<f64>,
-    #[serde(default)]
-    top_k: Option<usize>,
-    detections: Vec<Detection>,
+    detections: Vec<serde_json::Value>,
 }
 
 #[test]

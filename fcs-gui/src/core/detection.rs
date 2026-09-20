@@ -6,10 +6,7 @@ use image::DynamicImage;
 use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
 
 use anyhow::{Context as AnyhowContext, Result};
-use fcs_core::{
-    CpuPreprocessor, FaceDetector, PostprocessConfig, PreprocessConfig, Preprocessor,
-    WgpuPreprocessor, YuNetDetector,
-};
+use fcs_core::{FaceDetector, Preprocessor, WgpuPreprocessor};
 use fcs_utils::{
     GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image,
     load_image_raw, quality::estimate_sharpness, resolve_data_path,
@@ -30,7 +27,10 @@ pub fn build_detector(
     Result<FaceDetector>,
     Option<fcs_core::EyeRefiner>,
 ) {
-    let (preprocessor, gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
+    // The preprocessor itself is no longer used for detection -- the detector does its own,
+    // on its own conventions -- but building it is still how the GPU context and its status are
+    // obtained, and the enhancement pipeline runs on that context.
+    let (_preprocessor, gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
         info!("Using shared GPU context from egui renderer");
         build_preprocessor_from_context(shared_ctx, settings)
     } else {
@@ -47,10 +47,6 @@ pub fn build_detector(
     };
     let model_path = resolve_data_path(configured_model_path);
     let model_path_display = model_path.display().to_string();
-
-    let preprocess: PreprocessConfig = settings.input.into();
-    let postprocess: PostprocessConfig = (&settings.detection).into();
-    let prefer_gpu_inference = settings.gpu.enabled && settings.gpu.inference;
 
     // The detector, on whichever engine is available: ONNX Runtime, the WGSL kernels, or the
     // built-in CPU graph. Loaded here so it lands on the same background thread the GPU
