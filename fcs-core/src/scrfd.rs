@@ -1,0 +1,360 @@
+//! SCRFD: the detector trained on this project's own licence-clean data.
+//!
+//! It finds 86.0% of the faces in the Open Images test split at 0.11 false positives per image,
+//! against YuNet's 71.6% at 0.14, and on a corpus neither model has seen it finds 135 faces
+//! YuNet misses while missing 13 it finds (`tools/dataset/SCRFD_80K.md`). It costs about 10%
+//! more per image: 6.4 ms against 5.8 at 640x640 on ONNX Runtime.
+//!
+//! **It does not replace YuNet, it is preferred over it.** YuNet's topology is compiled into
+//! the built-in CPU graph (`crate::yunet`) and the WGSL kernels, while this model runs only
+//! under ONNX Runtime, so making it the sole detector would leave a machine without a runtime
+//! with no detector at all rather than a slower one. [`ScrfdDetector::load`] returns `None`
+//! when the runtime or the model file is missing and the caller keeps YuNet -- the same rule
+//! [`crate::EyeRefiner`] follows.
+//!
+//! The graph is exported by `tools/dataset/export_scrfd.py` and emits nine raw tensors, three
+//! per stride: class scores already sigmoided, box distances, and keypoint distances, both in
+//! units of the stride. No NMS inside the graph, so the decoding below is the whole of it.
+
+use std::path::Path;
+
+use anyhow::Result;
+use image::DynamicImage;
+use log::{debug, info, warn};
+
+use crate::{
+    nms::apply_nms_in_place,
+    postprocess::{BoundingBox, Detection, Landmark},
+};
+
+/// The exported graph's fixed input side.
+pub const INPUT_SIZE: u32 = 640;
+
+/// Strides the head predicts at, in the order their tensors are matched.
+const STRIDES: [u32; 3] = [8, 16, 32];
+
+/// Anchors per cell, from the config's two scales at one ratio.
+const ANCHORS_PER_CELL: usize = 2;
+
+/// Landmarks the head predicts: the same five, in the same order, that YuNet emits.
+const LANDMARKS: usize = 5;
+
+/// Workspace-relative location of the exported model.
+const DEFAULT_MODEL: &str = "models/scrfd80k_500m_640.onnx";
+
+/// A loaded SCRFD detector.
+#[derive(Debug)]
+pub struct ScrfdDetector {
+    session: fcs_ort::Session,
+}
+
+/// How a source image was laid onto the square input, and what undoes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Letterbox {
+    /// Factor the source was multiplied by; detections are divided by it to come back.
+    pub(crate) scale: f32,
+}
+
+impl ScrfdDetector {
+    /// Load from the default location, or `None` when it cannot run.
+    ///
+    /// `None` is the ordinary outcome without ONNX Runtime, not an error: the caller keeps
+    /// whatever detector it already has.
+    pub fn load() -> Option<Self> {
+        Self::load_from(fcs_utils::resolve_data_path(DEFAULT_MODEL))
+    }
+
+    /// Load from an explicit path. See [`Self::load`] for the `None` cases.
+    pub fn load_from<P: AsRef<Path>>(path: P) -> Option<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            debug!("SCRFD not loaded: no model at {}", path.display());
+            return None;
+        }
+        let environment = fcs_ort::Environment::shared().or_else(|| {
+            debug!("SCRFD not loaded: no compatible ONNX Runtime");
+            None
+        })?;
+        match fcs_ort::Session::new(&environment, path, fcs_ort::SessionOptions::default()) {
+            Ok(session) => {
+                info!("SCRFD detector loaded from {}", path.display());
+                Some(Self { session })
+            }
+            Err(err) => {
+                warn!(
+                    "SCRFD at {} failed to open a session ({err})",
+                    path.display()
+                );
+                None
+            }
+        }
+    }
+
+    /// Detect faces, in the source image's own pixel coordinates.
+    ///
+    /// `score_threshold` is the operating point: 0.5 was chosen by eye on a corpus neither this
+    /// model nor YuNet had seen, where 0.4 kept 32 false positives among the 60 largest
+    /// disagreements and 0.5 kept 7 of them while losing 2 of 25 real faces (SCRFD_80K.md).
+    pub fn detect(
+        &self,
+        image: &DynamicImage,
+        score_threshold: f32,
+        nms_threshold: f32,
+    ) -> Result<Vec<Detection>> {
+        let (input, letterbox) = preprocess(image, INPUT_SIZE);
+        let shape = [1usize, 3, INPUT_SIZE as usize, INPUT_SIZE as usize];
+        let outputs = self.session.run(&input, &shape)?;
+
+        let mut detections = decode(&outputs, letterbox, score_threshold, INPUT_SIZE)?;
+        detections.sort_by(|a, b| b.score.total_cmp(&a.score));
+        apply_nms_in_place(&mut detections, nms_threshold);
+        Ok(detections)
+    }
+}
+
+/// Resize into the top-left of a square canvas and normalise, as the model was trained.
+///
+/// Three details that are all load-bearing, and all silent when wrong: the source goes to the
+/// **top-left** rather than being centred the way `crate::preprocess` letterboxes for YuNet;
+/// channels are **RGB**, not YuNet's BGR; and the padding is normalised along with everything
+/// else. The Python builds a zeroed `uint8` canvas and then subtracts, so the padding is
+/// `(0 - 127.5) / 128`, not zero, and a model fed zeroed padding sees a border it never met.
+pub(crate) fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
+    let (width, height) = (image.width().max(1), image.height().max(1));
+    let ratio = height as f32 / width as f32;
+    let (new_width, new_height) = if ratio > 1.0 {
+        (((size as f32 / ratio) as u32).max(1), size)
+    } else {
+        (size, ((size as f32 * ratio) as u32).max(1))
+    };
+    let scale = new_height as f32 / height as f32;
+
+    let resized = fcs_utils::resize_image(
+        image,
+        new_width,
+        new_height,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let plane = (size * size) as usize;
+    // The padding value, not 0.0: see the note above.
+    let mut tensor = vec![(0.0 - 127.5) / 128.0; 3 * plane];
+    for y in 0..new_height.min(size) {
+        for x in 0..new_width.min(size) {
+            let pixel = resized.get_pixel(x, y);
+            let index = (y * size + x) as usize;
+            for channel in 0..3 {
+                tensor[channel * plane + index] = (pixel[channel] as f32 - 127.5) / 128.0;
+            }
+        }
+    }
+    (tensor, Letterbox { scale })
+}
+
+/// Turn the nine raw tensors into detections in source-image coordinates.
+///
+/// Outputs are matched by shape rather than by position: the last dimension says which head a
+/// tensor came from (1 = score, 4 = box distance, 10 = keypoint distance) and the row count says
+/// which stride (640/8 squared times two anchors = 12,800, then 3,200, then 800). Matching by
+/// index would work today and break silently the first time the exporter reorders anything.
+pub(crate) fn decode(
+    outputs: &[fcs_ort::OutputTensor],
+    letterbox: Letterbox,
+    score_threshold: f32,
+    size: u32,
+) -> Result<Vec<Detection>> {
+    let mut detections = Vec::new();
+
+    for (level, stride) in STRIDES.iter().enumerate() {
+        let cells = (size / stride) as usize;
+        let rows = cells * cells * ANCHORS_PER_CELL;
+        let scores = find(outputs, rows, 1, "scores", level)?;
+        let boxes = find(outputs, rows, 4, "boxes", level)?;
+        let points = find(outputs, rows, LANDMARKS * 2, "keypoints", level)?;
+        let stride = *stride as f32;
+
+        for row in 0..rows {
+            let score = scores[row];
+            if score < score_threshold {
+                continue;
+            }
+            // Rows run spatially with the anchors interleaved, so a cell's anchors are adjacent.
+            let cell = row / ANCHORS_PER_CELL;
+            let centre_x = (cell % cells) as f32 * stride;
+            let centre_y = (cell / cells) as f32 * stride;
+
+            // distance2bbox: left, top, right, bottom distances outward from the centre.
+            let d = &boxes[row * 4..row * 4 + 4];
+            let x1 = centre_x - d[0] * stride;
+            let y1 = centre_y - d[1] * stride;
+            let x2 = centre_x + d[2] * stride;
+            let y2 = centre_y + d[3] * stride;
+
+            let mut landmarks = [Landmark::new(0.0, 0.0); LANDMARKS];
+            for (index, landmark) in landmarks.iter_mut().enumerate() {
+                let dx = points[row * LANDMARKS * 2 + index * 2];
+                let dy = points[row * LANDMARKS * 2 + index * 2 + 1];
+                *landmark = Landmark::new(
+                    (centre_x + dx * stride) / letterbox.scale,
+                    (centre_y + dy * stride) / letterbox.scale,
+                );
+            }
+
+            detections.push(Detection {
+                bbox: BoundingBox {
+                    x: x1 / letterbox.scale,
+                    y: y1 / letterbox.scale,
+                    width: (x2 - x1) / letterbox.scale,
+                    height: (y2 - y1) / letterbox.scale,
+                },
+                landmarks,
+                score,
+            });
+        }
+    }
+    Ok(detections)
+}
+
+/// The tensor with this row count and channel count, or a readable error.
+fn find<'a>(
+    outputs: &'a [fcs_ort::OutputTensor],
+    rows: usize,
+    channels: usize,
+    what: &str,
+    level: usize,
+) -> Result<&'a [f32]> {
+    outputs
+        .iter()
+        .find(|tensor| {
+            let shape = &tensor.shape;
+            shape.last() == Some(&channels) && tensor.data.len() == rows * channels
+        })
+        .map(|tensor| tensor.data.as_slice())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "SCRFD output for {what} at stride level {level} is missing: wanted {rows}x{channels}, \
+                 the model returned {:?}",
+                outputs.iter().map(|t| t.shape.clone()).collect::<Vec<_>>()
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgb, RgbImage};
+
+    fn tensor(shape: Vec<usize>, data: Vec<f32>) -> fcs_ort::OutputTensor {
+        fcs_ort::OutputTensor { shape, data }
+    }
+
+    #[test]
+    fn a_wide_image_is_letterboxed_along_the_top() {
+        // 1000x500 is twice as wide as tall, so it fills the width and half the height.
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(1000, 500, Rgb([255, 255, 255])));
+        let (input, fit) = preprocess(&image, 640);
+        assert!((fit.scale - 0.64).abs() < 1e-6, "scale was {}", fit.scale);
+
+        let plane = 640 * 640;
+        // Inside the image: white, normalised.
+        assert!((input[0] - (255.0 - 127.5) / 128.0).abs() < 1e-6);
+        // Below it: padding, which must carry the normalised zero, not zero.
+        let below = 500 * 640; // first row past the resized content
+        assert!(
+            (input[below] - (0.0 - 127.5) / 128.0).abs() < 1e-6,
+            "padding was {}",
+            input[below]
+        );
+        assert_eq!(input.len(), 3 * plane);
+    }
+
+    #[test]
+    fn a_tall_image_fills_the_height() {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(500, 1000, Rgb([10, 20, 30])));
+        let (_, fit) = preprocess(&image, 640);
+        assert!((fit.scale - 0.64).abs() < 1e-6, "scale was {}", fit.scale);
+    }
+
+    /// One anchor over threshold at stride 32, decoded by hand.
+    fn single_detection_outputs(score: f32) -> Vec<fcs_ort::OutputTensor> {
+        let mut outputs = Vec::new();
+        for stride in STRIDES {
+            let cells = (640 / stride) as usize;
+            let rows = cells * cells * ANCHORS_PER_CELL;
+            let mut scores = vec![0.0f32; rows];
+            let mut boxes = vec![0.0f32; rows * 4];
+            let mut points = vec![0.0f32; rows * LANDMARKS * 2];
+            if stride == 32 {
+                // Cell 5 -> centre (5*32, 0) = (160, 0); first anchor of that cell is row 10.
+                scores[10] = score;
+                boxes[40..44].copy_from_slice(&[1.0, 0.0, 1.0, 2.0]);
+                points[100] = 0.5; // first landmark, x only
+            }
+            outputs.push(tensor(vec![1, rows, 1], scores));
+            outputs.push(tensor(vec![1, rows, 4], boxes));
+            outputs.push(tensor(vec![1, rows, LANDMARKS * 2], points));
+        }
+        outputs
+    }
+
+    #[test]
+    fn decode_places_a_box_using_stride_scaled_distances() {
+        let outputs = single_detection_outputs(0.9);
+        let found = decode(&outputs, Letterbox { scale: 1.0 }, 0.5, 640).unwrap();
+        assert_eq!(found.len(), 1);
+        let detection = &found[0];
+        // centre (160, 0); distances (1,0,1,2) * stride 32.
+        assert!(
+            (detection.bbox.x - 128.0).abs() < 1e-3,
+            "x {}",
+            detection.bbox.x
+        );
+        assert!((detection.bbox.y - 0.0).abs() < 1e-3);
+        assert!(
+            (detection.bbox.width - 64.0).abs() < 1e-3,
+            "w {}",
+            detection.bbox.width
+        );
+        assert!(
+            (detection.bbox.height - 64.0).abs() < 1e-3,
+            "h {}",
+            detection.bbox.height
+        );
+        assert!(
+            (detection.landmarks[0].x - 176.0).abs() < 1e-3,
+            "kp {}",
+            detection.landmarks[0].x
+        );
+    }
+
+    #[test]
+    fn decode_undoes_the_letterbox_scale() {
+        let outputs = single_detection_outputs(0.9);
+        let found = decode(&outputs, Letterbox { scale: 0.5 }, 0.5, 640).unwrap();
+        assert!(
+            (found[0].bbox.x - 256.0).abs() < 1e-3,
+            "x {}",
+            found[0].bbox.x
+        );
+        assert!((found[0].bbox.width - 128.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn scores_below_the_threshold_are_dropped() {
+        let outputs = single_detection_outputs(0.3);
+        assert!(
+            decode(&outputs, Letterbox { scale: 1.0 }, 0.5, 640)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_missing_output_is_an_error_naming_what_was_wanted() {
+        let outputs = vec![tensor(vec![1, 12800, 1], vec![0.0; 12800])];
+        let err = decode(&outputs, Letterbox { scale: 1.0 }, 0.5, 640)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("boxes"), "{err}");
+    }
+}

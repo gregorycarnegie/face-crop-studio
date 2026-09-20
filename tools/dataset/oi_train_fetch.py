@@ -129,8 +129,8 @@ def main() -> None:
         (args.data / "train_fetch_failed.txt").write_text(
             "".join(f"{i}\t{e}\n" for i, e in failed), encoding="utf-8")
         gone = {i for i, _ in failed}
-        kept = [r for r in csv.DictReader(open(manifest, newline="", encoding="utf-8"))
-                if r["ImageID"] not in gone]
+        with open(manifest, newline="", encoding="utf-8") as f:
+            kept = [r for r in csv.DictReader(f) if r["ImageID"] not in gone]
         with open(manifest, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=list(kept[0].keys()))
             writer.writeheader()

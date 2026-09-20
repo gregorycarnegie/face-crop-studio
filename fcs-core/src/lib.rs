@@ -75,6 +75,8 @@ pub mod postprocess;
 pub mod preprocess;
 /// Standard crop size presets for face crops.
 pub mod presets;
+/// SCRFD, the detector trained on this project's own data (optional, ONNX Runtime only).
+pub mod scrfd;
 /// The f32 tensor shared by every stage.
 pub mod tensor;
 
@@ -92,6 +94,7 @@ pub use preprocess::{
     CpuPreprocessor, InputSize, PreprocessConfig, PreprocessOutput, Preprocessor, WgpuPreprocessor,
     preprocess_dynamic_image, preprocess_image, preprocess_image_with,
 };
+pub use scrfd::ScrfdDetector;
 
 /// Returns the crate version for diagnostics.
 pub fn version() -> &'static str {
