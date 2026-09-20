@@ -56,9 +56,21 @@ runs:
       env:
         DAV1D_VERSION: ${{ inputs.dav1d-version }}
       run: |
-        curl -fsSL -o /tmp/dav1d.tar.xz \
-          "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz"
-        tar -xf /tmp/dav1d.tar.xz -C /tmp
+        # download.videolan.org timed out twice in a row from both Linux runners (135 s to
+        # connect, curl 28), failing two release builds for a reason unrelated to the release.
+        # libde265 and libheif below already come from GitHub; dav1d was the one dependency
+        # resting on a single host, so it now retries and then falls back to the project's own
+        # GitHub mirror, whose tag archive meson builds identically.
+        RETRY="--retry 3 --retry-all-errors --retry-delay 5 --connect-timeout 20"
+        if curl -fsSL $RETRY -o /tmp/dav1d.tar.xz \
+             "https://download.videolan.org/pub/videolan/dav1d/${DAV1D_VERSION}/dav1d-${DAV1D_VERSION}.tar.xz"; then
+          tar -xf /tmp/dav1d.tar.xz -C /tmp
+        else
+          echo "download.videolan.org unreachable; falling back to the GitHub mirror" >&2
+          curl -fsSL $RETRY -o /tmp/dav1d.tar.gz \
+            "https://github.com/videolan/dav1d/archive/refs/tags/${DAV1D_VERSION}.tar.gz"
+          tar -xf /tmp/dav1d.tar.gz -C /tmp
+        fi
         meson setup "/tmp/dav1d-${DAV1D_VERSION}/build" "/tmp/dav1d-${DAV1D_VERSION}" \
           --prefix=/usr/local \
           --libdir=lib \
