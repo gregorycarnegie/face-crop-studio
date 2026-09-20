@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0-rc3] - 2026-09-20
+
+rc2 built and installed correctly on every platform; this folds in what running
+it turned up.
+
+### Fixed
+
+- **SCRFD reported three landmarks it had never learned.** The detection JSON
+  carried five points per face, of which the nose and mouth corners sat on top of
+  each other above the face box. The model's landmark head was trained on eye
+  pairs with nose and mouth weighted to zero, so those outputs never received a
+  gradient and decoded to the anchor centre. Cropping was unaffected -- it reads
+  the two eyes, which the refiner replaces -- but the JSON published them and both
+  the CLI's `--annotate` and the GUI's preview drew all five. They now read as the
+  all-zero "absent" point, which the drawing code skips.
+- **The packaged-build check in the release workflow matched a log line that had
+  been renamed**, so a correct Windows package failed its own verification. Only a
+  tagged build runs that workflow, which is what these candidates are for.
+- **One unreachable host could fail the whole Linux release.** dav1d was fetched
+  from a single mirror, which timed out from both Linux runners twice in a row. It
+  now retries and falls back to the project's GitHub mirror.
+
+### Changed
+
+- **The YuNet fallback is no longer built when SCRFD is going to replace it.** On
+  the GPU path that was five compiled WGSL pipelines and the VRAM they hold, for a
+  detector that was then never called.
+- **The GUI status line names the detector**: "SCRFD-80k ready on onnxruntime", or
+  "YuNet 2023 ready on wgsl-gpu" without a runtime. Which one you get depends on
+  what is installed, and until now only the log said so.
+
 ## [1.8.0-rc2] - 2026-09-20
 
 The second candidate, for the same reason as the first: this one changes how the
@@ -1833,7 +1864,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc2...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc3...HEAD
+[1.8.0-rc3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc2...v1.8.0-rc3
 [1.8.0-rc2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc1...v1.8.0-rc2
 [1.8.0-rc1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0-rc1
 [1.7.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...v1.7.0
