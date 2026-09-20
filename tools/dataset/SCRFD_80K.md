@@ -147,6 +147,64 @@ judged, so the precision figure belongs to large detections and says nothing abo
 labels are `Human face` boxes only, so a dog scoring 0.47 is a false positive by this project's
 definition, and this is the first measurement of how often that happens.
 
+## What shipping it would take
+
+Scoped 20 September 2026, by reading the engines rather than estimating.
+
+**The export is not blocked after all, and is done.** `tools/scrfd2onnx.py` fails under torch
+2.x because it builds its dummy input through mmdet's pipeline, which hands the tracer numpy
+arrays. The model traces fine when handed a plain tensor, so `export_scrfd.py` wraps
+`feature_test` -- extract features, run the head, return the raw per-stride tensors -- and
+exports that. No NMS in the graph, which is the part a tracer chokes on anyway.
+`scrfd80k_500m_640.onnx`, 2.5 MB, matches torch to **3.8e-06**.
+
+Two traps in verifying it, both of which first looked like a broken export. Under
+`torch.onnx.is_in_onnx_export()` the head switches to the deployment layout, so each
+`(1, A*C, H, W)` map becomes `(1, H*W*A, C)`; and the class maps get a sigmoid the eager path
+does not apply. Compare raw against exported and the "error" is 6.7. Reshape and sigmoid the
+reference first and it is 3.8e-06. That layout is what upstream's wrapper and
+`eval_eye_error.py` already decode.
+
+**Cost: 6.4 ms/image against YuNet's 5.8 on ONNX Runtime CPU at 640x640** -- 10% slower for a
+much better detector, and 2.5 MB against 232 KB on disk.
+
+**The op inventory says no new kernels are needed.** The graph is 60 convolutions (40 dense,
+20 depthwise), 41 ReLU, 4 Add, 2 nearest Resize, 3 Sigmoid, and no BatchNorm at all -- the
+export folded it into the convolution weights. Everything else is Reshape/Transpose/Concat
+plumbing, which matters only to a generic interpreter; both engines run a compiled topology and
+read weights by name, so that plumbing becomes Rust rather than kernels. Against what exists:
+
+| Needed | GPU (WGSL) | Built-in CPU graph |
+|---|---|---|
+| 1x1 dense, stride 1 (23) | `Kernel::Pointwise` | pointwise path |
+| 3x3 depthwise, stride 1 (16) | `Kernel::Depthwise` | depthwise path |
+| 3x3 dense, stride 1 (14) | `Kernel::General` | general path |
+| 3x3 depthwise, **stride 2** (4) | `Kernel::Grouped` -- exists, reads stride from its uniforms | general path (`groups`) |
+| 3x3 dense, stride 2 (3) | `Kernel::General` (YuNet's own stem) | general path |
+| ReLU (41), Add (4), nearest 2x (2) | present | present |
+| Sigmoid (3) | `ActivationKind::Sigmoid` | 3 final outputs; plain Rust |
+
+So a port is topology and decode, not infrastructure. For scale: YuNet's own topology is 208
+lines of constants plus 67 of macros, executed by 366 (CPU) and 373 (GPU) lines. SCRFD-500M is
+bigger -- MobileNetV1 (2,3,2,6 blocks), PAFPN, and a head that does not share weights across
+strides -- but the same shape of work, and its decode is *simpler* than YuNet's because
+`loss_dfl=False` means direct distance regression with no distribution to integrate.
+
+**The staging that matters.** Replacing YuNet outright would make the app ONNX-Runtime-only,
+and a machine without it would have no detector rather than a slower one. Keeping YuNet as the
+fallback avoids that entirely: SCRFD when a runtime is present (which every release bundles),
+YuNet's built-in graph when it is not. That is the same degradation rule `EyeRefiner` already
+uses, it needs no port, and it is what makes the port optional rather than a prerequisite.
+
+* **Phase 1, small:** decode the 9 raw tensors in Rust (anchors at strides 8/16/32, two scales,
+  `distance2bbox`, keypoints, then the existing NMS), a detector that selects SCRFD under ORT
+  and falls back to YuNet, ship the model through the fetch-and-verify path the refiner already
+  uses, parity tests against the numpy decoder.
+* **Phase 2, optional:** declare the topology and run it on the CPU and WGSL engines, so the
+  better detector no longer needs ORT. Mechanical, and `backend_parity` plus tract (dev-only)
+  are the oracles -- though whether tract accepts this graph is untested, and it needed
+  `onnxsim` for YuNet.
+
 ## What this does not establish
 
 * **Precision on small faces is unmeasured.** See above: the judged sample was the 60 largest

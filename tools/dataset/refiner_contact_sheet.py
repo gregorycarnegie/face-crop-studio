@@ -19,13 +19,13 @@ import base64
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_eye_refiner import Refiner  # noqa: E402 - same directory by design
 
@@ -43,8 +43,7 @@ def to_local(path: str) -> str:
     the Windows interpreter. So the drive letter is mapped to /mnt as well.
     """
     path = path.replace("\\", "/")
-    if path.startswith("//?/"):
-        path = path[4:]
+    path = path.removeprefix("//?/")
     if sys.platform != "win32" and re.match(r"^[A-Za-z]:/", path):
         path = f"/mnt/{path[0].lower()}/{path[3:]}"
     return path

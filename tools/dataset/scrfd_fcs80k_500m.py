@@ -38,38 +38,38 @@ _base_ = './scrfd_500m_bnkps.py'
 data_root = '/home/grego/work/oi80k/'
 
 epochs = 100
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=1500,
-    warmup_ratio=0.001,
-    step=[69, 85])
+lr_config = {
+    'policy': 'step',
+    'warmup': 'linear',
+    'warmup_iters': 1500,
+    'warmup_ratio': 0.001,
+    'step': [69, 85]}
 total_epochs = epochs
-checkpoint_config = dict(interval=10)
+checkpoint_config = {'interval': 10}
 
 # Overlap (intersection over the anchor's own area) above which an anchor sitting on an
 # ignore region is neither positive nor negative. 0.5 is mmdet's usual value where it is set.
 IGNORE_IOF = 0.5
 
-model = dict(
-    bbox_head=dict(
-        train_cfg=dict(assigner=dict(type='ATSSAssigner', topk=9,
-                                     ignore_iof_thr=IGNORE_IOF))))
-train_cfg = dict(assigner=dict(type='ATSSAssigner', topk=9, ignore_iof_thr=IGNORE_IOF))
+model = {
+    'bbox_head': {
+        'train_cfg': {'assigner': {'type': 'ATSSAssigner', 'topk': 9,
+                                     'ignore_iof_thr': IGNORE_IOF}}}}
+train_cfg = {'assigner': {'type': 'ATSSAssigner', 'topk': 9, 'ignore_iof_thr': IGNORE_IOF}}
 
-data = dict(
-    samples_per_gpu=64,
-    workers_per_gpu=12,
-    train=dict(
-        ann_file=data_root + 'labelv2_train_all.txt',
-        img_prefix=data_root + 'images/',
-    ),
-    val=dict(
-        ann_file=data_root + 'labelv2_test_all.txt',
-        img_prefix=data_root + 'images/',
-    ),
-    test=dict(
-        ann_file=data_root + 'labelv2_test_all.txt',
-        img_prefix=data_root + 'images/',
-    ),
-)
+data = {
+    'samples_per_gpu': 64,
+    'workers_per_gpu': 12,
+    'train': {
+        'ann_file': data_root + 'labelv2_train_all.txt',
+        'img_prefix': data_root + 'images/',
+    },
+    'val': {
+        'ann_file': data_root + 'labelv2_test_all.txt',
+        'img_prefix': data_root + 'images/',
+    },
+    'test': {
+        'ann_file': data_root + 'labelv2_test_all.txt',
+        'img_prefix': data_root + 'images/',
+    },
+}

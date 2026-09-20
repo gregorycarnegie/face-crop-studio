@@ -44,8 +44,7 @@ def load(path: Path) -> dict[str, list]:
 def to_local(path: str) -> str:
     """A Windows path from the JSON, opened wherever this runs (WSL included)."""
     path = path.replace("\\", "/")
-    if path.startswith("//?/"):
-        path = path[4:]
+    path = path.removeprefix("//?/")
     if sys.platform != "win32" and re.match(r"^[A-Za-z]:/", path):
         path = f"/mnt/{path[0].lower()}/{path[3:]}"
     return path
