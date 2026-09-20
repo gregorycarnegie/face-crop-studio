@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0-rc5] - 2026-09-20
+
+### Fixed
+
+- **The GUI named the wrong detector.** The header badge hard-coded
+  `YuNet 640 · ready` and the status bar took its name from the configured model
+  path, which only ever points at the YuNet fallback -- so both read YuNet while
+  SCRFD was detecting. Both now report the detector that actually loaded. The
+  status line added in rc3 was correct but is not what the window displays.
+
 ## [1.8.0-rc4] - 2026-09-20
 
 rc3 was correct in a packaged run -- SCRFD selected, the untrained landmarks
@@ -1878,7 +1888,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc4...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc5...HEAD
+[1.8.0-rc5]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc4...v1.8.0-rc5
 [1.8.0-rc4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc3...v1.8.0-rc4
 [1.8.0-rc3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc2...v1.8.0-rc3
 [1.8.0-rc2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc1...v1.8.0-rc2
