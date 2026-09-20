@@ -131,7 +131,7 @@ impl FaceDetector {
     /// The inference backend underneath, for diagnostics.
     pub fn inference_backend(&self) -> &'static str {
         match (&self.scrfd, &self.yunet) {
-            (Some(_), _) => "onnxruntime",
+            (Some(scrfd), _) => scrfd.engine(),
             (None, Some(yunet)) => yunet.inference_backend(),
             (None, None) => "none",
         }

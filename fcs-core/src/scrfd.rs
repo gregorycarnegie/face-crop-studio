@@ -53,10 +53,22 @@ const TRAINED_LANDMARKS: usize = 2;
 /// Workspace-relative location of the exported model.
 const DEFAULT_MODEL: &str = "models/scrfd80k_500m_640.onnx";
 
-/// A loaded SCRFD detector.
+/// A loaded SCRFD detector, on whichever engine is available.
 #[derive(Debug)]
 pub struct ScrfdDetector {
-    session: fcs_ort::Session,
+    backend: Backend,
+}
+
+/// Where the network actually runs.
+///
+/// ONNX Runtime first because it is the fastest and every release bundles it, then the WGSL
+/// engine, then the built-in CPU graph. All three were checked against each other on the same
+/// input: 1.1e-05 between GPU and ONNX Runtime, 1.2e-05 between CPU and ONNX Runtime.
+#[derive(Debug)]
+enum Backend {
+    Ort(fcs_ort::Session),
+    Gpu(Box<(crate::gpu::GpuInferenceOps, gpu::ScrfdGpuWeights)>),
+    Cpu(Box<plan::ScrfdWeights>),
 }
 
 /// How a source image was laid onto the square input, and what undoes it.
@@ -82,22 +94,78 @@ impl ScrfdDetector {
             debug!("SCRFD not loaded: no model at {}", path.display());
             return None;
         }
-        let environment = fcs_ort::Environment::shared().or_else(|| {
-            debug!("SCRFD not loaded: no compatible ONNX Runtime");
-            None
-        })?;
+        let Some(environment) = fcs_ort::Environment::shared() else {
+            // Not a failure any more: the same network runs on the built-in engines, which is
+            // what lets YuNet leave the packages entirely.
+            debug!("no ONNX Runtime for SCRFD; using the built-in engines");
+            return Self::load_builtin(path);
+        };
         match fcs_ort::Session::new(&environment, path, fcs_ort::SessionOptions::default()) {
             Ok(session) => {
                 info!("SCRFD detector loaded from {}", path.display());
-                Some(Self { session })
+                Some(Self {
+                    backend: Backend::Ort(session),
+                })
             }
             Err(err) => {
                 warn!(
-                    "SCRFD at {} failed to open a session ({err})",
+                    "SCRFD at {} failed to open a session ({err}); using the built-in engines",
                     path.display()
                 );
+                Self::load_builtin(path)
+            }
+        }
+    }
+
+    /// Load onto the built-in engines, for a machine with no ONNX Runtime.
+    ///
+    /// The GPU is tried first and the CPU graph is the floor. This is what lets SCRFD ship
+    /// everywhere, and so what lets YuNet -- trained on WIDER FACE, "non-commercial academic
+    /// research only" -- leave the packages.
+    pub fn load_builtin<P: AsRef<Path>>(path: P) -> Option<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            debug!("SCRFD not loaded: no model at {}", path.display());
+            return None;
+        }
+
+        match fcs_utils::GpuContext::init_with_fallback(&Default::default()) {
+            fcs_utils::GpuAvailability::Available(context) => {
+                match crate::gpu::GpuInferenceOps::new(context, None)
+                    .and_then(|ops| Ok((gpu::ScrfdGpuWeights::load(&ops, path)?, ops)))
+                {
+                    Ok((weights, ops)) => {
+                        info!("SCRFD on the WGSL engine, from {}", path.display());
+                        return Some(Self {
+                            backend: Backend::Gpu(Box::new((ops, weights))),
+                        });
+                    }
+                    Err(err) => warn!("SCRFD on the GPU failed ({err}); trying the CPU graph"),
+                }
+            }
+            other => debug!("no GPU for SCRFD ({other:?}); using the CPU graph"),
+        }
+
+        match plan::ScrfdWeights::load(path) {
+            Ok(weights) => {
+                info!("SCRFD on the built-in CPU graph, from {}", path.display());
+                Some(Self {
+                    backend: Backend::Cpu(Box::new(weights)),
+                })
+            }
+            Err(err) => {
+                warn!("SCRFD at {} would not load ({err})", path.display());
                 None
             }
+        }
+    }
+
+    /// Which engine is running, for logs.
+    pub fn engine(&self) -> &'static str {
+        match self.backend {
+            Backend::Ort(_) => "onnxruntime",
+            Backend::Gpu(_) => "wgsl-gpu",
+            Backend::Cpu(_) => "cpu-graph",
         }
     }
 
@@ -113,10 +181,42 @@ impl ScrfdDetector {
         nms_threshold: f32,
     ) -> Result<Vec<Detection>> {
         let (input, letterbox) = preprocess(image, INPUT_SIZE);
-        let shape = [1usize, 3, INPUT_SIZE as usize, INPUT_SIZE as usize];
-        let outputs = self.session.run(&input, &shape)?;
+        let side = INPUT_SIZE as usize;
+        let shape = [1usize, 3, side, side];
 
-        let mut detections = decode(&outputs, letterbox, score_threshold, INPUT_SIZE)?;
+        let mut detections = match &self.backend {
+            Backend::Ort(session) => {
+                let outputs = session.run(&input, &shape)?;
+                decode(&outputs, letterbox, score_threshold, INPUT_SIZE)?
+            }
+            Backend::Gpu(boxed) => {
+                let (ops, weights) = boxed.as_ref();
+                let uploaded = ops.upload_tensor(shape.to_vec(), &input, Some("scrfd input"))?;
+                let outputs = gpu::run(ops, &uploaded, weights)?;
+                let maps = outputs
+                    .iter()
+                    .map(|tensor| {
+                        let dims = tensor.shape().dims();
+                        Ok((tensor.to_vec()?, [dims[0], dims[1], dims[2], dims[3]]))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?
+            }
+            Backend::Cpu(weights) => {
+                let tensor = crate::cpu::tensor::Tensor::new(1, 3, side, side, input)?;
+                let outputs = plan::run(tensor, weights)?;
+                let maps: Vec<(Vec<f32>, [usize; 4])> = outputs
+                    .iter()
+                    .map(|t| {
+                        (
+                            t.data().to_vec(),
+                            [t.batch(), t.channels(), t.height(), t.width()],
+                        )
+                    })
+                    .collect();
+                decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?
+            }
+        };
         detections.sort_by(|a, b| b.score.total_cmp(&a.score));
         apply_nms_in_place(&mut detections, nms_threshold);
         Ok(detections)
@@ -182,8 +282,37 @@ pub(crate) fn decode(
         let scores = find(outputs, rows, 1, "scores", level)?;
         let boxes = find(outputs, rows, 4, "boxes", level)?;
         let points = find(outputs, rows, LANDMARKS * 2, "keypoints", level)?;
-        let stride = *stride as f32;
+        decode_level(
+            scores,
+            boxes,
+            points,
+            cells,
+            *stride as f32,
+            letterbox,
+            score_threshold,
+            &mut detections,
+        );
+    }
+    Ok(detections)
+}
 
+/// One stride's worth of rows, in the deployment layout: spatial order, anchors interleaved.
+///
+/// Shared by both callers so the geometry exists once. `decode` feeds it ONNX Runtime's
+/// tensors; `decode_maps` feeds it the built-in engines' raw maps, transposed to match.
+#[allow(clippy::too_many_arguments)]
+fn decode_level(
+    scores: &[f32],
+    boxes: &[f32],
+    points: &[f32],
+    cells: usize,
+    stride: f32,
+    letterbox: Letterbox,
+    score_threshold: f32,
+    detections: &mut Vec<Detection>,
+) {
+    {
+        let rows = cells * cells * ANCHORS_PER_CELL;
         for row in 0..rows {
             let score = scores[row];
             if score < score_threshold {
@@ -230,7 +359,80 @@ pub(crate) fn decode(
             });
         }
     }
+}
+
+/// Decode the raw `(1, anchors*channels, height, width)` maps the built-in engines produce.
+///
+/// They stop at the head's convolutions, because the sigmoid and the deployment reshape that
+/// ONNX Runtime's graph carries are cheaper to do here than to add as engine ops. Each map is
+/// transposed into the same row order `decode_level` expects: spatial position first, anchors
+/// interleaved, channels innermost.
+pub(crate) fn decode_maps(
+    maps: &[(Vec<f32>, [usize; 4])],
+    letterbox: Letterbox,
+    score_threshold: f32,
+    size: u32,
+) -> Result<Vec<Detection>> {
+    let mut detections = Vec::new();
+
+    for (level, stride) in STRIDES.iter().enumerate() {
+        let cells = (size / stride) as usize;
+        let scores = deployment_rows(maps, level, 1, cells, true, "scores")?;
+        let boxes = deployment_rows(maps, level + 3, 4, cells, false, "boxes")?;
+        let points = deployment_rows(maps, level + 6, LANDMARKS * 2, cells, false, "keypoints")?;
+        decode_level(
+            &scores,
+            &boxes,
+            &points,
+            cells,
+            *stride as f32,
+            letterbox,
+            score_threshold,
+            &mut detections,
+        );
+    }
     Ok(detections)
+}
+
+/// Transpose one map from `(anchors*channels, height, width)` into rows of `channels`.
+fn deployment_rows(
+    maps: &[(Vec<f32>, [usize; 4])],
+    at: usize,
+    channels: usize,
+    cells: usize,
+    sigmoid: bool,
+    what: &str,
+) -> Result<Vec<f32>> {
+    let (data, dims) = maps.get(at).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no {what} map at index {at}: the engine returned {} maps",
+            maps.len()
+        )
+    })?;
+    let (height, width) = (dims[2], dims[3]);
+    anyhow::ensure!(
+        height == cells && width == cells && dims[1] == ANCHORS_PER_CELL * channels,
+        "{what} map is {dims:?}, expected {ANCHORS_PER_CELL}x{channels} channels over {cells}x{cells}"
+    );
+
+    let plane = height * width;
+    let mut rows = vec![0.0f32; plane * ANCHORS_PER_CELL * channels];
+    for y in 0..height {
+        for x in 0..width {
+            for anchor in 0..ANCHORS_PER_CELL {
+                for channel in 0..channels {
+                    let value = data[(anchor * channels + channel) * plane + y * width + x];
+                    let row = (y * width + x) * ANCHORS_PER_CELL + anchor;
+                    rows[row * channels + channel] = if sigmoid {
+                        1.0 / (1.0 + (-value).exp())
+                    } else {
+                        value
+                    };
+                }
+            }
+        }
+    }
+    Ok(rows)
 }
 
 /// The tensor with this row count and channel count, or a readable error.
