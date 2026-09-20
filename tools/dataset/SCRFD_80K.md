@@ -102,13 +102,58 @@ decoding them at full resolution.
 between workers through file descriptors against the open-file limit -- and then, with the limit
 raised, simply started nothing in four minutes.
 
+## Off home turf: the VinaSkyy corpus, judged by eye
+
+Open Images is home turf for this model and away turf for YuNet, so the margin above is partly
+that. The check is a corpus neither has seen: 1,239 photographs in `Downloads\VinaSkyy`, no
+labels, so `compare_detectors.py` matches the two models at IoU 0.5 and a human judges every
+disagreement as a crop (`scrfd_detect.py` writes the checkpoint's detections in `fcs-cli --json`
+shape first).
+
+At the 0.4 threshold matched on Open Images FP/image, SCRFD found 1,323 faces to YuNet's 1,129:
+1,120 found by both, 9 only by YuNet, 203 only by SCRFD, and 166 of those 203 over 200 px wide,
+so not small-face noise. **Counting is not judging, though, and the judgement was less
+flattering.** Of the 9 YuNet-only detections, 5 were faces and 4 false positives. Of the 60
+largest SCRFD-only detections, 25 were faces, 32 were false positives and 3 were animals -- over
+half of its extra finds wrong, at sizes large enough to produce a confidently wrong crop.
+
+**Score separates them, which is what makes this fixable.** The judged faces score 0.634 at the
+median against 0.456 for the false positives:
+
+| Threshold | Judged faces kept | False positives kept | Animals kept |
+|-----------|-------------------|----------------------|--------------|
+| 0.40 | 25 | 32 | 3 |
+| **0.50** | **23** | **7** | 1 |
+| 0.60 | 16 | 2 | 1 |
+| 0.70 | 3 | 0 | 0 |
+
+Across the whole corpus that reads:
+
+| SCRFD threshold | Faces found | Both | Only YuNet 0.8 | Only SCRFD |
+|-----------------|-------------|------|----------------|------------|
+| 0.40 | 1,323 | 1,120 | 9 | 203 |
+| **0.50** | **1,251** | 1,116 | 13 | 135 |
+| 0.60 | 1,180 | 1,093 | 36 | 87 |
+
+**0.50 is the operating point**, chosen on this corpus rather than on Open Images: it keeps 23 of
+the 25 judged faces while dropping 25 of the 32 false positives, and on Open Images it still
+reads 81.8% of all faces at 0.07 FP/image against YuNet's 71.6% at 0.14. So the detector is
+better off its own turf too -- 135 unique finds against 13, at roughly three-quarters precision
+on the large ones -- but the useful margin is a good deal smaller than the raw 203-to-9 suggests.
+
+Two things that judgement does not cover. Only the **60 largest** of the 203 were shown and
+judged, so the precision figure belongs to large detections and says nothing about the remaining
+143, which are smaller. And **animals**: three of the extras were a pet's face. The training
+labels are `Human face` boxes only, so a dog scoring 0.47 is a false positive by this project's
+definition, and this is the first measurement of how often that happens.
+
 ## What this does not establish
 
-* **The test set is home turf.** This model trained on Open Images' train split and is scored on
-  Open Images' validation and test split: same corpus, same photographers, same conventions.
-  YuNet trained on WIDER FACE, so the same test set is away turf for it. Some of the 14-point
-  margin is that advantage rather than a better detector, and the size of it is unmeasured. A
-  comparison on the `Downloads\VinaSkyy` corpus, which neither model has seen, is the next check.
+* **Precision on small faces is unmeasured.** See above: the judged sample was the 60 largest
+  disagreements of 203.
+* **One corpus, one photographer.** VinaSkyy is a single subject shot in similar conditions.
+  It answers "does the Open Images margin survive off-distribution" and not "how does this behave
+  on arbitrary photographs".
 * **Nothing here is shippable yet.** `fcs-core` compiles YuNet's topology into both the built-in
   CPU graph (`crate::yunet`) and the WGSL kernels, so SCRFD would run under ONNX Runtime alone:
   a machine without it would have no detector rather than a slower one. Export is also blocked --
