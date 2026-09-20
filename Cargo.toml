@@ -141,7 +141,7 @@ base64 = "0.23.1"
 calamine = "0.36.1"
 crc32fast = "1.5.2"
 csv = "1.4.0"
-parquet = { version = "59.3.0", default-features = false, features = [
+parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "flate2",
     "flate2-zlib-rs",
