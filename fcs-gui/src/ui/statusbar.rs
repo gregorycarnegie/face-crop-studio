@@ -24,14 +24,21 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
                 };
                 status_cell(ui, &ready_text, Some(ready_dot));
 
-                // Model
-                let model_name = app
-                    .settings
-                    .model_path
-                    .as_deref()
-                    .and_then(|p| std::path::Path::new(p).file_stem())
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("YuNet 640");
+                // Model. From the loaded detector rather than from `settings.model_path`, which
+                // only ever names the YuNet fallback -- so this cell read
+                // "face_detection_yunet_2023mar_640 · ONNX" on a run where SCRFD was detecting.
+                // Before one loads there is nothing to report but the configured path.
+                let model_name = match app.detector.as_deref() {
+                    Some(detector) => detector.model_name().to_string(),
+                    None => app
+                        .settings
+                        .model_path
+                        .as_deref()
+                        .and_then(|p| std::path::Path::new(p).file_stem())
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("no model")
+                        .to_string(),
+                };
                 status_cell(ui, &format!("{model_name} · ONNX"), None);
 
                 // Where detection runs

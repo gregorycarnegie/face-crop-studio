@@ -299,11 +299,13 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 // Right: model status
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
-                    let model_ready = app.detector.is_some();
-                    let (dot_color, status_text) = if model_ready {
-                        (P::LIME, "YuNet 640 · ready".to_string())
-                    } else {
-                        (P::ROSE, "YuNet · no model".to_string())
+                    // Named from the detector that actually loaded, not hard-coded: SCRFD is
+                    // preferred and YuNet is the fallback, so which one is running depends on
+                    // whether ONNX Runtime is present. This badge said "YuNet 640" while SCRFD
+                    // was doing the work.
+                    let (dot_color, status_text) = match app.detector.as_deref() {
+                        Some(detector) => (P::LIME, format!("{} · ready", detector.model_name())),
+                        None => (P::ROSE, "no model".to_string()),
                     };
                     ui.label(
                         egui::RichText::new(&status_text)
