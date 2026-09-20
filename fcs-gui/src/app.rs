@@ -272,11 +272,19 @@ fn crop_fill_hex(crop: &fcs_utils::config::CropSettings) -> String {
 /// Shown between the first frame and the detector arriving on it (experiment 81).
 const STATUS_DETECTOR_PENDING: &str = "Starting the detector…";
 
-fn initial_status_line(has_detector: bool) -> &'static str {
-    if has_detector {
-        "Model ready — select an image to detect faces."
-    } else {
-        "Model not loaded — configure model path to begin."
+/// Names the detector, because two can run and which one you get depends on what is installed.
+///
+/// SCRFD finds considerably more faces than YuNet but needs ONNX Runtime, so a build without
+/// the runtime silently falls back. Until this said so, the only way to find out which was
+/// running was the log.
+fn initial_status_line(detector: Option<&fcs_core::FaceDetector>) -> String {
+    match detector {
+        Some(detector) => format!(
+            "{} ready on {} — select an image to detect faces.",
+            detector.model_name(),
+            detector.inference_backend()
+        ),
+        None => "Model not loaded — configure model path to begin.".to_owned(),
     }
 }
 
@@ -511,7 +519,7 @@ impl App2 {
                         None
                     }
                 };
-                self.status_line = initial_status_line(self.detector.is_some()).to_owned();
+                self.status_line = initial_status_line(self.detector.as_deref());
                 info!(
                     "startup: detector ready at {:.0} ms since launch",
                     crate::since_launch_ms()
@@ -530,7 +538,7 @@ impl App2 {
                 // asking and leave the app in the same state a failed build leaves it.
                 self.detector_rx = None;
                 log::warn!("Detector build thread ended without a result");
-                self.status_line = initial_status_line(false).to_owned();
+                self.status_line = initial_status_line(None);
                 // Release anything that was parked waiting for it, or the preview spins
                 // on a detector that is never coming.
                 if self.preview.is_loading {

@@ -25,11 +25,13 @@ pub fn build_cli_detector(
     gpu_runtime: &CliGpuRuntime,
     gpu: &GpuSettings,
 ) -> Result<FaceDetector> {
-    let yunet = select_detector(model_path, preprocess, postprocess, gpu_runtime, gpu)?;
-    // SCRFD when its model and a runtime are both there, YuNet otherwise -- see
-    // `fcs_core::face_detector`. Reported once, after selection, because neither the
-    // settings nor the hardware alone say which detector and backend won.
-    let detector = FaceDetector::new(yunet);
+    // Built through a closure so YuNet is never constructed when SCRFD is going to shadow it:
+    // on the GPU path that is five compiled WGSL pipelines and the VRAM they hold.
+    let detector = FaceDetector::load_or_build(|| {
+        select_detector(model_path, preprocess, postprocess, gpu_runtime, gpu)
+    })?;
+    // Reported once, after selection, because neither the settings nor the hardware alone say
+    // which detector and backend won -- see `fcs_core::face_detector`.
     info!(
         "Detector: {} on {}",
         detector.model_name(),

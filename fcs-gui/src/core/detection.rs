@@ -71,36 +71,41 @@ pub fn build_detector(
         }
     };
 
-    let detector_result = if prefer_gpu_inference {
-        let pre: Arc<dyn Preprocessor> = preprocessor
-            .as_ref()
-            .map(Arc::clone)
-            .unwrap_or_else(|| Arc::new(CpuPreprocessor));
-        match YuNetDetector::with_gpu_preprocessor(
-            &model_path,
-            preprocess.clone(),
-            postprocess.clone(),
-            pre,
-        )
-        .with_context(|| format!("failed GPU YuNet from {model_path_display}"))
-        {
-            Ok(d) => {
-                info!("Using GPU inference");
-                Ok(d)
+    // Wrapped in a closure and handed to `FaceDetector::load_or_build`, so none of this runs
+    // when SCRFD loads and would shadow it: the GPU path compiles five WGSL pipelines here and
+    // holds VRAM for them, which is the cost experiment 81 measured at launch.
+    let build_yunet = || -> Result<YuNetDetector> {
+        if prefer_gpu_inference {
+            let pre: Arc<dyn Preprocessor> = preprocessor
+                .as_ref()
+                .map(Arc::clone)
+                .unwrap_or_else(|| Arc::new(CpuPreprocessor));
+            match YuNetDetector::with_gpu_preprocessor(
+                &model_path,
+                preprocess.clone(),
+                postprocess.clone(),
+                pre,
+            )
+            .with_context(|| format!("failed GPU YuNet from {model_path_display}"))
+            {
+                Ok(d) => {
+                    info!("Using GPU inference");
+                    Ok(d)
+                }
+                Err(err) => {
+                    warn!("GPU inference failed ({err}); falling back");
+                    build_cpu()
+                }
             }
-            Err(err) => {
-                warn!("GPU inference failed ({err}); falling back");
-                build_cpu()
-            }
+        } else {
+            build_cpu()
         }
-    } else {
-        build_cpu()
     };
 
     // SCRFD when its model and a runtime are both present, YuNet otherwise, which is why the
     // line below names the model as well as the backend: neither the settings nor the hardware
     // alone say which one won. See `fcs_core::face_detector`.
-    let detector_result = detector_result.map(FaceDetector::new);
+    let detector_result = FaceDetector::load_or_build(build_yunet);
     if let Ok(detector) = &detector_result {
         info!(
             "Detector: {} on {}",
