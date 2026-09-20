@@ -3,7 +3,6 @@
 #
 # Run from the repo root. Assumes:
 #   - target/release/fcs-gui exists (built by caller, x86_64-unknown-linux-gnu)
-#   - models/face_detection_yunet_2023mar_640.onnx exists (downloaded by caller)
 #   - models/eye_refiner.onnx exists (fetched by caller from a release asset)
 #   - models/scrfd80k_500m_640.onnx exists (likewise)
 #   - rsvg-convert, appimagetool, cargo-deb available on PATH
@@ -27,13 +26,12 @@ APP_NAME="face-crop-studio"
 BINARY_NAME="fcs-gui"
 SVG_SOURCE="fcs-gui/assets/app_logo.svg"
 BIN_SRC="target/release/${BINARY_NAME}"
-MODEL_FILE="models/face_detection_yunet_2023mar_640.onnx"
-# Better eye points for levelling crops. Required rather than optional: the packages are
-# what users get, and a release that quietly shipped without it would level by YuNet's
+# Better eye points for levelling crops. Required rather than optional: the packages are what
+# users get, and a release that quietly shipped without it would level by the detector's own
 # landmarks while the release notes claimed otherwise.
 REFINER_FILE="models/eye_refiner.onnx"
-# The detector itself; without it the package falls back to YuNet, which is a
-# silent downgrade rather than a failure, so it is required here too.
+# The detector. Required: there is no second detector to fall back to, so a package without it
+# cannot detect anything at all.
 DETECTOR_FILE="models/scrfd80k_500m_640.onnx"
 DESKTOP_FILE="installer/linux/face-crop-studio.desktop"
 ICON_PNG="installer/linux/face-crop-studio.png"
@@ -48,7 +46,7 @@ DIST_DIR="dist/linux"
 APPDIR="$DIST_DIR/${APP_NAME}.AppDir"
 APPIMAGE_PATH="$DIST_DIR/face-crop-studio-${VERSION}-${ARCH}.AppImage"
 
-for f in "$BIN_SRC" "$MODEL_FILE" "$REFINER_FILE" "$DETECTOR_FILE" "$SVG_SOURCE" "$DESKTOP_FILE"; do
+for f in "$BIN_SRC" "$REFINER_FILE" "$DETECTOR_FILE" "$SVG_SOURCE" "$DESKTOP_FILE"; do
     if [ ! -f "$f" ]; then
         echo "error: required file missing at $f" >&2
         exit 1
@@ -70,7 +68,6 @@ mkdir -p "$APPDIR/usr/share/face-crop-studio/models"
 
 cp "$BIN_SRC" "$APPDIR/usr/bin/$BINARY_NAME"
 chmod +x "$APPDIR/usr/bin/$BINARY_NAME"
-cp "$MODEL_FILE" "$APPDIR/usr/share/face-crop-studio/models/"
 cp "$REFINER_FILE" "$APPDIR/usr/share/face-crop-studio/models/"
 cp "$DETECTOR_FILE" "$APPDIR/usr/share/face-crop-studio/models/"
 # Beside the executable, which is the first place fcs-ort looks. Putting it in a

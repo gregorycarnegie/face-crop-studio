@@ -2,7 +2,7 @@
 
 Thanks for helping improve Face Crop Studio. This repository is a Rust workspace with four main crates:
 
-- `fcs-core`: face detection, YuNet model loading, crop math, and GPU inference pieces.
+- `fcs-core`: face detection, the three inference engines, crop math, and GPU pieces.
 - `fcs-utils`: shared configuration, image enhancement, export helpers, and webcam support.
 - `fcs-mapping`: CSV/Excel/Parquet/SQLite ingestion for the batch mapping workflow.
 - `fcs-cli`: command-line workflows for batch processing and automation.
@@ -24,10 +24,11 @@ cargo run -p fcs-gui
 cargo run -p fcs-cli -- --help
 ```
 
-The YuNet model is **committed to the repository** under `models/`, so detection
-works on a fresh clone with no extra download — `models/face_detection_yunet_2023mar_640.onnx`
-is the default for both the CLI and GUI. The first build is slow (it compiles
-the full dependency graph including wgpu); subsequent runs are incremental.
+The detector model is **not** in the repository: `models/scrfd80k_500m_640.onnx` is fetched
+from a release asset (see `models/README.md` for the URL and digest), which CI does in its
+`Prepare Models` job. Detection is disabled without it and the tests that need it skip, so grab
+it before running them. The first build is slow (it compiles the full dependency graph including
+wgpu); subsequent runs are incremental.
 
 If `cargo run` fails to compile, you're almost certainly missing one of the
 build tools below (most commonly NASM, or the `dav1d`/`pkg-config` setup for
@@ -78,15 +79,15 @@ To make the vcpkg settings permanent for new terminals:
 [Environment]::SetEnvironmentVariable("PKG_CONFIG_ALL_STATIC", "1", "User")
 ```
 
-The full test suite and both front-ends use the YuNet model at:
+The full test suite and both front-ends use the model at:
 
 ```text
-models/face_detection_yunet_2023mar_640.onnx
+models/scrfd80k_500m_640.onnx
 ```
 
-This file is committed to the repo, so no download is needed. See
-`models/README.md` for checksums and regeneration details if you need to
-re-export it.
+See `models/README.md` for the download URL and checksum. Tests that need it skip when it is
+absent; set `FCS_STRICT_TESTS=1` to turn those skips into failures, which is how CI runs so a leg
+cannot pass having checked nothing.
 
 ## Common Commands
 

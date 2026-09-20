@@ -1,11 +1,11 @@
 # CLI Recipes
 
-The `fcs-cli` crate exposes a flexible command-line tool for running YuNet detection, cropping, quality filtering, and enhancement workflows. This document captures a handful of common invocations you can adapt to your projects.
+The `fcs-cli` crate exposes a flexible command-line tool for running face detection, cropping, quality filtering, and enhancement workflows. This document captures a handful of common invocations you can adapt to your projects.
 
 ## Basic Detection
 
 ```bash
-cargo run -p fcs-cli -- --input fixtures/images/006.jpg --model models/face_detection_yunet_2023mar_640.onnx
+cargo run -p fcs-cli -- --input fixtures/images/006.jpg --model models/scrfd80k_500m_640.onnx
 ```
 
 Prints a summary of detections to stdout. Add `--json detections.json` to capture structured output for downstream tooling.
@@ -15,7 +15,7 @@ Prints a summary of detections to stdout. Add `--json detections.json` to captur
 ```bash
 cargo run -p fcs-cli -- \
   --input portraits/alex.png \
-  --model models/face_detection_yunet_2023mar_640.onnx \
+  --model models/scrfd80k_500m_640.onnx \
   --crop \
   --preset headshot \
   --output-dir crops/
@@ -82,7 +82,7 @@ The rotation is only as good as the eye points behind it, so the crop uses `mode
 ```bash
 cargo run -p fcs-cli -- \
   --input portraits/ \
-  --model models/face_detection_yunet_2023mar_640.onnx \
+  --model models/scrfd80k_500m_640.onnx \
   --crop \
   --output-dir exports/ \
   --metadata-mode custom \

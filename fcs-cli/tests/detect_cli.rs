@@ -5,7 +5,7 @@ use std::{
 };
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use fcs_utils::{fixture_path, load_fixture_json, normalize_path};
+use fcs_utils::{fixture_path, normalize_path};
 use image::{ImageBuffer, Rgb};
 use serde::Deserialize;
 use serde_json::Value;
@@ -93,12 +93,6 @@ fn detect_annotate_matches_fixture_when_no_detections() -> Result<(), Box<dyn Er
     assert_eq!(annotated.dimensions(), original.dimensions());
     assert_eq!(annotated.as_raw(), original.as_raw());
 
-    let expected: FixtureFile = load_fixture_json("opencv/pattern_no_faces.json")?;
-    assert!(
-        expected.detections.is_empty(),
-        "fixture should have no detections"
-    );
-
     Ok(())
 }
 
@@ -110,8 +104,10 @@ fn detect_annotate_matches_fixture_when_no_detections() -> Result<(), Box<dyn Er
 // equality nor "never worse" would be true.
 //
 // That is a real loss of coverage -- it was the only check against an implementation nobody
-// here wrote. What replaces it is the parity between this project's own three engines, and the
-// snapshot below.
+// here wrote. What replaces it is the parity between this project's own three engines
+// (`fcs-core/tests/scrfd_parity.rs`) and the snapshot below, both of which only compare this
+// project against itself. The `fixtures/opencv/` goldens went with the test: 276 files of
+// YuNet's opinions at its own threshold, which this detector disagrees with by design.
 fn fixtures_available() -> bool {
     fcs_utils::fixture_path("images/006.jpg").is_ok()
 }
@@ -156,17 +152,6 @@ fn run_cli_detection(
 #[derive(Debug, Deserialize)]
 struct CliDetectionRecord {
     image: String,
-    detections: Vec<serde_json::Value>,
-}
-
-/// Enough of the OpenCV fixture format to ask how many faces it recorded.
-///
-/// It used to mirror the whole shape -- scores, boxes, landmarks, the thresholds the fixture
-/// was produced at -- because `cli_detections_match_opencv_parity_samples` compared against
-/// them field by field. That test went with YuNet, and the one remaining use only asks whether
-/// the fixture is empty.
-#[derive(Debug, Deserialize)]
-struct FixtureFile {
     detections: Vec<serde_json::Value>,
 }
 

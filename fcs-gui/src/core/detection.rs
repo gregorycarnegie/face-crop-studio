@@ -52,7 +52,7 @@ pub fn build_detector(
     // built-in CPU graph. Loaded here so it lands on the same background thread the GPU
     // preprocessor was built on (experiment 81).
     let detector_result = FaceDetector::load_from(&model_path)
-        .map(|detector| detector.with_score_threshold(settings.detection.confidence))
+        .map(|detector| detector.with_settings(&settings.detection))
         .with_context(|| format!("no detector model at {model_path_display}"));
     if let Ok(detector) = &detector_result {
         info!(

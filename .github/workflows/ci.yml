@@ -25,16 +25,20 @@ env:
   RUST_TOOLCHAIN: "1.98.0"
   # Match the runtime shipped by release.yml.
   ORT_VERSION: "1.24.4"
-  # Keep these checksums in sync with release.yml.
-  YUNET_ORIGINAL_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
-  YUNET_640_SHA256: d2c5a887db77802389261b13d2b9f5e1171b9d5787cb315d0add225812ff4d96
-  # CI only: the 320 export is for tests and experiment 75, and release.yml does not ship it.
-  YUNET_320_SHA256: 024177811019bb600bc7205c26b769917a97048fa18519dc79071024fa279c4f
+  # Keep these checksums and URLs in sync with release.yml.
+  EYE_REFINER_SHA256: b01dd218b46a7466eb13125b011e81b57e2e2e252794c403029db1d7c7628e76
+  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1/eye_refiner.onnx
+  SCRFD_SHA256: f31f1f01ca33d24184059bba0627a54b8351e6f2b167474a4d71f2361ea53c39
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2/scrfd80k_500m_640.onnx
 
 jobs:
-  # Generate and verify the models once, then hand them to every platform leg as
-  # an artifact. onnxsim is slow and the Windows/macOS runners are the expensive
-  # ones, so they should not each be re-running it.
+  # Fetch and verify the models once, then hand them to every platform leg as an artifact.
+  # Both are this project's own exports, fetched from release assets: no Python and no onnxsim,
+  # which were only needed to re-export YuNet from opencv_zoo.
+  #
+  # The test legs run with FCS_STRICT_TESTS=1, which turns "model missing, skipping" into a
+  # failure, so a leg without these cannot quietly pass having checked nothing --
+  # tests/scrfd_parity.rs is the one that would.
   models:
     name: Prepare Models
     runs-on: ubuntu-latest
@@ -42,30 +46,18 @@ jobs:
       # Only needed for the local verify-models composite action below.
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install onnxsim
-        run: pip install onnxsim==0.4.36
-
-      - name: Download and Process Model
+      - name: Download models
         shell: bash
         run: |
           mkdir -p models
-          curl -L -o models/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
-          onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
-            || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --path-to-input-shape="1,3,640,640" \
-            || onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx 1,3,640,640
-          onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_320.onnx --overwrite-input-shape "1,3,320,320"
+          curl -fsSL -o models/eye_refiner.onnx "$EYE_REFINER_URL"
+          curl -fsSL -o models/scrfd80k_500m_640.onnx "$SCRFD_URL"
 
       - name: Verify model checksums
         uses: ./.github/actions/verify-models
         with:
-          original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
-          simplified-sha256: ${{ env.YUNET_640_SHA256 }}
-          simplified-320-sha256: ${{ env.YUNET_320_SHA256 }}
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Upload models
         uses: actions/upload-artifact@v4

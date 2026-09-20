@@ -1,5 +1,12 @@
 # WebGPU ONNX Inference — Research & Implementation Notes
 
+> **Historical (pre-1.9).** Everything below measures or designs around **YuNet**, which was the
+> detector until 1.8.0 and no longer ships: its weights come from WIDER FACE, licensed for
+> non-commercial academic research only. The engines it describes still exist and still run
+> SCRFD; the numbers, node names and topology do not describe anything current, and the examples
+> named here were deleted with it. The full YuNet implementation and these experiments are in the
+> `face-crop-studio-yunet-archive` fork. Kept as a design and measurement record.
+
 > **Status: Implemented (Phase 12 complete).** The custom WGPU YuNet inference graph is shipped. Conv2D, BatchNorm, and Activation layers run as WGSL compute shaders in `fcs-core/src/gpu/`. GPU/CPU parity is validated in `fcs-core/tests/gpu_cpu_parity.rs`. This document is retained as a design reference; the "Next Actions" below are all complete.
 
 > Goal: run the **entire** ONNX graph on the GPU in **pure Rust** using **wgpu + WGSL**, keeping tensors resident on device (no host round‑trips between layers). Target model available: `face_detection_yunet_2023mar_640.onnx`.

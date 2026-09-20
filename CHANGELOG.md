@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **YuNet is gone, and with it the licence question this project set out to
+  remove.** It was the fallback detector for machines without ONNX Runtime, so
+  every package shipped its weights -- and those weights are trained on WIDER
+  FACE, released for "non-commercial academic research only"
+  (`tools/dataset/DATA_CARD.md`). Keeping it meant shipping a commercial app
+  around a non-commercial model. It is no longer needed as a floor: SCRFD runs on
+  the WGSL kernels and the built-in CPU graph as well as ONNX Runtime, agreeing
+  to about 1e-05 and producing identical detections, so there is nothing a machine
+  can be missing that leaves it without a detector. Deleted: the two `.onnx`
+  files, the `opencv_zoo` download and the `onnxsim` re-export from CI and the
+  release workflow (and with them Python from both model jobs), `crate::yunet`'s
+  compiled-in topology and macros, `YuNetModel`, `YuNetDetector`, `CpuYuNet`,
+  `GpuYuNet`, the YuNet halves of the CPU and WGSL graphs, `apply_postprocess`
+  and its `[N, 15]` decode, and 22 examples and benches that measured them.
+  `tract-onnx` leaves the dependency graph entirely.
+- **`nms::dedup_close_centers`.** A second suppression pass after IoU NMS,
+  dropping detections whose centres sat within 50% of the larger box's longest
+  edge. It only ever ran on YuNet's decode path. **SCRFD has never run with it**,
+  and every measurement -- `SCRFD_80K.md`, the 1,239-image batch, the shipped
+  1.8.0 -- was made without it, so nothing changes; whether SCRFD produces
+  centre-duplicated boxes at a lowered confidence floor is an open question,
+  recorded in `ARCHITECTURE.md`.
+- **`PostprocessConfig` and `DetectionOutput::scale_x`/`scale_y`.** The config was
+  YuNet's three knobs on YuNet's scale and had no callers left outside the crate;
+  the two scale fields were always `1.0` and documented as "do not apply this
+  again", which is a trap rather than an API.
+
+### Fixed
+
+- **The NMS threshold and top-K settings do something again.** Since the detector
+  changed, `FaceDetector` read `confidence` from settings but held the other two
+  at compile-time constants, so the GUI's NMS slider and Top-K control -- and
+  `--nms-threshold` and `--top-k` -- moved nothing at all. This is the same class
+  of bug as the `score_threshold` rename in 1.8.0 and was found by deleting the
+  code that used to consume them. `FaceDetector::with_settings` now takes the
+  whole `DetectionSettings` and applies all three, and a test asserts each field
+  reaches the detector.
+- **The Linux `.deb` shipped the wrong models.** Its asset list carried YuNet and
+  neither `scrfd80k_500m_640.onnx` nor `eye_refiner.onnx`, so the package that
+  users installed detected with the fallback and levelled crops with the
+  detector's own eye points. Both installers' AppImage and macOS paths also
+  hard-failed on the missing YuNet file, which would have broken the next release
+  build.
+- **`fcs-ort`'s end-to-end test pointed at a deleted model.** It loaded YuNet and
+  asserted 12 outputs; it now loads the shipped detector and asserts 9. This is
+  the test that catches a wrong offset in the hand-maintained `OrtApi` table, so
+  it silently skipping would have been the worst of the three.
+
+### Changed
+
+- **Detector parity is now checked against a weaker oracle, and this is a real
+  loss.** `tract` interpreted the ONNX file rather than re-encoding the topology
+  by hand, which is what made it able to catch a mistake both of our own engines
+  shared. It was dev-only and it left with YuNet. `fcs-core/tests/scrfd_parity.rs`
+  replaces the five deleted parity tests: it checks the built-in CPU graph and the
+  WGSL engine against ONNX Runtime on the model that ships (1.24e-05 and 1.10e-05),
+  and re-adds the concurrency guard that caught pooled GPU buffers escaping between
+  rayon workers -- comparing 252,000 head values across 8 concurrent runs, because
+  a synthetic input finds no faces and comparing detections would compare two empty
+  lists. Everything now compares this project against itself.
+- CI and the release workflow fetch both models as release assets and verify their
+  digests; `verify-models` now fails when given no digests at all, rather than
+  passing having checked nothing. CI gains the detector model, which it never had,
+  so the tests that need it stop skipping under `FCS_STRICT_TESTS=1`.
+- `FCS_FIXTURE_ROOT` and `FCS_MODEL_PATH` replace `YUNET_FIXTURE_ROOT` and
+  `YUNET_MODEL_PATH`.
+- `docs/PERFORMANCE.md`, `docs/gpu_research.md`, `docs/parity_report.md` and
+  `docs/ONNX_RUNTIME_OPTIONS.md` measure or design around YuNet and are marked
+  historical rather than rewritten. The deleted implementation and experiments are
+  preserved in the `face-crop-studio-yunet-archive` fork.
+
 ## [1.8.0] - 2026-09-20
 
 Two models trained for this project ship in this release: a detector that finds

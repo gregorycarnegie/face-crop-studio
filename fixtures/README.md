@@ -6,11 +6,15 @@ or sensitive information; prefer synthetic or cleared data.
 
 ## Layout
 
-- `fixtures/images/` — raw input frames used by the OpenCV parity test.
+- `fixtures/images/` — raw input frames used by the CLI tests.
   **Local only** (git-ignored): these are real faces, so they are not committed.
   Tests that need them skip gracefully when the directory is absent (e.g. in CI).
-- `fixtures/opencv/` — OpenCV YuNet reference detections for parity validation.
-  **Local only** (git-ignored), paired with `fixtures/images/`.
+- `fixtures/opencv/` — **no longer used by any test.** These were OpenCV YuNet's
+  detections, and `cli_detections_match_opencv_parity_samples` compared this
+  project against them. That test went with YuNet: the scores are on a different
+  scale and the current detector disagrees with these boxes by design. Kept on
+  disk because they are local files, not repository content — delete them
+  whenever you like.
 - `fixtures/golden/` — **committed** golden outputs. Synthetic, no image data:
   - `crop_regions.json` — expected `CropRegion` for the scenarios in
     `fcs-core/tests/golden_crop_regions.rs`.
@@ -36,14 +40,10 @@ must contain at least one.
 
 ## Generating OpenCV golden detections
 
-Generate the reference with OpenCV's `FaceDetectorYN`, not Face Crop Studio,
-so the parity check remains independent. For each image:
-
-1. Run `models/face_detection_yunet_2023mar_640.onnx` at `640x640` with score
-   threshold `0.9`, NMS threshold `0.3`, and top-k `5000`.
-2. Scale the returned bounding box and five landmark pairs from `640x640` back
-   to the original image dimensions.
-3. Save `fixtures/opencv/<image-stem>.json`, preserving the image's suffix.
+The recipe that generated `fixtures/opencv/` is kept below for the record; nothing reads these
+files any more. It ran OpenCV's `FaceDetectorYN` rather than Face Crop Studio, which is what made
+the comparison independent — the thing the current test suite does not have, since every check
+now compares this project against itself.
 
 Each JSON file has this shape (use an empty `detections` array for `_n`):
 

@@ -32,7 +32,7 @@ impl Upsample2xPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
-            uniforms: UniformCache::new("yunet_resize2x_uniforms"),
+            uniforms: UniformCache::new("fcs_resize2x_uniforms"),
         })
     }
 
@@ -146,7 +146,7 @@ impl ResizeAddPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
-            uniforms: UniformCache::new("yunet_resize2x_add_uniforms"),
+            uniforms: UniformCache::new("fcs_resize2x_add_uniforms"),
         })
     }
 

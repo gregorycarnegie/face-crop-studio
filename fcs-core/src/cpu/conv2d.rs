@@ -1,4 +1,4 @@
-//! CPU convolution for the YuNet graph.
+//! CPU convolution for the detector's graph.
 //!
 //! Semantics match `gpu/conv2d.wgsl` exactly, because the two backends are
 //! compared against each other: cross-correlation (not flipped), zero padding,
@@ -6,7 +6,7 @@
 //! `[oc][local_ic][ky][kx]`, one bias per output channel, optional fused
 //! activation.
 //!
-//! Three paths, because YuNet only ever asks for three shapes and they want
+//! Three paths, because the graph only ever asks for three shapes and they want
 //! very different code:
 //!
 //! * **pointwise** (1x1, dense) — a matrix multiply over channels, and where
@@ -14,7 +14,7 @@
 //! * **depthwise** (KxK, `groups == channels`) — one independent kernel per
 //!   channel. This is the case `tract` lowers to a scalar loop, which is
 //!   59-61% of a CPU detection there.
-//! * **general** — everything else. YuNet uses it once, for the 3x3 stride-2
+//! * **general** — everything else. The detector uses it once, for the 3x3 stride-2
 //!   stem, so it is written for clarity rather than speed.
 
 use anyhow::Result;
@@ -371,7 +371,7 @@ fn conv_depthwise(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) ->
 
 /// Everything the specialised paths do not cover.
 ///
-/// YuNet uses this once, for the 3x3 stride-2 stem over RGB — which measured as
+/// The detector uses this once, for the 3x3 stride-2 stem over RGB — which measured as
 /// the single most expensive layer in the network, since it runs at the full
 /// 640x640 input. So it is not the naive loop it looks like: output rows are
 /// classified as interior (every kernel tap lands inside the image) or edge,
@@ -571,8 +571,8 @@ mod tests {
 
     /// Whatever path `conv2d` picks must agree with the reference. Each fast path is valid only
     /// for some shapes: a 3x1 kernel, an unpadded or strided 1x1, a strided depthwise layer or a
-    /// depth multiplier of 2 routed to one of them computes the wrong thing, and YuNet's own
-    /// layers never try those combinations.
+    /// depth multiplier of 2 routed to one of them computes the wrong thing, and the detector's
+    /// own layers never try those combinations.
     #[test]
     fn every_layer_shape_matches_the_reference_whichever_path_runs() {
         let c_in = 4usize;

@@ -57,7 +57,12 @@ depends = "$auto, libc6 (>= 2.35)"
 assets = [
     ["../target/release/fcs-gui", "usr/bin/", "755"],
     [
-        "../models/face_detection_yunet_2023mar_640.onnx",
+        "../models/scrfd80k_500m_640.onnx",
+        "usr/share/face-crop-studio/models/",
+        "644",
+    ],
+    [
+        "../models/eye_refiner.onnx",
         "usr/share/face-crop-studio/models/",
         "644",
     ],
@@ -87,7 +92,12 @@ name = "face-crop-studio"
 assets = [
     ["../target/release/fcs-gui", "usr/bin/", "755"],
     [
-        "../models/face_detection_yunet_2023mar_640.onnx",
+        "../models/scrfd80k_500m_640.onnx",
+        "usr/share/face-crop-studio/models/",
+        "644",
+    ],
+    [
+        "../models/eye_refiner.onnx",
         "usr/share/face-crop-studio/models/",
         "644",
     ],

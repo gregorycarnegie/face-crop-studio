@@ -11,11 +11,13 @@ GPU accelerated face detection and cropping software built in Rust.
 [![CI](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml)
 [![Release](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml/badge.svg)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml)
 
-Face Crop Studio is a Rust workspace that wraps the YuNet face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Both CPU and GPU acceleration paths are supported via wgpu/WGSL compute shaders for preprocessing, enhancement, and custom YuNet inference.
+Face Crop Studio is a Rust workspace that wraps a face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Both CPU and GPU acceleration paths are supported via wgpu/WGSL compute shaders for preprocessing, enhancement, and inference.
+
+The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open Images photographs, so the shipped weights carry no non-commercial restriction. It runs on ONNX Runtime, on WGSL compute shaders, or on a built-in CPU graph, picking whichever is available.
 
 ## Crates
 
-- **`fcs-core`** – Loads the YuNet ONNX model with `tract-onnx`, handles preprocessing/postprocessing, and implements the crop calculation logic. Includes GPU-accelerated preprocessing and custom GPU YuNet inference via WGSL compute shaders (see `ARCHITECTURE.md` for details).
+- **`fcs-core`** – Loads the detector, decodes its outputs, and implements the crop calculation logic. Holds all three inference engines – ONNX Runtime, WGSL compute shaders, and a pure-Rust CPU graph – plus GPU-accelerated preprocessing (see `ARCHITECTURE.md` for details).
 - **`fcs-utils`** – Shared helpers: configuration structs, Laplacian-variance quality scoring, enhancement pipeline (CPU and GPU paths with 7 WGSL compute shaders), and output encoders with metadata support.
 - **`fcs-mapping`** – Tabular ingestion for the batch mapping workflow: reads CSV, Excel, Parquet, and SQLite tables into source-image/output-name pairs. Standalone — it depends on no other workspace crate.
 - **`fcs-cli`** – Command-line frontend aimed at batch processing and automation with optional GPU acceleration (auto-detected, with fallback to CPU). Features GPU context pooling for efficient batch operations. Example invocations are documented in `docs/cli_recipes.md`.
@@ -56,7 +58,7 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 
 - **Preprocessing** – GPU-accelerated image resizing, color space conversion (RGB→BGR), and tensor layout transformation (HWC→CHW) with automatic fallback to CPU.
 - **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking.
-- **Custom YuNet inference** – Full GPU implementation of YuNet face detection model using custom WGSL shaders for Conv2D, BatchNorm, pooling, and activation operations (see `docs/gpu_research.md`).
+- **Custom inference** – Full GPU implementation of the detector using custom WGSL shaders for Conv2D, pooling, add, upsample and activation operations, matching ONNX Runtime to about 1e-05 (see `docs/gpu_research.md`).
 - **GPU context pooling** – CLI uses async GPU context pool for efficient batch operations; GUI shares wgpu context with eframe's rendering backend.
 - **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. Use `--gpu` or `--no-gpu` flags in CLI for explicit control.
 
@@ -163,7 +165,7 @@ The easiest option is the [Microsoft Store](#microsoft-store) listing, which kee
    - `fcs-gui.exe` for the desktop app
    - `fcs-cli.exe --help` for CLI usage
 
-The release package includes `models/face_detection_yunet_2023mar_640.onnx` by default, so detection works out-of-the-box without manually selecting a model path.
+The release package includes `models/scrfd80k_500m_640.onnx` by default, so detection works out-of-the-box without manually selecting a model path.
 
 ### Microsoft Store
 
@@ -243,7 +245,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 ## Development Tasks
 
 - `cargo check --workspace` – Fast type checking across all crates.
-- `cargo test --workspace --all-features` – Run the full test suite (requires the YuNet 640×640 ONNX model under `models/`).
+- `cargo test --workspace --all-features` – Run the full test suite (requires `models/scrfd80k_500m_640.onnx`; set `FCS_STRICT_TESTS=1` to fail rather than skip when it is missing).
 - `cargo run -p fcs-cli -- --help` – View CLI options.
 - `cargo run -p fcs-cli -- --benchmark-preprocess` – Benchmark GPU vs CPU preprocessing performance.
 - `cargo run -p fcs-cli -- --input fixtures/ --gpu` – Run with explicit GPU acceleration.
@@ -307,7 +309,7 @@ Mutation testing is deliberately not in CI: every mutant is a fresh incremental 
 - [Changelog](CHANGELOG.md) – release history and notable changes.
 - [CLI recipes](docs/cli_recipes.md) – common `fcs-cli` invocations for detection, cropping, filtering, and enhancement.
 - [GUI crop guide](docs/gui_crop_guide.md) – walkthrough of the desktop crop workflow and keyboard shortcuts.
-- [GPU research notes](docs/gpu_research.md) – design and implementation of the custom WGPU YuNet inference graph.
+- [GPU research notes](docs/gpu_research.md) – design and implementation of the custom WGPU inference graph.
 - [ONNX runtime options](docs/ONNX_RUNTIME_OPTIONS.md) – inference backend trade-offs and the chosen approach.
 - [Performance guide](docs/PERFORMANCE.md) – performance profile and optimization notes.
 - [OpenCV parity snapshot](docs/parity_report.md) – detection/crop parity against the OpenCV reference.

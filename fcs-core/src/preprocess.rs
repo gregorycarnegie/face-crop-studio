@@ -1,7 +1,14 @@
-//! Preprocessing utilities for preparing images for YuNet inference.
+//! Letterboxing images into inference tensors, on the CPU or the GPU.
 //!
-//! The helpers in this module resize images, convert them into the expected tensor layout, and
-//! return the scale factors necessary to map detections back to the source image.
+//! The helpers here resize images, convert them into `[1, 3, H, W]` **BGR** with the source
+//! **centred**, and return the scale factors needed to map detections back.
+//!
+//! **Nothing on the detection path goes through this any more.** Those were YuNet's conventions;
+//! SCRFD wants RGB with the source in the **top-left**, and `crate::scrfd::preprocess` does that
+//! itself, in one place with the decode that has to undo it. What still uses this module is
+//! `fcs-cli --benchmark-preprocess`, which measures the CPU against the WGSL path, and the GUI,
+//! which builds a [`WgpuPreprocessor`] as its way of obtaining a GPU context and its status --
+//! a side effect worth untangling, since it compiles preprocessing shaders nothing then runs.
 
 use crate::gpu::tensor::GpuTensor;
 use crate::tensor::Tensor;
@@ -22,7 +29,7 @@ use std::{
     sync::{Arc, Mutex, mpsc},
 };
 
-/// Desired input resolution for YuNet.
+/// Desired input resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputSize {
     /// The width of the input tensor.
@@ -81,7 +88,7 @@ pub struct PreprocessOutput {
     pub original_size: (u32, u32),
 }
 
-/// Preprocess an image file into a YuNet-ready tensor in `[1, 3, H, W]` (CHW) BGR format matching OpenCV's `blobFromImage`.
+/// Preprocess an image file into a `[1, 3, H, W]` (CHW) BGR tensor matching OpenCV's `blobFromImage`.
 ///
 /// # Arguments
 ///
@@ -188,7 +195,7 @@ impl From<&InputDimensions> for PreprocessConfig {
 
 /// Abstraction over preprocessing backends (CPU, GPU).
 pub trait Preprocessor: Send + Sync + std::fmt::Debug {
-    /// Convert the provided dynamic image into a YuNet-ready tensor.
+    /// Convert the provided dynamic image into a BGR CHW tensor.
     fn preprocess(
         &self,
         image: &DynamicImage,
@@ -1231,7 +1238,7 @@ mod tests {
         // Input size matches the image, so no resampling stands between the
         // source pixels and the tensor and the expected values are exact.
         //
-        // YuNet wants `[1, 3, H, W]` with the channels in B, G, R order — the
+        // This module produces `[1, 3, H, W]` with the channels in B, G, R order — the
         // layout OpenCV's blobFromImage produces. `preprocess_generates_bgr_tensor`
         // only checks every value is in 0..=255, which holds just as well for
         // RGB order, an interleaved layout, or transposed rows.
@@ -1355,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn input_size_default_is_the_yunet_resolution() {
+    fn input_size_default_is_the_configured_resolution() {
         assert_eq!(InputSize::default(), InputSize::new(640, 640));
         // PreprocessConfig::default has to inherit it rather than zero it.
         assert_eq!(

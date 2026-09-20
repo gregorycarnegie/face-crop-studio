@@ -1,16 +1,16 @@
 //! SCRFD: the detector trained on this project's own licence-clean data.
 //!
 //! It finds 86.0% of the faces in the Open Images test split at 0.11 false positives per image,
-//! against YuNet's 71.6% at 0.14, and on a corpus neither model has seen it finds 135 faces
-//! YuNet misses while missing 13 it finds (`tools/dataset/SCRFD_80K.md`). It costs about 10%
+//! against YuNet's 71.6% at 0.14, and on a corpus neither model had seen it found 135 faces
+//! YuNet missed while missing 13 it found (`tools/dataset/SCRFD_80K.md`). It cost about 10%
 //! more per image: 6.4 ms against 5.8 at 640x640 on ONNX Runtime.
 //!
-//! **It does not replace YuNet, it is preferred over it.** YuNet's topology is compiled into
-//! the built-in CPU graph (`crate::yunet`) and the WGSL kernels, while this model runs only
-//! under ONNX Runtime, so making it the sole detector would leave a machine without a runtime
-//! with no detector at all rather than a slower one. [`ScrfdDetector::load`] returns `None`
-//! when the runtime or the model file is missing and the caller keeps YuNet -- the same rule
-//! [`crate::EyeRefiner`] follows.
+//! **It is the only detector.** It runs on all three engines -- ONNX Runtime, the WGSL kernels
+//! (`gpu`), or the built-in CPU graph (`plan`) -- which agree to about 1e-05 and produce
+//! identical detections, so there is nothing a machine can be missing that leaves it without a
+//! detector. That is what let YuNet go: its weights come from WIDER FACE, "non-commercial
+//! academic research only". [`ScrfdDetector::load`] still returns `None` when the model file
+//! itself is absent, and then detection cannot run at all.
 //!
 //! The graph is exported by `tools/dataset/export_scrfd.py` and emits nine raw tensors, three
 //! per stride: class scores already sigmoided, box distances, and keypoint distances, both in
@@ -43,7 +43,7 @@ const STRIDES: [u32; 3] = [8, 16, 32];
 /// Anchors per cell, from the config's two scales at one ratio.
 const ANCHORS_PER_CELL: usize = 2;
 
-/// Landmarks the head predicts: the same five, in the same order, that YuNet emits.
+/// Landmarks the head predicts: eyes, nose, then the two mouth corners.
 const LANDMARKS: usize = 5;
 
 /// How many of those five this model was actually taught: the two eyes, and nothing else.
@@ -226,8 +226,8 @@ impl ScrfdDetector {
 /// Resize into the top-left of a square canvas and normalise, as the model was trained.
 ///
 /// Three details that are all load-bearing, and all silent when wrong: the source goes to the
-/// **top-left** rather than being centred the way `crate::preprocess` letterboxes for YuNet;
-/// channels are **RGB**, not YuNet's BGR; and the padding is normalised along with everything
+/// **top-left** rather than being centred the way `crate::preprocess` letterboxes; channels
+/// are **RGB**, not the BGR that module produces; and the padding is normalised along with everything
 /// else. The Python builds a zeroed `uint8` canvas and then subtracts, so the padding is
 /// `(0 - 127.5) / 128`, not zero, and a model fed zeroed padding sees a border it never met.
 pub(crate) fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {

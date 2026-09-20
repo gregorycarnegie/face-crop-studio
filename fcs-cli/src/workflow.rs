@@ -527,8 +527,11 @@ pub(crate) mod tests {
     pub(crate) fn build_test_detector() -> Option<Arc<fcs_core::FaceDetector>> {
         let model_path =
             fcs_utils::model_path("models/scrfd80k_500m_640.onnx").expect("resolve model")?;
-        let detector = build_cli_detector(&model_path, fcs_utils::config::DEFAULT_CONFIDENCE)
-            .expect("the bundled model builds a detector");
+        let detector = build_cli_detector(
+            &model_path,
+            &fcs_utils::config::DetectionSettings::default(),
+        )
+        .expect("the bundled model builds a detector");
         Some(Arc::new(detector))
     }
 

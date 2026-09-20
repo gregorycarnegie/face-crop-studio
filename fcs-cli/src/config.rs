@@ -349,10 +349,10 @@ mod tests {
 
     #[test]
     fn metadata_tags_parses_valid_entries() {
-        let entries = vec!["author=Alice".to_string(), "project=YuNet".to_string()];
+        let entries = vec!["author=Alice".to_string(), "project=Portraits".to_string()];
         let map = parse_metadata_tags_args(&entries);
         assert_eq!(map.get("author").map(String::as_str), Some("Alice"));
-        assert_eq!(map.get("project").map(String::as_str), Some("YuNet"));
+        assert_eq!(map.get("project").map(String::as_str), Some("Portraits"));
     }
 
     #[test]

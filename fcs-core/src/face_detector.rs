@@ -15,28 +15,52 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::{path::Path, sync::Arc};
 
-use crate::{detector::DetectionOutput, scrfd::ScrfdDetector};
+use crate::{postprocess::Detection, scrfd::ScrfdDetector};
+use fcs_utils::config::DetectionSettings;
 
-/// Score at which SCRFD is run.
+/// What one detection run produced.
+#[derive(Debug, Clone)]
+pub struct DetectionOutput {
+    /// Detected faces in original-image pixels, after filtering and suppression.
+    pub detections: Vec<Detection>,
+    /// The original dimensions of the input image.
+    pub original_size: (u32, u32),
+}
+
+/// The application's detector.
 ///
-/// Not the configured YuNet threshold, which is on a different scale entirely -- YuNet ships at
-/// 0.9, and the two models' scores are not comparable. 0.5 was chosen by eye on a corpus neither
-/// model had seen: at 0.4 the 60 largest detections YuNet missed held 32 false positives, and at
-/// 0.5 seven, losing 2 of 25 real faces (SCRFD_80K.md). The configured threshold still governs
-/// YuNet whenever YuNet is the one running.
+/// The three knobs come from [`DetectionSettings`] and every one of them reaches the model.
+/// That is worth stating because it was briefly untrue: when this replaced the YuNet pair, the
+/// score was read from settings while the NMS threshold and the cap stayed at the constants
+/// below, so the GUI's sliders moved nothing. See [`Self::with_settings`].
+#[derive(Debug)]
+pub struct FaceDetector {
+    /// Behind an `Arc` so [`Self::with_settings`] can re-wrap without reloading the model.
+    scrfd: Arc<ScrfdDetector>,
+    score_threshold: f32,
+    nms_threshold: f32,
+    top_k: usize,
+}
+
+/// Keep at most `top_k` detections, where `0` means keep all.
+///
+/// `ScrfdDetector::detect` returns them score-descending, so truncating keeps the best.
+fn apply_top_k(detections: &mut Vec<Detection>, top_k: usize) {
+    if top_k > 0 {
+        detections.truncate(top_k);
+    }
+}
+
+/// Score at which SCRFD is run when nothing says otherwise.
+///
+/// Chosen by eye on a corpus neither this model nor YuNet had seen: at 0.4 the 60 largest
+/// detections it found and YuNet missed held 32 false positives, and at 0.5 seven, losing 2 of
+/// 25 real faces (SCRFD_80K.md). Not comparable to YuNet's shipped 0.9 -- different model,
+/// different scale, which is why the setting that carries it was renamed.
 pub const SCRFD_SCORE_THRESHOLD: f32 = 0.5;
 
 /// Upstream SCRFD's own `test_cfg.nms.iou_threshold`.
 pub const SCRFD_NMS_THRESHOLD: f32 = 0.4;
-
-/// The application's detector.
-#[derive(Debug)]
-pub struct FaceDetector {
-    /// Behind an `Arc` so [`Self::with_postprocess`] can re-wrap without reloading the model.
-    scrfd: Arc<ScrfdDetector>,
-    score_threshold: f32,
-    nms_threshold: f32,
-}
 
 impl FaceDetector {
     /// Load the detector, or `None` when no model is present.
@@ -52,26 +76,39 @@ impl FaceDetector {
         ScrfdDetector::load_from(path).map(Self::new)
     }
 
-    /// Wrap an already-loaded detector.
+    /// Wrap an already-loaded detector at the default operating point.
     pub fn new(scrfd: ScrfdDetector) -> Self {
         Self {
             scrfd: Arc::new(scrfd),
             score_threshold: SCRFD_SCORE_THRESHOLD,
             nms_threshold: SCRFD_NMS_THRESHOLD,
+            top_k: fcs_utils::config::DEFAULT_TOP_K,
+        }
+    }
+
+    /// The same detector configured from settings, sharing the loaded model.
+    ///
+    /// All three fields are applied. `confidence` and `nms_threshold` are passed to the model;
+    /// `top_k` caps what comes back, after suppression, keeping the highest scores. **`0` means
+    /// no cap**, which is what the pass this replaced meant by it -- the GUI cannot reach 0, but
+    /// `--top-k 0` can, and a user writing that means "no limit", not "no faces".
+    pub fn with_settings(&self, settings: &DetectionSettings) -> Self {
+        Self {
+            scrfd: Arc::clone(&self.scrfd),
+            score_threshold: settings.confidence,
+            nms_threshold: settings.nms_threshold,
+            top_k: settings.top_k,
         }
     }
 
     /// Run detection on an in-memory image.
     pub fn detect_image(&self, image: &DynamicImage) -> Result<DetectionOutput> {
-        let detections = self
+        let mut detections = self
             .scrfd
             .detect(image, self.score_threshold, self.nms_threshold)?;
+        apply_top_k(&mut detections, self.top_k);
         Ok(DetectionOutput {
             detections,
-            // The decoding has already undone the letterbox, so these are the identity: a
-            // caller that rescaled by them would move every box a second time.
-            scale_x: 1.0,
-            scale_y: 1.0,
             original_size: (image.width(), image.height()),
         })
     }
@@ -82,19 +119,6 @@ impl FaceDetector {
         let image = fcs_utils::load_image(path)
             .with_context(|| format!("failed to load image from {}", path.display()))?;
         self.detect_image(&image)
-    }
-
-    /// The same detector at a different score threshold, sharing the loaded model.
-    ///
-    /// Takes the threshold directly rather than a `PostprocessConfig`: that config's fields --
-    /// score, NMS, top-k -- were YuNet's, on YuNet's scale, and this model's scores are not
-    /// comparable to them.
-    pub fn with_score_threshold(&self, score_threshold: f32) -> Self {
-        Self {
-            scrfd: Arc::clone(&self.scrfd),
-            score_threshold,
-            nms_threshold: self.nms_threshold,
-        }
     }
 
     /// Which detector is running, for logs and the GUI.
@@ -113,16 +137,79 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_threshold_change_shares_the_loaded_model() {
+    fn settings_change_shares_the_loaded_model() {
         let Some(detector) = FaceDetector::load() else {
             eprintln!("skipped: no detector model present");
             return;
         };
-        let stricter = detector.with_score_threshold(0.9);
+        let stricter = detector.with_settings(&DetectionSettings {
+            confidence: 0.9,
+            nms_threshold: 0.1,
+            top_k: 3,
+        });
         assert_eq!(stricter.model_name(), "SCRFD-80k");
         assert_eq!(stricter.inference_backend(), detector.inference_backend());
         // Re-wrapping must not reload: both share one Arc.
         assert!(Arc::ptr_eq(&detector.scrfd, &stricter.scrfd));
+    }
+
+    /// The bug this guards: a setting read into the struct but never passed to the model. Each
+    /// field is given a value distinguishable from the default, and read back.
+    #[test]
+    fn every_setting_reaches_the_detector() {
+        let Some(detector) = FaceDetector::load() else {
+            eprintln!("skipped: no detector model present");
+            return;
+        };
+        let configured = detector.with_settings(&DetectionSettings {
+            confidence: 0.75,
+            nms_threshold: 0.25,
+            top_k: 7,
+        });
+        assert!((configured.score_threshold - 0.75).abs() < f32::EPSILON);
+        assert!((configured.nms_threshold - 0.25).abs() < f32::EPSILON);
+        assert_eq!(configured.top_k, 7);
+    }
+
+    fn dummy_detections(count: usize) -> Vec<Detection> {
+        (0..count)
+            .map(|i| Detection {
+                bbox: crate::postprocess::BoundingBox {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+                landmarks: [fcs_utils::point::Point::new(0.0, 0.0); 5],
+                score: 1.0 - i as f32 * 0.1,
+            })
+            .collect()
+    }
+
+    /// `0` must mean "no cap", not "no faces". The GUI cannot reach 0, but `--top-k 0` can, and
+    /// it reads as "no limit" -- truncating to zero would silently return nothing.
+    #[test]
+    fn a_top_k_of_zero_is_no_cap() {
+        let mut detections = dummy_detections(3);
+        apply_top_k(&mut detections, 0);
+        assert_eq!(detections.len(), 3, "0 must not truncate");
+    }
+
+    #[test]
+    fn top_k_keeps_the_highest_scores() {
+        let mut detections = dummy_detections(5);
+        apply_top_k(&mut detections, 2);
+        assert_eq!(detections.len(), 2);
+        // `detect` hands them over score-descending, so the survivors are the best two.
+        assert!(detections[0].score > detections[1].score);
+        assert!((detections[0].score - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_top_k_above_the_count_keeps_everything() {
+        let mut detections = dummy_detections(2);
+        apply_top_k(&mut detections, 100);
+        assert_eq!(detections.len(), 2);
     }
 
     #[test]

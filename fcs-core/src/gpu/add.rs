@@ -32,7 +32,7 @@ impl AddPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
-            uniforms: UniformCache::new("yunet_add_uniforms"),
+            uniforms: UniformCache::new("fcs_add_uniforms"),
         })
     }
 

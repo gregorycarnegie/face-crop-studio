@@ -10,11 +10,11 @@ use std::{
 ///
 /// `wgpu::Device::create_buffer_init` measured **8.1 us** per 16-byte uniform on
 /// RTX 4090 / D3D12 (`examples/encode_cost.rs`), against a whole forward pass that records
-/// in ~0.19 ms. The YuNet graph is static, so a handful of distinct uniform values covers
+/// in ~0.19 ms. The graph is static, so a handful of distinct uniform values covers
 /// every dispatch and after the first pass every lookup hits.
 ///
 /// Keyed by contents rather than by layer, so it stays correct if a caller builds an
-/// unexpected config; bounded by the number of distinct shapes, which for YuNet is well
+/// unexpected config; bounded by the number of distinct shapes, which for the detector is well
 /// under twenty per pipeline. A caller sweeping many resolutions through one pipeline would
 /// grow it without bound.
 ///

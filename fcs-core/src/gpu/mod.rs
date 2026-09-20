@@ -1,8 +1,9 @@
-//! GPU inference building blocks for the YuNet model.
+//! GPU inference building blocks, in WGSL compute shaders.
 //!
-//! [`GpuYuNet`](crate::gpu::GpuYuNet) runs the complete network using WGSL compute shaders.
-//! [`GpuInferenceOps`](crate::gpu::GpuInferenceOps) exposes individual tensor operations, including variants
-//! that record work into a caller-owned encoder for a single queue submission.
+//! [`GpuInferenceOps`](crate::gpu::GpuInferenceOps) exposes individual tensor operations,
+//! including variants that record work into a caller-owned encoder for a single queue
+//! submission. The topology that drives them lives with its model; see
+//! [`crate::scrfd::gpu`], which runs the whole detector on these ops.
 
 /// Elementwise activation functions for GPU tensors.
 pub mod activation;
@@ -54,8 +55,3 @@ const MAX_POOL_WGSL: &str = include_str!("pool.wgsl");
 const ADD_WGSL: &str = include_str!("add.wgsl");
 const UPSAMPLE2X_WGSL: &str = include_str!("resize2x.wgsl");
 const RESIZE2X_ADD_WGSL: &str = include_str!("resize2x_add.wgsl");
-/// Encoding the YuNet backbone, neck, and detection heads.
-pub mod graph;
-/// Loading and running the complete YuNet GPU graph.
-pub mod runtime;
-pub use runtime::GpuYuNet;

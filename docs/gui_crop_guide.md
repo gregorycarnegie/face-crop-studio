@@ -1,11 +1,11 @@
 # GUI Crop Features Guide
 
-The desktop app bundles a full crop workflow on top of YuNet detection so you can preview, fine‑tune, and export professional headshots without juggling multiple tools. This guide walks through the key surfaces available in the left-hand control panel and the associated keyboard shortcuts.
+The desktop app bundles a full crop workflow on top of face detection so you can preview, fine‑tune, and export professional headshots without juggling multiple tools. This guide walks through the key surfaces available in the left-hand control panel and the associated keyboard shortcuts.
 
 ## Quick Start
 
 1. Launch the GUI with `cargo run -p fcs-gui` (or run the packaged binary once released).
-2. Click **Open image…** to select a portrait photo, or simply drag an image from your desktop (or paste one from the clipboard) to load it instantly. YuNet will run automatically as soon as the model has been configured.
+2. Click **Open image…** to select a portrait photo, or simply drag an image from your desktop (or paste one from the clipboard) to load it instantly. Detection will run automatically as soon as the model has been configured.
 3. Detected faces appear in the **Detected Faces** list. Click a thumbnail or the accompanying **Select** button to include a face in the export set. Hold *Shift* and use the number keys (1‑6) to jump between the built-in crop presets.
 4. Hit **Export selected faces** (or press *Enter*) to run the crop, optional enhancements, and save pipeline.
 
@@ -20,7 +20,7 @@ The desktop app bundles a full crop workflow on top of YuNet detection so you ca
 
 ## Face Selection & Quality
 
-- Every detection shows the YuNet confidence, Laplacian variance score, and quality bucket (Low/Medium/High). These scores drive automation such as auto-selecting the best face or skipping blurry exports.
+- Every detection shows the detector's confidence, Laplacian variance score, and quality bucket (Low/Medium/High). These scores drive automation such as auto-selecting the best face or skipping blurry exports.
 - Use **Select All / Deselect All** to batch toggle the current detections.
 - Quality automation rules live under *Crop ▸ Quality Rules*. You can require a minimum quality level, append `_highq/_medq/_lowq` suffixes, or skip exports if no face reaches High quality.
 

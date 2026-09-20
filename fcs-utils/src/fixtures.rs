@@ -6,14 +6,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const FIXTURE_ENV: &str = "YUNET_FIXTURE_ROOT";
-const MODEL_ENV: &str = "YUNET_MODEL_PATH";
+const FIXTURE_ENV: &str = "FCS_FIXTURE_ROOT";
+const MODEL_ENV: &str = "FCS_MODEL_PATH";
 const STRICT_ENV: &str = "FCS_STRICT_TESTS";
 
 /// Resolve the root directory that stores project fixtures.
 ///
 /// This function searches for a `fixtures` directory in the following order:
-/// 1. The path specified by the `YUNET_FIXTURE_ROOT` environment variable.
+/// 1. The path specified by the `FCS_FIXTURE_ROOT` environment variable.
 /// 2. Ancestor directories of the current crate's manifest directory.
 ///
 /// Returns an error if the directory cannot be found.
@@ -40,7 +40,7 @@ pub fn fixtures_dir() -> Result<PathBuf> {
 /// Resolve a model file, for tests and benchmarks that need the real ONNX weights.
 ///
 /// Searched in order:
-/// 1. The file named by the `YUNET_MODEL_PATH` environment variable.
+/// 1. The file named by the `FCS_MODEL_PATH` environment variable.
 /// 2. `relative` joined onto each ancestor of the crate's manifest directory.
 ///
 /// Resolving against the manifest rather than the current directory is the point: `cargo test
@@ -53,7 +53,7 @@ pub fn fixtures_dir() -> Result<PathBuf> {
 ///
 /// # Arguments
 ///
-/// * `relative` - A workspace-relative path, e.g. `models/face_detection_yunet_2023mar_640.onnx`.
+/// * `relative` - A workspace-relative path, e.g. `models/scrfd80k_500m_640.onnx`.
 pub fn model_path<P: AsRef<Path>>(relative: P) -> Result<Option<PathBuf>> {
     if let Ok(value) = env::var(MODEL_ENV) {
         let candidate = PathBuf::from(value);
@@ -180,7 +180,7 @@ mod tests {
         let result = fixtures_dir();
         unsafe { env::remove_var(FIXTURE_ENV) };
 
-        let dir = result.expect("fixtures_dir should succeed with YUNET_FIXTURE_ROOT set");
+        let dir = result.expect("fixtures_dir should succeed with FCS_FIXTURE_ROOT set");
         assert_eq!(dir.to_str().unwrap(), tmp_path);
     }
 

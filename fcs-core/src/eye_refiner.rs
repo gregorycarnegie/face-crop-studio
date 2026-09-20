@@ -1,7 +1,7 @@
 //! A small convnet that replaces a detector's two eye points with better ones.
 //!
 //! `face_cropper` uses landmarks 0 and 1 for exactly one thing: the angle of the eye line,
-//! which levels the crop. YuNet's are adequate for locating a face and mediocre at that
+//! which levels the crop. A detector's own eye points are adequate for locating a face and mediocre at that
 //! angle -- measured against 1,382 hand-clicked test faces it lands 4.05 degrees out at the
 //! median, with only 57.6% of faces within 5 degrees. This model, trained on 1,988 clicked
 //! eye pairs with rotation augmentation and an explicit angle term in its loss, gives 1.18
@@ -10,11 +10,11 @@
 //!
 //! It refines rather than detects. It reads a box somebody else found and rewrites two
 //! points inside it, so it is independent of which detector produced that box -- the reason
-//! it lives here rather than inside `YuNetModel`, and the reason replacing YuNet later does
+//! it lives here rather than inside the detector, and the reason replacing the detector does
 //! not disturb it.
 //!
-//! **It runs only under ONNX Runtime.** The built-in CPU graph has YuNet's topology compiled
-//! in (`crate::yunet`) and the WGSL kernels cover the ops YuNet needs, which do not include
+//! **It runs only under ONNX Runtime.** The built-in CPU graph and the WGSL kernels cover the
+//! ops the detector needs, which do not include
 //! this model's `GlobalAveragePool` and `Gemm`. Rather than hand-write a second topology
 //! twice, [`EyeRefiner::load`] returns `None` when no runtime or no model file is present and
 //! callers keep the detector's own landmarks. Releases bundle the runtime on all three

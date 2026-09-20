@@ -1,6 +1,6 @@
 //! NCHW f32 tensors for the CPU inference graph.
 //!
-//! Deliberately minimal: YuNet's graph only ever needs 4-D f32 activations, so
+//! Deliberately minimal: the graph only ever needs 4-D f32 activations, so
 //! there is no dtype dispatch, no strides and no broadcasting. Anything more
 //! general would be machinery with no caller.
 

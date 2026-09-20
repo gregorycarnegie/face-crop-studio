@@ -1,5 +1,12 @@
 # OpenCV Parity Snapshot
 
+> **Historical (pre-1.9).** Everything below measures or designs around **YuNet**, which was the
+> detector until 1.8.0 and no longer ships: its weights come from WIDER FACE, licensed for
+> non-commercial academic research only. The engines it describes still exist and still run
+> SCRFD; the numbers, node names and topology do not describe anything current, and the examples
+> named here were deleted with it. The full YuNet implementation and these experiments are in the
+> `face-crop-studio-yunet-archive` fork. Kept as a design and measurement record.
+
 Generated with:
 
 ```bash

@@ -54,7 +54,7 @@
 
 - Config/settings compatibility:
 - Model requirements:
-  - `face_detection_yunet_2023mar_640.onnx` required
+  - `scrfd80k_500m_640.onnx` required
 
 ## Contributors
 

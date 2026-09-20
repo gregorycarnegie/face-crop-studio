@@ -1,30 +1,21 @@
 name: Verify model checksums
 description: >
-  Checks the YuNet ONNX models against their pinned SHA-256 digests. The same
-  check runs in prepare-models (right after generation) and again in every
-  release job (after the artifact download), so a corrupted or swapped artifact
-  cannot reach a shipped package. Written in bash + sha256sum rather than Python
-  because the windows-11-arm runner has no guaranteed Python, and this needs to
-  work identically on all five release jobs.
+  Checks the ONNX models against their pinned SHA-256 digests. Both models are now fetched from
+  release assets rather than regenerated from a public URL, so these digests are the only thing
+  standing between a swapped upload and a shipped package. The same check runs in prepare-models
+  (right after the fetch) and again in every release job (after the artifact download). Written
+  in bash + sha256sum rather than Python because the windows-11-arm runner has no guaranteed
+  Python, and this needs to work identically on all five release jobs.
 
 inputs:
   models-dir:
-    description: Directory holding the downloaded/generated models.
+    description: Directory holding the downloaded models.
     default: models
-  original-sha256:
-    description: Expected digest of face_detection_yunet_2023mar.onnx.
-    required: true
-  simplified-sha256:
-    description: Expected digest of face_detection_yunet_2023mar_640.onnx.
-    required: true
-  simplified-320-sha256:
-    description: Expected digest of face_detection_yunet_2023mar_320.onnx. Only CI generates it, so empty skips the check.
+  scrfd-sha256:
+    description: Expected digest of scrfd80k_500m_640.onnx, the detector. Empty skips the check.
     default: ""
   eye-refiner-sha256:
     description: Expected digest of eye_refiner.onnx. Empty skips the check, for jobs that do not need it.
-    default: ""
-  scrfd-sha256:
-    description: Expected digest of scrfd80k_500m_640.onnx. Empty skips the check.
     default: ""
 
 runs:
@@ -34,9 +25,6 @@ runs:
       shell: bash
       env:
         MODELS_DIR: ${{ inputs.models-dir }}
-        ORIGINAL_SHA256: ${{ inputs.original-sha256 }}
-        SIMPLIFIED_SHA256: ${{ inputs.simplified-sha256 }}
-        SIMPLIFIED_320_SHA256: ${{ inputs.simplified-320-sha256 }}
         EYE_REFINER_SHA256: ${{ inputs.eye-refiner-sha256 }}
         SCRFD_SHA256: ${{ inputs.scrfd-sha256 }}
       run: |
@@ -45,18 +33,17 @@ runs:
         # pinned inputs so the digests stay declared in one place (release.yml).
         sums_file="$(mktemp)"
         {
-          echo "${ORIGINAL_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar.onnx"
-          echo "${SIMPLIFIED_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar_640.onnx"
-          if [ -n "${SIMPLIFIED_320_SHA256}" ]; then
-            echo "${SIMPLIFIED_320_SHA256}  ${MODELS_DIR}/face_detection_yunet_2023mar_320.onnx"
-          fi
-          # The refiner is fetched from a release asset rather than regenerated, so its digest
-          # is the only thing standing between a swapped upload and a shipped package.
-          if [ -n "${EYE_REFINER_SHA256}" ]; then
-            echo "${EYE_REFINER_SHA256}  ${MODELS_DIR}/eye_refiner.onnx"
-          fi
           if [ -n "${SCRFD_SHA256}" ]; then
             echo "${SCRFD_SHA256}  ${MODELS_DIR}/scrfd80k_500m_640.onnx"
           fi
+          if [ -n "${EYE_REFINER_SHA256}" ]; then
+            echo "${EYE_REFINER_SHA256}  ${MODELS_DIR}/eye_refiner.onnx"
+          fi
         } > "$sums_file"
+        # Every digest empty means this step silently checked nothing, which is how a caller
+        # that forgets to pass one would still go green. Fail instead.
+        if [ ! -s "$sums_file" ]; then
+          echo "verify-models: no digests were supplied, so nothing was checked" >&2
+          exit 1
+        fi
         sha256sum --check --strict "$sums_file"

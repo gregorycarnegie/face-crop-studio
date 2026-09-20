@@ -144,7 +144,6 @@ Section "Uninstall"
   Delete "$INSTDIR\LICENSE-*"
   ; Remove only the bundled models; RMDir (no /r) leaves the directory intact
   ; if the user placed additional models there.
-  Delete "$INSTDIR\models\face_detection_yunet_2023mar_640.onnx"
   Delete "$INSTDIR\models\eye_refiner.onnx"
   Delete "$INSTDIR\models\scrfd80k_500m_640.onnx"
   RMDir "$INSTDIR\models"

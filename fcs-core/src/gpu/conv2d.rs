@@ -42,7 +42,8 @@ enum Kernel {
     Depthwise,
     /// Ungrouped, anything else: the 640x640 3->16 stride-2 stem.
     General,
-    /// Grouped and not depthwise. Nothing in YuNet reaches it; it is the public
+    /// Grouped and not depthwise. Nothing in the detector reaches it -- all 60 of its
+    /// convolutions are `groups == 1` or `in_per_group == 1` -- so it is only the public
     /// `conv2d` API's fallback, which is why its pipeline is built on first use.
     Grouped,
 }
@@ -54,14 +55,15 @@ pub(super) struct Conv2dPipeline {
     /// `main` in the shader branches on the uniforms, so compiling it drags all four kernels
     /// through FXC: about 185 ms, which experiment 80 found to be 90% of all shader
     /// compilation and 22% of a cold start. Compiled per entry point instead, the three
-    /// kernels YuNet dispatches cost about 25 + 21 + 53 ms, because compilation is
+    /// kernels the detector dispatches cost about 25 + 21 + 53 ms, because compilation is
     /// superlinear in what one entry point can reach
     /// (`examples/shader_compile_cost.rs`).
     pointwise_pipeline: wgpu::ComputePipeline,
     depthwise_pipeline: wgpu::ComputePipeline,
     general_pipeline: wgpu::ComputePipeline,
-    /// Built on first use, because nothing in YuNet is a grouped convolution and compiling
-    /// the branching entry point is the expensive half of the whole thing.
+    /// Built on first use, because nothing in the detector is a grouped-not-depthwise
+    /// convolution and compiling the branching entry point is the expensive half of the whole
+    /// thing.
     grouped_pipeline: OnceLock<wgpu::ComputePipeline>,
     module: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
@@ -102,7 +104,7 @@ impl Conv2dPipeline {
         // All four entry points bind the same five resources, so one layout serves them and
         // the bind-group cache stays shared rather than one per pipeline.
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("yunet_conv2d_bgl"),
+            label: Some("fcs_conv2d_bgl"),
             entries: &[
                 buffer_entry(0, wgpu::BufferBindingType::Storage { read_only: true }),
                 buffer_entry(1, wgpu::BufferBindingType::Storage { read_only: true }),
@@ -112,7 +114,7 @@ impl Conv2dPipeline {
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("yunet_conv2d_layout"),
+            label: Some("fcs_conv2d_layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
@@ -135,7 +137,7 @@ impl Conv2dPipeline {
             pipeline_layout,
             bind_group_layout,
             pixels_per_thread,
-            uniforms: UniformCache::new("yunet_conv2d_uniforms"),
+            uniforms: UniformCache::new("fcs_conv2d_uniforms"),
             bind_groups: Mutex::new(HashMap::new()),
             bind_hits: AtomicU64::new(0),
             bind_misses: AtomicU64::new(0),
@@ -150,7 +152,7 @@ impl Conv2dPipeline {
             Kernel::General => &self.general_pipeline,
             Kernel::Grouped => self.grouped_pipeline.get_or_init(|| {
                 // `main` is the branching entry point, and the only one that reaches the
-                // grouped path. Nothing in YuNet gets here.
+                // grouped path. Nothing in the detector gets here.
                 device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some("main"),
                     layout: Some(&self.pipeline_layout),

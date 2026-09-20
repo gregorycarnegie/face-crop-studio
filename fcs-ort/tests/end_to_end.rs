@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use fcs_ort::{Environment, Session, SessionOptions};
 
-const MODEL: &str = "../models/face_detection_yunet_2023mar_640.onnx";
+const MODEL: &str = "../models/scrfd80k_500m_640.onnx";
 
 fn model_path() -> Option<PathBuf> {
     let path = PathBuf::from(MODEL);
@@ -42,9 +42,9 @@ fn loads_a_model_and_reads_its_signature() {
     let session =
         Session::new(&env, &model, SessionOptions::default()).expect("session should open");
 
-    // YuNet takes one input and emits cls/obj/bbox/kps for strides 8/16/32.
+    // SCRFD takes one input and emits cls/bbox/kps for strides 8/16/32.
     assert_eq!(session.input_names().len(), 1);
-    assert_eq!(session.output_names().len(), 12);
+    assert_eq!(session.output_names().len(), 9);
     assert!(
         !session.input_names()[0].as_bytes().is_empty(),
         "input name must be read from the model"
@@ -75,9 +75,11 @@ fn runs_the_graph_and_returns_well_formed_outputs() {
     let input = vec![0.5f32; shape.iter().product()];
     let outputs = session.run(&input, &shape).expect("run should succeed");
 
-    assert_eq!(outputs.len(), 12);
-    // Grid cells per stride for a 640x640 input: 80x80, 40x40, 20x20.
-    let expected_rows = [6400usize, 1600, 400];
+    assert_eq!(outputs.len(), 9);
+    // Grid cells per stride for a 640x640 input -- 80x80, 40x40, 20x20 -- times the two anchors
+    // per cell. The nine outputs come grouped by kind rather than by stride: the three class
+    // maps first, then the three box maps, then the three keypoint maps.
+    let expected_rows = [12800usize, 3200, 800];
     for (i, out) in outputs.iter().enumerate() {
         let rows = expected_rows[i % 3];
         assert_eq!(

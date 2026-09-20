@@ -1,4 +1,4 @@
-//! Command-line interface for running YuNet face detection.
+//! Command-line interface for running face detection.
 
 /// See the `mimalloc` note in the workspace Cargo.toml: tract's per-node tensor churn is
 /// pathological on the Windows system heap, and swapping the allocator is worth ~35% of a
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
 
     // Check if webcam mode is enabled
     if args.webcam {
-        let detector = build_cli_detector(&model_path, settings.detection.confidence)?;
+        let detector = build_cli_detector(&model_path, &settings.detection)?;
         let detector = Arc::new(detector);
         let settings = Arc::new(settings);
         let quality_filter = Arc::new(quality_filter);
@@ -127,7 +127,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let detector = build_cli_detector(&model_path, settings.detection.confidence)?;
+    let detector = build_cli_detector(&model_path, &settings.detection)?;
 
     if args.mapping_file.is_some() && !args.crop {
         info!(

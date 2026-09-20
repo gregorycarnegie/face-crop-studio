@@ -5,7 +5,7 @@
 //! crisp edges and well-focused features, while a low variance points to blur
 //! or motion smearing. We bucket raw variance values into three coarse bands:
 //! `Low` (≤300), `Medium` (300‒1000), and `High` (>1000). Those thresholds
-//! were calibrated against the YuNet fixtures so that High roughly aligns with
+//! were calibrated against the local fixtures, on YuNet's boxes, so that High roughly aligns with
 //! the faces we would confidently ship to customers, Medium covers "usable but
 //! soft" captures, and Low highlights frames that should be skipped or
 //! re-shot. The helpers in this module expose both the raw variance score and

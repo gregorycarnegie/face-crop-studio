@@ -59,7 +59,7 @@ impl ActivationPipeline {
             len: len as u32,
             mode: kind as u32,
         };
-        let uniform_buffer = create_uniform_buffer(device, "yunet_activation_uniforms", &uniforms);
+        let uniform_buffer = create_uniform_buffer(device, "fcs_activation_uniforms", &uniforms);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("activation_bg"),
             layout: &self.bind_group_layout,

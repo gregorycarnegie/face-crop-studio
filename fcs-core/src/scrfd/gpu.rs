@@ -27,7 +27,7 @@ pub struct ScrfdGpuWeights {
 impl ScrfdGpuWeights {
     /// Upload every weight the topology names.
     ///
-    /// Read by name through the same reader `crate::yunet` uses, so an export whose names moved
+    /// Read by name through the shared ONNX initializer reader, so an export whose names moved
     /// fails here rather than part-way through a frame.
     pub fn load(ops: &GpuInferenceOps, path: &std::path::Path) -> Result<Self> {
         let mut names = Vec::new();
@@ -39,7 +39,7 @@ impl ScrfdGpuWeights {
                 }
             }
         }
-        let map = crate::yunet::onnx::OnnxInitializerMap::load(path, &names)
+        let map = crate::onnx::OnnxInitializerMap::load(path, &names)
             .with_context(|| format!("reading SCRFD weights from {}", path.display()))?;
 
         let mut convs = Vec::with_capacity(super::topology::STEPS.len());

@@ -12,7 +12,7 @@ use anyhow::Result;
 use fcs_utils::gpu::{GpuBufferPool, GpuContext};
 use std::sync::Arc;
 
-/// Collection of GPU-backed YuNet primitives.
+/// Collection of GPU-backed inference primitives.
 ///
 /// This type owns the compiled WGSL pipelines for convolution, pooling and
 /// activations so callers can reuse them across layers.

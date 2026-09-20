@@ -57,7 +57,7 @@ pub(crate) mod test_support;
 
 use std::sync::Arc;
 
-/// Compute passes one profiler run can hold. A YuNet forward pass is ~62.
+/// Compute passes one profiler run can hold. An SCRFD forward pass is 66.
 const DEFAULT_PROFILER_PASSES: u32 = 256;
 
 /// How long a blocking wait for the GPU may take before it is treated as a fault.
@@ -208,7 +208,7 @@ impl Default for GpuContextOptions {
             optional_features: Features::empty(),
             required_limits: None,
             dx12_shader_compiler: Dx12Compiler::default(),
-            label: Some("YuNet GPU context".to_string()),
+            label: Some("Face Crop Studio GPU context".to_string()),
             memory_hints: None,
             profiling: false,
         }

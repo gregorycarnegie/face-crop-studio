@@ -1,7 +1,7 @@
 //! The slice of the ONNX protobuf schema needed to read initializers.
 //!
 //! Only three messages and five fields, because the topology is compiled in
-//! (see [`crate::yunet`]) and the model file is consulted for weights alone.
+//! (see [`crate::scrfd::topology`]) and the model file is consulted for weights alone.
 //! This replaces `tract_onnx::pb`, which came with the whole runtime.
 //!
 //! Protobuf ignores fields it does not know about, so declaring a subset parses

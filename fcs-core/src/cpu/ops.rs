@@ -1,4 +1,4 @@
-//! The non-convolution operators YuNet needs: max pooling, elementwise add,
+//! The non-convolution operators the graph needs: max pooling, elementwise add,
 //! and a nearest 2x upsample.
 //!
 //! Semantics mirror `gpu/pool.wgsl`, `gpu/add.wgsl` and `gpu/resize2x.wgsl`,

@@ -272,11 +272,11 @@ fn crop_fill_hex(crop: &fcs_utils::config::CropSettings) -> String {
 /// Shown between the first frame and the detector arriving on it (experiment 81).
 const STATUS_DETECTOR_PENDING: &str = "Starting the detector…";
 
-/// Names the detector, because two can run and which one you get depends on what is installed.
+/// Names the detector and the engine it landed on.
 ///
-/// SCRFD finds considerably more faces than YuNet but needs ONNX Runtime, so a build without
-/// the runtime silently falls back. Until this said so, the only way to find out which was
-/// running was the log.
+/// One detector ships, but it runs on ONNX Runtime, the WGSL kernels or the built-in CPU graph
+/// depending on what is installed, and that choice is a large speed difference. Until this said
+/// so, the only way to find out which was running was the log.
 fn initial_status_line(detector: Option<&fcs_core::FaceDetector>) -> String {
     match detector {
         Some(detector) => format!(
@@ -511,7 +511,7 @@ impl App2 {
                 self.eye_refiner = eye_refiner.map(Arc::new);
                 self.detector = match result {
                     Ok(d) => {
-                        info!("YuNet model loaded");
+                        info!("detector loaded");
                         Some(Arc::new(d))
                     }
                     Err(err) => {
@@ -823,9 +823,8 @@ impl App2 {
             return;
         };
         self.needs_postprocess_update = false;
-        // Re-wraps at the new confidence, sharing the loaded model: the detector's scores are
-        // its own, so this is the one number the slider still controls.
-        let detector = Arc::new(detector.with_score_threshold(self.settings.detection.confidence));
+        // Re-wraps at the new settings, sharing the loaded model.
+        let detector = Arc::new(detector.with_settings(&self.settings.detection));
         self.detector = Some(Arc::clone(&detector));
         let Some(path) = self.preview.image_path.clone() else {
             return;
@@ -1231,8 +1230,8 @@ fn show_about_window(ctx: &egui::Context, open: &mut bool) {
 
             ui.label(
                 egui::RichText::new(
-                    "Face Crop Studio uses the YuNet neural network to detect \
-                     faces and automatically crop portraits at scale.",
+                    "Face Crop Studio uses a neural network to detect faces \
+                     and automatically crop portraits at scale.",
                 )
                 .size(12.5)
                 .color(P::INK2),

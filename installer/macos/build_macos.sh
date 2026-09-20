@@ -3,7 +3,6 @@
 #
 # Run from the repo root. Assumes:
 #   - target/aarch64-apple-darwin/release/fcs-gui exists (built by caller)
-#   - models/face_detection_yunet_2023mar_640.onnx exists (downloaded by caller)
 #   - models/eye_refiner.onnx exists (fetched by caller from a release asset)
 #   - models/scrfd80k_500m_640.onnx exists (likewise)
 #   - librsvg (rsvg-convert), create-dmg installed via Homebrew
@@ -23,7 +22,6 @@ TARGET_TRIPLE="aarch64-apple-darwin"
 APP_NAME="Face Crop Studio"
 BINARY_NAME="fcs-gui"
 BUNDLE_ID="dev.facecropstudio.app"
-MODEL_FILE="models/face_detection_yunet_2023mar_640.onnx"
 # Better eye points for levelling crops. Required rather than optional, for the same
 # reason as the detector: a bundle without it levels by YuNet's landmarks, silently.
 REFINER_FILE="models/eye_refiner.onnx"
@@ -41,8 +39,6 @@ if [ ! -f "$BIN_SRC" ]; then
     echo "error: release binary missing at $BIN_SRC" >&2
     exit 1
 fi
-if [ ! -f "$MODEL_FILE" ]; then
-    echo "error: model missing at $MODEL_FILE" >&2
     exit 1
 fi
 if [ ! -f "$REFINER_FILE" ]; then
@@ -95,7 +91,6 @@ sed -e "s|{{VERSION}}|$VERSION|g" \
 # --- Binary + bundled assets -------------------------------------------------
 cp "$BIN_SRC" "$APP_DIR/Contents/MacOS/$BINARY_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$BINARY_NAME"
-cp "$MODEL_FILE" "$APP_DIR/Contents/MacOS/models/"
 cp "$REFINER_FILE" "$APP_DIR/Contents/MacOS/models/"
 cp "$DETECTOR_FILE" "$APP_DIR/Contents/MacOS/models/"
 

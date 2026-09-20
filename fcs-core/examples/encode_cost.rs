@@ -157,7 +157,7 @@ fn main() -> Result<()> {
                 c: 3,
                 d: 4,
             },
-            "yunet_add_uniforms",
+            "fcs_add_uniforms",
         )
     });
 

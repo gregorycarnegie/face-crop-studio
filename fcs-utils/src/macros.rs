@@ -1,4 +1,4 @@
-//! Macros for reducing GPU shader boilerplate across the yunet codebase.
+//! Macros for reducing GPU shader boilerplate across the codebase.
 //!
 //! This module provides declarative macros that eliminate repetitive patterns in WGPU code,
 //! particularly for pipeline initialization, buffer readback, and uniform struct definitions.
@@ -108,12 +108,12 @@ macro_rules! create_gpu_pipeline {
         });
 
         let bind_group_layout = $device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(concat!("yunet_", $label, "_bgl")),
+            label: Some(concat!("fcs_", $label, "_bgl")),
             entries: &[$($entry),*],
         });
 
         let pipeline_layout = $device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(concat!("yunet_", $label, "_layout")),
+            label: Some(concat!("fcs_", $label, "_layout")),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });

@@ -128,7 +128,7 @@ impl MaxPoolPipeline {
         Ok(Self {
             pipeline,
             bind_group_layout,
-            uniforms: UniformCache::new("yunet_max_pool_uniforms"),
+            uniforms: UniformCache::new("fcs_max_pool_uniforms"),
         })
     }
 

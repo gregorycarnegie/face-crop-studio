@@ -109,7 +109,6 @@ tiny-skia = "0.12.0"
 # Machine learning and numeric processing
 bytemuck = { version = "1.25.2", features = ["derive"] }
 prost = "0.14.4"
-tract-onnx = "0.23.7"
 # Dynamic loading of the ONNX Runtime library, used by fcs-ort.
 libloading = "0.9.0"
 
@@ -154,10 +153,11 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 
 # Concurrency and utilities
-# Global allocator for the shipped binaries. tract allocates and frees an intermediate
-# tensor per graph node per inference; on the Windows system heap those large blocks are
-# decommitted on free and re-fault on the next run, which profiling put at ~25% of a
-# detection. mimalloc keeps them cached and cuts single-image detection by a third.
+# Global allocator for the shipped binaries. The ~third it cut off single-image detection was
+# measured against tract, which allocated and freed a tensor per graph node per inference: on
+# the Windows system heap those large blocks are decommitted on free and re-fault on the next
+# run, which profiling put at ~25% of a detection. tract is gone, but `scrfd::plan` allocates
+# per step the same way, so the reason should still hold — unmeasured since the swap.
 mimalloc = "0.1.52"
 rayon = "1.12.0"
 walkdir = "2.5.0"

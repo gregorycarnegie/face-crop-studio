@@ -10,7 +10,7 @@
 //! earlier ones by index, so execution is a single pass over an array with no graph walking.
 //!
 //! What it deliberately does not do is interpret ONNX. The weights are read by name through
-//! the same reader `crate::yunet` uses; everything about the shape of the network is compiled
+//! the shared ONNX initializer reader; everything about the shape of the network is compiled
 //! in. A model with a different architecture will fail to load rather than half-run.
 
 use anyhow::{Context, Result};
@@ -21,7 +21,7 @@ use crate::{
         ops::{add, resize2x},
         tensor::Tensor,
     },
-    yunet::onnx::OnnxInitializerMap,
+    onnx::OnnxInitializerMap,
 };
 
 /// One operation, writing one slot.

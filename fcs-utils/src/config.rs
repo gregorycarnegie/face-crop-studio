@@ -1,4 +1,4 @@
-//! Shared configuration types consumed across the YuNet workspace.
+//! Shared configuration types consumed across the workspace.
 //!
 //! These structures provide a common representation for inference, detection, cropping, and
 //! enhancement settings that can be serialized to disk and reused by CLI and GUI front-ends.
@@ -34,7 +34,7 @@ pub const DEFAULT_CONFIDENCE: f32 = 0.5;
 pub const DEFAULT_NMS_THRESHOLD: f32 = 0.3;
 /// Default maximum number of detections to return.
 pub const DEFAULT_TOP_K: usize = 5_000;
-/// Default path to the YuNet ONNX model.
+/// Default path to the detector's ONNX model.
 pub const DEFAULT_MODEL_PATH: &str = "models/scrfd80k_500m_640.onnx";
 /// Default path for persisted GUI settings.
 pub const DEFAULT_SETTINGS_PATH: &str = "config/gui_settings.json";
@@ -469,7 +469,7 @@ impl TelemetrySettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
-    /// Optional override for the YuNet ONNX model path.
+    /// Optional override for the detector's ONNX model path.
     /// If `None`, a default path is used.
     pub model_path: Option<String>,
     /// The input dimensions for model inference.
@@ -578,7 +578,7 @@ pub struct GpuSettings {
     pub enabled: bool,
     /// Respect `WGPU_*` environment overrides when initializing the backend.
     pub respect_env: bool,
-    /// Execute YuNet inference on the GPU when supported.
+    /// Execute inference on the GPU when supported.
     pub inference: bool,
     /// Use GPU for image preprocessing (resize, color conversion).
     pub preprocessing: bool,
