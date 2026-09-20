@@ -7,98 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.8.0-rc5] - 2026-09-20
+## [1.8.0] - 2026-09-20
 
-### Fixed
-
-- **The GUI named the wrong detector.** The header badge hard-coded
-  `YuNet 640 · ready` and the status bar took its name from the configured model
-  path, which only ever points at the YuNet fallback -- so both read YuNet while
-  SCRFD was detecting. Both now report the detector that actually loaded. The
-  status line added in rc3 was correct but is not what the window displays.
-
-## [1.8.0-rc4] - 2026-09-20
-
-rc3 was correct in a packaged run -- SCRFD selected, the untrained landmarks
-absent, the shadowed fallback no longer built. This fixes the one thing that run
-showed to be untrue.
-
-### Fixed
-
-- **The CLI announced a model it may never open.** `Loading YuNet model from ...`
-  was logged before the detector was chosen, so a run that selected SCRFD claimed
-  to be loading YuNet two lines above the line saying SCRFD had loaded. It now
-  reads `YuNet fallback configured: ...`, and the detector that won is still
-  logged after the choice is made.
-
-## [1.8.0-rc3] - 2026-09-20
-
-rc2 built and installed correctly on every platform; this folds in what running
-it turned up.
-
-### Fixed
-
-- **SCRFD reported three landmarks it had never learned.** The detection JSON
-  carried five points per face, of which the nose and mouth corners sat on top of
-  each other above the face box. The model's landmark head was trained on eye
-  pairs with nose and mouth weighted to zero, so those outputs never received a
-  gradient and decoded to the anchor centre. Cropping was unaffected -- it reads
-  the two eyes, which the refiner replaces -- but the JSON published them and both
-  the CLI's `--annotate` and the GUI's preview drew all five. They now read as the
-  all-zero "absent" point, which the drawing code skips.
-- **The packaged-build check in the release workflow matched a log line that had
-  been renamed**, so a correct Windows package failed its own verification. Only a
-  tagged build runs that workflow, which is what these candidates are for.
-- **One unreachable host could fail the whole Linux release.** dav1d was fetched
-  from a single mirror, which timed out from both Linux runners twice in a row. It
-  now retries and falls back to the project's GitHub mirror.
-
-### Changed
-
-- **The YuNet fallback is no longer built when SCRFD is going to replace it.** On
-  the GPU path that was five compiled WGSL pipelines and the VRAM they hold, for a
-  detector that was then never called.
-- **The GUI status line names the detector**: "SCRFD-80k ready on onnxruntime", or
-  "YuNet 2023 ready on wgsl-gpu" without a runtime. Which one you get depends on
-  what is installed, and until now only the log said so.
-
-## [1.8.0-rc2] - 2026-09-20
-
-The second candidate, for the same reason as the first: this one changes how the
-release is built again -- a second model fetched as a release asset and
-checksummed in every job -- and that path runs nowhere but a tagged build.
-
-### Added
-
-- **A better detector, trained on this project's own licence-clean data.**
-  `models/scrfd80k_500m_640.onnx` is an SCRFD-500M trained here on 80,000 CC BY 2.0
-  Open Images photographs (244,683 boxed faces). Scored against complete test
-  boxes at matched false-positive rates it finds **86.0%** of faces at 0.11 false
-  positives per image, where YuNet 2023 finds 71.6% at 0.14. On a 1,239-image
-  corpus neither model had seen, judged crop by crop, it finds 135 faces YuNet
-  misses while missing 13 that YuNet finds. It costs 6.4 ms/image against YuNet's
-  5.8 on ONNX Runtime, and 2.5 MB on disk. `tools/dataset/SCRFD_80K.md` records
-  the measurements, including what they do not establish.
-
-  It is **preferred, not a replacement**: it runs only under ONNX Runtime, while
-  YuNet's architecture is compiled into the built-in CPU graph and the WGSL
-  kernels. A machine without a runtime keeps YuNet rather than losing detection,
-  the same way the eye refiner degrades. Which one is running appears in the log
-  as `Detector: SCRFD-80k on onnxruntime`.
-
-### Fixed
-
-- **The label files behind the earlier training runs boxed only the faces whose
-  eyes had been clicked** -- 2,500 boxes in images where Open Images drew 12,070 --
-  so every run learned ~9,300 real faces as background, and every false-positive
-  figure counted real, unlabelled faces as false positives. Nothing shipped was
-  affected; the correction is at the top of `tools/dataset/CURVE_RESULTS.md`.
-
-## [1.8.0-rc1] - 2026-09-19
-
-A release candidate: the eye refiner changes how the release itself is built --
-a second model fetched as a release asset and checksummed in every job -- and
-that path runs nowhere but a tagged build.
+Two models trained for this project ship in this release: a detector that finds
+considerably more faces than the one before it, and a small model that fixes where the
+eyes are so levelled crops are actually level. Both are optional at runtime -- without
+ONNX Runtime the app keeps the detector and landmarks it always had.
 
 ### Added
 
@@ -118,6 +32,22 @@ that path runs nowhere but a tagged build.
   command-line equivalent, reachable from `fcs-cli` only by hand-writing a JSON
   config. Documented in the README and `docs/cli_recipes.md`, where it had not
   been mentioned at all.
+
+- **A better detector, trained on this project's own licence-clean data.**
+  `models/scrfd80k_500m_640.onnx` is an SCRFD-500M trained here on 80,000 CC BY 2.0
+  Open Images photographs (244,683 boxed faces). Scored against complete test
+  boxes at matched false-positive rates it finds **86.0%** of faces at 0.11 false
+  positives per image, where YuNet 2023 finds 71.6% at 0.14. On a 1,239-image
+  corpus neither model had seen, judged crop by crop, it finds 135 faces YuNet
+  misses while missing 13 that YuNet finds. It costs 6.4 ms/image against YuNet's
+  5.8 on ONNX Runtime, and 2.5 MB on disk. `tools/dataset/SCRFD_80K.md` records
+  the measurements, including what they do not establish.
+
+  It is **preferred, not a replacement**: it runs only under ONNX Runtime, while
+  YuNet's architecture is compiled into the built-in CPU graph and the WGSL
+  kernels. A machine without a runtime keeps YuNet rather than losing detection,
+  the same way the eye refiner degrades. Which one is running appears in the log
+  as `Detector: SCRFD-80k on onnxruntime`.
 
 ### Changed
 
@@ -142,6 +72,13 @@ that path runs nowhere but a tagged build.
   and Linux runners have no GPU adapter, so until now nothing there reached the
   translation step that fails for a shader those backends cannot take.
 
+- **The YuNet fallback is no longer built when SCRFD is going to replace it.** On
+  the GPU path that was five compiled WGSL pipelines and the VRAM they hold, for a
+  detector that was then never called.
+- **The GUI status line names the detector**: "SCRFD-80k ready on onnxruntime", or
+  "YuNet 2023 ready on wgsl-gpu" without a runtime. Which one you get depends on
+  what is installed, and until now only the log said so.
+
 ### Fixed
 
 - **A CMYK JPEG no longer kills the whole batch.** `decode_jpeg_turbo` asked
@@ -157,6 +94,39 @@ that path runs nowhere but a tagged build.
   fixed 96 px reserve at the bottom of the sidebar, and once the bar grew past it
   the report button was drawn below the window edge. The bar is now a bottom panel
   that sizes itself to its buttons, with the file list scrolling in the rest.
+
+- **The label files behind the earlier training runs boxed only the faces whose
+  eyes had been clicked** -- 2,500 boxes in images where Open Images drew 12,070 --
+  so every run learned ~9,300 real faces as background, and every false-positive
+  figure counted real, unlabelled faces as false positives. Nothing shipped was
+  affected; the correction is at the top of `tools/dataset/CURVE_RESULTS.md`.
+
+- **SCRFD reported three landmarks it had never learned.** The detection JSON
+  carried five points per face, of which the nose and mouth corners sat on top of
+  each other above the face box. The model's landmark head was trained on eye
+  pairs with nose and mouth weighted to zero, so those outputs never received a
+  gradient and decoded to the anchor centre. Cropping was unaffected -- it reads
+  the two eyes, which the refiner replaces -- but the JSON published them and both
+  the CLI's `--annotate` and the GUI's preview drew all five. They now read as the
+  all-zero "absent" point, which the drawing code skips.
+- **The packaged-build check in the release workflow matched a log line that had
+  been renamed**, so a correct Windows package failed its own verification. Only a
+  tagged build runs that workflow, which is why it survived every local check.
+- **One unreachable host could fail the whole Linux release.** dav1d was fetched
+  from a single mirror, which timed out from both Linux runners twice in a row. It
+  now retries and falls back to the project's GitHub mirror.
+
+- **The CLI announced a model it may never open.** `Loading YuNet model from ...`
+  was logged before the detector was chosen, so a run that selected SCRFD claimed
+  to be loading YuNet two lines above the line saying SCRFD had loaded. It now
+  reads `YuNet fallback configured: ...`, and the detector that won is still
+  logged after the choice is made.
+
+- **The GUI named the wrong detector.** The header badge hard-coded
+  `YuNet 640 · ready` and the status bar took its name from the configured model
+  path, which only ever points at the YuNet fallback -- so both read YuNet while
+  SCRFD was detecting. Both now report the detector that actually loaded, as does
+  the status line.
 
 ## [1.7.0] - 2026-09-13
 
@@ -1888,12 +1858,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc5...HEAD
-[1.8.0-rc5]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc4...v1.8.0-rc5
-[1.8.0-rc4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc3...v1.8.0-rc4
-[1.8.0-rc3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc2...v1.8.0-rc3
-[1.8.0-rc2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc1...v1.8.0-rc2
-[1.8.0-rc1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0-rc1
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.3...v1.5.4
