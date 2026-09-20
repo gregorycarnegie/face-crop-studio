@@ -543,7 +543,15 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                 color,
             );
 
-            for lm in &det.detection.landmarks {
+            // Skipping all-zero landmarks, which mean "not predicted" rather than the image's
+            // top-left corner -- SCRFD reports nose and mouth that way, having been trained on
+            // eyes alone.
+            for lm in det
+                .detection
+                .landmarks
+                .iter()
+                .filter(|lm| lm.x != 0.0 || lm.y != 0.0)
+            {
                 let lm_pos = norm_to_screen_rotated(lm.x / iw, lm.y / ih, draw_rect, rot);
                 draw_landmark_dot(&painter, lm_pos);
             }

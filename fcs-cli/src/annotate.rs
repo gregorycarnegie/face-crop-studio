@@ -34,7 +34,14 @@ pub fn annotate_image(
     for detection in detections {
         let rect = rect_from_bbox(&detection.bbox, img_w, img_h);
         draw_hollow_rect_mut(&mut image, rect, rect_color);
-        for lm in &detection.landmarks {
+        // An all-zero landmark means "not predicted", not "at the top-left corner": SCRFD
+        // reports nose and mouth corners that way because its landmark head was only ever
+        // trained on eyes. Drawing them would put three dots in the corner of every frame.
+        for lm in detection
+            .landmarks
+            .iter()
+            .filter(|lm| lm.x != 0.0 || lm.y != 0.0)
+        {
             let cx = clamp_to_i32(lm.x, img_w);
             let cy = clamp_to_i32(lm.y, img_h);
             draw_filled_circle_mut(&mut image, (cx, cy), 2, landmark_color);

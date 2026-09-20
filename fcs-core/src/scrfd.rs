@@ -39,6 +39,10 @@ const ANCHORS_PER_CELL: usize = 2;
 /// Landmarks the head predicts: the same five, in the same order, that YuNet emits.
 const LANDMARKS: usize = 5;
 
+/// How many of those five this model was actually taught: the two eyes, and nothing else.
+/// See the note in [`decode`] on why the rest are reported absent rather than passed through.
+const TRAINED_LANDMARKS: usize = 2;
+
 /// Workspace-relative location of the exported model.
 const DEFAULT_MODEL: &str = "models/scrfd80k_500m_640.onnx";
 
@@ -190,8 +194,15 @@ pub(crate) fn decode(
             let x2 = centre_x + d[2] * stride;
             let y2 = centre_y + d[3] * stride;
 
+            // Only the two eyes are real. This model's landmark head was trained on eye pairs
+            // clicked for this project, with nose and mouth corners written `-1` and weighted
+            // to zero (`tools/dataset/to_labelv2.py`), so those three outputs received no
+            // gradient at all: they emit near-zero distances that decode to the anchor centre,
+            // which lands *above* the face and is identical for all three. Left in, they look
+            // like landmarks and are drawn as landmarks. The all-zero point is this codebase's
+            // existing "absent" marker, which `face_cropper` already tests for.
             let mut landmarks = [Landmark::new(0.0, 0.0); LANDMARKS];
-            for (index, landmark) in landmarks.iter_mut().enumerate() {
+            for (index, landmark) in landmarks.iter_mut().enumerate().take(TRAINED_LANDMARKS) {
                 let dx = points[row * LANDMARKS * 2 + index * 2];
                 let dy = points[row * LANDMARKS * 2 + index * 2 + 1];
                 *landmark = Landmark::new(
@@ -325,6 +336,25 @@ mod tests {
             "kp {}",
             detection.landmarks[0].x
         );
+    }
+
+    #[test]
+    fn untrained_landmarks_are_reported_absent_rather_than_guessed() {
+        // The fixture puts a non-zero distance on landmark 0 only; every other landmark reads
+        // zero, which is what the real model does for nose and mouth. Passing those through
+        // decodes them to the anchor centre -- three identical points above the face, which
+        // look like predictions and get drawn like predictions.
+        let outputs = single_detection_outputs(0.9);
+        let found = decode(&outputs, Letterbox { scale: 1.0 }, 0.5, 640).unwrap();
+        let landmarks = found[0].landmarks;
+        assert!(landmarks[0].x != 0.0, "the eyes are predicted");
+        for (index, landmark) in landmarks.iter().enumerate().skip(TRAINED_LANDMARKS) {
+            assert_eq!(
+                (landmark.x, landmark.y),
+                (0.0, 0.0),
+                "landmark {index} was never trained and must read as absent"
+            );
+        }
     }
 
     #[test]
