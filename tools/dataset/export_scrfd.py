@@ -57,6 +57,20 @@ def fold_batchnorm(path: str) -> int:
     model = onnx.load(path)
     graph = model.graph
     tensors = {i.name: numpy_helper.to_array(i) for i in graph.initializer}
+
+    # Give aliased weights a tensor of their own first.
+    #
+    # torch deduplicates parameters that happen to hold identical values: here
+    # `neck.downsample_convs.0.conv.bias` and `neck.fpn_convs.1.conv.bias` are bit-identical
+    # (their weights are not), so the export keeps one initializer and an Identity node
+    # renaming it. ONNX Runtime follows that; a reader that looks weights up by name finds a
+    # name with nothing behind it. Two of the sixty convolutions were affected.
+    alias_nodes = [n for n in graph.node if n.op_type == "Identity" and n.input[0] in tensors]
+    for node in alias_nodes:
+        tensors[node.output[0]] = tensors[node.input[0]]
+        graph.node.remove(node)
+    if alias_nodes:
+        print(f"materialised {len(alias_nodes)} weights that were aliases of another")
     producer = {output: node for node in graph.node for output in node.output}
     consumers: dict[str, list] = {}
     for node in graph.node:

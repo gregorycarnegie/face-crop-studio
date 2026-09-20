@@ -16,6 +16,11 @@
 //! per stride: class scores already sigmoided, box distances, and keypoint distances, both in
 //! units of the stride. No NMS inside the graph, so the decoding below is the whole of it.
 
+/// Running the network without ONNX Runtime, on the built-in CPU graph.
+pub mod plan;
+/// The generated step table; see `tools/dataset/scrfd_topology.py`.
+pub mod topology;
+
 use std::path::Path;
 
 use anyhow::Result;
