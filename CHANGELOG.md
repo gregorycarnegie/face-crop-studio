@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0-rc4] - 2026-09-20
+
+rc3 was correct in a packaged run -- SCRFD selected, the untrained landmarks
+absent, the shadowed fallback no longer built. This fixes the one thing that run
+showed to be untrue.
+
+### Fixed
+
+- **The CLI announced a model it may never open.** `Loading YuNet model from ...`
+  was logged before the detector was chosen, so a run that selected SCRFD claimed
+  to be loading YuNet two lines above the line saying SCRFD had loaded. It now
+  reads `YuNet fallback configured: ...`, and the detector that won is still
+  logged after the choice is made.
+
 ## [1.8.0-rc3] - 2026-09-20
 
 rc2 built and installed correctly on every platform; this folds in what running
@@ -1864,7 +1878,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc3...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc4...HEAD
+[1.8.0-rc4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc3...v1.8.0-rc4
 [1.8.0-rc3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc2...v1.8.0-rc3
 [1.8.0-rc2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0-rc1...v1.8.0-rc2
 [1.8.0-rc1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0-rc1
