@@ -347,7 +347,13 @@ jobs:
           $Out = & "$DistDir/fcs-cli.exe" --input "$DistDir/samples/sample_01.jpg" `
                    --output-dir "$env:RUNNER_TEMP/ort-smoke" --no-gpu 2>&1 | Out-String
           Write-Host $Out
-          if ($Out -notmatch "Detection backend: onnxruntime") {
+          # Matches "Detector: <model> on onnxruntime". The model name is deliberately not
+          # pinned: either detector on ONNX Runtime is a correct package, and this check is
+          # about the runtime, whose absence degrades silently to the ~3x slower built-in graph.
+          # It caught its own staleness once -- the log line used to read "Detection backend:
+          # onnxruntime" and the rename slipped past every local check, because nothing but a
+          # tagged build runs this.
+          if ($Out -notmatch "Detector: .+ on onnxruntime") {
             throw "packaged build did not select ONNX Runtime; it fell back to another backend"
           }
 
