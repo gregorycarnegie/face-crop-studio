@@ -15,6 +15,7 @@ refiner cannot fix a face that was never detected.
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 from statistics import median
 
@@ -22,7 +23,6 @@ import cv2
 import numpy as np
 import torch
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from train_eye_refiner import Refiner, usable  # noqa: E402 - same directory by design
 

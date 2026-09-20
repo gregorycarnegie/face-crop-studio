@@ -27,6 +27,7 @@ points but no reliable left/right identity, and training on them would teach the
 """
 
 import argparse
+import itertools
 import json
 import random
 from pathlib import Path
@@ -34,9 +35,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
 
 
 def usable(annotation: dict) -> bool:
@@ -128,7 +129,7 @@ class Refiner(nn.Module):
         super().__init__()
         channels = [3, width, width * 2, width * 4, width * 4, width * 8]
         blocks = []
-        for inp, out in zip(channels, channels[1:]):
+        for inp, out in itertools.pairwise(channels):
             blocks += [nn.Conv2d(inp, out, 3, stride=2, padding=1, bias=False),
                        nn.BatchNorm2d(out), nn.ReLU(inplace=True),
                        nn.Conv2d(out, out, 3, padding=1, bias=False),

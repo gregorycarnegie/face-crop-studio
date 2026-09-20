@@ -9,7 +9,6 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-
 SOURCE_EXTENSIONS = {
     ".c",
     ".cc",
@@ -138,7 +137,7 @@ def looks_test_only(path: Path) -> bool:
 
 
 def strip_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", lambda match: "\n" * match.group(0).count("\n"), text, flags=re.S)
+    text = re.sub(r"/\*.*?\*/", lambda match: "\n" * match.group(0).count("\n"), text, flags=re.DOTALL)
     lines = []
     for line in text.splitlines():
         line = re.sub(r"//.*", "", line)
