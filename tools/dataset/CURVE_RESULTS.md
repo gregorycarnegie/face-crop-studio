@@ -30,6 +30,9 @@ six and a half hours each. The answer is in "What the curve says" at the end.
 > `oi_to_labelv2.py` now writes every Open Images box (`labelv2_{train,test}_all.txt`), with
 > group-of boxes, depictions and unboxed YuNet detections as ignore regions, and the 80,000-image
 > run (`scrfd_fcs80k_500m.py`) trains and is scored on those.
+>
+> That run is done, and it settles the question this document could not: 86.0% of all faces at
+> 0.11 FP/image against YuNet's 71.6% at 0.14. See `SCRFD_80K.md`.
 
 ## The baseline to beat
 

@@ -111,6 +111,18 @@ cd insightface && git sparse-checkout set detection/scrfd
     discarded, while the run looks healthy because box loss still falls. Confirm `loss_kps`
     appears in the logged losses, not merely in the config dump.
 
+12. **`--no-validate` is not optional, and dropping it costs a run.** mmdet's evaluation hook
+    calls `multiclass_nms`, which indexes a CPU tensor with CUDA indices under torch 2.x:
+    `RuntimeError: indices should be either on cpu or on the same device as the indexed
+    tensor`. The base config evaluates every 80 epochs, so a run dies *at* epoch 80 having
+    trained perfectly well up to it. The 80,000-image run did exactly that, 16 hours in,
+    because the launch script omitted the flag this document already prescribed below. Nothing
+    here needs that hook: `eval_eye_error.py` scores checkpoints through its own decoding.
+    Recovery is cheap if `checkpoint_config.interval` is set, since the checkpoint is written
+    before the hook runs -- `--resume-from work_dirs/<run>/epoch_80.pth --no-validate` picks up
+    at 81 with the schedule intact. Patching `mmdet/core/post_processing/bbox_nms.py` would fix
+    it properly; nothing has needed that yet.
+
 ## Checking it works
 
 ```sh
