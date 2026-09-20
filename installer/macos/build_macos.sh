@@ -5,6 +5,7 @@
 #   - target/aarch64-apple-darwin/release/fcs-gui exists (built by caller)
 #   - models/face_detection_yunet_2023mar_640.onnx exists (downloaded by caller)
 #   - models/eye_refiner.onnx exists (fetched by caller from a release asset)
+#   - models/scrfd80k_500m_640.onnx exists (likewise)
 #   - librsvg (rsvg-convert), create-dmg installed via Homebrew
 #
 # Optional environment for signing/notarization (all required together):
@@ -26,6 +27,9 @@ MODEL_FILE="models/face_detection_yunet_2023mar_640.onnx"
 # Better eye points for levelling crops. Required rather than optional, for the same
 # reason as the detector: a bundle without it levels by YuNet's landmarks, silently.
 REFINER_FILE="models/eye_refiner.onnx"
+# The detector itself; without it the package falls back to YuNet, which is a
+# silent downgrade rather than a failure, so it is required here too.
+DETECTOR_FILE="models/scrfd80k_500m_640.onnx"
 SVG_SOURCE="fcs-gui/assets/app_logo.svg"
 
 DIST_DIR="dist/macos"
@@ -43,6 +47,10 @@ if [ ! -f "$MODEL_FILE" ]; then
 fi
 if [ ! -f "$REFINER_FILE" ]; then
     echo "error: eye refiner missing at $REFINER_FILE" >&2
+    exit 1
+fi
+if [ ! -f "$DETECTOR_FILE" ]; then
+    echo "error: detector missing at $DETECTOR_FILE" >&2
     exit 1
 fi
 if [ ! -f "$SVG_SOURCE" ]; then
@@ -89,6 +97,7 @@ cp "$BIN_SRC" "$APP_DIR/Contents/MacOS/$BINARY_NAME"
 chmod +x "$APP_DIR/Contents/MacOS/$BINARY_NAME"
 cp "$MODEL_FILE" "$APP_DIR/Contents/MacOS/models/"
 cp "$REFINER_FILE" "$APP_DIR/Contents/MacOS/models/"
+cp "$DETECTOR_FILE" "$APP_DIR/Contents/MacOS/models/"
 
 # ONNX Runtime, beside the executable where fcs-ort looks first. Optional: with
 # no FCS_ORT_LIB the bundle still works and uses the built-in CPU graph, so a

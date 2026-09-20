@@ -16,6 +16,10 @@ env:
   # and this digest is the only thing standing between a swapped upload and a shipped build.
   EYE_REFINER_SHA256: b01dd218b46a7466eb13125b011e81b57e2e2e252794c403029db1d7c7628e76
   EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1/eye_refiner.onnx
+  # The detector trained on this project's own data (tools/dataset/SCRFD_80K.md). Like the
+  # refiner it cannot be regenerated from a public URL, so it is fetched and checksummed.
+  SCRFD_SHA256: 337dab7db27401fc35f1d48baa737f552d25e3198f62533038467d39e0d7a00b
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v1/scrfd80k_500m_640.onnx
 
 jobs:
   shader-validation:
@@ -64,6 +68,7 @@ jobs:
           uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --overwrite-input-shape "1,3,640,640" \
             || uvx --python 3.11 --with onnxsim==0.4.36 --with onnxruntime onnxsim models/face_detection_yunet_2023mar.onnx models/face_detection_yunet_2023mar_640.onnx --input-shape "1,3,640,640"
           curl -fsSL -o models/eye_refiner.onnx "$EYE_REFINER_URL"
+          curl -fsSL -o models/scrfd80k_500m_640.onnx "$SCRFD_URL"
 
       - name: Verify model checksums
         uses: ./.github/actions/verify-models
@@ -71,6 +76,7 @@ jobs:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
           eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Upload prepared models
         uses: actions/upload-artifact@v4
@@ -80,6 +86,7 @@ jobs:
             models/face_detection_yunet_2023mar.onnx
             models/face_detection_yunet_2023mar_640.onnx
             models/eye_refiner.onnx
+            models/scrfd80k_500m_640.onnx
           if-no-files-found: error
           retention-days: 1
 
@@ -141,6 +148,7 @@ jobs:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
           eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -286,6 +294,7 @@ jobs:
           Copy-Item fcs-gui/assets/app_icon.ico "$DistDir/app_icon.ico"
           Copy-Item models/face_detection_yunet_2023mar_640.onnx "$DistDir/models/face_detection_yunet_2023mar_640.onnx"
           Copy-Item models/eye_refiner.onnx "$DistDir/models/eye_refiner.onnx"
+          Copy-Item models/scrfd80k_500m_640.onnx "$DistDir/models/scrfd80k_500m_640.onnx"
           if (Test-Path samples) {
             Copy-Item -Recurse samples "$DistDir/samples"
           }
@@ -312,7 +321,8 @@ jobs:
         run: |
           $ModelPaths = @(
             "dist/$env:DIST_NAME/models/face_detection_yunet_2023mar_640.onnx",
-            "dist/$env:DIST_NAME/models/eye_refiner.onnx"
+            "dist/$env:DIST_NAME/models/eye_refiner.onnx",
+            "dist/$env:DIST_NAME/models/scrfd80k_500m_640.onnx"
           )
           foreach ($ModelPath in $ModelPaths) {
             if (-not (Test-Path $ModelPath)) {
@@ -602,6 +612,7 @@ jobs:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
           eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -759,6 +770,7 @@ jobs:
           original-sha256: ${{ env.YUNET_ORIGINAL_SHA256 }}
           simplified-sha256: ${{ env.YUNET_640_SHA256 }}
           eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Install build dependencies
         uses: ./.github/actions/linux-build-deps

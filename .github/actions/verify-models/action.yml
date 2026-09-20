@@ -23,6 +23,9 @@ inputs:
   eye-refiner-sha256:
     description: Expected digest of eye_refiner.onnx. Empty skips the check, for jobs that do not need it.
     default: ""
+  scrfd-sha256:
+    description: Expected digest of scrfd80k_500m_640.onnx. Empty skips the check.
+    default: ""
 
 runs:
   using: composite
@@ -35,6 +38,7 @@ runs:
         SIMPLIFIED_SHA256: ${{ inputs.simplified-sha256 }}
         SIMPLIFIED_320_SHA256: ${{ inputs.simplified-320-sha256 }}
         EYE_REFINER_SHA256: ${{ inputs.eye-refiner-sha256 }}
+        SCRFD_SHA256: ${{ inputs.scrfd-sha256 }}
       run: |
         set -euo pipefail
         # sha256sum --check needs "<digest>  <path>" lines; build them from the
@@ -50,6 +54,9 @@ runs:
           # is the only thing standing between a swapped upload and a shipped package.
           if [ -n "${EYE_REFINER_SHA256}" ]; then
             echo "${EYE_REFINER_SHA256}  ${MODELS_DIR}/eye_refiner.onnx"
+          fi
+          if [ -n "${SCRFD_SHA256}" ]; then
+            echo "${SCRFD_SHA256}  ${MODELS_DIR}/scrfd80k_500m_640.onnx"
           fi
         } > "$sums_file"
         sha256sum --check --strict "$sums_file"

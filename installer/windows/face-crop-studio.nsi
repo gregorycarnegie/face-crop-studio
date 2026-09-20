@@ -146,6 +146,7 @@ Section "Uninstall"
   ; if the user placed additional models there.
   Delete "$INSTDIR\models\face_detection_yunet_2023mar_640.onnx"
   Delete "$INSTDIR\models\eye_refiner.onnx"
+  Delete "$INSTDIR\models\scrfd80k_500m_640.onnx"
   RMDir "$INSTDIR\models"
   ; Remove bundled sample images and docs; RMDir (no /r) preserves any extra
   ; files the user dropped into the samples folder.
