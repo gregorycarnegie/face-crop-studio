@@ -39,6 +39,74 @@ class RawHead(torch.nn.Module):
         return tuple(flat)
 
 
+def fold_batchnorm(path: str) -> int:
+    """Fold each BatchNorm into the convolution feeding it, in place.
+
+    For `y = gamma * (conv(x) - mean) / sqrt(var + eps) + beta` the convolution absorbs both:
+
+        w' = w * gamma / sqrt(var + eps)
+        b' = (b - mean) * gamma / sqrt(var + eps) + beta
+
+    The convolution keeps its own weight name, which is the whole point -- see the note at the
+    export call. Returns how many were folded, so a graph that silently stops matching this
+    shape reports zero rather than passing quietly.
+    """
+    import onnx
+    from onnx import numpy_helper
+
+    model = onnx.load(path)
+    graph = model.graph
+    tensors = {i.name: numpy_helper.to_array(i) for i in graph.initializer}
+    producer = {output: node for node in graph.node for output in node.output}
+    consumers: dict[str, list] = {}
+    for node in graph.node:
+        for name in node.input:
+            consumers.setdefault(name, []).append(node)
+
+    folded, dead_nodes, dead_tensors = 0, [], set()
+    for node in graph.node:
+        if node.op_type != "BatchNormalization":
+            continue
+        conv = producer.get(node.input[0])
+        # Only when the convolution feeds this BatchNorm and nothing else, or folding would
+        # change what those other consumers see.
+        if conv is None or conv.op_type != "Conv" or len(consumers.get(conv.output[0], [])) != 1:
+            continue
+
+        gamma, beta, mean, var = (tensors[n] for n in node.input[1:5])
+        eps = next((a.f for a in node.attribute if a.name == "epsilon"), 1e-5)
+        scale = gamma / np.sqrt(var + eps)
+
+        weight_name = conv.input[1]
+        weight = tensors[weight_name]
+        tensors[weight_name] = weight * scale.reshape(-1, *([1] * (weight.ndim - 1)))
+
+        has_bias = len(conv.input) > 2
+        bias = tensors[conv.input[2]] if has_bias else np.zeros_like(mean)
+        bias_name = conv.input[2] if has_bias else weight_name.rsplit(".", 1)[0] + ".bias"
+        tensors[bias_name] = (bias - mean) * scale + beta
+        if has_bias:
+            conv.input[2] = bias_name
+        else:
+            conv.input.append(bias_name)
+
+        conv.output[0] = node.output[0]  # the convolution now produces what the BatchNorm did
+        dead_nodes.append(node)
+        dead_tensors.update(node.input[1:5])
+        folded += 1
+
+    for node in dead_nodes:
+        graph.node.remove(node)
+    del graph.initializer[:]
+    for name, array in tensors.items():
+        if name not in dead_tensors:
+            graph.initializer.append(numpy_helper.from_array(array, name))
+
+    onnx.checker.check_model(model)
+    onnx.save(model, path)
+    return folded
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("config")
@@ -61,6 +129,12 @@ def main() -> None:
     names = [f"out_{i}" for i in range(len(expected))]
     print(f"{len(expected)} output tensors: {[tuple(t.shape) for t in expected]}")
 
+    # `do_constant_folding=False` on purpose. Folding is what makes the graph fast, but torch's
+    # folding discards the module paths: the folded run produced 82 tensors named
+    # `onnx::Conv_533` out of 118. `fcs-core`'s built-in CPU and WGSL engines look weights up by
+    # name (`crate::yunet::onnx`), and those numbers are assigned per export, so anything
+    # pinned to them breaks the next time the model is regenerated. So the BatchNorms are
+    # folded below instead, which keeps every name and produces the same numbers.
     torch.onnx.export(
         model,
         example,
@@ -68,8 +142,10 @@ def main() -> None:
         input_names=["input.1"],
         output_names=names,
         opset_version=args.opset,
-        do_constant_folding=True,
+        do_constant_folding=False,
     )
+    folded = fold_batchnorm(args.out)
+    print(f"folded {folded} BatchNorm nodes into their convolutions, keeping their names")
 
     try:
         import onnxruntime as rt
