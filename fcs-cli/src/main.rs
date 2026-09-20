@@ -86,7 +86,7 @@ fn main() -> Result<()> {
     // Check if webcam mode is enabled
     if args.webcam {
         info!(
-            "Loading YuNet model from {} at resolution {}x{}",
+            "YuNet fallback configured: {} at {}x{}",
             model_path.display(),
             input_size.width,
             input_size.height
@@ -140,7 +140,10 @@ fn main() -> Result<()> {
     }
 
     info!(
-        "Loading YuNet model from {} at resolution {}x{}",
+        // Says "configured", not "loading": SCRFD is preferred when it can run, and then this
+        // model is never opened at all. The detector that actually won is logged by
+        // `build_cli_detector`, after the choice is made.
+        "YuNet fallback configured: {} at {}x{}",
         model_path.display(),
         input_size.width,
         input_size.height
