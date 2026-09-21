@@ -19,11 +19,11 @@ fn blurry_crop_is_skipped_when_min_quality_set() {
             height: 100.0,
         },
         landmarks: [
-            Landmark { x: 60.0, y: 60.0 },
-            Landmark { x: 90.0, y: 60.0 },
-            Landmark { x: 75.0, y: 80.0 },
-            Landmark { x: 65.0, y: 100.0 },
-            Landmark { x: 85.0, y: 100.0 },
+            Some(Landmark { x: 60.0, y: 60.0 }),
+            Some(Landmark { x: 90.0, y: 60.0 }),
+            Some(Landmark { x: 75.0, y: 80.0 }),
+            Some(Landmark { x: 65.0, y: 100.0 }),
+            Some(Landmark { x: 85.0, y: 100.0 }),
         ],
         score: 0.9,
     };

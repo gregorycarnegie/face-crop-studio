@@ -240,13 +240,13 @@ fn apply_nms_naive(detections: &mut Vec<Detection>, threshold: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::postprocess::{BoundingBox, Detection, Landmark};
+    use crate::postprocess::{BoundingBox, Detection};
     use proptest::prelude::*;
 
     fn detection_with_score(score: f32, bbox: BoundingBox) -> Detection {
         Detection {
             bbox,
-            landmarks: [Landmark::new(0.0, 0.0); 5],
+            landmarks: [None; 5],
             score,
         }
     }
@@ -851,7 +851,7 @@ mod tests {
 #[cfg(test)]
 mod benches {
     use super::*;
-    use crate::postprocess::{BoundingBox, Detection, Landmark};
+    use crate::postprocess::{BoundingBox, Detection};
     use std::time::{Duration, Instant};
 
     fn apply_nms_in_place_baseline(detections: &mut Vec<Detection>, threshold: f32) {
@@ -905,7 +905,7 @@ mod benches {
                     width: rng.next_f32().mul_add(100.0, 20.0),
                     height: rng.next_f32().mul_add(100.0, 20.0),
                 },
-                landmarks: [Landmark { x: 0.0, y: 0.0 }; 5],
+                landmarks: [None; 5],
                 score: rng.next_f32(),
             });
         }
@@ -961,7 +961,6 @@ mod benches {
 #[cfg(test)]
 mod benchmarks {
     use super::*;
-    use crate::postprocess::Landmark;
     use std::time::Instant;
 
     fn detection(x: f32, y: f32, size: f32, score: f32) -> Detection {
@@ -972,7 +971,7 @@ mod benchmarks {
                 width: size,
                 height: size,
             },
-            landmarks: [Landmark::new(0.0, 0.0); 5],
+            landmarks: [None; 5],
             score,
         }
     }

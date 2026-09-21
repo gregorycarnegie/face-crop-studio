@@ -180,7 +180,7 @@ mod tests {
                     width: 10.0,
                     height: 10.0,
                 },
-                landmarks: [fcs_utils::point::Point::new(0.0, 0.0); 5],
+                landmarks: [None; 5],
                 score: 1.0 - i as f32 * 0.1,
             })
             .collect()

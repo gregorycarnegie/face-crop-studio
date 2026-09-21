@@ -1111,13 +1111,13 @@ impl App2 {
     }
 
     pub fn commit_manual_box(&mut self, bbox: fcs_core::BoundingBox) {
-        use fcs_core::{Detection, Landmark};
+        use fcs_core::Detection;
         use fcs_utils::quality::Quality;
         self.push_undo();
         let det = crate::types::DetectionWithQuality {
             detection: Detection {
                 bbox,
-                landmarks: [Landmark::new(0.0, 0.0); 5],
+                landmarks: [None; 5],
                 score: 1.0,
             },
             quality_score: 1.0,

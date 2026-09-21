@@ -470,11 +470,11 @@ pub(crate) mod tests {
                 height,
             },
             landmarks: [
-                Landmark { x: 1.0, y: 1.0 },
-                Landmark { x: 2.0, y: 1.0 },
-                Landmark { x: 1.5, y: 1.5 },
-                Landmark { x: 1.25, y: 2.0 },
-                Landmark { x: 1.75, y: 2.0 },
+                Some(Landmark { x: 1.0, y: 1.0 }),
+                Some(Landmark { x: 2.0, y: 1.0 }),
+                Some(Landmark { x: 1.5, y: 1.5 }),
+                Some(Landmark { x: 1.25, y: 2.0 }),
+                Some(Landmark { x: 1.75, y: 2.0 }),
             ],
             score,
         }

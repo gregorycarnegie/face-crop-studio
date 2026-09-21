@@ -335,16 +335,15 @@ fn decode_level(
             // to zero (`tools/dataset/to_labelv2.py`), so those three outputs received no
             // gradient at all: they emit near-zero distances that decode to the anchor centre,
             // which lands *above* the face and is identical for all three. Left in, they look
-            // like landmarks and are drawn as landmarks. The all-zero point is this codebase's
-            // existing "absent" marker, which `face_cropper` already tests for.
-            let mut landmarks = [Landmark::new(0.0, 0.0); LANDMARKS];
+            // like landmarks and are drawn as landmarks, so they are reported absent.
+            let mut landmarks = [None; LANDMARKS];
             for (index, landmark) in landmarks.iter_mut().enumerate().take(TRAINED_LANDMARKS) {
                 let dx = points[row * LANDMARKS * 2 + index * 2];
                 let dy = points[row * LANDMARKS * 2 + index * 2 + 1];
-                *landmark = Landmark::new(
+                *landmark = Some(Landmark::new(
                     (centre_x + dx * stride) / letterbox.scale,
                     (centre_y + dy * stride) / letterbox.scale,
-                );
+                ));
             }
 
             detections.push(Detection {
@@ -540,11 +539,8 @@ mod tests {
             "h {}",
             detection.bbox.height
         );
-        assert!(
-            (detection.landmarks[0].x - 176.0).abs() < 1e-3,
-            "kp {}",
-            detection.landmarks[0].x
-        );
+        let eye = detection.landmarks[0].expect("the first eye is predicted");
+        assert!((eye.x - 176.0).abs() < 1e-3, "kp {}", eye.x);
     }
 
     #[test]
@@ -552,16 +548,17 @@ mod tests {
         // The fixture puts a non-zero distance on landmark 0 only; every other landmark reads
         // zero, which is what the real model does for nose and mouth. Passing those through
         // decodes them to the anchor centre -- three identical points above the face, which
-        // look like predictions and get drawn like predictions.
+        // look like predictions and get drawn like predictions. They must come back as `None`,
+        // so a consumer cannot read one by accident.
         let outputs = single_detection_outputs(0.9);
         let found = decode(&outputs, Letterbox { scale: 1.0 }, 0.5, 640).unwrap();
         let landmarks = found[0].landmarks;
-        assert!(landmarks[0].x != 0.0, "the eyes are predicted");
+        assert!(landmarks[0].is_some(), "the eyes are predicted");
+        assert!(landmarks[1].is_some(), "the eyes are predicted");
         for (index, landmark) in landmarks.iter().enumerate().skip(TRAINED_LANDMARKS) {
-            assert_eq!(
-                (landmark.x, landmark.y),
-                (0.0, 0.0),
-                "landmark {index} was never trained and must read as absent"
+            assert!(
+                landmark.is_none(),
+                "landmark {index} was never trained and must read as absent, got {landmark:?}"
             );
         }
     }

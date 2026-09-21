@@ -41,7 +41,12 @@ pub(crate) struct ProgressSnapshot {
 pub struct DetectionRecord {
     pub score: f32,
     pub bbox: [f32; 4],
-    pub landmarks: [[f32; 2]; 5],
+    /// Five landmark slots, `null` where the detector predicted nothing.
+    ///
+    /// Emitted as `null` rather than `[0, 0]`, which is what 1.x wrote for the three the
+    /// detector was never trained on. A consumer had no way to tell that apart from a real
+    /// landmark at the origin, and this project's own code got it wrong more than once.
+    pub landmarks: [Option<[f32; 2]>; 5],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quality_score: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,7 +72,7 @@ impl From<&Detection> for DetectionRecord {
                 detection.bbox.width,
                 detection.bbox.height,
             ],
-            landmarks: detection.landmarks.map(|lm| [lm.x, lm.y]),
+            landmarks: detection.landmarks.map(|lm| lm.map(|p| [p.x, p.y])),
             quality_score: None,
             quality: None,
         }

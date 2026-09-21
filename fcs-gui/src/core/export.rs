@@ -32,11 +32,12 @@ fn eye_positions(
     img_h: u32,
     crop: &CoreCropSettings,
 ) -> Vec<RedEye> {
-    let re = &detection.landmarks[0];
-    let le = &detection.landmarks[1];
-    if re.x == 0.0 && re.y == 0.0 && le.x == 0.0 && le.y == 0.0 {
+    // Both eyes or neither: one point is not a pair, and red-eye removal has nothing to aim
+    // at without both. This was a check for an all-zero sentinel, which could not tell an
+    // absent landmark from a real one at the origin.
+    let (Some(re), Some(le)) = (detection.landmarks[0], detection.landmarks[1]) else {
         return vec![];
-    }
+    };
     let region = calculate_crop_region(img_w, img_h, detection.bbox, crop);
     let sx = crop.output_width as f32 / region.width.max(1) as f32;
     let sy = crop.output_height as f32 / region.height.max(1) as f32;

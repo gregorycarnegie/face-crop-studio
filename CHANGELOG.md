@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Landmarks are `Option<Landmark>` rather than an all-zero sentinel.** *(breaking)* The
+  shipped detector predicts only the two eyes -- nose and mouth were weighted to zero in
+  training -- and the other three were reported as `(0, 0)`. Every consumer then had to
+  re-derive what that meant, which they did in three different spellings across four call
+  sites, and the one that got it wrong was the one that mattered: `face_cropper` treated a
+  landmark at exactly the origin as a coordinate, so a missing eye beside a real one rotated
+  the crop by the angle from `(0, 0)` to the other eye -- 45 degrees, from a value that meant
+  "nothing was predicted". A test asserted that behaviour as correct ("one populated landmark
+  is enough to align"); it now asserts the opposite, with the reasoning written down.
+
+  `Option` makes the question unavoidable rather than optional, and the four hand-rolled checks
+  collapse into `iter().flatten()` or a two-`Some` pattern. It also makes a real landmark at
+  the origin expressible, which the sentinel could not.
+
+- **`--json` writes `null` for an absent landmark, not `[0, 0]`.** *(breaking output format)*
+  A consumer had no way to tell the sentinel from a real prediction at the origin. Now:
+
+  ```json
+  "landmarks": [[957.67, 719.57], [1227.01, 721.86], null, null, null]
+  ```
+
 ### Added
 
 - **An independent oracle, back in CI.** Until now every test compared this project against

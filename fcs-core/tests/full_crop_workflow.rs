@@ -19,26 +19,26 @@ fn make_detection(x: f32, y: f32, width: f32, height: f32, score: f32) -> Detect
             height,
         },
         landmarks: [
-            Landmark {
+            Some(Landmark {
                 x: width.mul_add(0.3, x),
                 y: height.mul_add(0.3, y),
-            },
-            Landmark {
+            }),
+            Some(Landmark {
                 x: width.mul_add(0.7, x),
                 y: height.mul_add(0.3, y),
-            },
-            Landmark {
+            }),
+            Some(Landmark {
                 x: width.mul_add(0.5, x),
                 y: height.mul_add(0.55, y),
-            },
-            Landmark {
+            }),
+            Some(Landmark {
                 x: width.mul_add(0.35, x),
                 y: height.mul_add(0.75, y),
-            },
-            Landmark {
+            }),
+            Some(Landmark {
                 x: width.mul_add(0.65, x),
                 y: height.mul_add(0.75, y),
-            },
+            }),
         ],
         score,
     }

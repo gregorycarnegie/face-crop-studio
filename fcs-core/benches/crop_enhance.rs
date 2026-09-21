@@ -32,11 +32,11 @@ fn build_detection() -> Detection {
             height: 384.0,
         },
         landmarks: [
-            Landmark { x: 360.0, y: 380.0 },
-            Landmark { x: 620.0, y: 380.0 },
-            Landmark { x: 490.0, y: 520.0 },
-            Landmark { x: 420.0, y: 620.0 },
-            Landmark { x: 560.0, y: 620.0 },
+            Some(Landmark { x: 360.0, y: 380.0 }),
+            Some(Landmark { x: 620.0, y: 380.0 }),
+            Some(Landmark { x: 490.0, y: 520.0 }),
+            Some(Landmark { x: 420.0, y: 620.0 }),
+            Some(Landmark { x: 560.0, y: 620.0 }),
         ],
         score: 0.95,
     }

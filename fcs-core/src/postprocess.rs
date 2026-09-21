@@ -86,12 +86,16 @@ pub struct Detection {
     pub bbox: BoundingBox,
     /// Five landmark slots: right eye, left eye, nose tip, right mouth corner, left mouth corner.
     ///
-    /// **Only the two eyes are populated.** The shipped detector was trained with the nose and
-    /// mouth keypoints weighted to zero, so it never learned them; they are reported as
-    /// `(0, 0)` rather than passed through, because the untrained head decodes to the anchor
-    /// centre, which looks like a plausible facial point and is not one. Consumers that draw or
-    /// measure landmarks must skip the zeros.
-    pub landmarks: [Landmark; 5],
+    /// **Only the two eyes are ever `Some`.** The shipped detector was trained with the nose and
+    /// mouth keypoints weighted to zero, so it never learned them, and the untrained head
+    /// decodes to the anchor centre -- a plausible-looking facial point that is not one.
+    ///
+    /// `Option` rather than an all-zero sentinel, which is what this was until 2.0. The sentinel
+    /// had to be re-checked by every consumer, was spelled three different ways across four call
+    /// sites, and read as a coordinate wherever somebody forgot: a landmark at exactly `(0, 0)`
+    /// paired with a real one produced a 45-degree eye-line rotation from nothing at all. The
+    /// compiler now asks the question instead.
+    pub landmarks: [Option<Landmark>; 5],
     /// The confidence score of the detection.
     pub score: f32,
 }

@@ -30,11 +30,11 @@ fn cli_like_crop_and_enhance_saves_file() {
             height: 150.0,
         },
         landmarks: [
-            Landmark { x: 100.0, y: 100.0 },
-            Landmark { x: 200.0, y: 100.0 },
-            Landmark { x: 150.0, y: 140.0 },
-            Landmark { x: 115.0, y: 200.0 },
-            Landmark { x: 185.0, y: 200.0 },
+            Some(Landmark { x: 100.0, y: 100.0 }),
+            Some(Landmark { x: 200.0, y: 100.0 }),
+            Some(Landmark { x: 150.0, y: 140.0 }),
+            Some(Landmark { x: 115.0, y: 200.0 }),
+            Some(Landmark { x: 185.0, y: 200.0 }),
         ],
         score: 0.98,
     };

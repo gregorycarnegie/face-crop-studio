@@ -131,7 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// Skipped with a printed note when the image is absent, so the example still runs anywhere.
 fn check_real_image() -> Result<(), Box<dyn std::error::Error>> {
-    use fcs_core::{BoundingBox, Detection, EyeRefiner, Landmark};
+    use fcs_core::{BoundingBox, Detection, EyeRefiner};
 
     const IMAGE: &str = r"C:\Users\grego\Downloads\VinaSkyy\1.jpg";
     const BOX: [f32; 4] = [804.6168, 427.279_45, 535.7621, 807.3744];
@@ -159,7 +159,7 @@ fn check_real_image() -> Result<(), Box<dyn std::error::Error>> {
             width: BOX[2],
             height: BOX[3],
         },
-        landmarks: [Landmark::new(0.0, 0.0); 5],
+        landmarks: [None; 5],
         score: 1.0,
     }];
 
@@ -170,7 +170,8 @@ fn check_real_image() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut worst = 0.0f32;
     for (index, expected) in PYTHON_EYES.iter().enumerate() {
-        let got = detections[0].landmarks[index];
+        let got = detections[0].landmarks[index]
+            .ok_or_else(|| format!("the refiner left eye {index} absent"))?;
         println!(
             "eye {index}: rust {:9.4} {:9.4}   python {:9.4} {:9.4}",
             got.x, got.y, expected[0], expected[1]

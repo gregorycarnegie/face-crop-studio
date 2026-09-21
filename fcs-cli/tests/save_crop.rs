@@ -21,11 +21,11 @@ fn saves_crops_in_various_formats() {
             height: 100.0,
         },
         landmarks: [
-            Landmark { x: 160.0, y: 160.0 },
-            Landmark { x: 190.0, y: 160.0 },
-            Landmark { x: 175.0, y: 180.0 },
-            Landmark { x: 165.0, y: 200.0 },
-            Landmark { x: 185.0, y: 200.0 },
+            Some(Landmark { x: 160.0, y: 160.0 }),
+            Some(Landmark { x: 190.0, y: 160.0 }),
+            Some(Landmark { x: 175.0, y: 180.0 }),
+            Some(Landmark { x: 165.0, y: 200.0 }),
+            Some(Landmark { x: 185.0, y: 200.0 }),
         ],
         score: 0.9,
     };

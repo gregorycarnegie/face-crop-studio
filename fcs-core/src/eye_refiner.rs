@@ -108,8 +108,8 @@ impl EyeRefiner {
         // hold one to three.
         for detection in detections.iter_mut() {
             if let Some([left, right]) = self.predict(image, &detection.bbox) {
-                detection.landmarks[0] = left;
-                detection.landmarks[1] = right;
+                detection.landmarks[0] = Some(left);
+                detection.landmarks[1] = Some(right);
                 refined += 1;
             }
         }

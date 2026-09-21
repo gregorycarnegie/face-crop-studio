@@ -128,11 +128,11 @@ pub fn crop_face_from_image(
         // usual RetinaFace/YuNet order, where index 0 is the subject's *own* right eye. These
         // names are screen-relative on purpose: read anatomically, "left eye" is the mirror of
         // this, and that reading has already produced one mirrored landmark mapping elsewhere.
-        let left_eye = &detection.landmarks[0];
-        let right_eye = &detection.landmarks[1];
-        let both_zero =
-            left_eye.x == 0.0 && left_eye.y == 0.0 && right_eye.x == 0.0 && right_eye.y == 0.0;
-        if !both_zero {
+        // Both eyes or nothing. Aligning from one point is not possible, and the sentinel this
+        // replaced made a missing eye look like a real one at the origin -- which rotated the
+        // crop 45 degrees when the other eye happened to sit diagonally from it.
+        if let (Some(left_eye), Some(right_eye)) = (detection.landmarks[0], detection.landmarks[1])
+        {
             // Angle of the eye line relative to horizontal in source image coords, taken from
             // the viewer's left eye towards the viewer's right. Positive angle = the eye on
             // the right sits lower on screen; rotate by -angle to level them.
@@ -302,11 +302,11 @@ mod tests {
                 height: 100.0,
             },
             landmarks: [
-                crate::postprocess::Landmark { x: 360.0, y: 260.0 },
-                crate::postprocess::Landmark { x: 390.0, y: 260.0 },
-                crate::postprocess::Landmark { x: 375.0, y: 285.0 },
-                crate::postprocess::Landmark { x: 365.0, y: 310.0 },
-                crate::postprocess::Landmark { x: 385.0, y: 310.0 },
+                Some(crate::postprocess::Landmark { x: 360.0, y: 260.0 }),
+                Some(crate::postprocess::Landmark { x: 390.0, y: 260.0 }),
+                Some(crate::postprocess::Landmark { x: 375.0, y: 285.0 }),
+                Some(crate::postprocess::Landmark { x: 365.0, y: 310.0 }),
+                Some(crate::postprocess::Landmark { x: 385.0, y: 310.0 }),
             ],
             score: 0.95,
         };
@@ -327,9 +327,9 @@ mod tests {
         assert_eq!(out.height(), 300);
     }
 
-    /// Landmarks that are all zero, which switches the eye-line branch off.
-    fn no_landmarks() -> [crate::postprocess::Landmark; 5] {
-        [crate::postprocess::Landmark { x: 0.0, y: 0.0 }; 5]
+    /// No landmarks at all, which switches the eye-line branch off.
+    fn no_landmarks() -> [Option<crate::postprocess::Landmark>; 5] {
+        [None; 5]
     }
 
     fn detection_at(bbox: BoundingBox) -> Detection {
@@ -508,8 +508,8 @@ mod tests {
 
         // Level eyes give an angle of zero, so alignment is still a no-op.
         let mut level = detection_at(bbox);
-        level.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 14.0 };
-        level.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 14.0 };
+        level.landmarks[0] = Some(crate::postprocess::Landmark { x: 12.0, y: 14.0 });
+        level.landmarks[1] = Some(crate::postprocess::Landmark { x: 20.0, y: 14.0 });
         assert_eq!(
             crop_face_from_image(&img, &level, &base).to_rgba8(),
             crop_face_from_image(&img, &level, &unaligned).to_rgba8(),
@@ -518,8 +518,8 @@ mod tests {
 
         // Tilted eyes must actually change the output.
         let mut tilted = detection_at(bbox);
-        tilted.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 10.0 };
-        tilted.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 18.0 };
+        tilted.landmarks[0] = Some(crate::postprocess::Landmark { x: 12.0, y: 10.0 });
+        tilted.landmarks[1] = Some(crate::postprocess::Landmark { x: 20.0, y: 18.0 });
         assert_ne!(
             crop_face_from_image(&img, &tilted, &base).to_rgba8(),
             crop_face_from_image(&img, &tilted, &unaligned).to_rgba8(),
@@ -544,14 +544,14 @@ mod tests {
         let (right_eye, left_eye) = ((12.0f32, 10.0f32), (20.0f32, 18.0f32));
 
         let mut detection = detection_at(bbox);
-        detection.landmarks[0] = crate::postprocess::Landmark {
+        detection.landmarks[0] = Some(crate::postprocess::Landmark {
             x: right_eye.0,
             y: right_eye.1,
-        };
-        detection.landmarks[1] = crate::postprocess::Landmark {
+        });
+        detection.landmarks[1] = Some(crate::postprocess::Landmark {
             x: left_eye.0,
             y: left_eye.1,
-        };
+        });
 
         let fill = FillColor::opaque(3, 5, 7);
         let aligned = CropSettings {
@@ -640,24 +640,44 @@ mod tests {
             ..settings.clone()
         };
 
-        // Right eye at the origin, left eye offset diagonally: not "no
-        // landmarks", so this must rotate.
-        let mut partial = detection_at(bbox);
-        partial.landmarks[0] = crate::postprocess::Landmark { x: 0.0, y: 0.0 };
-        partial.landmarks[1] = crate::postprocess::Landmark { x: 5.0, y: 5.0 };
-        assert_ne!(
-            crop_face_from_image(&img, &partial, &settings).to_rgba8(),
-            crop_face_from_image(&img, &partial, &unaligned).to_rgba8(),
-            "one populated landmark is enough to align"
+        // One eye present and the other absent must NOT rotate. This is the assertion the
+        // `Option` change inverted, and it is worth being explicit about why.
+        //
+        // Until 2.0 the absent marker was an all-zero point, and this test asserted the
+        // opposite: that a landmark at exactly `(0, 0)` beside a real one "is enough to
+        // align". It is not. There is no eye line through one point, so what actually
+        // happened was that the origin was read as a coordinate and the crop was rotated by
+        // the angle from `(0, 0)` to the other eye -- 45 degrees, here, from a value that
+        // meant "nothing was predicted".
+        let mut one_eye = detection_at(bbox);
+        one_eye.landmarks[0] = None;
+        one_eye.landmarks[1] = Some(crate::postprocess::Landmark { x: 5.0, y: 5.0 });
+        assert_eq!(
+            crop_face_from_image(&img, &one_eye, &settings).to_rgba8(),
+            crop_face_from_image(&img, &one_eye, &unaligned).to_rgba8(),
+            "one eye is not an eye line, so alignment must be skipped"
         );
 
-        // A single zero component elsewhere behaves the same way.
-        let mut one_axis = detection_at(bbox);
-        one_axis.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 0.0 };
-        one_axis.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 8.0 };
+        // A real landmark that happens to sit on an axis is still a real landmark, and still
+        // aligns. Under the sentinel this was indistinguishable from the case above.
+        let mut on_axis = detection_at(bbox);
+        on_axis.landmarks[0] = Some(crate::postprocess::Landmark { x: 12.0, y: 0.0 });
+        on_axis.landmarks[1] = Some(crate::postprocess::Landmark { x: 20.0, y: 8.0 });
         assert_ne!(
-            crop_face_from_image(&img, &one_axis, &settings).to_rgba8(),
-            crop_face_from_image(&img, &one_axis, &unaligned).to_rgba8(),
+            crop_face_from_image(&img, &on_axis, &settings).to_rgba8(),
+            crop_face_from_image(&img, &on_axis, &unaligned).to_rgba8(),
+            "a zero component is a coordinate, not an absence"
+        );
+
+        // And the origin itself: a genuine eye at (0, 0) with its pair is now usable, which
+        // the sentinel made impossible to express.
+        let mut at_origin = detection_at(bbox);
+        at_origin.landmarks[0] = Some(crate::postprocess::Landmark { x: 0.0, y: 0.0 });
+        at_origin.landmarks[1] = Some(crate::postprocess::Landmark { x: 8.0, y: 0.0 });
+        assert_eq!(
+            crop_face_from_image(&img, &at_origin, &settings).to_rgba8(),
+            crop_face_from_image(&img, &at_origin, &unaligned).to_rgba8(),
+            "a level pair needs no rotation, wherever it sits"
         );
     }
 
@@ -685,12 +705,12 @@ mod tests {
         };
 
         let mut down = detection_at(bbox);
-        down.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 10.0 };
-        down.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 18.0 };
+        down.landmarks[0] = Some(crate::postprocess::Landmark { x: 12.0, y: 10.0 });
+        down.landmarks[1] = Some(crate::postprocess::Landmark { x: 20.0, y: 18.0 });
 
         let mut up = detection_at(bbox);
-        up.landmarks[0] = crate::postprocess::Landmark { x: 12.0, y: 18.0 };
-        up.landmarks[1] = crate::postprocess::Landmark { x: 20.0, y: 10.0 };
+        up.landmarks[0] = Some(crate::postprocess::Landmark { x: 12.0, y: 18.0 });
+        up.landmarks[1] = Some(crate::postprocess::Landmark { x: 20.0, y: 10.0 });
 
         assert_ne!(
             crop_face_from_image(&img, &down, &settings).to_rgba8(),
@@ -710,13 +730,7 @@ mod tests {
                 width: 20.0,
                 height: 20.0,
             },
-            landmarks: [
-                crate::postprocess::Landmark { x: 0.0, y: 0.0 },
-                crate::postprocess::Landmark { x: 0.0, y: 0.0 },
-                crate::postprocess::Landmark { x: 0.0, y: 0.0 },
-                crate::postprocess::Landmark { x: 0.0, y: 0.0 },
-                crate::postprocess::Landmark { x: 0.0, y: 0.0 },
-            ],
+            landmarks: [None; 5],
             score: 0.8,
         };
         let settings = CropSettings {
@@ -777,14 +791,14 @@ mod tests {
             ("left eye x only", (0.0, 0.0), (-7.0, 0.0)),
         ] {
             let mut detection = detection_at(bbox);
-            detection.landmarks[0] = crate::postprocess::Landmark {
+            detection.landmarks[0] = Some(crate::postprocess::Landmark {
                 x: right_eye.0,
                 y: right_eye.1,
-            };
-            detection.landmarks[1] = crate::postprocess::Landmark {
+            });
+            detection.landmarks[1] = Some(crate::postprocess::Landmark {
                 x: left_eye.0,
                 y: left_eye.1,
-            };
+            });
             assert_ne!(
                 crop_face_from_image(&img, &detection, &settings).to_rgba8(),
                 baseline,
