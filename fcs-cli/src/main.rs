@@ -6,10 +6,7 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use std::{
-    fs::{self, File},
-    sync::Arc,
-};
+use std::{fs, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
@@ -220,9 +217,11 @@ fn main() -> Result<()> {
             fs::create_dir_all(dir)
                 .with_context(|| format!("failed to create directory {}", dir.display()))?;
         }
-        let file = File::create(json_path)
-            .with_context(|| format!("failed to create {}", json_path.display()))?;
-        serde_json::to_writer_pretty(file, &results).with_context(|| {
+        // Serialised to memory and then replaced atomically: writing straight into a
+        // `File::create` truncates the previous run's JSON before the new one is written, so a
+        // failure part-way left neither.
+        let json = serde_json::to_vec_pretty(&results).context("failed to serialize detections")?;
+        fcs_utils::write_atomically(json_path, &json).with_context(|| {
             format!("failed to write detection JSON to {}", json_path.display())
         })?;
         info!("Wrote detections to {}", json_path.display());

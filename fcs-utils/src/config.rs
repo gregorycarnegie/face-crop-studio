@@ -448,14 +448,16 @@ impl AppSettings {
 
     /// Serialize settings to disk in pretty-printed JSON.
     ///
-    /// This will overwrite the file if it already exists.
+    /// Replaces an existing file through [`crate::write_atomically`], so a write that fails
+    /// leaves the previous settings in place. This used to be `fs::write`, which truncates
+    /// first: a failure part-way through left the user with an empty or half-written config,
+    /// which then fails to parse and silently reverts every preference to its default.
     pub fn save_to_path<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
         let payload =
             serde_json::to_string_pretty(self).context("failed to serialize settings JSON")?;
-        fs::write(path, payload)
-            .with_context(|| format!("failed to write settings file {}", path.display()))?;
-        Ok(())
+        crate::write_atomically(path, payload.as_bytes())
+            .with_context(|| format!("failed to write settings file {}", path.display()))
     }
 }
 

@@ -35,6 +35,8 @@
 
 #![warn(missing_docs)]
 
+/// Replacing a file without destroying it on the way.
+pub mod atomic_write;
 /// Shared color utilities.
 pub mod color;
 /// Application configuration and settings management.
@@ -69,6 +71,7 @@ pub mod webcam;
 mod wgsl_validation_tests;
 
 use anyhow::Result;
+pub use atomic_write::write_atomically;
 pub use color::{
     RgbaColor, cmyk_to_rgb, hsl_to_rgb, hsv_to_rgb, parse_hex_color, rgb_to_cmyk, rgb_to_hsl,
     rgb_to_hsv,

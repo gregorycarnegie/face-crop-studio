@@ -58,8 +58,34 @@ pub fn annotate_image(
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
 
-    image
-        .save(&output_path)
+    // The output keeps the source's extension, so the format follows from it. A RAW or HEIC
+    // source names a format nothing here can encode, which is an error worth saying out loud
+    // rather than a silent miss.
+    let format = image::ImageFormat::from_path(&output_path).with_context(|| {
+        format!(
+            "cannot write an annotated image to {}: no encoder for that extension",
+            output_path.display()
+        )
+    })?;
+
+    // Drawing needs RGBA, but JPEG has no alpha channel and refuses to encode it -- which is
+    // why `--annotate` produced nothing but a 0-byte file for every `.jpg` input, the most
+    // common one there is. Dropping alpha here is lossless: the annotation is drawn opaque.
+    let annotated = DynamicImage::ImageRgba8(image);
+    let annotated = if format == image::ImageFormat::Jpeg {
+        DynamicImage::ImageRgb8(annotated.to_rgb8())
+    } else {
+        annotated
+    };
+
+    // Encoded to memory and replaced atomically rather than through `image::save`, which
+    // truncates the destination before encoding: the failure above used to leave that 0-byte
+    // file in place of whatever annotation was there before.
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    annotated
+        .write_to(&mut encoded, format)
+        .with_context(|| format!("failed to encode annotated image {}", output_path.display()))?;
+    fcs_utils::write_atomically(&output_path, &encoded.into_inner())
         .with_context(|| format!("failed to save annotated image {}", output_path.display()))?;
 
     Ok(output_path)
@@ -256,5 +282,58 @@ mod tests {
                 "{w}x{h}: {err}"
             );
         }
+    }
+
+    /// The bug the existing tests missed by only ever using `.png`.
+    ///
+    /// Drawing happens in RGBA and JPEG has no alpha channel, so encoding refused outright and
+    /// `--annotate` wrote a 0-byte file for every `.jpg` input -- the commonest source there is.
+    /// It has to come back out as a decodable JPEG of the same size as the input.
+    #[test]
+    fn annotating_a_jpeg_source_writes_a_real_jpeg() {
+        let dir = tempdir().expect("tempdir");
+        let img_path = dir.path().join("photo.jpg");
+        let out_dir = dir.path().join("annotated");
+        std::fs::create_dir_all(&out_dir).expect("create output dir");
+
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            80,
+            60,
+            image::Rgba([90, 120, 150, 255]),
+        ));
+        let det = make_detection(10.0, 10.0, 30.0, 30.0);
+
+        let written = annotate_image(&img, &img_path, &[det], &out_dir).expect("annotate a jpeg");
+        assert_eq!(written, out_dir.join("photo.jpg"));
+
+        let bytes = std::fs::metadata(&written).expect("stat").len();
+        assert!(bytes > 0, "a 0-byte file is the bug this guards");
+        let decoded = image::open(&written).expect("the output must be a decodable image");
+        assert_eq!((decoded.width(), decoded.height()), (80, 60));
+    }
+
+    /// A source extension with no encoder must fail loudly and leave nothing behind, rather
+    /// than the truncated file `image::save` used to produce.
+    #[test]
+    fn a_source_extension_with_no_encoder_writes_nothing() {
+        let dir = tempdir().expect("tempdir");
+        let img_path = dir.path().join("capture.nef");
+        let out_dir = dir.path().join("annotated");
+        std::fs::create_dir_all(&out_dir).expect("create output dir");
+
+        let img =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(20, 20, image::Rgba([1, 2, 3, 255])));
+        let err = annotate_image(&img, &img_path, &[], &out_dir).expect_err("no NEF encoder");
+        assert!(
+            format!("{err:#}").contains("no encoder"),
+            "the error should say why: {err:#}"
+        );
+        assert!(
+            std::fs::read_dir(&out_dir)
+                .expect("read_dir")
+                .next()
+                .is_none(),
+            "nothing may be left in the output directory"
+        );
     }
 }

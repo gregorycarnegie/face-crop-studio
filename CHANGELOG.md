@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed export was reported as a success.** `write_bytes` finished with
+  `writer.flush().ok()`, discarding the result. `BufWriter::write_all` only fills a buffer, so
+  for anything past the buffer size a full disk or a failing drive reports itself at `flush` --
+  and that error was thrown away. The CLI printed `crops_saved=1` and the GUI showed success for
+  a crop that had not been written.
+- **A failed write destroyed the file it was replacing.** `File::create` and `fs::write`
+  truncate the destination before the new bytes arrive, so a write that failed part-way left a
+  truncated or empty file where good data had been -- the previous export lost to the attempt to
+  replace it. Writes now go to a temporary file beside the destination and `fs::rename` over it
+  only once every byte is written, through one shared `fcs_utils::write_atomically`. This was
+  not one call site but **six**: crops, the detection JSON, annotated images, the GUI's queue
+  list and batch report, and the settings file -- where a half-written config then fails to
+  parse and silently reverts every preference to its default. The replacement is atomic;
+  durability across a power loss is not promised, and the docs say so rather than implying it.
+- **`--annotate` wrote a 0-byte file for every `.jpg` input.** Found while fixing the above, and
+  demonstrated with the old code: annotation is drawn in RGBA, JPEG has no alpha channel, so
+  encoding refused and `image::save` -- having already created the file -- left nothing but a
+  truncated stub that looked like a successful annotation. Alpha is now dropped for JPEG, and a
+  source extension with no encoder (a RAW, say) fails with a reason instead of silently. The
+  existing tests missed this by only ever using `.png`; both cases are now covered.
+- **`--watch` with `--output-dir` pointed at the watched directory fed on itself.** Every crop
+  landed as a new filesystem event, was detected, and produced another crop, forever. It is now
+  refused before the watcher starts, naming the offending flag and the path as the user typed it.
+  An output directory *inside* the watched one is still allowed, and deliberately: the watcher is
+  non-recursive, so a subdirectory produces no events and cannot loop.
+
 ### Removed
 
 - **The preprocessing pipeline (`fcs-core::preprocess`), and the settings that fed it.**

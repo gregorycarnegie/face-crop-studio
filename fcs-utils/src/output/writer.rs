@@ -12,16 +12,13 @@ use crate::config::MetadataMode;
 use anyhow::{Context, Result};
 use image::DynamicImage;
 use log::debug;
-use std::{
-    fs,
-    fs::File,
-    io::{BufWriter, Write},
-    path::Path,
-};
+use std::{fs, path::Path};
 
 /// Save an image using the provided options and metadata context.
 ///
-/// Creates missing parent directories and overwrites an existing destination.
+/// Creates missing parent directories and replaces an existing destination. The replacement
+/// goes through a temporary file in the same directory, so a failed write leaves whatever was
+/// already there untouched rather than truncating it.
 /// A recognized extension selects the format when `options.auto_detect` is true;
 /// otherwise `options.format` is used, with PNG as the fallback.
 ///
@@ -32,7 +29,9 @@ use std::{
 /// # Errors
 ///
 /// Returns an error on directory creation, encoding, metadata serialization, or
-/// file creation/write failure. Writing is not atomic.
+/// file creation/write failure -- including a failure that only shows up when the buffered
+/// bytes reach the disk, which this used to discard and report as success. See
+/// [`crate::write_atomically`] for what "replaces" guarantees and what it does not.
 pub fn save_dynamic_image(
     image: &DynamicImage,
     destination: &Path,
@@ -89,8 +88,7 @@ pub fn save_dynamic_image(
         }
     }
 
-    write_bytes(destination, &encoded)?;
-    Ok(())
+    crate::write_atomically(destination, &encoded)
 }
 
 pub(super) fn determine_format(path: &Path, options: &OutputOptions) -> ImageFormatHint {
@@ -128,15 +126,4 @@ pub fn append_suffix_to_filename(name: &str, suffix: &str) -> String {
     } else {
         format!("{name}{suffix}")
     }
-}
-
-fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
-    let file =
-        File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(bytes)
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    writer.flush().ok();
-    Ok(())
 }

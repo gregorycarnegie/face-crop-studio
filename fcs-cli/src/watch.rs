@@ -44,6 +44,40 @@ const TICK: Duration = Duration::from_millis(200);
 /// was first seen.
 type Pending = HashMap<PathBuf, (u64, Instant)>;
 
+/// Refuse a configuration that would make the run feed on its own output.
+///
+/// Writing into the directory being watched is a loop: every crop lands as a new event, gets
+/// detected, and produces another crop, which lands as another event. It does not converge --
+/// the crop of a crop is still a face -- so the run never settles and the output directory
+/// fills until someone stops it.
+///
+/// This is refused rather than worked around. Skipping our own writes would need the watcher to
+/// know which paths came from this process, and the configuration is not one anybody wants: a
+/// user asking for it has made a mistake, and a clear error beats silently ignoring half the
+/// directory. `--crop` already requires `--output-dir`, so no working setup relies on this.
+///
+/// An output directory *inside* the watched one is fine and deliberately allowed: the watcher
+/// is [`RecursiveMode::NonRecursive`], so files in a subdirectory produce no events at all.
+/// Only an exact match can loop. All three paths are canonicalised by the caller, so comparing
+/// them directly is sound -- `.` and a full path to the same directory compare equal.
+///
+/// Returns the name of the offending flag and leaves the message to the caller, which still
+/// has the path as the user typed it. Canonicalisation prefixes an extended-length marker on
+/// Windows, and reporting someone's output directory back to them with a `\\?\` on the front
+/// helps nobody -- the same reason the watcher logs `dir` rather than `watched`.
+fn self_feeding_output(
+    watched: &Path,
+    crop_output_dir: Option<&Path>,
+    annotate_dir: Option<&Path>,
+) -> Option<&'static str> {
+    [
+        ("--output-dir", crop_output_dir),
+        ("--annotate", annotate_dir),
+    ]
+    .into_iter()
+    .find_map(|(flag, dir)| (dir == Some(watched)).then_some(flag))
+}
+
 /// Whether a path is one this mode should pick up.
 ///
 /// The supported list is the same one `collect_images` walks a directory with, so watch
@@ -99,6 +133,22 @@ pub fn run(
         "--watch needs a directory; {} is not one",
         dir.display()
     );
+    // Before the watcher starts, not after the first crop has already triggered the next one.
+    if let Some(flag) = self_feeding_output(
+        &watched,
+        crop_output_dir.as_deref(),
+        annotate_dir.as_deref(),
+    ) {
+        anyhow::bail!(
+            concat!(
+                "{} is the directory being watched ({}), so everything written there would be ",
+                "detected again and produce more files, forever. Point it outside the watched ",
+                "directory, or at a subdirectory of it."
+            ),
+            flag,
+            dir.display()
+        );
+    }
 
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |event| {
@@ -337,5 +387,43 @@ mod tests {
         assert!(take_settled(&mut pending, Duration::from_secs(30)).is_empty());
         assert_eq!(pending.len(), 1);
         assert_eq!(take_settled(&mut pending, Duration::ZERO), vec![path]);
+    }
+
+    /// The loop this guards against: crops landing in the watched directory are detected again.
+    #[test]
+    fn an_output_dir_equal_to_the_watched_dir_is_refused() {
+        let watched = Path::new("/data/incoming");
+
+        assert_eq!(
+            self_feeding_output(watched, Some(watched), None),
+            Some("--output-dir"),
+            "--output-dir into the watched directory must be refused"
+        );
+        assert_eq!(
+            self_feeding_output(watched, None, Some(watched)),
+            Some("--annotate"),
+            "--annotate into the watched directory must be refused"
+        );
+    }
+
+    /// A subdirectory cannot loop, because the watcher is non-recursive, so it must be allowed
+    /// -- refusing it would reject the obvious `--watch in --output-dir in/crops` layout.
+    #[test]
+    fn an_output_dir_below_or_outside_the_watched_dir_is_allowed() {
+        let watched = Path::new("/data/incoming");
+        for out in [
+            Path::new("/data/incoming/crops"),
+            Path::new("/data/outgoing"),
+            Path::new("/elsewhere"),
+        ] {
+            assert_eq!(
+                self_feeding_output(watched, Some(out), None),
+                None,
+                "{} should be allowed",
+                out.display()
+            );
+        }
+        // And with neither flag set there is nothing to check.
+        assert_eq!(self_feeding_output(watched, None, None), None);
     }
 }

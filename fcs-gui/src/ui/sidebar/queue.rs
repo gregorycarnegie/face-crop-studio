@@ -207,7 +207,7 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
                 .iter()
                 .map(|f| f.path.display().to_string())
                 .collect();
-            match std::fs::write(&path, lines.join("\n")) {
+            match fcs_utils::write_atomically(&path, lines.join("\n").as_bytes()) {
                 Ok(_) => app.show_success(format!(
                     "Queue exported to {}",
                     path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
@@ -252,7 +252,7 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
                 let written = crate::core::export::batch_report(&app.batch_files, csv)
-                    .and_then(|bytes| Ok(std::fs::write(&path, bytes)?));
+                    .and_then(|bytes| fcs_utils::write_atomically(&path, &bytes));
                 match written {
                     Ok(()) => app.show_success(format!("Batch report saved to {}", path.display())),
                     Err(e) => app.show_error("Report export failed", format!("{e:#}")),
