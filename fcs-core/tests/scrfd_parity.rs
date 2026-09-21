@@ -12,9 +12,14 @@
 //! ORT_DYLIB_PATH=.../onnxruntime.dll cargo test -p fcs-core --test scrfd_parity
 //! ```
 //!
-//! Both tests skip when there is no ONNX Runtime and the GPU one also skips without an adapter,
-//! so a machine missing either reports a pass having checked nothing. `FCS_STRICT_TESTS=1`
-//! turns those skips into failures, which is how CI runs them.
+//! Two kinds of "cannot run here", deliberately treated differently:
+//!
+//! * **The model or ONNX Runtime is missing.** CI provides both, so this is a misconfiguration
+//!   rather than a fact about the machine, and `FCS_STRICT_TESTS=1` turns the skip into a
+//!   failure so a leg cannot report a pass having checked nothing.
+//! * **There is no GPU adapter.** That is a fact about the machine, and CI's Linux runners do
+//!   not have one, so it always skips -- strict or not. Making it strict-failable turned the
+//!   Linux legs red for having no graphics card, which is not a defect in this code.
 
 use fcs_core::{
     cpu::tensor::Tensor,
@@ -38,7 +43,7 @@ fn strict() -> bool {
     std::env::var("FCS_STRICT_TESTS").is_ok_and(|v| v != "0" && !v.is_empty())
 }
 
-/// Skip, or fail when strict.
+/// Skip, or fail when strict. For things CI supplies: the model, and ONNX Runtime.
 macro_rules! skip_unless_strict {
     ($($arg:tt)*) => {{
         if strict() {
@@ -47,6 +52,32 @@ macro_rules! skip_unless_strict {
         eprintln!("skipped: {}", format!($($arg)*));
         return;
     }};
+}
+
+/// Skip regardless of strictness. For hardware the machine either has or does not.
+macro_rules! skip_without_gpu {
+    ($($arg:tt)*) => {{
+        eprintln!("skipped (no GPU, not a failure): {}", format!($($arg)*));
+        return;
+    }};
+}
+
+/// A GPU context, or `None` on a machine without an adapter.
+///
+/// Kept in one place so both GPU tests answer "is there an adapter" the same way, and so the
+/// reason is reported rather than swallowed.
+fn gpu_context() -> Option<std::sync::Arc<GpuContext>> {
+    match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+        GpuAvailability::Available(context) => Some(context),
+        GpuAvailability::Disabled { reason } => {
+            eprintln!("no GPU: disabled ({reason})");
+            None
+        }
+        GpuAvailability::Unavailable { error } => {
+            eprintln!("no GPU: unavailable ({error})");
+            None
+        }
+    }
 }
 
 fn model_path() -> Option<std::path::PathBuf> {
@@ -166,10 +197,8 @@ fn the_wgsl_engine_matches_onnx_runtime() {
         skip_unless_strict!("no ONNX Runtime; set ORT_DYLIB_PATH");
     };
 
-    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(context) => context,
-        GpuAvailability::Disabled { reason } => skip_unless_strict!("GPU disabled: {reason}"),
-        GpuAvailability::Unavailable { error } => skip_unless_strict!("no GPU: {error}"),
+    let Some(context) = gpu_context() else {
+        skip_without_gpu!("the WGSL engine needs an adapter");
     };
     let ops = GpuInferenceOps::new(context, None).expect("build ops");
     let weights = ScrfdGpuWeights::load(&ops, &model).expect("weights upload by name");
@@ -218,10 +247,8 @@ fn concurrent_gpu_inference_matches_sequential() {
     let Some(model) = model_path() else {
         skip_unless_strict!("no model at models/scrfd80k_500m_640.onnx");
     };
-    let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(context) => context,
-        GpuAvailability::Disabled { reason } => skip_unless_strict!("GPU disabled: {reason}"),
-        GpuAvailability::Unavailable { error } => skip_unless_strict!("no GPU: {error}"),
+    let Some(context) = gpu_context() else {
+        skip_without_gpu!("the race this guards is in the GPU buffer pool");
     };
     let ops = GpuInferenceOps::new(context, None).expect("build ops");
     let weights = ScrfdGpuWeights::load(&ops, &model).expect("weights upload by name");
