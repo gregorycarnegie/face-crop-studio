@@ -12,17 +12,17 @@ use fcs_utils::{
 use image::DynamicImage;
 use log::{debug, info, warn};
 
+/// The GPU work the CLI actually does: enhancement and shape masks.
+///
+/// It no longer keeps the `GpuContext` itself. The only caller that wanted one was the
+/// preprocessing benchmark, and preprocessing is the detector's own business now -- the
+/// enhancer holds the `Arc` it needs.
 pub struct CliGpuRuntime {
-    context: Option<Arc<GpuContext>>,
     status: GpuStatusIndicator,
     enhancer: Option<Arc<WgpuEnhancer>>,
 }
 
 impl CliGpuRuntime {
-    pub fn context(&self) -> Option<&Arc<GpuContext>> {
-        self.context.as_ref()
-    }
-
     pub fn log_status(&self) {
         log_gpu_status(&self.status);
     }
@@ -161,11 +161,7 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
         None => None,
     };
 
-    let runtime = CliGpuRuntime {
-        context,
-        status,
-        enhancer,
-    };
+    let runtime = CliGpuRuntime { status, enhancer };
     runtime.log_status();
     Ok(runtime)
 }
@@ -188,7 +184,6 @@ mod tests {
 
     fn manual_runtime(status: GpuStatusIndicator) -> CliGpuRuntime {
         CliGpuRuntime {
-            context: None,
             status,
             enhancer: None,
         }
@@ -245,10 +240,14 @@ mod tests {
 
     // --- CliGpuRuntime methods with GPU disabled ---
 
+    /// With the GPU off there must be no enhancer, so `enhance` takes the CPU pipeline.
+    ///
+    /// This used to assert the absence of the stored `GpuContext`, which the runtime no longer
+    /// keeps; the enhancer is the observable consequence, and the thing a caller notices.
     #[test]
-    fn init_runtime_gpu_disabled_has_no_context() {
+    fn init_runtime_gpu_disabled_has_no_enhancer() {
         let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
-        assert!(runtime.context().is_none());
+        assert!(runtime.enhancer.is_none());
     }
 
     #[test]

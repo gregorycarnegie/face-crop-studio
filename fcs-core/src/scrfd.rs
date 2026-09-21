@@ -73,9 +73,9 @@ enum Backend {
 
 /// How a source image was laid onto the square input, and what undoes it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Letterbox {
+pub struct Letterbox {
     /// Factor the source was multiplied by; detections are divided by it to come back.
-    pub(crate) scale: f32,
+    pub scale: f32,
 }
 
 impl ScrfdDetector {
@@ -230,7 +230,7 @@ impl ScrfdDetector {
 /// are **RGB**, not the BGR that module produces; and the padding is normalised along with everything
 /// else. The Python builds a zeroed `uint8` canvas and then subtracts, so the padding is
 /// `(0 - 127.5) / 128`, not zero, and a model fed zeroed padding sees a border it never met.
-pub(crate) fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
+pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
     let (width, height) = (image.width().max(1), image.height().max(1));
     let ratio = height as f32 / width as f32;
     let (new_width, new_height) = if ratio > 1.0 {

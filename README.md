@@ -56,9 +56,8 @@ High-level views of how the workspace fits together. Each image links to its edi
 
 The project includes comprehensive GPU acceleration via wgpu and WGSL compute shaders:
 
-- **Preprocessing** – GPU-accelerated image resizing, color space conversion (RGB→BGR), and tensor layout transformation (HWC→CHW) with automatic fallback to CPU.
-- **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking.
-- **Custom inference** – Full GPU implementation of the detector using custom WGSL shaders for Conv2D, pooling, add, upsample and activation operations, matching ONNX Runtime to about 1e-05 (see `docs/gpu_research.md`).
+- **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking. Used by the CLI; the GUI currently runs the CPU pipeline instead.
+- **Custom inference** – Full GPU implementation of the detector in WGSL (Conv2D, pooling, add, upsample, activations), matching ONNX Runtime to about 1e-05. It exists so detection works with no external runtime, **not** because it is faster: measured, the two are a tie (`docs/ENGINE_SPEED.md`).
 - **GPU context pooling** – CLI uses async GPU context pool for efficient batch operations; GUI shares wgpu context with eframe's rendering backend.
 - **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. Use `--gpu` or `--no-gpu` flags in CLI for explicit control.
 
@@ -247,7 +246,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 - `cargo check --workspace` – Fast type checking across all crates.
 - `cargo test --workspace --all-features` – Run the full test suite (requires `models/scrfd80k_500m_640.onnx`; set `FCS_STRICT_TESTS=1` to fail rather than skip when it is missing).
 - `cargo run -p fcs-cli -- --help` – View CLI options.
-- `cargo run -p fcs-cli -- --benchmark-preprocess` – Benchmark GPU vs CPU preprocessing performance.
+- `cargo run --release -p fcs-core --example engine_speed -- <image>` – What a detection costs, per engine (see `docs/ENGINE_SPEED.md`).
 - `cargo run -p fcs-cli -- --input fixtures/ --gpu` – Run with explicit GPU acceleration.
 - `cargo run -p fcs-cli -- --input fixtures/ --no-gpu` – Run with CPU-only mode.
 - `cargo run -p fcs-cli -- --watch inbox/ --crop --output-dir out/` – Watch a folder and crop each image as it lands. Files already in `inbox/` are left alone; run the same command with `--input inbox/` to process those.

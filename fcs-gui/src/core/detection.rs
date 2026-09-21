@@ -6,7 +6,7 @@ use image::DynamicImage;
 use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
 
 use anyhow::{Context as AnyhowContext, Result};
-use fcs_core::{FaceDetector, Preprocessor, WgpuPreprocessor};
+use fcs_core::FaceDetector;
 use fcs_utils::{
     GpuAvailability, GpuContext, GpuContextOptions, config::AppSettings, load_image,
     load_image_raw, quality::estimate_sharpness, resolve_data_path,
@@ -27,14 +27,11 @@ pub fn build_detector(
     Result<FaceDetector>,
     Option<fcs_core::EyeRefiner>,
 ) {
-    // The preprocessor itself is no longer used for detection -- the detector does its own,
-    // on its own conventions -- but building it is still how the GPU context and its status are
-    // obtained, and the enhancement pipeline runs on that context.
-    let (_preprocessor, gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
+    let (gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
         info!("Using shared GPU context from egui renderer");
-        build_preprocessor_from_context(shared_ctx, settings)
+        describe_context(shared_ctx, settings)
     } else {
-        maybe_build_gpu_preprocessor(settings)
+        acquire_gpu_context(settings)
     };
 
     let Some(configured_model_path) = settings.model_path.as_deref() else {
@@ -49,8 +46,8 @@ pub fn build_detector(
     let model_path_display = model_path.display().to_string();
 
     // The detector, on whichever engine is available: ONNX Runtime, the WGSL kernels, or the
-    // built-in CPU graph. Loaded here so it lands on the same background thread the GPU
-    // preprocessor was built on (experiment 81).
+    // built-in CPU graph. Loaded off the UI thread (experiment 81): it opens a session or
+    // compiles shaders, neither of which belongs in a frame.
     let detector_result = FaceDetector::load_from(&model_path)
         .map(|detector| detector.with_settings(&settings.detection))
         .with_context(|| format!("no detector model at {model_path_display}"));
@@ -73,64 +70,43 @@ pub fn build_detector(
     (gpu_status, gpu_context, detector_result, eye_refiner)
 }
 
-fn maybe_build_gpu_preprocessor(
-    settings: &AppSettings,
-) -> (
-    Option<Arc<dyn Preprocessor>>,
-    Option<Arc<GpuContext>>,
-    GpuStatusIndicator,
-) {
-    if !settings.gpu.preprocessing {
-        let status = GpuStatusIndicator::disabled("GPU preprocessing disabled".to_string());
-        return (None, None, status);
-    }
+/// Open a GPU context, or report why there is none.
+///
+/// This used to build a `WgpuPreprocessor` and keep the context as a side effect, from when the
+/// preprocessor fed the detector. It no longer does -- the detector letterboxes internally, on
+/// its own conventions -- so the shaders it compiled were pure waste at startup, and worse, a
+/// preprocessor that failed to build discarded the context along with itself.
+fn acquire_gpu_context(settings: &AppSettings) -> (Option<Arc<GpuContext>>, GpuStatusIndicator) {
     let options: GpuContextOptions = (&settings.gpu).into();
     match GpuContext::init_with_fallback(&options) {
-        GpuAvailability::Available(ctx) => build_preprocessor_from_context(ctx, settings),
-        GpuAvailability::Disabled { reason } => (None, None, GpuStatusIndicator::disabled(reason)),
+        GpuAvailability::Available(ctx) => describe_context(ctx, settings),
+        GpuAvailability::Disabled { reason } => (None, GpuStatusIndicator::disabled(reason)),
         GpuAvailability::Unavailable { error } => {
-            (None, None, GpuStatusIndicator::error(error.to_string()))
+            (None, GpuStatusIndicator::error(error.to_string()))
         }
     }
 }
 
-fn build_preprocessor_from_context(
+/// Name the adapter behind a context we already hold, honouring the GPU toggle.
+fn describe_context(
     context: Arc<GpuContext>,
     settings: &AppSettings,
-) -> (
-    Option<Arc<dyn Preprocessor>>,
-    Option<Arc<GpuContext>>,
-    GpuStatusIndicator,
-) {
-    if !settings.gpu.enabled || !settings.gpu.preprocessing {
+) -> (Option<Arc<GpuContext>>, GpuStatusIndicator) {
+    if !settings.gpu.enabled {
         return (
-            None,
             None,
             GpuStatusIndicator::disabled("Disabled by config".to_string()),
         );
     }
     let info = context.adapter_info();
-    match WgpuPreprocessor::new(context.clone()) {
-        Ok(pre) => {
-            let status = GpuStatusIndicator::available(
-                info.name.clone(),
-                format!("{:?}", info.backend),
-                Some(info.driver.clone()),
-                Some(info.vendor),
-                Some(info.device),
-            );
-            (Some(Arc::new(pre)), Some(context), status)
-        }
-        Err(err) => {
-            warn!("GPU preprocessor failed: {err}");
-            let status = GpuStatusIndicator::fallback(
-                format!("{err}"),
-                Some(info.name.clone()),
-                Some(format!("{:?}", info.backend)),
-            );
-            (None, Some(context), status)
-        }
-    }
+    let status = GpuStatusIndicator::available(
+        info.name.clone(),
+        format!("{:?}", info.backend),
+        Some(info.driver.clone()),
+        Some(info.vendor),
+        Some(info.device),
+    );
+    (Some(context), status)
 }
 
 /// Upper bound for a preview texture side. egui rejects (panics on) any texture

@@ -29,10 +29,9 @@
 //! # Lower-level APIs
 //!
 //! [`ScrfdDetector`] is the detector itself, without the settings plumbing; it letterboxes,
-//! runs, and decodes in one call. [`scrfd::plan`] and [`scrfd::gpu`] run the network on the
-//! built-in CPU graph and the WGSL kernels respectively, given weights read by name from the
-//! export. [`preprocess`] letterboxes into `[1, 3, height, width]` tensors for callers driving
-//! a graph themselves.
+//! runs, and decodes in one call. [`scrfd::preprocess`] is that letterbox on its own, and
+//! [`scrfd::plan`] and [`scrfd::gpu`] run the network on the built-in CPU graph and the WGSL
+//! kernels respectively, given weights read by name from the export.
 //!
 //! [`CropSettings`] controls crop geometry. The serializable
 //! [`fcs_utils::config::CropSettings`] additionally includes export and UI options;
@@ -58,8 +57,6 @@ mod nms;
 pub mod onnx;
 /// Detection types, score filtering and NMS settings.
 pub mod postprocess;
-/// Image pre-processing (resizing, tensor conversion).
-pub mod preprocess;
 /// Standard crop size presets for face crops.
 pub mod presets;
 /// SCRFD, the detector trained on this project's own data.
@@ -76,10 +73,6 @@ pub use crate::{
 pub use eye_refiner::EyeRefiner;
 pub use face_detector::{DetectionOutput, FaceDetector};
 pub use postprocess::{BoundingBox, Detection, Landmark};
-pub use preprocess::{
-    CpuPreprocessor, InputSize, PreprocessConfig, PreprocessOutput, Preprocessor, WgpuPreprocessor,
-    preprocess_dynamic_image, preprocess_image, preprocess_image_with,
-};
 pub use scrfd::ScrfdDetector;
 
 /// Returns the crate version for diagnostics.

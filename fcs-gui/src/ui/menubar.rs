@@ -4,10 +4,7 @@ use crate::{
     app::collect_folder_images, core::settings::persist_with_feedback, theme::P, types::App2,
 };
 use egui::{Frame, Popup, RichText, Sense, Ui, Vec2};
-use fcs_utils::{
-    config::{MetadataMode, ResizeQuality},
-    configure_telemetry,
-};
+use fcs_utils::{config::MetadataMode, configure_telemetry};
 
 pub fn show(ui: &mut Ui, app: &mut App2) {
     egui::Panel::top("menubar")
@@ -166,26 +163,6 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                         app.needs_postprocess_update = true;
                     }
 
-                    // ── Input ──────────────────────────────────────────────────
-                    ui.separator();
-                    section_label(ui, "Input");
-                    let old_rq = app.settings.input.resize_quality;
-                    ui.horizontal(|ui| {
-                        ui.label("Resize quality");
-                        ui.radio_value(
-                            &mut app.settings.input.resize_quality,
-                            ResizeQuality::Quality,
-                            "Quality",
-                        );
-                        ui.radio_value(
-                            &mut app.settings.input.resize_quality,
-                            ResizeQuality::Speed,
-                            "Speed",
-                        );
-                    });
-                    if app.settings.input.resize_quality != old_rq {
-                        app.needs_detector_rebuild = true;
-                    }
                     // ── GPU ────────────────────────────────────────────────────
                     ui.separator();
                     section_label(ui, "GPU");
@@ -196,18 +173,6 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                         app.needs_detector_rebuild = true;
                     }
                     ui.add_enabled_ui(app.settings.gpu.enabled, |ui| {
-                        if ui
-                            .checkbox(&mut app.settings.gpu.inference, "GPU inference")
-                            .changed()
-                        {
-                            app.needs_detector_rebuild = true;
-                        }
-                        if ui
-                            .checkbox(&mut app.settings.gpu.preprocessing, "GPU preprocessing")
-                            .changed()
-                        {
-                            app.needs_detector_rebuild = true;
-                        }
                         if ui
                             .checkbox(&mut app.settings.gpu.respect_env, "Respect env overrides")
                             .changed()

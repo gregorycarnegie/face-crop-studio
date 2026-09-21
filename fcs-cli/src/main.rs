@@ -13,14 +13,12 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use fcs_core::PreprocessConfig;
 use fcs_utils::{configure_telemetry, init_logging, normalize_path, resolve_data_path};
 use log::info;
 use rayon::prelude::*;
 
 mod annotate;
 mod args;
-mod benchmark;
 mod color;
 mod config;
 mod detector;
@@ -79,10 +77,6 @@ fn main() -> Result<()> {
     let quality_filter = build_quality_filter(&settings.crop.quality_rules);
     let gpu_runtime = Arc::new(init_cli_gpu_runtime(&settings)?);
 
-    // Only the preprocessing benchmark still needs this: the detector does its own
-    // preprocessing, on its own conventions.
-    let preprocess_config: PreprocessConfig = settings.input.into();
-
     // Check if webcam mode is enabled
     if args.webcam {
         let detector = build_cli_detector(&model_path, &settings.detection)?;
@@ -116,15 +110,6 @@ fn main() -> Result<()> {
     };
     if args.watch.is_none() && processing_items.is_empty() {
         anyhow::bail!("no images were queued for processing");
-    }
-
-    if args.benchmark_preprocess {
-        benchmark::run_preprocess_benchmark(
-            &processing_items,
-            &preprocess_config,
-            gpu_runtime.context(),
-        )?;
-        return Ok(());
     }
 
     let detector = build_cli_detector(&model_path, &settings.detection)?;

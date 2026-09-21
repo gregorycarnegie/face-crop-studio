@@ -34,10 +34,6 @@ tempfile.workspace = true
 mozjpeg.workspace = true
 
 [[bench]]
-name = "preprocessing"
-harness = false
-
-[[bench]]
 name = "crop_enhance"
 harness = false
 

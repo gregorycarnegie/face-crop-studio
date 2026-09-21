@@ -9,6 +9,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The preprocessing pipeline (`fcs-core::preprocess`), and the settings that fed it.**
+  Nothing on the detection path had used it since SCRFD landed: the detector letterboxes
+  internally, on conventions the old code did not share (RGB in the top-left, not centred BGR).
+  Measured before deleting rather than after (`docs/ENGINE_SPEED.md`):
+  - GPU preprocessing cannot beat the CPU above about 2 MP, which the repo had already
+    established (experiment 10) and which `WgpuPreprocessor` encoded as a pixel cutoff. On a
+    36 MP RAW the cutoff means the CPU path is what runs, so `--benchmark-preprocess` was
+    reporting CPU times under a `gpu:` label.
+  - The CPU resize is already the SIMD path, about 7 GP/s, so there was no win left to chase.
+
+  Gone with it: `--benchmark-preprocess`, `fcs-cli/src/benchmark.rs`, the `preprocessing`
+  Criterion bench, `preprocess.wgsl` and `rgb_to_chw.wgsl`, and `CliGpuRuntime::context`
+  (the benchmark was its only reader).
+- **`gpu.inference` / `--gpu-inference`.** Inert since SCRFD landed -- written by the CLI and
+  the GUI checkbox, read by nobody, because the detector picks its own engine. Deleted rather
+  than wired up, because the measurement says there is nothing to expose: the WGSL engine and
+  ONNX Runtime are a tie (3.78 ms against 3.67 ms for the network, readback included).
+- **`gpu.preprocessing`** and its GUI checkbox, which after the untangle gated nothing.
+- **The `input` settings section** (`input.width`, `input.height`, `input.resize_quality`) and
+  the `--width`, `--height` and `--resize-quality` flags. The export fixes the input at
+  640x640, so the dimensions were never choosable. `resize_quality` is a real trade in
+  principle -- preprocessing is 42% of a detection on a 36 MP RAW -- but its quality cost was
+  measured against YuNet's preprocessing (experiment 54), is unmeasured against SCRFD, and the
+  GUI radio triggered a full detector rebuild for a value nothing read. Re-adding it needs the
+  measurement first. Existing settings files keep loading: serde ignores the removed keys, and
+  a test pins that.
+
+### Fixed
+
+- **Turning off "GPU preprocessing" disabled GPU *enhancement* in the GUI.** The context was
+  obtained as a side effect of building a `WgpuPreprocessor`, and both the "disabled" branch
+  and a preprocessor that failed to build returned `None` for the context along with itself.
+  The GUI now takes the context directly and reports the adapter from it.
+- **The GUI compiled two preprocessing shader pipelines at every startup and dropped the
+  result.** On a machine with ONNX Runtime -- the common case, and every released package --
+  those were the only compute pipelines built during startup, so this removes shader
+  compilation from launch entirely. The saving is not measured; experiment 81 put all five
+  pipelines of the old `build_detector` at 150 ms of an 890 ms launch.
+
+### Added
+
+- **`docs/ENGINE_SPEED.md` and `examples/engine_speed.rs`:** what a detection costs, per
+  engine, measured honestly. The GPU figure had never been: wgpu queues dispatches and
+  returns, so the old timings stopped the clock before the work happened. Recording alone
+  reads as a 22% GPU win; waiting for the readback that `detect` must do anyway makes it 3%
+  slower. Also: preprocessing (5.18 ms) is larger than the network (3.67 ms) on a 36 MP RAW,
+  and the built-in CPU graph is 6.3x slower than ONNX Runtime -- a usable floor, not a fast
+  path.
+- `scrfd::preprocess` and `scrfd::Letterbox` are public, so the letterbox can be measured and
+  driven without going through `detect`.
+
+### Removed
+
 - **YuNet is gone, and with it the licence question this project set out to
   remove.** It was the fallback detector for machines without ONNX Runtime, so
   every package shipped its weights -- and those weights are trained on WIDER

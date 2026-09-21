@@ -67,29 +67,9 @@ pub struct DetectArgs {
     #[arg(long = "no-gpu", action = ArgAction::SetTrue)]
     pub no_gpu: bool,
 
-    /// Run inference on the GPU (falls back to CPU if unavailable).
-    #[arg(long = "gpu-inference", action = ArgAction::SetTrue)]
-    pub gpu_inference: bool,
-
     /// Control whether `WGPU_*` env vars influence GPU selection (`auto` or `ignore`).
     #[arg(long = "gpu-env", value_enum)]
     pub gpu_env: Option<GpuEnvMode>,
-
-    /// Measure preprocessing latency (CPU vs GPU) for the resolved input set and exit.
-    #[arg(long = "benchmark-preprocess", action = ArgAction::SetTrue)]
-    pub benchmark_preprocess: bool,
-
-    /// Override input width (pixels).
-    #[arg(long)]
-    pub width: Option<u32>,
-
-    /// Override input height (pixels).
-    #[arg(long)]
-    pub height: Option<u32>,
-
-    /// Resize quality mode: `quality` (Triangle) or `speed` (fast Nearest).
-    #[arg(long, value_name = "MODE")]
-    pub resize_quality: Option<fcs_utils::config::ResizeQuality>,
 
     /// Override score threshold.
     #[arg(long)]

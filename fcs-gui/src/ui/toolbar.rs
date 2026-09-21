@@ -109,9 +109,10 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 
 /// Where detection really runs, for the toolbar pill and the status bar.
 ///
-/// `status` only describes GPU preprocessing: with that off it carries no adapter even
-/// while inference is on the GPU, and with the GPU off it must not claim one at all
-/// (this used to fall back to "GPU · wgpu").
+/// `status` describes the GPU context the app holds, which is not the same question as where
+/// the network runs: the detector picks its own engine, so inference can be on the GPU while
+/// the status carries no adapter, and with the GPU off this must not claim one at all (it used
+/// to fall back to "GPU · wgpu").
 pub(crate) fn gpu_label(status: &GpuStatusIndicator, inference_backend: Option<&str>) -> String {
     let gpu_inference = inference_backend == Some("wgsl-gpu");
     match status.adapter_name.as_deref() {

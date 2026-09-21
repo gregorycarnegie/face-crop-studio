@@ -221,7 +221,7 @@ python tools/dataset/oi_faces.py .        # argument is the directory holding th
 
 # YuNet baseline: images from the public mirror, then detect and score
 #   https://open-images-dataset.s3.amazonaws.com/{validation,test}/<ImageID>.jpg
-fcs-cli --input images/ --json det.json --gpu --gpu-inference --score-threshold 0.8
+fcs-cli --input images/ --json det.json --gpu --score-threshold 0.8
 python tools/dataset/eval_yunet.py det.json images/
 
 # Audit: contact sheet of the detections that matched no box, to judge by eye

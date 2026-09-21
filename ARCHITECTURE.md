@@ -131,7 +131,11 @@ graph TD
 | Inference (640x640)            | ~20 ms            | ~15 ms            | ~1.3x   |
 | Enhancement (Full Pipeline)    | ~180 ms           | ~12 ms            | ~15x    |
 
-*Note: GPU preprocessing includes PCIe transfer overhead which dominates for single images. Batch throughput sees higher gains.*
+*Note: GPU preprocessing was removed in 1.9.0. The transfer grows with the source image while
+the saving does not, so it only won below about 2 MP (experiment 10) — and since the detector
+started letterboxing internally, nothing called it at all. `docs/ENGINE_SPEED.md` has the
+current figures: preprocessing is 42% of a detection on a 36 MP RAW, and it is already the SIMD
+CPU path.*
 
 ### GPU Inference Determinism
 

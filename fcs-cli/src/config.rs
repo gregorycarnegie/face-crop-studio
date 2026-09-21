@@ -44,10 +44,6 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
     }
     if args.no_gpu {
         settings.gpu.enabled = false;
-        settings.gpu.inference = false;
-    }
-    if args.gpu_inference {
-        settings.gpu.inference = true;
     }
     if let Some(mode) = args.gpu_env {
         settings.gpu.respect_env = mode.respects_env();
@@ -72,15 +68,6 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
         settings.crop.eye_line_align = true;
     }
 
-    if let Some(width) = args.width {
-        settings.input.width = width;
-    }
-    if let Some(height) = args.height {
-        settings.input.height = height;
-    }
-    if let Some(mode) = args.resize_quality {
-        settings.input.resize_quality = mode;
-    }
     if let Some(score) = args.score_threshold {
         settings.detection.confidence = score;
     }
@@ -396,14 +383,12 @@ mod tests {
     }
 
     #[test]
-    fn override_no_gpu_disables_inference() {
+    fn override_no_gpu_disables_the_gpu() {
         let mut settings = AppSettings::default();
         settings.gpu.enabled = true;
-        settings.gpu.inference = true;
         let args = parse_args(&["--input", "x.jpg", "--no-gpu"]);
         apply_cli_overrides(&mut settings, &args);
         assert!(!settings.gpu.enabled);
-        assert!(!settings.gpu.inference);
     }
 
     #[test]
@@ -497,16 +482,9 @@ mod tests {
         let args = parse_args(&[
             "--input",
             "x.jpg",
-            "--gpu-inference",
             "--gpu-env",
             "ignore",
             "--telemetry",
-            "--width",
-            "320",
-            "--height",
-            "240",
-            "--resize-quality",
-            "speed",
             "--preset",
             "linkedin",
             "--crop-fill-color",
@@ -531,15 +509,8 @@ mod tests {
 
         apply_cli_overrides(&mut settings, &args);
 
-        assert!(settings.gpu.inference);
         assert!(!settings.gpu.respect_env);
         assert!(settings.telemetry.enabled);
-        assert_eq!(settings.input.width, 320);
-        assert_eq!(settings.input.height, 240);
-        assert_eq!(
-            settings.input.resize_quality,
-            fcs_utils::config::ResizeQuality::Speed
-        );
         assert_eq!(settings.crop.preset, "linkedin");
         assert_eq!(settings.crop.output_width, 400);
         assert_eq!(settings.crop.output_height, 400);

@@ -16,15 +16,10 @@ use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    env, fmt, fs,
+    env, fs,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
-/// Default input width in pixels.
-pub const DEFAULT_INPUT_WIDTH: u32 = 640;
-/// Default input height in pixels.
-pub const DEFAULT_INPUT_HEIGHT: u32 = 640;
 /// Default minimum confidence score for a detection to be considered valid.
 /// Where the shipped detector is run, chosen by eye on a corpus it had never seen: at 0.4 the
 /// 60 largest detections it found and YuNet missed held 32 false positives, and at 0.5 seven,
@@ -81,101 +76,6 @@ impl DetectionSettings {
         self.nms_threshold = self.nms_threshold.clamp(0.0, 1.0);
     }
 }
-
-/// Filter preference when resizing images for inference.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ResizeQuality {
-    /// Preserve visual quality when resizing (default, Triangle filter).
-    #[default]
-    Quality,
-    /// Prioritize throughput for batch inference (Nearest filter).
-    ///
-    /// Measured (experiment 54, `examples/resize_quality.rs nearest`, 120 fixtures): 1.76x
-    /// faster end to end, and it loses 2 of 51 faces, shifts landmarks by 10.7 px at p95
-    /// and 33.6 px at worst, and drops box IoU to 0.93. That is the same failure mode as
-    /// the `Interpolation` candidate experiment 51 rejected, so this is a recall setting
-    /// rather than a quality dial.
-    Speed,
-}
-
-impl ResizeQuality {
-    /// Return the display label (`"Quality"` or `"Speed"`).
-    pub const fn as_label(self) -> &'static str {
-        match self {
-            ResizeQuality::Quality => "Quality",
-            ResizeQuality::Speed => "Speed",
-        }
-    }
-}
-
-impl fmt::Display for ResizeQuality {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                ResizeQuality::Quality => "quality",
-                ResizeQuality::Speed => "speed",
-            }
-        )
-    }
-}
-
-impl FromStr for ResizeQuality {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "quality" => Ok(ResizeQuality::Quality),
-            "speed" => Ok(ResizeQuality::Speed),
-            other => Err(format!(
-                "invalid resize quality '{other}'; expected 'quality' or 'speed'"
-            )),
-        }
-    }
-}
-
-/// Model input dimensions and the resize filter preference.
-/// Defaults to 640 by 640 pixels with quality resizing.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct InputDimensions {
-    /// Target model-input width in pixels.
-    pub width: u32,
-    /// Target model-input height in pixels.
-    pub height: u32,
-    /// Choose between quality-focused or speed-focused resizing.
-    pub resize_quality: ResizeQuality,
-}
-
-impl Default for InputDimensions {
-    fn default() -> Self {
-        Self {
-            width: DEFAULT_INPUT_WIDTH,
-            height: DEFAULT_INPUT_HEIGHT,
-            // `Quality`, matching `ResizeQuality::default()` and the shipped
-            // `config/gui_settings.json`, which both already said quality. This default was
-            // the one place that disagreed, so anyone starting without a settings file got
-            // the nearest-neighbour resize -- and experiment 54 measured that at 2 faces
-            // lost in 51 over the fixture corpus.
-            resize_quality: ResizeQuality::Quality,
-        }
-    }
-}
-
-impl InputDimensions {
-    /// Replace zero dimensions with defaults.
-    pub fn sanitize(&mut self) {
-        if self.width == 0 {
-            self.width = DEFAULT_INPUT_WIDTH;
-        }
-        if self.height == 0 {
-            self.height = DEFAULT_INPUT_HEIGHT;
-        }
-    }
-}
-
 /// How to position the face within the crop region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -472,8 +372,6 @@ pub struct AppSettings {
     /// Optional override for the detector's ONNX model path.
     /// If `None`, a default path is used.
     pub model_path: Option<String>,
-    /// The input dimensions for model inference.
-    pub input: InputDimensions,
     /// The parameters for detection post-processing.
     pub detection: DetectionSettings,
     /// The parameters for face cropping.
@@ -514,7 +412,6 @@ impl Default for AppSettings {
     fn default() -> Self {
         let mut settings = Self {
             model_path: Some(DEFAULT_MODEL_PATH.into()),
-            input: InputDimensions::default(),
             detection: DetectionSettings::default(),
             crop: CropSettings::default(),
             enhance: EnhanceSettings::default(),
@@ -543,7 +440,6 @@ impl AppSettings {
             settings.model_path = Some(AppSettings::default().model_path.unwrap());
         }
 
-        settings.input.sanitize();
         settings.detection.sanitize();
         settings.crop.sanitize();
 
@@ -578,10 +474,6 @@ pub struct GpuSettings {
     pub enabled: bool,
     /// Respect `WGPU_*` environment overrides when initializing the backend.
     pub respect_env: bool,
-    /// Execute inference on the GPU when supported.
-    pub inference: bool,
-    /// Use GPU for image preprocessing (resize, color conversion).
-    pub preprocessing: bool,
 }
 
 impl Default for GpuSettings {
@@ -589,8 +481,6 @@ impl Default for GpuSettings {
         Self {
             enabled: true,
             respect_env: true,
-            inference: true,
-            preprocessing: true, // Enable GPU preprocessing by default when GPU is available
         }
     }
 }
@@ -627,7 +517,6 @@ mod tests {
         settings.save_to_path(file.path()).expect("save");
 
         let loaded = AppSettings::load_from_path(file.path()).expect("load");
-        assert_eq!(loaded.input, settings.input);
         assert_eq!(loaded.detection.top_k, settings.detection.top_k);
         assert_eq!(loaded.model_path, settings.model_path);
         assert_eq!(loaded.telemetry.enabled, settings.telemetry.enabled);
@@ -645,18 +534,10 @@ mod tests {
         }"#;
         fs::write(file.path(), json).expect("write custom settings");
 
+        // The `"input"` block above is deliberately left in: the detector fixes its input at
+        // 640x640, so that section was removed, and an existing settings file still carrying it
+        // must load rather than fail. serde ignores the unknown key.
         let loaded = AppSettings::load_from_path(file.path()).expect("load");
-        assert_eq!(
-            loaded.input,
-            InputDimensions {
-                width: 640,
-                height: 640,
-                // A settings file that omits `resize_quality` gets `Quality`. It used to get
-                // `Speed`, which loses 2 faces in 51 over the fixture corpus and which nobody
-                // had asked for -- see the note on the variant.
-                resize_quality: ResizeQuality::Quality,
-            }
-        );
         assert_eq!(loaded.detection.top_k, 123);
         assert!(loaded.model_path.is_some());
         assert!(!loaded.telemetry.enabled);
@@ -685,28 +566,6 @@ mod tests {
         s2.sanitize();
         assert_eq!(s2.confidence, 0.0);
         assert_eq!(s2.nms_threshold, DEFAULT_NMS_THRESHOLD);
-    }
-
-    #[test]
-    fn input_dimensions_sanitize_replaces_zeros() {
-        let mut d = InputDimensions {
-            width: 0,
-            height: 0,
-            resize_quality: ResizeQuality::Quality,
-        };
-        d.sanitize();
-        assert_eq!(d.width, DEFAULT_INPUT_WIDTH);
-        assert_eq!(d.height, DEFAULT_INPUT_HEIGHT);
-
-        // Non-zero dimensions should be left untouched
-        let mut d2 = InputDimensions {
-            width: 320,
-            height: 240,
-            resize_quality: ResizeQuality::Speed,
-        };
-        d2.sanitize();
-        assert_eq!(d2.width, 320);
-        assert_eq!(d2.height, 240);
     }
 
     #[test]
@@ -749,33 +608,10 @@ mod tests {
     }
 
     #[test]
-    fn resize_quality_from_str_and_as_label() {
-        assert_eq!(
-            "quality".parse::<ResizeQuality>().unwrap(),
-            ResizeQuality::Quality
-        );
-        assert_eq!(
-            "SPEED".parse::<ResizeQuality>().unwrap(),
-            ResizeQuality::Speed
-        );
-        assert!("fast".parse::<ResizeQuality>().is_err());
-        assert_eq!(ResizeQuality::Quality.as_label(), "Quality");
-        assert_eq!(ResizeQuality::Speed.as_label(), "Speed");
-    }
-
-    #[test]
-    fn resize_quality_display() {
-        assert_eq!(ResizeQuality::Quality.to_string(), "quality");
-        assert_eq!(ResizeQuality::Speed.to_string(), "speed");
-    }
-
-    #[test]
     fn gpu_settings_into_context_options() {
         let gs = GpuSettings {
             enabled: false,
             respect_env: false,
-            inference: true,
-            preprocessing: true,
         };
         let opts: GpuContextOptions = gs.into();
         assert!(!opts.enabled);
@@ -784,8 +620,6 @@ mod tests {
         let gs_ref = GpuSettings {
             enabled: true,
             respect_env: true,
-            inference: false,
-            preprocessing: false,
         };
         let opts_ref: GpuContextOptions = (&gs_ref).into();
         assert!(opts_ref.enabled);
@@ -963,7 +797,6 @@ mod tests {
             let settings = GpuSettings {
                 enabled,
                 respect_env,
-                ..Default::default()
             };
             let options: crate::gpu::GpuContextOptions = (&settings).into();
             assert_eq!(options.enabled, enabled, "enabled {enabled}");

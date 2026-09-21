@@ -5,9 +5,7 @@
 //! fallback when no compatible adapter is present.
 
 /// Combined resize + RGB→BGR + HWC→CHW WGSL compute shader.
-pub const PREPROCESS_WGSL: &str = include_str!("preprocess.wgsl");
 /// Packed 8-bit RGB → f32 BGR CHW, for sources resized on the CPU first.
-pub const RGB_TO_CHW_WGSL: &str = include_str!("rgb_to_chw.wgsl");
 /// Per-pixel exposure/brightness/contrast/saturation adjust shader.
 pub const PIXEL_ADJUST_WGSL: &str = include_str!("pixel_adjust.wgsl");
 /// Gaussian blur shader (horizontal/vertical).
