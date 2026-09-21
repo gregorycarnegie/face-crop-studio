@@ -1,11 +1,9 @@
 //! GPU runtime and context management for fcs-cli.
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use fcs_utils::{
-    CropShape, EnhancementSettings, GpuAvailability, GpuContext, GpuContextOptions, WgpuEnhancer,
-    apply_enhancements, apply_shape_mask_dynamic,
+    CropShape, EnhancementRuntime, EnhancementSettings, GpuAvailability, GpuContext,
+    GpuContextOptions, RedEye,
     config::AppSettings,
     gpu::{GpuStatusIndicator, GpuStatusMode},
 };
@@ -19,7 +17,8 @@ use log::{debug, info, warn};
 /// enhancer holds the `Arc` it needs.
 pub struct CliGpuRuntime {
     status: GpuStatusIndicator,
-    enhancer: Option<Arc<WgpuEnhancer>>,
+    /// Shared with the GUI, so the two front-ends cannot diverge about what enhancement means.
+    enhancement: EnhancementRuntime,
 }
 
 impl CliGpuRuntime {
@@ -27,16 +26,18 @@ impl CliGpuRuntime {
         log_gpu_status(&self.status);
     }
 
-    pub fn enhance(&self, image: &DynamicImage, settings: &EnhancementSettings) -> DynamicImage {
-        if let Some(enhancer) = &self.enhancer {
-            match enhancer.apply(image, settings, None) {
-                Ok(output) => return output,
-                Err(err) => {
-                    warn!("GPU enhancement failed: {err}; falling back to CPU pipeline.");
-                }
-            }
-        }
-        apply_enhancements(image, settings, None)
+    /// Enhance a crop, on the GPU when available.
+    ///
+    /// `eyes` used to be hard-coded `None` here, so red-eye removal had nothing to aim at in
+    /// the CLI while the GUI passed real positions. The mapping now lives in
+    /// `fcs_core::eye_positions`, reachable from both.
+    pub fn enhance(
+        &self,
+        image: &DynamicImage,
+        settings: &EnhancementSettings,
+        eyes: Option<&[RedEye]>,
+    ) -> DynamicImage {
+        self.enhancement.enhance(image, settings, eyes)
     }
 
     pub fn apply_shape_mask(
@@ -47,28 +48,13 @@ impl CliGpuRuntime {
         vignette_intensity: f32,
         vignette_color: fcs_utils::color::RgbaColor,
     ) -> DynamicImage {
-        if let Some(enhancer) = &self.enhancer {
-            match enhancer.apply_shape_mask_gpu(
-                image,
-                shape,
-                vignette_softness,
-                vignette_intensity,
-                vignette_color,
-            ) {
-                Ok(Some(masked)) => return masked,
-                Ok(None) => {}
-                Err(err) => warn!("GPU shape mask failed: {err}; falling back to CPU path."),
-            }
-        }
-        let mut cpu = image.clone();
-        apply_shape_mask_dynamic(
-            &mut cpu,
+        self.enhancement.apply_shape_mask(
+            image,
             shape,
             vignette_softness,
             vignette_intensity,
             vignette_color,
-        );
-        cpu
+        )
     }
 }
 
@@ -143,25 +129,15 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
         }
     };
 
-    let enhancer = match &context {
-        Some(ctx) => match WgpuEnhancer::new(ctx.clone()) {
-            Ok(enhancer) => {
-                info!(
-                    "GPU enhancement pipeline ready on '{}' ({:?})",
-                    ctx.adapter_info().name,
-                    ctx.adapter_info().backend
-                );
-                Some(Arc::new(enhancer))
-            }
-            Err(err) => {
-                warn!("GPU enhancer initialization failed: {err}");
-                None
-            }
-        },
-        None => None,
-    };
+    let enhancement = EnhancementRuntime::new(context.clone());
+    if let Some(name) = enhancement.adapter_name() {
+        info!("GPU enhancement pipeline ready on '{name}'");
+    }
 
-    let runtime = CliGpuRuntime { status, enhancer };
+    let runtime = CliGpuRuntime {
+        status,
+        enhancement,
+    };
     runtime.log_status();
     Ok(runtime)
 }
@@ -185,7 +161,7 @@ mod tests {
     fn manual_runtime(status: GpuStatusIndicator) -> CliGpuRuntime {
         CliGpuRuntime {
             status,
-            enhancer: None,
+            enhancement: EnhancementRuntime::cpu_only(),
         }
     }
 
@@ -247,7 +223,7 @@ mod tests {
     #[test]
     fn init_runtime_gpu_disabled_has_no_enhancer() {
         let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
-        assert!(runtime.enhancer.is_none());
+        assert_eq!(runtime.enhancement.backend(), "cpu");
     }
 
     #[test]
@@ -265,7 +241,7 @@ mod tests {
             image::Rgba([100, 120, 140, 255]),
         ));
         let enh = EnhancementSettings::default();
-        let result = runtime.enhance(&img, &enh);
+        let result = runtime.enhance(&img, &enh, None);
         assert_eq!(result.width(), 20);
         assert_eq!(result.height(), 20);
     }

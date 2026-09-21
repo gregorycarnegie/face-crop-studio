@@ -21,12 +21,7 @@ use std::{
 pub fn build_detector(
     settings: &AppSettings,
     shared_gpu_context: Option<Arc<GpuContext>>,
-) -> (
-    GpuStatusIndicator,
-    Option<Arc<GpuContext>>,
-    Result<FaceDetector>,
-    Option<fcs_core::EyeRefiner>,
-) {
+) -> crate::types::DetectorBuild {
     let (gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
         info!("Using shared GPU context from egui renderer");
         describe_context(shared_ctx, settings)
@@ -34,12 +29,17 @@ pub fn build_detector(
         acquire_gpu_context(settings)
     };
 
+    // Built here rather than on the UI thread: seven WGSL pipelines is not frame work.
+    let enhancement = fcs_utils::EnhancementRuntime::new(gpu_context.clone());
+    info!("Enhancement pipeline on {}", enhancement.backend());
+
     let Some(configured_model_path) = settings.model_path.as_deref() else {
         return (
             gpu_status,
             gpu_context,
             Err(anyhow::anyhow!("no model path configured")),
             None,
+            enhancement,
         );
     };
     let model_path = resolve_data_path(configured_model_path);
@@ -67,7 +67,13 @@ pub fn build_detector(
         .then(fcs_core::EyeRefiner::load)
         .flatten();
 
-    (gpu_status, gpu_context, detector_result, eye_refiner)
+    (
+        gpu_status,
+        gpu_context,
+        detector_result,
+        eye_refiner,
+        enhancement,
+    )
 }
 
 /// Open a GPU context, or report why there is none.

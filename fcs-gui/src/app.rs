@@ -138,7 +138,11 @@ impl App2 {
             let _ = detector_tx.send(built);
         });
 
-        let gpu = GpuPipeline::from_context(GpuStatusIndicator::pending(), None);
+        let gpu = GpuPipeline::from_context(
+            GpuStatusIndicator::pending(),
+            None,
+            fcs_utils::EnhancementRuntime::cpu_only(),
+        );
         let detector = None;
         let status_line = STATUS_DETECTOR_PENDING.to_owned();
 
@@ -505,9 +509,9 @@ impl App2 {
             return;
         };
         match rx.try_recv() {
-            Ok((status, context, result, eye_refiner)) => {
+            Ok((status, context, result, eye_refiner, enhancement)) => {
                 self.detector_rx = None;
-                self.gpu = GpuPipeline::from_context(status, context);
+                self.gpu = GpuPipeline::from_context(status, context, enhancement);
                 self.eye_refiner = eye_refiner.map(Arc::new);
                 self.detector = match result {
                     Ok(d) => {
@@ -557,10 +561,11 @@ impl App2 {
         // A rebuild reads the current thresholds and re-detects anyway.
         self.needs_postprocess_update = false;
         let shared = self.gpu.context.clone();
-        let (status, new_gpu_ctx, result, eye_refiner) = build_detector(&self.settings, shared);
+        let (status, new_gpu_ctx, result, eye_refiner, enhancement) =
+            build_detector(&self.settings, shared);
         if new_gpu_ctx.is_some() {
             // New context: adopt it (and its status) as the active GPU unit.
-            self.gpu = GpuPipeline::from_context(status, new_gpu_ctx);
+            self.gpu = GpuPipeline::from_context(status, new_gpu_ctx, enhancement);
         } else {
             self.gpu.status = status;
         }

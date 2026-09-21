@@ -166,7 +166,13 @@ pub fn run_webcam_mode(
                 let mut crop_img = crop_face_from_image(&frame, det, &core_settings);
 
                 if let Some(enh) = enhancement_settings.as_ref() {
-                    crop_img = gpu_runtime.enhance(&crop_img, enh);
+                    let eyes =
+                        fcs_core::eye_positions(det, frame.width(), frame.height(), &core_settings);
+                    crop_img = gpu_runtime.enhance(
+                        &crop_img,
+                        enh,
+                        (!eyes.is_empty()).then_some(&eyes[..]),
+                    );
                 }
 
                 let (quality_score, quality) = estimate_sharpness(&crop_img);

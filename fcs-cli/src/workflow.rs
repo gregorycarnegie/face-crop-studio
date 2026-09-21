@@ -329,9 +329,13 @@ fn build_processed_crop(
     settings: &AppSettings,
     enhancement_settings: Option<&Arc<fcs_utils::EnhancementSettings>>,
     runtime: &gpu::CliGpuRuntime,
+    eyes: &[fcs_utils::RedEye],
 ) -> ProcessedCrop {
     if let Some(enh) = enhancement_settings {
-        crop_img = runtime.enhance(&crop_img, enh);
+        // Red-eye removal needs to know where the eyes are. This used to pass `None`, so in
+        // the CLI it had nothing to aim at while the GUI aimed properly.
+        let eyes = (!eyes.is_empty()).then_some(eyes);
+        crop_img = runtime.enhance(&crop_img, enh, eyes);
     }
 
     let (quality_score, quality) = estimate_sharpness(&crop_img);
@@ -362,8 +366,10 @@ fn generate_processed_crops(
 ) -> Vec<ProcessedCrop> {
     let mut processed = Vec::with_capacity(detections.len());
 
+    let (img_w, img_h) = (img.width(), img.height());
     for (idx, det) in detections.iter().enumerate() {
         let crop_img = crop_face_from_image(img, det, core_settings);
+        let eyes = fcs_core::eye_positions(det, img_w, img_h, core_settings);
         processed.push(build_processed_crop(
             idx,
             det,
@@ -371,6 +377,7 @@ fn generate_processed_crops(
             settings,
             enhancement_settings,
             runtime,
+            &eyes,
         ));
     }
 

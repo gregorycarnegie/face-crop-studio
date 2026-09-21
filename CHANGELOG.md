@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The GUI never used the WGSL enhancement shaders, and the CLI never aimed red-eye removal.**
+  Both front-ends enhance crops and each had grown half the feature:
+
+  | | GPU shaders | Eye positions for red-eye |
+  |---|---|---|
+  | CLI (1.x) | yes | **no** -- hard-coded `None` |
+  | GUI (1.x) | **no** -- called the CPU pipeline | yes |
+
+  Neither was a decision. The GUI held a `GpuContext` the whole time and used it for a status
+  label; the CLI could not pass eye positions because the mapping from landmarks to crop
+  coordinates lived inside the GUI. `fcs_utils::EnhancementRuntime` is now the one answer for
+  both, and `fcs_core::eye_positions` is reachable from either. A test asserts that passing the
+  eye positions changes the result, so the argument cannot quietly become decoration again.
+
+  This is the divergence predicted by "five copies of one pipeline": the shared geometry was in
+  `fcs-core` while the step after it was reimplemented per front-end, so the two drifted in
+  opposite directions without either looking wrong on its own.
+
 ### Changed
 
 - **Landmarks are `Option<Landmark>` rather than an all-zero sentinel.** *(breaking)* The

@@ -503,11 +503,14 @@ impl MappingUiState {
 /// The eye refiner rides along because it opens an ONNX session, and the reason the detector
 /// is built off the UI thread (experiment 81) applies equally to it. `None` is ordinary: no
 /// runtime, or no model file -- see `fcs_core::EyeRefiner::load`.
+/// The enhancement runtime rides along for the same reason: building it compiles seven WGSL
+/// pipelines, which has no business happening in a frame.
 pub type DetectorBuild = (
     GpuStatusIndicator,
     Option<Arc<GpuContext>>,
     anyhow::Result<fcs_core::FaceDetector>,
     Option<fcs_core::EyeRefiner>,
+    fcs_utils::EnhancementRuntime,
 );
 
 // ── GPU pipeline ──────────────────────────────────────────────────────────────
@@ -518,13 +521,26 @@ pub type DetectorBuild = (
 pub struct GpuPipeline {
     pub status: GpuStatusIndicator,
     pub context: Option<Arc<GpuContext>>,
+    /// Enhancement and shape masking, on the GPU when one is available.
+    ///
+    /// Shared with the CLI (`fcs_utils::EnhancementRuntime`). Until 2.0 the GUI called the CPU
+    /// pipeline directly and never touched the shaders it was holding a context for.
+    pub enhancement: fcs_utils::EnhancementRuntime,
 }
 
 impl GpuPipeline {
-    /// Bundles the GPU status indicator with an optional shared GPU context.
-    /// With no context the app runs CPU-only.
-    pub fn from_context(status: GpuStatusIndicator, context: Option<Arc<GpuContext>>) -> Self {
-        Self { status, context }
+    /// Bundles the GPU status indicator with a shared context and the enhancement runtime
+    /// built on it. With no context the app runs CPU-only, which every method still supports.
+    pub fn from_context(
+        status: GpuStatusIndicator,
+        context: Option<Arc<GpuContext>>,
+        enhancement: fcs_utils::EnhancementRuntime,
+    ) -> Self {
+        Self {
+            status,
+            context,
+            enhancement,
+        }
     }
 }
 

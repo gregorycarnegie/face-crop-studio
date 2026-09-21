@@ -77,7 +77,7 @@ pub use color::{
     rgb_to_hsv,
 };
 pub use config::PositioningMode;
-pub use enhance::{EnhancementSettings, WgpuEnhancer, apply_enhancements};
+pub use enhance::{EnhancementRuntime, EnhancementSettings, WgpuEnhancer, apply_enhancements};
 #[cfg(feature = "fixtures")]
 pub use fixtures::{
     fixture_path, fixtures_dir, load_fixture_bytes, load_fixture_image, load_fixture_json,

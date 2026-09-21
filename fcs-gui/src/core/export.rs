@@ -2,14 +2,10 @@
 
 use crate::types::{App2, BatchFile, BatchFileStatus, JobMessage};
 
-use fcs_core::{
-    CropSettings as CoreCropSettings, Detection, FaceDetector, calculate_crop_region,
-    crop_face_from_image,
-};
+use fcs_core::{CropSettings as CoreCropSettings, Detection, FaceDetector, crop_face_from_image};
 use fcs_utils::{
-    ImageFormatHint, MetadataContext, OutputOptions, RedEye, append_suffix_to_filename,
-    apply_enhancements, apply_shape_mask, estimate_sharpness, load_image, quality::Quality,
-    save_dynamic_image,
+    ImageFormatHint, MetadataContext, OutputOptions, append_suffix_to_filename, apply_shape_mask,
+    estimate_sharpness, load_image, quality::Quality, save_dynamic_image,
 };
 use image::{DynamicImage, GenericImageView, Rgba};
 use log::{error, info, warn};
@@ -24,36 +20,6 @@ use std::{
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
     },
 };
-
-/// Map the two eye landmarks into output-crop coordinates for targeted red-eye removal.
-fn eye_positions(
-    detection: &Detection,
-    img_w: u32,
-    img_h: u32,
-    crop: &CoreCropSettings,
-) -> Vec<RedEye> {
-    // Both eyes or neither: one point is not a pair, and red-eye removal has nothing to aim
-    // at without both. This was a check for an all-zero sentinel, which could not tell an
-    // absent landmark from a real one at the origin.
-    let (Some(re), Some(le)) = (detection.landmarks[0], detection.landmarks[1]) else {
-        return vec![];
-    };
-    let region = calculate_crop_region(img_w, img_h, detection.bbox, crop);
-    let sx = crop.output_width as f32 / region.width.max(1) as f32;
-    let sy = crop.output_height as f32 / region.height.max(1) as f32;
-    let face_h_out =
-        detection.bbox.height / region.height.max(1) as f32 * crop.output_height as f32;
-    let radius = (face_h_out * 0.12).max(4.0);
-    [re, le]
-        .iter()
-        .map(|lm| RedEye {
-            x: (lm.x - region.x as f32) * sx,
-            y: (lm.y - region.y as f32) * sy,
-            radius,
-            _pad: 0.0,
-        })
-        .collect()
-}
 
 /// Apply shape mask then composite transparent pixels onto `fill`.
 /// When `fill.alpha == 0` the output keeps its alpha channel (transparent PNG/WEBP).
@@ -137,6 +103,9 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
     let detections = &app.preview.detections;
     let source_path = app.preview.image_path.as_deref();
     let settings = &app.settings;
+    // The same runtime the CLI and the batch path use, so the three agree about whether
+    // enhancement runs on the shaders.
+    let enhancement = &app.gpu.enhancement;
     let crop_settings = app.build_crop_settings();
     let output_options = OutputOptions::from_crop_settings(&settings.crop);
     let ext = output_extension(settings.crop.output_format);
@@ -162,16 +131,16 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
         let raw_crop =
             crop_face_from_image(source_image.as_ref(), &detection_for_crop, &crop_settings);
         let shaped = apply_shape_and_fill(raw_crop, &settings.crop);
-        let eyes = eye_positions(
+        let eyes = fcs_core::eye_positions(
             &detection_for_crop,
             source_image.width(),
             source_image.height(),
             &crop_settings,
         );
-        let crop = apply_enhancements(
+        let crop = enhancement.enhance(
             &shaped,
             &settings.enhance.to_enhancement_settings(),
-            if eyes.is_empty() { None } else { Some(&eyes) },
+            (!eyes.is_empty()).then_some(&eyes[..]),
         );
 
         let mut filename = format!("{source_stem}_face_{:02}.{ext}", face_index + 1);
@@ -233,6 +202,8 @@ pub fn start_batch_export(app: &mut App2) {
     // the refiner too. Without this, exported crops would be levelled by YuNet's eye points
     // while the preview beside them shows refined ones.
     let eye_refiner = app.eye_refiner.clone();
+    // Cheap to clone: the enhancer sits behind an Arc, so every worker shares one.
+    let enhancement = app.gpu.enhancement.clone();
 
     let Some(output_dir) = FileDialog::new()
         .set_title("Export batch crops")
@@ -288,6 +259,7 @@ pub fn start_batch_export(app: &mut App2) {
                     tasks,
                     detector.as_ref(),
                     eye_refiner.as_deref(),
+                    &enhancement,
                     output_dir.as_path(),
                     settings.as_ref(),
                     &tx,
@@ -308,6 +280,7 @@ pub fn start_batch_export(app: &mut App2) {
         let inner_tx = tx.clone();
         let inner_detector = detector.clone();
         let inner_eye_refiner = eye_refiner.clone();
+        let inner_enhancement = enhancement.clone();
         let inner_output_dir = output_dir.clone();
         let inner_settings = settings.clone();
         let inner_completed = completed.clone();
@@ -327,6 +300,7 @@ pub fn start_batch_export(app: &mut App2) {
                     let status = run_batch_job_panic_safe(
                         inner_detector.as_ref(),
                         inner_eye_refiner.as_deref(),
+                        &inner_enhancement,
                         path,
                         inner_output_dir.as_path(),
                         inner_settings.as_ref(),
@@ -352,9 +326,11 @@ pub fn start_batch_export(app: &mut App2) {
 
 /// Run one batch job and convert any panic into a [`BatchFileStatus::Failed`].
 /// One corrupt/edge-case image must not abort the rest of the batch.
+#[allow(clippy::too_many_arguments)]
 fn run_batch_job_panic_safe(
     detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
+    enhancement: &fcs_utils::EnhancementRuntime,
     path: PathBuf,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
@@ -365,6 +341,7 @@ fn run_batch_job_panic_safe(
         run_batch_job(
             detector,
             eye_refiner,
+            enhancement,
             path,
             output_dir,
             settings,
@@ -403,6 +380,7 @@ fn run_batch_sequential(
     tasks: Vec<(usize, PathBuf, Option<PathBuf>)>,
     detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
+    enhancement: &fcs_utils::EnhancementRuntime,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
     tx: &std::sync::mpsc::Sender<JobMessage>,
@@ -417,6 +395,7 @@ fn run_batch_sequential(
         let status = run_batch_job_panic_safe(
             detector,
             eye_refiner,
+            enhancement,
             path,
             output_dir,
             settings,
@@ -431,9 +410,11 @@ fn run_batch_sequential(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_batch_job(
     detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
+    enhancement: &fcs_utils::EnhancementRuntime,
     path: PathBuf,
     output_dir: &Path,
     settings: &fcs_utils::config::AppSettings,
@@ -478,11 +459,11 @@ fn run_batch_job(
     for (face_index, detection) in detections.iter().enumerate() {
         let raw = crop_face_from_image(&source_image, detection, &crop_settings);
         let shaped = apply_shape_and_fill(raw, &settings.crop);
-        let eyes = eye_positions(detection, src_w, src_h, &crop_settings);
-        let crop = apply_enhancements(
+        let eyes = fcs_core::eye_positions(detection, src_w, src_h, &crop_settings);
+        let crop = enhancement.enhance(
             &shaped,
             &settings.enhance.to_enhancement_settings(),
-            if eyes.is_empty() { None } else { Some(&eyes) },
+            (!eyes.is_empty()).then_some(&eyes[..]),
         );
         let (quality_score, quality) = estimate_sharpness(&crop);
         crops.push(crop);

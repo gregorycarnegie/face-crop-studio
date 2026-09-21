@@ -82,6 +82,39 @@ fn blit_region(
     }
 }
 
+/// Map the two eye landmarks into output-crop coordinates, for targeted red-eye removal.
+///
+/// Empty when either eye is absent: one point is not a pair, and there is nothing to aim at.
+///
+/// This lived in the GUI until 2.0, which is why the CLI passed `None` for the eye positions
+/// and its red-eye removal had nothing to aim at -- the mapping simply was not reachable from
+/// there. It belongs next to `calculate_crop_region`, whose geometry it inverts.
+pub fn eye_positions(
+    detection: &Detection,
+    img_w: u32,
+    img_h: u32,
+    settings: &CropSettings,
+) -> Vec<fcs_utils::RedEye> {
+    let (Some(right), Some(left)) = (detection.landmarks[0], detection.landmarks[1]) else {
+        return Vec::new();
+    };
+    let region = calculate_crop_region(img_w, img_h, detection.bbox, settings);
+    let sx = settings.output_width as f32 / region.width.max(1) as f32;
+    let sy = settings.output_height as f32 / region.height.max(1) as f32;
+    let face_h_out =
+        detection.bbox.height / region.height.max(1) as f32 * settings.output_height as f32;
+    let radius = (face_h_out * 0.12).max(4.0);
+    [right, left]
+        .iter()
+        .map(|lm| fcs_utils::RedEye {
+            x: (lm.x - region.x as f32) * sx,
+            y: (lm.y - region.y as f32) * sy,
+            radius,
+            _pad: 0.0,
+        })
+        .collect()
+}
+
 /// Crop a face from `img` according to `detection` and `settings`.
 ///
 /// The returned image is resized to `settings.output_width` x `settings.output_height`.

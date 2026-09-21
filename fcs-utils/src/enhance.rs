@@ -8,6 +8,7 @@ mod detail;
 mod gpu;
 mod pipeline;
 mod red_eye;
+mod runtime;
 mod settings;
 mod skin;
 mod tone;
@@ -19,6 +20,7 @@ mod tests;
 
 pub use gpu::WgpuEnhancer;
 pub use pipeline::apply_enhancements;
+pub use runtime::EnhancementRuntime;
 pub use settings::EnhancementSettings;
 
 #[cfg(test)]
