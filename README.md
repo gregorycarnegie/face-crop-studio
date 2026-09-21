@@ -245,6 +245,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 
 - `cargo check --workspace` – Fast type checking across all crates.
 - `cargo test --workspace --all-features` – Run the full test suite (requires `models/scrfd80k_500m_640.onnx`; set `FCS_STRICT_TESTS=1` to fail rather than skip when it is missing).
+- `cargo test -p fcs-core --test python_parity` – Compare the Rust detector against the Python implementation it was ported from, on committed CC BY 2.0 fixtures. The only test here that checks this project against something it did not write; see `fixtures/oracle/ATTRIBUTION.md`.
 - `cargo run -p fcs-cli -- --help` – View CLI options.
 - `cargo run --release -p fcs-core --example engine_speed -- <image>` – What a detection costs, per engine (see `docs/ENGINE_SPEED.md`).
 - `cargo run -p fcs-cli -- --input fixtures/ --gpu` – Run with explicit GPU acceleration.

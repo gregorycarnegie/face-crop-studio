@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An independent oracle, back in CI.** Until now every test compared this project against
+  itself: three engines agreeing to 1e-05, golden crop regions, a CLI snapshot. That proves the
+  parts are consistent, not that they are right. `tract` used to interpret the ONNX file rather
+  than re-encode it, which is what let it catch a mistake both of our own engines shared, and it
+  left with YuNet in 1.9.0.
+
+  `fcs-core/tests/python_parity.rs` restores it by comparing against
+  `tools/dataset/scrfd_detect.py` -- the same checkpoint run through torch in WSL, decoded by the
+  numpy reference. Agreement covers the whole chain at once: the top-left letterbox, RGB channel
+  order, normalised padding, the export and the decode, every one of which was wrong at some
+  point during the port. On the committed fixtures the two paths agree on **9 of 9 faces**, with
+  the worst box edge 1.53 px and a median error of 0.44% of box width.
+
+  **Verified to fail, not just to pass.** Flipping the channel order to BGR is caught four ways
+  at once (a confident face lost, the worst box edge at 27 px, max error 30.7%, score drift over
+  its limit); centring the letterbox the way YuNet did drops matches from 9 to 1. Neither
+  mutation is detectable by any amount of self-comparison -- all three engines would agree
+  happily on the wrong convention.
+
+  It also pins the shipped model to `epoch_100.pth`: exporting from a different epoch moves
+  every score far more than the tolerances allow.
+
+- **`fixtures/oracle/`: the first and only images committed to this repository.** Eight Open
+  Images photographs, every one CC BY 2.0, attributed in `fixtures/oracle/ATTRIBUTION.md`. The
+  rest of `fixtures/` stays git-ignored, deliberately, because it is real faces that were never
+  licensed for redistribution -- and the earlier plan to commit some of *those* for this test
+  would have quietly undone that policy. These come from the same licence-clean dataset the
+  detector was trained on, and the licence was verified rather than assumed: all 167,056 rows of
+  the val+test splits carry exactly one licence.
+
+  Chosen for spread rather than size, because a wrong preprocessing convention shows up as a
+  systematic box shift and it is the letterbox axes and strides that shift: aspect ratios 0.57 to
+  2.60, face heights 4% to 79%, face counts one to five, and one image where both sides must find
+  nothing. 227 KB in total.
+
+- `FCS_PARITY_REFERENCE` points that test at a larger corpus instead, which is how it began life
+  as `examples/scrfd_parity.rs`. The example is gone rather than duplicated: two copies of a
+  comparison is how the two sides drift apart.
+
 ### Fixed
 
 - **A failed export was reported as a success.** `write_bytes` finished with

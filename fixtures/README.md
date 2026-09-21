@@ -15,6 +15,13 @@ or sensitive information; prefer synthetic or cleared data.
   scale and the current detector disagrees with these boxes by design. Kept on
   disk because they are local files, not repository content — delete them
   whenever you like.
+- `fixtures/oracle/` — **committed**, and the only images in the repository. Eight
+  Open Images photographs, all CC BY 2.0 and attributed in
+  `fixtures/oracle/ATTRIBUTION.md`, plus `torch_epoch100.json`: what the Python
+  implementation produces for them. `fcs-core/tests/python_parity.rs` compares
+  this project against that, which is the only check here that does not compare
+  the project against itself. Real faces, but licensed for redistribution —
+  unlike everything else above, which is why these are the exception.
 - `fixtures/golden/` — **committed** golden outputs. Synthetic, no image data:
   - `crop_regions.json` — expected `CropRegion` for the scenarios in
     `fcs-core/tests/golden_crop_regions.rs`.
