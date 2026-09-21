@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Batch throughput measured, and the worker-count guidance corrected.** Every figure in
+  `docs/ENGINE_SPEED.md` was one image at a time; the real workload is a folder through rayon.
+  On the 1,239-image reference folder (9.8 MP average), detect + crop + write: **114 images/s,
+  8.8 ms each** at the default worker count, against 44.25 ms serial. Cropping, masking and
+  writing account for about 0.9 ms of that; the rest is detection.
+
+  Two findings worth acting on:
+
+  - **16 workers now beat 32, inverting experiment 60.** That measurement made rayon's default
+    the deliberate choice (32 at 7.85 s against 16 at 8.9 s) while warning the number "moved as
+    soon as the work around it changed". It moved again: 16 wins both alternated pairs by 5-8%.
+    It is **not** the atomic write added in 2.0 -- with nothing written at all, 16 takes 8.79 s
+    against 32 at 9.73 s -- so the change is in the detection path, the part that was replaced.
+    The default is left alone (`RAYON_NUM_THREADS` overrides it) because 5-8% on one machine is
+    thin and this ranking has now reversed twice, but the stale numbers in `README.md` and
+    `fcs-cli/src/main.rs` are corrected.
+  - **Parallel efficiency is only 34%** -- 5.4x on 16 physical cores. Ruled out as the cause:
+    file writes, and ONNX Runtime's intra-op threads (experiment 69 measured no difference).
+    Not ruled out and recorded as open: memory bandwidth in decode and resize, internal locking
+    in the shared `fcs_ort::Session`, and page-cache misses on ~1.2 GB of sources.
+
 ### Added
 
 - **A test that every setting changes something** (`fcs-core/tests/settings_have_effect.rs`).

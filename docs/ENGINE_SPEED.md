@@ -72,6 +72,51 @@ win left there, which is why the GPU preprocessing machinery was deleted in 1.9.
 wired up to SCRFD: it could only ever have helped under ~2 MP, where the network dominates
 anyway.
 
+## Batch throughput, which is what the CLI actually does
+
+Everything above is one image at a time. The real workload is a folder through rayon on a
+shared ONNX Runtime session, and that is a different number. Measured 2026-09-21 on the
+1,239-image reference folder (9.8 MP average), detect + crop + write, same machine:
+
+| Workers | Wall clock | Per image | Speedup |
+|---|---|---|---|
+| 1 (`RAYON_NUM_THREADS=1`) | 54.82 s | 44.25 ms | 1.0x |
+| 4 | 17.02 s | 13.74 ms | 3.2x |
+| 8 | 11.48 s | 9.26 ms | 4.8x |
+| **16** | **10.14 / 10.55 s** | **8.2 ms** | **5.4x** |
+| 32 (rayon's default here) | 10.87 / 10.94 / 10.99 / 11.05 s | 8.8 ms | 5.0x |
+
+114 images per second at the default, and **8.8 ms per image is throughput, not latency**: a
+single detection of one of these images costs 6.67 ms end to end (2.53 ms preprocess, 3.75 ms
+network), so the batch is doing roughly five images in the time one would take alone.
+
+Crop, shape mask and write together add about **0.9 ms per image**: detection alone runs the
+folder in 9.71 s against 10.87 s with cropping.
+
+### Two things worth acting on
+
+**16 workers now beat 32, which inverts the earlier measurement.** Experiment 60 found 32
+workers at 7.85 s against 16 at 8.9 s and made rayon's default the deliberate choice; the note
+recording it warned that "this number moved as soon as the work around it changed". It has.
+16 wins both alternated pairs by 5-8%, and the regression is **not** the atomic write added in
+2.0 -- with no crops written at all, 16 workers take 8.79 s against 32 at 9.73 s, so it is in
+the detection path. The work that changed there is the detector itself: YuNet's preprocessing
+and inference are gone, replaced by SCRFD's CPU resize and an ONNX Runtime session with four
+intra-op threads per run.
+
+The default is left alone rather than capped at 16 on the strength of a 5-8% difference on one
+machine: `RAYON_NUM_THREADS` already overrides it, "physical cores" counts P and E cores alike,
+and the comment in `fcs-cli/src/main.rs` explains why automatic capping was rejected before.
+But the ranking in that comment and in the README is now wrong, and both say so.
+
+**5.4x on 16 physical cores is 34% parallel efficiency.** Something serialises and this
+measurement does not say what. Ruled out: file writes (above), and ONNX Runtime's intra-op
+threads (experiment 69 measured the folder at 10.32 s against 10.18 s for 1 against 4 threads --
+no difference, and my 10.87 s matches). Not ruled out, in rough order of suspicion: JPEG decode
+and resize are memory-bandwidth bound and 1,239 x 9.8 MP is a lot of pixel traffic; the single
+shared `fcs_ort::Session` may lock internally despite documenting concurrent `Run` as safe; and
+the page cache may not be holding all ~1.2 GB of source images between runs.
+
 ## What this settled
 
 - **`gpu.inference` deleted** rather than made to work. It had been inert since SCRFD landed;
@@ -88,9 +133,7 @@ anyway.
 
 ## Not measured
 
-- Batch throughput. Every figure here is one image at a time; the CLI runs rayon over a folder
-  and shares one ONNX Runtime session, so per-image cost under contention is a different
-  number.
+- **Why** batch parallelism saturates at 5.4x; the section above lists what is ruled out.
 - Whether the decode/NMS gap above is really the layout difference.
 - The WGSL engine on anything but a 4090. It is the fallback path, so the machines that matter
   most for it are the ones without ONNX Runtime, and none were measured.

@@ -164,24 +164,21 @@ fn main() -> Result<()> {
         eye_refiner: &eye_refiner,
     };
 
-    // ponytail: Rayon's default pool, one worker per logical processor, and on this machine
-    // that is now the fastest setting rather than an overshoot to be capped.
+    // ponytail: Rayon's default pool, one worker per logical processor. No pool is built here,
+    // so `RAYON_NUM_THREADS` overrides it.
     //
-    // Two earlier measurements said the opposite -- 968 images flat from 8 to 16 workers and
-    // 14.0 s at 32, then 1239 images at 18.55 s against 17.05 s at 16, about 8% (experiment
-    // 63). Both were taken when each image cost far more CPU. After the crop, resize and
-    // quality-metric changes the batch is about 2.4x faster and the ranking inverted
-    // (experiment 60), warm and order alternated:
+    // **The ranking has inverted since this was last measured, and the default is no longer the
+    // fastest setting on this machine.** Experiment 60 found 32 workers at 7.85 s against 16 at
+    // 8.9 s over the 1239-image folder, and that is why the default was kept. Re-measured on
+    // 2026-09-21 with SCRFD in place of YuNet, alternated: 16 workers 10.14 / 10.55 s against
+    // 32 at 10.99 / 11.05 s, so 16 now wins by 5-8%. It is not the atomic write added in 2.0 --
+    // with nothing written at all, 16 takes 8.79 s against 32 at 9.73 s -- so the change is in
+    // the detection path, which is the part that was replaced.
     //
-    //     8 workers  10.9-14.7 s | 12  ~12.1 s | 16  8.9 s | 32  7.85 s | 48  8.0 s | 64  8.2 s
-    //
-    // The default wins all four alternated pairs against 16. Threads now spend most of their
-    // time blocked on the GPU and on file reads -- 112 s of CPU across a 7.85 s run on 32
-    // threads is about 45% busy each -- so more threads than cores is what keeps the cores fed.
-    //
-    // `RAYON_NUM_THREADS` overrides this, so no pool is built here. Note for anyone tempted to
-    // cap it automatically: this number moved as soon as the work around it changed, and
-    // "physical cores" counts P and E cores alike. See "Batch worker threads" in README.md.
+    // Still not capped automatically, for the reason that held before: 5-8% on one machine is
+    // thin, "physical cores" counts P and E cores alike, and this number has now moved twice as
+    // soon as the work around it changed. See docs/ENGINE_SPEED.md and "Batch worker threads" in
+    // README.md, both of which carry the current figures.
     if let Some(watch_dir) = args.watch.as_ref() {
         return watch::run(
             watch_dir,

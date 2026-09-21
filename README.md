@@ -77,21 +77,27 @@ Measured on 968 images (Ryzen 9 7950X, 16 cores / 32 threads, RTX 4090):
 Throughput was flat from 8 to 16 and fell away above the physical core count,
 so Rayon's default of 32 cost about 17% on this machine.
 
-**That is no longer true, and the default is now the right setting.** The batch
-path has since got about 2.4x faster, and the balance went with it. Re-measured
-on 1239 images, warm, order alternated, after the crop, resize and quality-metric
-changes (experiment 60):
+That stopped being true once the batch path got about 2.4x faster, and
+experiment 60 measured the default winning every alternated pair against 16 by
+about 12% (32 threads at 7.85 s against 8.9 s).
 
-| Rayon threads | 8 | 12 | 16 | 32 (default) | 48 | 64 |
-|---|---|---|---|---|---|---|
-| Wall clock | 10.9-14.7 s | ~12.1 s | 8.9 s | **7.85 s** | 8.0 s | 8.2 s |
+**It has now inverted a second time.** Re-measured on 2026-09-21 with SCRFD in
+place of YuNet, same 1239 images, warm, order alternated:
 
-The default wins every alternated pair against 16, by about 12%, and going above
-it is flat to slightly worse. The reversal is not mysterious: the CPU work per
-image shrank, so threads now spend more of their time blocked on the GPU and on
-file reads — about 112 s of CPU across a 7.85 s run on 32 threads is roughly 45%
-busy each — and you need more threads than cores to keep the cores fed. Capping
-at 16 now leaves the machine idle instead of saving it from contention.
+| Rayon threads | 1 | 4 | 8 | 16 | 32 (default) |
+|---|---|---|---|---|---|
+| Wall clock | 54.8 s | 17.0 s | 11.5 s | **10.14 / 10.55 s** | 10.87–11.05 s |
+
+16 now wins both alternated pairs by 5–8%. It is not the atomic write added in
+2.0: with nothing written at all, 16 threads take 8.79 s against 32 at 9.73 s,
+so the change is in the detection path — which is precisely the part that was
+replaced.
+
+Two measurements in a row have reversed this ranking as soon as the work around
+it changed, which is the real lesson: treat any number here as describing the
+build it was taken on. The wider finding is that batch scaling is poor whichever
+you pick — 5.4x on 16 physical cores, about 34% efficiency — and
+`docs/ENGINE_SPEED.md` records what has been ruled out as the cause.
 
 `RAYON_NUM_THREADS` still overrides the default if a particular machine wants
 something else. No automatic cap is applied, and the case for one is weaker than
