@@ -62,22 +62,34 @@ macro_rules! skip_without_gpu {
     }};
 }
 
-/// A GPU context, or `None` on a machine without an adapter.
+/// One GPU context for this whole test binary, or `None` without a usable adapter.
 ///
-/// Kept in one place so both GPU tests answer "is there an adapter" the same way, and so the
-/// reason is reported rather than swallowed.
+/// **Cached, and that is not an optimisation.** A test that opens its own device costs one
+/// device per test, `cargo test` starts them together, and cargo-mutants multiplies that by its
+/// job count -- which is how the NVIDIA driver wedges (experiment 94; it once produced 86
+/// meaningless timeouts in four hours). `fcs_core::gpu::test_context` does the same thing for
+/// the in-crate tests but is `cfg(test)` and so unreachable from here.
+///
+/// Also keeps both tests answering "is there an adapter" the same way, and reports the reason
+/// rather than swallowing it.
 fn gpu_context() -> Option<std::sync::Arc<GpuContext>> {
-    match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
-        GpuAvailability::Available(context) => Some(context),
-        GpuAvailability::Disabled { reason } => {
-            eprintln!("no GPU: disabled ({reason})");
-            None
-        }
-        GpuAvailability::Unavailable { error } => {
-            eprintln!("no GPU: unavailable ({error})");
-            None
-        }
-    }
+    static CONTEXT: std::sync::OnceLock<Option<std::sync::Arc<GpuContext>>> =
+        std::sync::OnceLock::new();
+    CONTEXT
+        .get_or_init(
+            || match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
+                GpuAvailability::Available(context) => Some(context),
+                GpuAvailability::Disabled { reason } => {
+                    eprintln!("no GPU: disabled ({reason})");
+                    None
+                }
+                GpuAvailability::Unavailable { error } => {
+                    eprintln!("no GPU: unavailable ({error})");
+                    None
+                }
+            },
+        )
+        .clone()
 }
 
 fn model_path() -> Option<std::path::PathBuf> {
