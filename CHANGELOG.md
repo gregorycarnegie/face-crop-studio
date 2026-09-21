@@ -7,28 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [2.0.0] - 2026-09-21
 
-- **Batch throughput measured, and the worker-count guidance corrected.** Every figure in
-  `docs/ENGINE_SPEED.md` was one image at a time; the real workload is a folder through rayon.
-  On the 1,239-image reference folder (9.8 MP average), detect + crop + write: **114 images/s,
-  8.8 ms each** at the default worker count, against 44.25 ms serial. Cropping, masking and
-  writing account for about 0.9 ms of that; the rest is detection.
+The licence question is closed: nothing shipped is trained on non-commercial data. YuNet is
+gone, and with it the fallback detector whose WIDER FACE weights made a commercial application
+depend on a model released for "non-commercial academic research only". SCRFD -- trained here on
+80,000 CC BY 2.0 Open Images photographs -- now runs on all three engines, so there is no
+machine left that needs a second detector.
 
-  Two findings worth acting on:
-
-  - **16 workers now beat 32, inverting experiment 60.** That measurement made rayon's default
-    the deliberate choice (32 at 7.85 s against 16 at 8.9 s) while warning the number "moved as
-    soon as the work around it changed". It moved again: 16 wins both alternated pairs by 5-8%.
-    It is **not** the atomic write added in 2.0 -- with nothing written at all, 16 takes 8.79 s
-    against 32 at 9.73 s -- so the change is in the detection path, the part that was replaced.
-    The default is left alone (`RAYON_NUM_THREADS` overrides it) because 5-8% on one machine is
-    thin and this ranking has now reversed twice, but the stale numbers in `README.md` and
-    `fcs-cli/src/main.rs` are corrected.
-  - **Parallel efficiency is only 34%** -- 5.4x on 16 physical cores. Ruled out as the cause:
-    file writes, and ONNX Runtime's intra-op threads (experiment 69 measured no difference).
-    Not ruled out and recorded as open: memory bandwidth in decode and resize, internal locking
-    in the shared `fcs_ort::Session`, and page-cache misses on ~1.2 GB of sources.
+The major version is for the API and output changes that came with clearing that out, listed
+below. Two other things are worth knowing before upgrading: **a failed export used to be
+reported as a success, and a failed write used to destroy the file it was replacing** -- both
+fixed, across all six write paths. And **six settings turned out to do nothing**; the ones that
+could be made meaningful were wired up, the rest are deleted, and a test now requires every
+remaining setting to change something observable.
 
 ### Added
 
@@ -43,66 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mapping is reported as `enhance.brightness` wired to nothing.
 
   It found one on its first run. See below.
-
-### Removed
-
-- **`enhance.enabled`.** *(breaking settings field)* Found by the test above. The GUI enhanced
-  unconditionally and the CLI gated on its own `--enhance` flag, so the settings field -- default
-  `false`, and present in every `gui_settings.json` -- was read by **nobody**. Deleted rather
-  than honoured: the per-feature controls already express "no enhancement" by sitting at their
-  neutral values, and a master switch with no UI, reachable only by editing JSON, would silently
-  disable everything.
-- **`crop.webp_quality` and `--webp-quality`.** *(breaking)* It reached `OutputOptions` and died
-  there: `encode_webp` calls `WebPEncoder::new_lossless`, and `image` offers no lossy WebP at
-  all. `writer.rs` had documented this as "currently has no effect" for long enough that the
-  caveat outlived the setting. Honouring it needs a different encoder, not a config field.
-
-  Existing settings files keep loading -- serde ignores both removed keys.
-
-### Fixed
-
-- **The GUI never used the WGSL enhancement shaders, and the CLI never aimed red-eye removal.**
-  Both front-ends enhance crops and each had grown half the feature:
-
-  | | GPU shaders | Eye positions for red-eye |
-  |---|---|---|
-  | CLI (1.x) | yes | **no** -- hard-coded `None` |
-  | GUI (1.x) | **no** -- called the CPU pipeline | yes |
-
-  Neither was a decision. The GUI held a `GpuContext` the whole time and used it for a status
-  label; the CLI could not pass eye positions because the mapping from landmarks to crop
-  coordinates lived inside the GUI. `fcs_utils::EnhancementRuntime` is now the one answer for
-  both, and `fcs_core::eye_positions` is reachable from either. A test asserts that passing the
-  eye positions changes the result, so the argument cannot quietly become decoration again.
-
-  This is the divergence predicted by "five copies of one pipeline": the shared geometry was in
-  `fcs-core` while the step after it was reimplemented per front-end, so the two drifted in
-  opposite directions without either looking wrong on its own.
-
-### Changed
-
-- **Landmarks are `Option<Landmark>` rather than an all-zero sentinel.** *(breaking)* The
-  shipped detector predicts only the two eyes -- nose and mouth were weighted to zero in
-  training -- and the other three were reported as `(0, 0)`. Every consumer then had to
-  re-derive what that meant, which they did in three different spellings across four call
-  sites, and the one that got it wrong was the one that mattered: `face_cropper` treated a
-  landmark at exactly the origin as a coordinate, so a missing eye beside a real one rotated
-  the crop by the angle from `(0, 0)` to the other eye -- 45 degrees, from a value that meant
-  "nothing was predicted". A test asserted that behaviour as correct ("one populated landmark
-  is enough to align"); it now asserts the opposite, with the reasoning written down.
-
-  `Option` makes the question unavoidable rather than optional, and the four hand-rolled checks
-  collapse into `iter().flatten()` or a two-`Some` pattern. It also makes a real landmark at
-  the origin expressible, which the sentinel could not.
-
-- **`--json` writes `null` for an absent landmark, not `[0, 0]`.** *(breaking output format)*
-  A consumer had no way to tell the sentinel from a real prediction at the origin. Now:
-
-  ```json
-  "landmarks": [[957.67, 719.57], [1227.01, 721.86], null, null, null]
-  ```
-
-### Added
 
 - **An independent oracle, back in CI.** Until now every test compared this project against
   itself: three engines agreeing to 1e-05, golden crop regions, a CLI snapshot. That proves the
@@ -143,35 +75,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `examples/scrfd_parity.rs`. The example is gone rather than duplicated: two copies of a
   comparison is how the two sides drift apart.
 
-### Fixed
+- **`docs/ENGINE_SPEED.md` and `examples/engine_speed.rs`:** what a detection costs, per
+  engine, measured honestly. The GPU figure had never been: wgpu queues dispatches and
+  returns, so the old timings stopped the clock before the work happened. Recording alone
+  reads as a 22% GPU win; waiting for the readback that `detect` must do anyway makes it 3%
+  slower. Also: preprocessing (5.18 ms) is larger than the network (3.67 ms) on a 36 MP RAW,
+  and the built-in CPU graph is 6.3x slower than ONNX Runtime -- a usable floor, not a fast
+  path.
+- `scrfd::preprocess` and `scrfd::Letterbox` are public, so the letterbox can be measured and
+  driven without going through `detect`.
 
-- **A failed export was reported as a success.** `write_bytes` finished with
-  `writer.flush().ok()`, discarding the result. `BufWriter::write_all` only fills a buffer, so
-  for anything past the buffer size a full disk or a failing drive reports itself at `flush` --
-  and that error was thrown away. The CLI printed `crops_saved=1` and the GUI showed success for
-  a crop that had not been written.
-- **A failed write destroyed the file it was replacing.** `File::create` and `fs::write`
-  truncate the destination before the new bytes arrive, so a write that failed part-way left a
-  truncated or empty file where good data had been -- the previous export lost to the attempt to
-  replace it. Writes now go to a temporary file beside the destination and `fs::rename` over it
-  only once every byte is written, through one shared `fcs_utils::write_atomically`. This was
-  not one call site but **six**: crops, the detection JSON, annotated images, the GUI's queue
-  list and batch report, and the settings file -- where a half-written config then fails to
-  parse and silently reverts every preference to its default. The replacement is atomic;
-  durability across a power loss is not promised, and the docs say so rather than implying it.
-- **`--annotate` wrote a 0-byte file for every `.jpg` input.** Found while fixing the above, and
-  demonstrated with the old code: annotation is drawn in RGBA, JPEG has no alpha channel, so
-  encoding refused and `image::save` -- having already created the file -- left nothing but a
-  truncated stub that looked like a successful annotation. Alpha is now dropped for JPEG, and a
-  source extension with no encoder (a RAW, say) fails with a reason instead of silently. The
-  existing tests missed this by only ever using `.png`; both cases are now covered.
-- **`--watch` with `--output-dir` pointed at the watched directory fed on itself.** Every crop
-  landed as a new filesystem event, was detected, and produced another crop, forever. It is now
-  refused before the watcher starts, naming the offending flag and the path as the user typed it.
-  An output directory *inside* the watched one is still allowed, and deliberately: the watcher is
-  non-recursive, so a subdirectory produces no events and cannot loop.
+### Changed
+
+- **Batch throughput measured, and the worker-count guidance corrected.** Every figure in
+  `docs/ENGINE_SPEED.md` was one image at a time; the real workload is a folder through rayon.
+  On the 1,239-image reference folder (9.8 MP average), detect + crop + write: **114 images/s,
+  8.8 ms each** at the default worker count, against 44.25 ms serial. Cropping, masking and
+  writing account for about 0.9 ms of that; the rest is detection.
+
+  Two findings worth acting on:
+
+  - **16 workers now beat 32, inverting experiment 60.** That measurement made rayon's default
+    the deliberate choice (32 at 7.85 s against 16 at 8.9 s) while warning the number "moved as
+    soon as the work around it changed". It moved again: 16 wins both alternated pairs by 5-8%.
+    It is **not** the atomic write added in 2.0 -- with nothing written at all, 16 takes 8.79 s
+    against 32 at 9.73 s -- so the change is in the detection path, the part that was replaced.
+    The default is left alone (`RAYON_NUM_THREADS` overrides it) because 5-8% on one machine is
+    thin and this ranking has now reversed twice, but the stale numbers in `README.md` and
+    `fcs-cli/src/main.rs` are corrected.
+  - **Parallel efficiency is only 34%** -- 5.4x on 16 physical cores. Ruled out as the cause:
+    file writes, and ONNX Runtime's intra-op threads (experiment 69 measured no difference).
+    Not ruled out and recorded as open: memory bandwidth in decode and resize, internal locking
+    in the shared `fcs_ort::Session`, and page-cache misses on ~1.2 GB of sources.
+
+- **Landmarks are `Option<Landmark>` rather than an all-zero sentinel.** *(breaking)* The
+  shipped detector predicts only the two eyes -- nose and mouth were weighted to zero in
+  training -- and the other three were reported as `(0, 0)`. Every consumer then had to
+  re-derive what that meant, which they did in three different spellings across four call
+  sites, and the one that got it wrong was the one that mattered: `face_cropper` treated a
+  landmark at exactly the origin as a coordinate, so a missing eye beside a real one rotated
+  the crop by the angle from `(0, 0)` to the other eye -- 45 degrees, from a value that meant
+  "nothing was predicted". A test asserted that behaviour as correct ("one populated landmark
+  is enough to align"); it now asserts the opposite, with the reasoning written down.
+
+  `Option` makes the question unavoidable rather than optional, and the four hand-rolled checks
+  collapse into `iter().flatten()` or a two-`Some` pattern. It also makes a real landmark at
+  the origin expressible, which the sentinel could not.
+
+- **`--json` writes `null` for an absent landmark, not `[0, 0]`.** *(breaking output format)*
+  A consumer had no way to tell the sentinel from a real prediction at the origin. Now:
+
+  ```json
+  "landmarks": [[957.67, 719.57], [1227.01, 721.86], null, null, null]
+  ```
+
+- **Detector parity is now checked against a weaker oracle, and this is a real
+  loss.** `tract` interpreted the ONNX file rather than re-encoding the topology
+  by hand, which is what made it able to catch a mistake both of our own engines
+  shared. It was dev-only and it left with YuNet. `fcs-core/tests/scrfd_parity.rs`
+  replaces the five deleted parity tests: it checks the built-in CPU graph and the
+  WGSL engine against ONNX Runtime on the model that ships (1.24e-05 and 1.10e-05),
+  and re-adds the concurrency guard that caught pooled GPU buffers escaping between
+  rayon workers -- comparing 252,000 head values across 8 concurrent runs, because
+  a synthetic input finds no faces and comparing detections would compare two empty
+  lists. Everything now compares this project against itself.
+- CI and the release workflow fetch both models as release assets and verify their
+  digests; `verify-models` now fails when given no digests at all, rather than
+  passing having checked nothing. CI gains the detector model, which it never had,
+  so the tests that need it stop skipping under `FCS_STRICT_TESTS=1`.
+- `FCS_FIXTURE_ROOT` and `FCS_MODEL_PATH` replace `YUNET_FIXTURE_ROOT` and
+  `YUNET_MODEL_PATH`.
+- `docs/PERFORMANCE.md`, `docs/gpu_research.md`, `docs/parity_report.md` and
+  `docs/ONNX_RUNTIME_OPTIONS.md` measure or design around YuNet and are marked
+  historical rather than rewritten. The deleted implementation and experiments are
+  preserved in the `face-crop-studio-yunet-archive` fork.
 
 ### Removed
+
+- **`enhance.enabled`.** *(breaking settings field)* Found by the test above. The GUI enhanced
+  unconditionally and the CLI gated on its own `--enhance` flag, so the settings field -- default
+  `false`, and present in every `gui_settings.json` -- was read by **nobody**. Deleted rather
+  than honoured: the per-feature controls already express "no enhancement" by sitting at their
+  neutral values, and a master switch with no UI, reachable only by editing JSON, would silently
+  disable everything.
+- **`crop.webp_quality` and `--webp-quality`.** *(breaking)* It reached `OutputOptions` and died
+  there: `encode_webp` calls `WebPEncoder::new_lossless`, and `image` offers no lossy WebP at
+  all. `writer.rs` had documented this as "currently has no effect" for long enough that the
+  caveat outlived the setting. Honouring it needs a different encoder, not a config field.
+
+  Existing settings files keep loading -- serde ignores both removed keys.
 
 - **The preprocessing pipeline (`fcs-core::preprocess`), and the settings that fed it.**
   Nothing on the detection path had used it since SCRFD landed: the detector letterboxes
@@ -199,32 +191,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GUI radio triggered a full detector rebuild for a value nothing read. Re-adding it needs the
   measurement first. Existing settings files keep loading: serde ignores the removed keys, and
   a test pins that.
-
-### Fixed
-
-- **Turning off "GPU preprocessing" disabled GPU *enhancement* in the GUI.** The context was
-  obtained as a side effect of building a `WgpuPreprocessor`, and both the "disabled" branch
-  and a preprocessor that failed to build returned `None` for the context along with itself.
-  The GUI now takes the context directly and reports the adapter from it.
-- **The GUI compiled two preprocessing shader pipelines at every startup and dropped the
-  result.** On a machine with ONNX Runtime -- the common case, and every released package --
-  those were the only compute pipelines built during startup, so this removes shader
-  compilation from launch entirely. The saving is not measured; experiment 81 put all five
-  pipelines of the old `build_detector` at 150 ms of an 890 ms launch.
-
-### Added
-
-- **`docs/ENGINE_SPEED.md` and `examples/engine_speed.rs`:** what a detection costs, per
-  engine, measured honestly. The GPU figure had never been: wgpu queues dispatches and
-  returns, so the old timings stopped the clock before the work happened. Recording alone
-  reads as a 22% GPU win; waiting for the readback that `detect` must do anyway makes it 3%
-  slower. Also: preprocessing (5.18 ms) is larger than the network (3.67 ms) on a 36 MP RAW,
-  and the built-in CPU graph is 6.3x slower than ONNX Runtime -- a usable floor, not a fast
-  path.
-- `scrfd::preprocess` and `scrfd::Letterbox` are public, so the letterbox can be measured and
-  driven without going through `detect`.
-
-### Removed
 
 - **YuNet is gone, and with it the licence question this project set out to
   remove.** It was the fallback detector for machines without ONNX Runtime, so
@@ -255,6 +221,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The GUI never used the WGSL enhancement shaders, and the CLI never aimed red-eye removal.**
+  Both front-ends enhance crops and each had grown half the feature:
+
+  | | GPU shaders | Eye positions for red-eye |
+  |---|---|---|
+  | CLI (1.x) | yes | **no** -- hard-coded `None` |
+  | GUI (1.x) | **no** -- called the CPU pipeline | yes |
+
+  Neither was a decision. The GUI held a `GpuContext` the whole time and used it for a status
+  label; the CLI could not pass eye positions because the mapping from landmarks to crop
+  coordinates lived inside the GUI. `fcs_utils::EnhancementRuntime` is now the one answer for
+  both, and `fcs_core::eye_positions` is reachable from either. A test asserts that passing the
+  eye positions changes the result, so the argument cannot quietly become decoration again.
+
+  This is the divergence predicted by "five copies of one pipeline": the shared geometry was in
+  `fcs-core` while the step after it was reimplemented per front-end, so the two drifted in
+  opposite directions without either looking wrong on its own.
+
+- **A failed export was reported as a success.** `write_bytes` finished with
+  `writer.flush().ok()`, discarding the result. `BufWriter::write_all` only fills a buffer, so
+  for anything past the buffer size a full disk or a failing drive reports itself at `flush` --
+  and that error was thrown away. The CLI printed `crops_saved=1` and the GUI showed success for
+  a crop that had not been written.
+- **A failed write destroyed the file it was replacing.** `File::create` and `fs::write`
+  truncate the destination before the new bytes arrive, so a write that failed part-way left a
+  truncated or empty file where good data had been -- the previous export lost to the attempt to
+  replace it. Writes now go to a temporary file beside the destination and `fs::rename` over it
+  only once every byte is written, through one shared `fcs_utils::write_atomically`. This was
+  not one call site but **six**: crops, the detection JSON, annotated images, the GUI's queue
+  list and batch report, and the settings file -- where a half-written config then fails to
+  parse and silently reverts every preference to its default. The replacement is atomic;
+  durability across a power loss is not promised, and the docs say so rather than implying it.
+- **`--annotate` wrote a 0-byte file for every `.jpg` input.** Found while fixing the above, and
+  demonstrated with the old code: annotation is drawn in RGBA, JPEG has no alpha channel, so
+  encoding refused and `image::save` -- having already created the file -- left nothing but a
+  truncated stub that looked like a successful annotation. Alpha is now dropped for JPEG, and a
+  source extension with no encoder (a RAW, say) fails with a reason instead of silently. The
+  existing tests missed this by only ever using `.png`; both cases are now covered.
+- **`--watch` with `--output-dir` pointed at the watched directory fed on itself.** Every crop
+  landed as a new filesystem event, was detected, and produced another crop, forever. It is now
+  refused before the watcher starts, naming the offending flag and the path as the user typed it.
+  An output directory *inside* the watched one is still allowed, and deliberately: the watcher is
+  non-recursive, so a subdirectory produces no events and cannot loop.
+
+- **Turning off "GPU preprocessing" disabled GPU *enhancement* in the GUI.** The context was
+  obtained as a side effect of building a `WgpuPreprocessor`, and both the "disabled" branch
+  and a preprocessor that failed to build returned `None` for the context along with itself.
+  The GUI now takes the context directly and reports the adapter from it.
+- **The GUI compiled two preprocessing shader pipelines at every startup and dropped the
+  result.** On a machine with ONNX Runtime -- the common case, and every released package --
+  those were the only compute pipelines built during startup, so this removes shader
+  compilation from launch entirely. The saving is not measured; experiment 81 put all five
+  pipelines of the old `build_detector` at 150 ms of an 890 ms launch.
+
 - **The NMS threshold and top-K settings do something again.** Since the detector
   changed, `FaceDetector` read `confidence` from settings but held the other two
   at compile-time constants, so the GUI's NMS slider and Top-K control -- and
@@ -273,29 +293,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asserted 12 outputs; it now loads the shipped detector and asserts 9. This is
   the test that catches a wrong offset in the hand-maintained `OrtApi` table, so
   it silently skipping would have been the worst of the three.
-
-### Changed
-
-- **Detector parity is now checked against a weaker oracle, and this is a real
-  loss.** `tract` interpreted the ONNX file rather than re-encoding the topology
-  by hand, which is what made it able to catch a mistake both of our own engines
-  shared. It was dev-only and it left with YuNet. `fcs-core/tests/scrfd_parity.rs`
-  replaces the five deleted parity tests: it checks the built-in CPU graph and the
-  WGSL engine against ONNX Runtime on the model that ships (1.24e-05 and 1.10e-05),
-  and re-adds the concurrency guard that caught pooled GPU buffers escaping between
-  rayon workers -- comparing 252,000 head values across 8 concurrent runs, because
-  a synthetic input finds no faces and comparing detections would compare two empty
-  lists. Everything now compares this project against itself.
-- CI and the release workflow fetch both models as release assets and verify their
-  digests; `verify-models` now fails when given no digests at all, rather than
-  passing having checked nothing. CI gains the detector model, which it never had,
-  so the tests that need it stop skipping under `FCS_STRICT_TESTS=1`.
-- `FCS_FIXTURE_ROOT` and `FCS_MODEL_PATH` replace `YUNET_FIXTURE_ROOT` and
-  `YUNET_MODEL_PATH`.
-- `docs/PERFORMANCE.md`, `docs/gpu_research.md`, `docs/parity_report.md` and
-  `docs/ONNX_RUNTIME_OPTIONS.md` measure or design around YuNet and are marked
-  historical rather than rewritten. The deleted implementation and experiments are
-  preserved in the `face-crop-studio-yunet-archive` fork.
 
 ## [1.8.0] - 2026-09-20
 
@@ -2148,7 +2145,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0...v2.0.0
 [1.8.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.5.4...v1.6.0
