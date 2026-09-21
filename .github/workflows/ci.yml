@@ -39,6 +39,33 @@ jobs:
   # The test legs run with FCS_STRICT_TESTS=1, which turns "model missing, skipping" into a
   # failure, so a leg without these cannot quietly pass having checked nothing --
   # tests/scrfd_parity.rs is the one that would.
+  # The installer scripts only ever execute inside a release build, so a typo in one is
+  # invisible until a tag is pushed -- and then it has already published a half-built release.
+  # That happened with v2.0.0: an edit left an orphaned `exit 1` in build_macos.sh, which
+  # exited in 0.1 s with no output after Linux and Windows had uploaded their artifacts.
+  # `bash -n` catches exactly that, in a second, on every push.
+  installers:
+    name: Check Installer Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every shell script
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r script; do
+            echo "checking $script"
+            bash -n "$script"
+            found=$((found + 1))
+          done < <(find installer tools -name '*.sh' -type f | sort)
+          # A silent zero would mean the glob stopped matching and this checked nothing.
+          if [ "$found" -eq 0 ]; then
+            echo "no shell scripts found -- this check is not checking anything" >&2
+            exit 1
+          fi
+          echo "$found script(s) parsed"
+
   models:
     name: Prepare Models
     runs-on: ubuntu-latest

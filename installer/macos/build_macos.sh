@@ -23,10 +23,11 @@ APP_NAME="Face Crop Studio"
 BINARY_NAME="fcs-gui"
 BUNDLE_ID="dev.facecropstudio.app"
 # Better eye points for levelling crops. Required rather than optional, for the same
-# reason as the detector: a bundle without it levels by YuNet's landmarks, silently.
+# reason as the detector: a bundle without it levels by the detector's own landmarks,
+# silently.
 REFINER_FILE="models/eye_refiner.onnx"
-# The detector itself; without it the package falls back to YuNet, which is a
-# silent downgrade rather than a failure, so it is required here too.
+# The detector. Required: there is no second detector to fall back to, so a bundle
+# without it cannot detect anything at all.
 DETECTOR_FILE="models/scrfd80k_500m_640.onnx"
 SVG_SOURCE="fcs-gui/assets/app_logo.svg"
 
@@ -37,8 +38,6 @@ DMG_PATH="$DIST_DIR/face-crop-studio-${VERSION}-${TARGET_TRIPLE}.dmg"
 BIN_SRC="target/${TARGET_TRIPLE}/release/${BINARY_NAME}"
 if [ ! -f "$BIN_SRC" ]; then
     echo "error: release binary missing at $BIN_SRC" >&2
-    exit 1
-fi
     exit 1
 fi
 if [ ! -f "$REFINER_FILE" ]; then

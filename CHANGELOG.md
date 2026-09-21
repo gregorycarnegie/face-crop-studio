@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The macOS release build exited immediately.** Removing YuNet from
+  `installer/macos/build_macos.sh` left an orphaned `exit 1` and `fi` behind the binary-presence
+  check, so the script exited 1 in 0.1 seconds with no output. It only shows up in a release
+  build, and by then Linux and Windows had already uploaded their artifacts -- a half-built
+  v2.0.0 with seven of eight platforms.
+
+### Added
+
+- **CI parses every installer script** (`bash -n`). These run only inside a release build, so a
+  typo in one is invisible until a tag is pushed. The new check takes a second, fails if it finds
+  no scripts to check, and was verified against the exact bug above.
+
 ## [2.0.0] - 2026-09-21
 
 The licence question is closed: nothing shipped is trained on non-commercial data. YuNet is
