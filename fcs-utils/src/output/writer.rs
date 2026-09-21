@@ -23,8 +23,9 @@ use std::{fs, path::Path};
 /// otherwise `options.format` is used, with PNG as the fallback.
 ///
 /// Source EXIF copying supports PNG-to-PNG and JPEG-to-JPEG. Custom metadata
-/// is embedded for PNG and JPEG only. WebP encoding is always lossless;
-/// `options.webp_quality` currently has no effect.
+/// is embedded for PNG and JPEG only. WebP encoding is always lossless -- there was a
+/// `webp_quality` setting for years, and it never reached the encoder, which `image` only
+/// offers losslessly. Honouring it needs a different encoder, not a config field.
 ///
 /// # Errors
 ///

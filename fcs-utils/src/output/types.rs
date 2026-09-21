@@ -124,8 +124,6 @@ pub struct OutputOptions {
     pub jpeg_quality: u8,
     /// Lossless PNG compression strategy.
     pub png_compression: PngCompression,
-    /// Stored WebP quality preference (0..=100); currently unused by the lossless encoder.
-    pub webp_quality: u8,
     /// Source EXIF and custom metadata policy; currently supported for PNG and JPEG output.
     pub metadata: MetadataSettings,
 }
@@ -138,7 +136,6 @@ impl OutputOptions {
             auto_detect: settings.auto_detect_format,
             jpeg_quality: settings.jpeg_quality.clamp(1, 100),
             png_compression: settings.png_compression,
-            webp_quality: settings.webp_quality.min(100),
             metadata: settings.metadata.clone(),
         }
     }

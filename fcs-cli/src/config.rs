@@ -119,9 +119,6 @@ pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
     if let Some(ref compression) = args.png_compression {
         settings.crop.png_compression = PngCompression::parse(compression);
     }
-    if let Some(webp) = args.webp_quality {
-        settings.crop.webp_quality = webp;
-    }
     if let Some(auto) = args.auto_detect_format {
         settings.crop.auto_detect_format = auto;
     }
@@ -493,8 +490,6 @@ mod tests {
             "JPG",
             "--png-compression",
             "best",
-            "--webp-quality",
-            "77",
             "--auto-detect-format=true",
             "--auto-select-best=true",
             "--skip-no-high-quality=true",
@@ -517,7 +512,6 @@ mod tests {
         assert_eq!(settings.crop.fill_color.red, 0x11);
         assert_eq!(settings.crop.output_format, ImageFormatHint::Jpeg);
         assert_eq!(settings.crop.png_compression, PngCompression::Best);
-        assert_eq!(settings.crop.webp_quality, 77);
         assert!(settings.crop.auto_detect_format);
         assert!(settings.crop.quality_rules.auto_select_best_face);
         assert!(settings.crop.quality_rules.auto_skip_no_high_quality);

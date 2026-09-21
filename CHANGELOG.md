@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A test that every setting changes something** (`fcs-core/tests/settings_have_effect.rs`).
+  Six settings in a row had turned out to do nothing, each found by accident while deleting
+  adjacent code. That is one missing invariant, not six bugs, and this is the invariant: flip one
+  field, require an observable difference from the pipeline it feeds.
+
+  Reachability is deliberately *not* what it checks. A grep finds a reader for all 53 fields, and
+  found one for `nms_threshold` while it did nothing -- read into `FaceDetector`'s own field and
+  stopped there. Verified to fail, too: dropping `brightness` on its way into the enhancement
+  mapping is reported as `enhance.brightness` wired to nothing.
+
+  It found one on its first run. See below.
+
+### Removed
+
+- **`enhance.enabled`.** *(breaking settings field)* Found by the test above. The GUI enhanced
+  unconditionally and the CLI gated on its own `--enhance` flag, so the settings field -- default
+  `false`, and present in every `gui_settings.json` -- was read by **nobody**. Deleted rather
+  than honoured: the per-feature controls already express "no enhancement" by sitting at their
+  neutral values, and a master switch with no UI, reachable only by editing JSON, would silently
+  disable everything.
+- **`crop.webp_quality` and `--webp-quality`.** *(breaking)* It reached `OutputOptions` and died
+  there: `encode_webp` calls `WebPEncoder::new_lossless`, and `image` offers no lossy WebP at
+  all. `writer.rs` had documented this as "currently has no effect" for long enough that the
+  caveat outlived the setting. Honouring it needs a different encoder, not a config field.
+
+  Existing settings files keep loading -- serde ignores both removed keys.
+
 ### Fixed
 
 - **The GUI never used the WGSL enhancement shaders, and the CLI never aimed red-eye removal.**

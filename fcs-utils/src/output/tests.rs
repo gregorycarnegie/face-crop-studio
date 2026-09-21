@@ -79,7 +79,6 @@ fn output_options_from_crop_settings_clamps_values() {
         output_format: ImageFormatHint::Jpeg,
         jpeg_quality: 0,
         png_compression: PngCompression::Best,
-        webp_quality: 200,
         auto_detect_format: false,
         ..CropSettings::default()
     };
@@ -91,7 +90,6 @@ fn output_options_from_crop_settings_clamps_values() {
     assert!(!options.auto_detect);
     assert_eq!(options.jpeg_quality, 1);
     assert_eq!(options.png_compression, PngCompression::Best);
-    assert_eq!(options.webp_quality, 100);
     assert_eq!(options.metadata.mode, MetadataMode::Custom);
 }
 
@@ -102,7 +100,6 @@ fn determine_format_prefers_extension_when_auto_detect_is_enabled() {
         auto_detect: true,
         jpeg_quality: 90,
         png_compression: PngCompression::Default,
-        webp_quality: 90,
         metadata: MetadataSettings::default(),
     };
 
@@ -145,7 +142,6 @@ fn save_dynamic_image_creates_missing_parent_directories() {
         auto_detect: false,
         jpeg_quality: 90,
         png_compression: PngCompression::Default,
-        webp_quality: 90,
         metadata: MetadataSettings {
             mode: MetadataMode::Strip,
             ..MetadataSettings::default()
@@ -174,7 +170,6 @@ fn save_dynamic_image_auto_detects_format_from_destination_extension() {
         auto_detect: true,
         jpeg_quality: 90,
         png_compression: PngCompression::Default,
-        webp_quality: 90,
         metadata: MetadataSettings {
             mode: MetadataMode::Strip,
             ..MetadataSettings::default()

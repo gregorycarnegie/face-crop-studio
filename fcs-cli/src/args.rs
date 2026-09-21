@@ -151,10 +151,6 @@ pub struct DetectArgs {
     #[arg(long)]
     pub png_compression: Option<String>,
 
-    /// WebP quality when saving as WebP (0-100).
-    #[arg(long)]
-    pub webp_quality: Option<u8>,
-
     /// Automatically detect output format from the file extension.
     #[arg(long)]
     pub auto_detect_format: Option<bool>,

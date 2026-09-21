@@ -22,7 +22,6 @@
     "output_format": "png",
     "jpeg_quality": 81,
     "png_compression": "default",
-    "webp_quality": 7,
     "auto_detect_format": true,
     "metadata": {
       "mode": "preserve",
@@ -49,7 +48,6 @@
     }
   },
   "enhance": {
-    "enabled": true,
     "auto_color": false,
     "exposure_stops": 0.0,
     "brightness": 0,

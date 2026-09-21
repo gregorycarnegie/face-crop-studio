@@ -116,8 +116,6 @@ pub struct CropSettings {
     pub jpeg_quality: u8,
     /// PNG compression strategy.
     pub png_compression: PngCompression,
-    /// WebP quality (0-100, lossy encoding)
-    pub webp_quality: u8,
     /// Automatically detect output format from the file extension.
     pub auto_detect_format: bool,
     /// Metadata behavior for exported crops.
@@ -160,8 +158,6 @@ impl CropSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EnhanceSettings {
-    /// Enable enhancements
-    pub enabled: bool,
     /// Apply histogram-equalization based auto color correction
     pub auto_color: bool,
     /// Exposure adjustment in stops (-2.0 to 2.0)
@@ -196,7 +192,6 @@ impl Default for CropSettings {
             output_format: ImageFormatHint::default(),
             jpeg_quality: 90,
             png_compression: PngCompression::default(),
-            webp_quality: 90,
             auto_detect_format: true,
             metadata: MetadataSettings::default(),
             quality_rules: QualityAutomationSettings::default(),
@@ -302,7 +297,6 @@ impl EnhanceSettings {
 impl Default for EnhanceSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
             auto_color: false,
             exposure_stops: 0.0,
             brightness: 0,

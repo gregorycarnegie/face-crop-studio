@@ -1353,7 +1353,6 @@ mod tests {
             auto_detect: true,
             jpeg_quality: 90,
             png_compression: PngCompression::Default,
-            webp_quality: 90,
             metadata: Default::default(),
         };
         save_dynamic_image(&src, &path, &options, &MetadataContext::default())
