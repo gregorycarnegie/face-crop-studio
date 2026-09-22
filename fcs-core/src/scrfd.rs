@@ -799,6 +799,118 @@ mod tests {
         assert!((first.y - second.y).abs() > 1.0, "the eyes share a y");
     }
 
+    /// The last anchor of the last cell must be reachable.
+    ///
+    /// `rows = cells * cells * ANCHORS_PER_CELL` bounds the scan. Shrinking it -- which is what
+    /// `cells * cells + ANCHORS_PER_CELL` does -- loses the high-index anchors, meaning faces in
+    /// the bottom-right of the frame silently stop being found. Every other fixture here puts
+    /// its detection at a low row, so the bound was never exercised.
+    #[test]
+    fn the_final_anchor_of_the_grid_is_scanned() {
+        const STRIDE: f32 = 32.0;
+        let cells = (640 / 32) as usize;
+        let rows = cells * cells * ANCHORS_PER_CELL;
+        let last = rows - 1;
+
+        let mut scores = vec![0.0f32; rows];
+        let mut boxes = vec![0.0f32; rows * 4];
+        let points = vec![0.0f32; rows * LANDMARKS * 2];
+        scores[last] = 0.75;
+        boxes[last * 4..last * 4 + 4].copy_from_slice(&[0.5, 0.25, 1.25, 1.75]);
+
+        let mut found = Vec::new();
+        decode_level(
+            &scores,
+            &boxes,
+            &points,
+            cells,
+            STRIDE,
+            Letterbox { scale: 1.0 },
+            0.5,
+            &mut found,
+        );
+        assert_eq!(
+            found.len(),
+            1,
+            "the last anchor ({last} of {rows}) was not scanned"
+        );
+        // And it belongs to the last cell, so the centre is at the far corner of the grid.
+        let expected_centre = (cells - 1) as f32 * STRIDE;
+        let got = &found[0];
+        assert!(
+            (got.bbox.x + 0.5 * STRIDE - expected_centre).abs() < 1e-3,
+            "box x {} does not sit at the last cell ({expected_centre})",
+            got.bbox.x
+        );
+    }
+
+    /// A score exactly equal to the threshold is kept.
+    ///
+    /// The guard is `score < threshold`, so `<` and `<=` differ only at equality -- and no
+    /// fixture hit it, which is the "threshold equal to the fixture's score" row of the
+    /// fixture-hygiene table read the other way round.
+    #[test]
+    fn a_score_exactly_on_the_threshold_is_kept() {
+        const STRIDE: f32 = 32.0;
+        let cells = (640 / 32) as usize;
+        let rows = cells * cells * ANCHORS_PER_CELL;
+        let mut scores = vec![0.0f32; rows];
+        let mut boxes = vec![0.0f32; rows * 4];
+        let points = vec![0.0f32; rows * LANDMARKS * 2];
+        scores[7] = 0.625; // exactly the threshold below, and exactly representable in binary
+        boxes[28..32].copy_from_slice(&[0.5, 0.25, 1.25, 1.75]);
+
+        let mut found = Vec::new();
+        decode_level(
+            &scores,
+            &boxes,
+            &points,
+            cells,
+            STRIDE,
+            Letterbox { scale: 1.0 },
+            0.625,
+            &mut found,
+        );
+        assert_eq!(
+            found.len(),
+            1,
+            "a score equal to the threshold must be kept"
+        );
+
+        // And one hair below it is dropped, so the comparison is not simply always true.
+        let mut below = vec![0.0f32; rows];
+        below[7] = 0.624;
+        let mut dropped = Vec::new();
+        decode_level(
+            &below,
+            &boxes,
+            &points,
+            cells,
+            STRIDE,
+            Letterbox { scale: 1.0 },
+            0.625,
+            &mut dropped,
+        );
+        assert!(
+            dropped.is_empty(),
+            "a score below the threshold must be dropped"
+        );
+    }
+
+    /// `ScrfdDetector::load` resolves the model relative to the working directory, which under
+    /// `cargo test` is the crate root. It therefore returns `None` here whatever it does, so the
+    /// `-> None` mutant is indistinguishable. Accepted for the same reason as the refiner's:
+    /// killing it needs `set_current_dir`, which is process-global. `load_from` carries the
+    /// logic and is tested above.
+    #[test]
+    fn load_resolves_relative_to_the_working_directory() {
+        assert!(
+            !std::path::Path::new(DEFAULT_MODEL).exists(),
+            "this test's premise is that {DEFAULT_MODEL} is not resolvable from the crate root"
+        );
+        assert!(ScrfdDetector::load().is_none());
+    }
+
     /// One anchor over threshold at stride 32, decoded by hand.
     fn single_detection_outputs(score: f32) -> Vec<fcs_ort::OutputTensor> {
         let mut outputs = Vec::new();

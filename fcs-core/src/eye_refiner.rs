@@ -450,20 +450,46 @@ mod tests {
                 left.is_some() && right.is_some(),
                 "detection {index} kept absent eyes"
             );
-            // The eyes must land inside the expanded crop, which is the only claim that holds
-            // for an arbitrary image: a mapping error puts them far outside it.
+            // Mapped back into crop pixels, which is where the model's own output lives: it
+            // predicts fractions of the crop side, so `image_point(v * SIZE, ..)` must land
+            // inside the crop and the two eyes must be a real distance apart.
+            //
+            // The first version of this test only checked "somewhere inside the crop", which
+            // is too loose to see the output mapping at all: replacing `v * SIZE` with
+            // `v + SIZE` or `v / SIZE` still lands inside, and all eight of those mutants
+            // survived. In crop pixels the two failures are obvious -- `+` pushes the point
+            // past SIZE, and `/` collapses both eyes onto the same spot.
             let crop = CropGeometry::for_box(&detection.bbox);
-            for point in [left.unwrap(), right.unwrap()] {
+            let half = SIZE as f32 / 2.0;
+            let scale = crop.side / SIZE as f32;
+            let to_crop = |p: Landmark| {
+                (
+                    (p.x - crop.centre_x) / scale + half,
+                    (p.y - crop.centre_y) / scale + half,
+                )
+            };
+            let (l, r) = (to_crop(left.unwrap()), to_crop(right.unwrap()));
+            // A central band, not just "inside": the crop is 1.25x the box, so the face fills
+            // the middle and its eyes cannot sit against an edge. Measured on this fixture the
+            // four coordinates are at 34%, 38%, 61% and 35% of the side, so 10..90% is a wide
+            // margin -- wide enough to survive a retrained model, tight enough that `v + SIZE`
+            // (which lands at 100%) and `v / SIZE` (which lands at 0%) both fall outside.
+            //
+            // Separation alone is not enough, and that is worth recording: dividing *one*
+            // eye's x by SIZE moves it to the crop's left edge and makes the two eyes further
+            // apart, so a separation check passes while the mapping is broken.
+            let band = (SIZE as f32 * 0.10)..=(SIZE as f32 * 0.90);
+            for (axis, value) in [("x", l.0), ("y", l.1), ("x", r.0), ("y", r.1)] {
                 assert!(
-                    (point.x - crop.centre_x).abs() <= crop.side
-                        && (point.y - crop.centre_y).abs() <= crop.side,
-                    "detection {index}: eye {point:?} is outside the crop around \
-                     ({}, {}) of side {}",
-                    crop.centre_x,
-                    crop.centre_y,
-                    crop.side
+                    band.contains(&value),
+                    "detection {index}: eye {axis} is at {value} crop pixels, outside the                      central band {band:?}"
                 );
             }
+            assert!(
+                (l.0 - r.0).abs() > SIZE as f32 * 0.10,
+                "detection {index}: the eyes are {} crop pixels apart, which is not a pair",
+                (l.0 - r.0).abs()
+            );
         }
 
         // The untrained three stay absent: the refiner replaces two points, not five.
@@ -508,5 +534,53 @@ mod tests {
             landmarks: [None; 5],
             score: 0.9,
         }
+    }
+
+    /// Sampling a point whose neighbours include column 0 and row 0.
+    ///
+    /// The companion test deliberately sits away from the origin so `x - left` cannot be
+    /// confused with `x + left`. That leaves the lower bounds untested: `px < 0` widening to
+    /// `px <= 0` throws away the *first* column, which only matters when a sample actually
+    /// touches it. Both mutants survived until this existed.
+    #[test]
+    fn sampling_includes_the_first_row_and_column() {
+        let image = gradient_image();
+        let (fx, fy) = (0.4f32, 0.3f32);
+        let got = sample_bilinear(&image, 5, 3, fx, fy);
+        let corners = [
+            ((0, 0), (1.0 - fx) * (1.0 - fy)),
+            ((1, 0), fx * (1.0 - fy)),
+            ((0, 1), (1.0 - fx) * fy),
+            ((1, 1), fx * fy),
+        ];
+        for (channel, value) in got.iter().enumerate() {
+            let expected: f32 = corners
+                .iter()
+                .map(|((cx, cy), weight)| weight * pixel_at(&image, *cx, *cy)[channel])
+                .sum();
+            assert!(
+                (value - expected).abs() < 1e-3,
+                "channel {channel}: got {value} expected {expected}"
+            );
+        }
+    }
+
+    /// `EyeRefiner::load` resolves the model relative to the working directory, and under
+    /// `cargo test` that is the crate root, which has no `models/`. So it returns `None` here
+    /// whatever it does, and a mutant replacing it with `None` is indistinguishable.
+    ///
+    /// Accepted rather than worked around: killing it would mean `set_current_dir`, which is
+    /// process-global and would make every other test in this binary order-dependent. The
+    /// logic worth testing is in `load_from`, which has its own coverage above; this wrapper is
+    /// one call to `resolve_data_path`, which is tested in `fcs-utils`.
+    #[test]
+    fn load_resolves_relative_to_the_working_directory() {
+        // Documents the behaviour rather than asserting a path: from the crate root there is
+        // no model, so `None` is correct.
+        assert!(
+            !std::path::Path::new(DEFAULT_MODEL).exists(),
+            "this test's premise is that {DEFAULT_MODEL} is not resolvable from the crate root"
+        );
+        assert!(EyeRefiner::load().is_none());
     }
 }

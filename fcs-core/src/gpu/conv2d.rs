@@ -710,7 +710,10 @@ mod kernel_selection_tests {
             ("pad y", config((3, 3), (1, 1), (1, 0), 8, (8, 8))),
             // groups != input channels, and output != input channels.
             ("groups", config((3, 3), (1, 1), (1, 1), 4, (8, 8))),
-            ("output channels", config((3, 3), (1, 1), (1, 1), 8, (8, 16))),
+            (
+                "output channels",
+                config((3, 3), (1, 1), (1, 1), 8, (8, 16)),
+            ),
         ] {
             assert_ne!(
                 kernel_for(&c),
