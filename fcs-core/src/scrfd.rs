@@ -494,6 +494,205 @@ mod tests {
         assert!((fit.scale - 0.64).abs() < 1e-6, "scale was {}", fit.scale);
     }
 
+    /// Non-degenerate raw head maps in the engines' own `(1, A*C, H, W)` layout.
+    ///
+    /// Every value depends on all four of channel, anchor, y and x, with coefficients chosen so
+    /// no two index terms can swap and give the same number -- the fixture-hygiene rule from
+    /// `.claude/skills/run-mutants`. A map full of zeros, or one where `y * width` happens to
+    /// equal `x * height`, lets an index mistake through however exact the assertion looks.
+    ///
+    /// Scores are mostly negative so only a handful of anchors clear the threshold after the
+    /// sigmoid; `sigmoid(v) > 0.5` exactly when `v > 0`.
+    fn raw_maps(size: u32) -> Vec<(Vec<f32>, [usize; 4])> {
+        let mut maps = Vec::new();
+        // Grouped by kind, then stride -- the order `decode_maps` indexes with `level + 3`.
+        for channels in [1usize, 4, LANDMARKS * 2] {
+            for stride in STRIDES {
+                let cells = (size / stride) as usize;
+                let plane = cells * cells;
+                let mut data = vec![0.0f32; ANCHORS_PER_CELL * channels * plane];
+                for anchor in 0..ANCHORS_PER_CELL {
+                    for channel in 0..channels {
+                        for y in 0..cells {
+                            for x in 0..cells {
+                                let at = (anchor * channels + channel) * plane + y * cells + x;
+                                let v = 0.37 * (channel as f32 + 1.0)
+                                    + 0.13 * x as f32
+                                    + 0.29 * y as f32
+                                    + 0.71 * anchor as f32;
+                                data[at] = if channels == 1 {
+                                    // One cell per stride clears the threshold, so every stride
+                                    // contributes detections rather than just the coarsest.
+                                    if x == 2 && y == 3 { v } else { -v - 0.5 }
+                                } else {
+                                    v
+                                };
+                            }
+                        }
+                    }
+                }
+                maps.push((data, [1, ANCHORS_PER_CELL * channels, cells, cells]));
+            }
+        }
+        maps
+    }
+
+    /// Transpose a raw map into the deployment layout, written out independently here.
+    ///
+    /// Deliberately not a call to `deployment_rows`: this is the reference that function is
+    /// checked against, so it has to be a separate statement of the same intent.
+    fn to_deployment(map: &(Vec<f32>, [usize; 4]), channels: usize, sigmoid: bool) -> Vec<f32> {
+        let (data, dims) = map;
+        let (height, width) = (dims[2], dims[3]);
+        let plane = height * width;
+        let mut rows = vec![0.0f32; plane * ANCHORS_PER_CELL * channels];
+        for y in 0..height {
+            for x in 0..width {
+                for anchor in 0..ANCHORS_PER_CELL {
+                    for channel in 0..channels {
+                        let value = data[(anchor * channels + channel) * plane + y * width + x];
+                        let row = (y * width + x) * ANCHORS_PER_CELL + anchor;
+                        rows[row * channels + channel] = if sigmoid {
+                            1.0 / (1.0 + (-value).exp())
+                        } else {
+                            value
+                        };
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    /// The two decode paths must produce identical detections from identical data.
+    ///
+    /// This is the test the engine-parity suite cannot be: `tests/scrfd_parity.rs` compares the
+    /// nine head tensors *before* decoding, and `tests/python_parity.rs` only ever runs the ONNX
+    /// Runtime path. So `decode_maps` and `deployment_rows` -- the decode every machine without
+    /// ONNX Runtime uses, which is the whole reason the built-in engines exist -- had no test at
+    /// all. A mutation run found 70 survivors in this file, most of them their arithmetic.
+    ///
+    /// Agreement is worth something because the other side is externally validated: torch
+    /// agrees with `decode` (python_parity), so `decode_maps` agreeing with `decode` inherits
+    /// that. Without the torch oracle this would only prove the two paths are consistent.
+    #[test]
+    fn the_two_decode_paths_agree() {
+        // 160 rather than 640: cells 20/10/5 keep the three strides' row counts distinct (800,
+        // 200, 50) so `find` still matches by shape, at a fraction of the arithmetic.
+        const SIZE: u32 = 160;
+        let maps = raw_maps(SIZE);
+
+        let mut deployment = Vec::new();
+        for (kind, channels) in [(0usize, 1usize), (1, 4), (2, LANDMARKS * 2)] {
+            for (level, stride) in STRIDES.iter().enumerate() {
+                let cells = (SIZE / stride) as usize;
+                let rows = cells * cells * ANCHORS_PER_CELL;
+                let map = &maps[kind * STRIDES.len() + level];
+                let values = to_deployment(map, channels, channels == 1);
+                deployment.push(tensor(vec![1, rows, channels], values));
+            }
+        }
+
+        let from_maps = decode_maps(&maps, Letterbox { scale: 1.5 }, 0.5, SIZE).expect("maps");
+        let from_deployment =
+            decode(&deployment, Letterbox { scale: 1.5 }, 0.5, SIZE).expect("deployment");
+
+        // Vacuous agreement is the failure mode to guard against: two empty lists match.
+        assert!(
+            from_maps.len() >= STRIDES.len(),
+            "expected at least one detection per stride, got {}",
+            from_maps.len()
+        );
+        assert_eq!(
+            from_maps.len(),
+            from_deployment.len(),
+            "the two paths found different numbers of faces"
+        );
+        for (index, (a, b)) in from_maps.iter().zip(&from_deployment).enumerate() {
+            assert_eq!(a.score, b.score, "detection {index}: score");
+            assert_eq!(a.bbox, b.bbox, "detection {index}: box");
+            assert_eq!(a.landmarks, b.landmarks, "detection {index}: landmarks");
+        }
+    }
+
+    fn strict_tests() -> bool {
+        std::env::var("FCS_STRICT_TESTS").is_ok_and(|v| v != "0" && !v.is_empty())
+    }
+
+    /// The model the workspace ships, resolved from this crate rather than the working
+    /// directory, which for a unit test is the crate root.
+    fn default_model_for_test() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("fcs-core sits in the workspace root")
+            .join(DEFAULT_MODEL)
+    }
+
+    /// `engine` names the backend, and the GPU parity tests *skip* on anything unexpected -- so
+    /// a mutant returning `""` made those tests skip and pass. Pinned here instead.
+    #[test]
+    fn engine_reports_one_of_the_three_known_backends() {
+        let Some(detector) = ScrfdDetector::load_from(default_model_for_test()) else {
+            assert!(
+                !strict_tests(),
+                "FCS_STRICT_TESTS: the shipped model did not load"
+            );
+            eprintln!("skipped: no model present");
+            return;
+        };
+        let engine = detector.engine();
+        assert!(
+            ["onnxruntime", "wgsl-gpu", "cpu-graph"].contains(&engine),
+            "unknown engine name {engine:?}"
+        );
+    }
+
+    /// Loading the shipped model must succeed, and `load_builtin` must too.
+    ///
+    /// Both returned `Option`, and every other test skipped on `None`, so `-> None` mutants were
+    /// invisible: the suite skipped and passed. Under `FCS_STRICT_TESTS` -- which CI sets -- an
+    /// absent detector is now a failure, which is what makes those mutants reachable.
+    #[test]
+    fn the_shipped_model_loads_on_both_entry_points() {
+        let model = default_model_for_test();
+        if !model.exists() {
+            assert!(!strict_tests(), "FCS_STRICT_TESTS: no model at {model:?}");
+            eprintln!("skipped: no model present");
+            return;
+        }
+        assert!(
+            ScrfdDetector::load_from(&model).is_some(),
+            "load_from returned None for a model that exists"
+        );
+        assert!(
+            ScrfdDetector::load_builtin(&model).is_some(),
+            "load_builtin returned None: the built-in engines are the floor and must always load"
+        );
+        // And the negative case, which is what the `!path.exists()` guard is for.
+        assert!(
+            ScrfdDetector::load_builtin(model.with_file_name("absent.onnx")).is_none(),
+            "a missing file must not produce a detector"
+        );
+    }
+
+    /// A square image takes either branch of the aspect-ratio test and must come out the same.
+    ///
+    /// This pins `>` against `>=` in `preprocess` as **equivalent**: at `ratio == 1.0` the
+    /// portrait arm computes `(size / 1.0, size)` and the landscape arm `(size, size * 1.0)`,
+    /// which are the same pair. The mutant cannot be killed, and this says so rather than
+    /// leaving the next reader to rediscover it.
+    #[test]
+    fn a_square_image_is_unaffected_by_which_aspect_branch_runs() {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(300, 300, Rgb([40, 50, 60])));
+        let (tensor, fit) = preprocess(&image, 640);
+        assert!(
+            (fit.scale - 640.0 / 300.0).abs() < 1e-6,
+            "scale {}",
+            fit.scale
+        );
+        assert_eq!(tensor.len(), 3 * 640 * 640);
+    }
+
     /// One anchor over threshold at stride 32, decoded by hand.
     fn single_detection_outputs(score: f32) -> Vec<fcs_ort::OutputTensor> {
         let mut outputs = Vec::new();

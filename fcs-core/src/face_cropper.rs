@@ -646,11 +646,10 @@ mod tests {
     }
 
     #[test]
-    fn eye_line_needs_all_four_landmark_values_zero_to_skip() {
-        // The guard is "no landmarks at all", so a single non-zero coordinate
-        // means the eyes are real and the rotation must happen. Treating it as
-        // "any coordinate is zero" would skip alignment for an eye that
-        // genuinely sits on x = 0 or y = 0.
+    fn eye_line_needs_both_eyes_present_to_align() {
+        // The guard is "both eyes are `Some`". The name and comment here used to say "all four
+        // landmark values zero", which was the pre-2.0 sentinel and is the opposite of what the
+        // assertions below now check -- a stale name on a rewritten test is worse than no name.
         let img = coded_source(32, 32);
         let bbox = BoundingBox {
             x: 8.0,
@@ -787,13 +786,14 @@ mod tests {
     }
 
     #[test]
-    fn eye_line_aligns_whenever_any_single_landmark_coordinate_is_set() {
-        // Each case leaves three of the four eye coordinates at zero, so every
-        // term of the "no landmarks at all" guard is exercised on its own. The
-        // tilts are chosen to be quarter or half turns, which are unmistakable
-        // in the output; an eye line that is merely horizontal would rotate by
-        // zero and look exactly like skipping the alignment. That is why the
-        // left eye's x is negative: a positive one alone is a level eye line.
+    fn eye_line_aligns_from_any_non_level_pair() {
+        // Both eyes are present in every case; what varies is where they sit. The tilts are
+        // quarter or half turns, which are unmistakable in the output -- an eye line that is
+        // merely horizontal rotates by zero and looks exactly like skipping the alignment,
+        // which is why the left eye's x is negative here.
+        //
+        // The previous name said "any single landmark coordinate is set", describing the
+        // all-zero sentinel that 2.0 replaced with `Option`.
         let img = coded_source(32, 32);
         let bbox = BoundingBox {
             x: 8.0,
@@ -838,5 +838,146 @@ mod tests {
                 "{label}: a populated eye coordinate must still align"
             );
         }
+    }
+
+    /// `eye_positions` maps the two eyes out of source pixels and into crop pixels.
+    ///
+    /// It arrived in 2.0 by being moved out of the GUI, and it arrived with no tests: all 19 of
+    /// this file's surviving mutants were its arithmetic. The fixture is chosen so none of that
+    /// arithmetic can collapse -- a non-square image and box, an output size that is neither a
+    /// multiple nor a divisor of the crop region, and eyes away from the region's origin so
+    /// `lm.x - region.x` is a number rather than zero.
+    #[test]
+    fn eye_positions_map_into_output_crop_coordinates() {
+        let (img_w, img_h) = (800u32, 600u32);
+        let bbox = BoundingBox {
+            x: 150.0,
+            y: 120.0,
+            width: 200.0,
+            height: 160.0,
+        };
+        let settings = CropSettings {
+            output_width: 320,
+            output_height: 240,
+            face_height_pct: 50.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: false,
+        };
+        let mut detection = detection_at(bbox);
+        detection.landmarks[0] = Some(crate::postprocess::Landmark { x: 203.0, y: 171.0 });
+        detection.landmarks[1] = Some(crate::postprocess::Landmark { x: 297.0, y: 183.0 });
+
+        let eyes = eye_positions(&detection, img_w, img_h, &settings);
+        assert_eq!(eyes.len(), 2, "both eyes present means two targets");
+
+        // The expected mapping, written out here rather than taken from the function.
+        let region = calculate_crop_region(img_w, img_h, bbox, &settings);
+        let sx = settings.output_width as f32 / region.width.max(1) as f32;
+        let sy = settings.output_height as f32 / region.height.max(1) as f32;
+        let face_h_out = bbox.height / region.height.max(1) as f32 * settings.output_height as f32;
+        let expected_radius = (face_h_out * 0.12).max(4.0);
+
+        // A fixture where the radius sits on its floor would hide every term feeding it.
+        assert!(
+            expected_radius > 4.0,
+            "fixture must clear the 4 px floor, got {expected_radius}"
+        );
+
+        for (eye, landmark) in eyes
+            .iter()
+            .zip([detection.landmarks[0], detection.landmarks[1]])
+        {
+            let landmark = landmark.expect("set above");
+            let want_x = (landmark.x - region.x as f32) * sx;
+            let want_y = (landmark.y - region.y as f32) * sy;
+            assert!((eye.x - want_x).abs() < 1e-3, "x {} vs {want_x}", eye.x);
+            assert!((eye.y - want_y).abs() < 1e-3, "y {} vs {want_y}", eye.y);
+            assert!(
+                (eye.radius - expected_radius).abs() < 1e-3,
+                "radius {} vs {expected_radius}",
+                eye.radius
+            );
+            // Non-zero and distinct, or the comparisons above prove less than they look.
+            assert!(want_x.abs() > 1.0 && want_y.abs() > 1.0);
+            assert!((want_x - want_y).abs() > 1.0);
+        }
+        // The two eyes must not land on the same point, which a dropped landmark index would do.
+        assert!(
+            (eyes[0].x - eyes[1].x).abs() > 1.0,
+            "both eyes mapped to the same x"
+        );
+    }
+
+    /// One eye absent means no targets: red-eye removal has nothing to aim at with half a pair.
+    #[test]
+    fn eye_positions_are_empty_unless_both_eyes_are_present() {
+        let bbox = BoundingBox {
+            x: 10.0,
+            y: 20.0,
+            width: 60.0,
+            height: 80.0,
+        };
+        let settings = CropSettings {
+            output_width: 128,
+            output_height: 96,
+            face_height_pct: 60.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: false,
+        };
+        let eye = Some(crate::postprocess::Landmark { x: 30.0, y: 45.0 });
+
+        for (left, right) in [(None, None), (eye, None), (None, eye)] {
+            let mut detection = detection_at(bbox);
+            detection.landmarks[0] = left;
+            detection.landmarks[1] = right;
+            assert!(
+                eye_positions(&detection, 200, 300, &settings).is_empty(),
+                "a half pair must produce no targets"
+            );
+        }
+
+        // And with both, it does produce them -- so the emptiness above is the guard, not a
+        // function that always returns nothing.
+        let mut both = detection_at(bbox);
+        both.landmarks[0] = eye;
+        both.landmarks[1] = Some(crate::postprocess::Landmark { x: 52.0, y: 49.0 });
+        assert_eq!(eye_positions(&both, 200, 300, &settings).len(), 2);
+    }
+
+    /// A tiny face clamps the radius to its 4 px floor rather than vanishing.
+    #[test]
+    fn a_tiny_face_keeps_a_usable_eye_radius() {
+        let bbox = BoundingBox {
+            x: 100.0,
+            y: 100.0,
+            width: 9.0,
+            height: 7.0,
+        };
+        let settings = CropSettings {
+            output_width: 64,
+            output_height: 48,
+            face_height_pct: 3.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: false,
+        };
+        let mut detection = detection_at(bbox);
+        detection.landmarks[0] = Some(crate::postprocess::Landmark { x: 102.0, y: 103.0 });
+        detection.landmarks[1] = Some(crate::postprocess::Landmark { x: 106.0, y: 104.0 });
+        let eyes = eye_positions(&detection, 400, 300, &settings);
+        assert_eq!(eyes.len(), 2);
+        assert!(
+            (eyes[0].radius - 4.0).abs() < 1e-3,
+            "radius should sit on the floor, got {}",
+            eyes[0].radius
+        );
     }
 }

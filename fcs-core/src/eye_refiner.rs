@@ -266,6 +266,26 @@ mod tests {
         let centre = crop.image_point(half, half);
         assert!((centre.x - 140.0).abs() < 1e-3, "got {}", centre.x);
         assert!((centre.y - 260.0).abs() < 1e-3, "got {}", centre.y);
+
+        // Off-centre, on both axes. At the centre `crop_x - half` is zero, so `* scale` and
+        // `/ scale` agree and the scale mutants in `image_point` survive -- they did, on the y
+        // axis, which no test read away from the centre.
+        let side = 120.0 * BOX_SCALE;
+        let scale = side / SIZE as f32;
+        let quarter = SIZE as f32 / 4.0;
+        let off = crop.image_point(quarter, quarter);
+        let expected_x = (quarter - half) * scale + 140.0;
+        let expected_y = (quarter - half) * scale + 260.0;
+        assert!(
+            (off.x - expected_x).abs() < 1e-3,
+            "x {} vs {expected_x}",
+            off.x
+        );
+        assert!(
+            (off.y - expected_y).abs() < 1e-3,
+            "y {} vs {expected_y}",
+            off.y
+        );
     }
 
     #[test]
@@ -281,35 +301,89 @@ mod tests {
         assert!((right.x - left.x - expected).abs() < 1e-3);
     }
 
-    #[test]
-    fn sampling_pads_with_zero_outside_the_image() {
-        // A face at the edge of a photograph is the case this covers: cv2.warpAffine pads with
-        // a constant zero border, and training saw that padding.
-        let mut image = RgbaImage::new(4, 4);
-        for pixel in image.pixels_mut() {
-            *pixel = Rgba([255, 255, 255, 255]);
+    /// A 5x3 image whose every pixel is distinct, for sampling tests.
+    ///
+    /// Non-square so a width/height swap cannot survive, and no value is a multiple of another
+    /// so a wrong weight cannot land on the right answer by arithmetic accident.
+    fn gradient_image() -> DynamicImage {
+        let mut image = RgbaImage::new(5, 3);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            // 13 and 29 are coprime, so (x, y) -> value is injective across this grid.
+            let v = 13 * x as u16 + 29 * y as u16 + 7;
+            *pixel = Rgba([v as u8, (v + 3) as u8, (v + 11) as u8, 255]);
         }
-        let image = DynamicImage::ImageRgba8(image);
-        let inside = sample_bilinear(&image, 4, 4, 2.0, 2.0);
-        let outside = sample_bilinear(&image, 4, 4, -5.0, 2.0);
-        assert_eq!(inside, [255.0, 255.0, 255.0]);
-        assert_eq!(outside, [0.0, 0.0, 0.0]);
+        DynamicImage::ImageRgba8(image)
     }
 
-    #[test]
-    fn sampling_interpolates_between_neighbours() {
-        let mut image = RgbaImage::new(2, 1);
-        image.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
-        image.put_pixel(1, 0, Rgba([100, 100, 100, 255]));
-        let image = DynamicImage::ImageRgba8(image);
-        let middle = sample_bilinear(&image, 2, 1, 0.5, 0.0);
-        assert!((middle[0] - 50.0).abs() < 1e-3, "got {}", middle[0]);
+    fn pixel_at(image: &DynamicImage, x: u32, y: u32) -> [f32; 3] {
+        let p = image.get_pixel(x, y);
+        [p[0] as f32, p[1] as f32, p[2] as f32]
     }
 
+    /// Bilinear weights, against an expected value computed independently here.
+    ///
+    /// The sample point is deliberately awkward. Both fractions are non-zero, unequal, and not
+    /// complements of each other, so none of the four weights coincide and no pair of them can
+    /// swap without changing the result. The previous version of this test sampled a *uniform
+    /// white* image at *integer* coordinates, which made every weight and every offset in
+    /// `sample_bilinear` invisible: 11 of its mutants survived.
     #[test]
-    fn a_zero_sized_box_is_skipped_rather_than_sampled() {
-        let bbox = box_at(10.0, 10.0, 0.0, 0.0);
-        assert!(!(bbox.width > 0.0 && bbox.height > 0.0));
+    fn sampling_interpolates_with_the_four_corner_weights() {
+        let image = gradient_image();
+        // Both coordinates have a non-zero integer part on purpose: at y = 0.7 the floor is 0,
+        // so `y - top` and `y + top` are the same number and the offset mutant survives. That
+        // is what the first draft of this test did.
+        let (x, y) = (1.3f32, 1.7f32);
+        let (fx, fy) = (0.3f32, 0.7f32);
+
+        let got = sample_bilinear(&image, 5, 3, x, y);
+        // The four pixels around (1.3, 1.7): floors are 1 and 1, so the corners are (1,1),
+        // (2,1), (1,2) and (2,2).
+        let corners = [
+            ((1, 1), (1.0 - fx) * (1.0 - fy)),
+            ((2, 1), fx * (1.0 - fy)),
+            ((1, 2), (1.0 - fx) * fy),
+            ((2, 2), fx * fy),
+        ];
+        for (channel, value) in got.iter().enumerate() {
+            let expected: f32 = corners
+                .iter()
+                .map(|((cx, cy), weight)| weight * pixel_at(&image, *cx, *cy)[channel])
+                .sum();
+            assert!(
+                (value - expected).abs() < 1e-3,
+                "channel {channel}: got {value} expected {expected}"
+            );
+        }
+    }
+
+    /// Zero outside the image, on every edge separately.
+    ///
+    /// Each edge is its own case because the bounds test is four `||`-joined comparisons: with
+    /// one sample point they agree, and `||` collapsing to `&&` or a `<` widening to `<=`
+    /// survives. The image is 5x3, so the x and y limits are different numbers.
+    #[test]
+    fn sampling_pads_with_zero_outside_every_edge() {
+        let image = gradient_image();
+        for (x, y, edge) in [
+            (-1.7f32, 1.4f32, "left"),
+            (5.4, 1.4, "right"),
+            (2.3, -1.6, "top"),
+            (2.3, 3.5, "bottom"),
+        ] {
+            assert_eq!(
+                sample_bilinear(&image, 5, 3, x, y),
+                [0.0, 0.0, 0.0],
+                "{edge} edge should read as zero padding"
+            );
+        }
+        // Just inside the far corner still reads real pixels, so the bounds are not simply
+        // rejecting everything.
+        let inside = sample_bilinear(&image, 5, 3, 3.6, 1.8);
+        assert!(
+            inside.iter().all(|v| *v > 0.0),
+            "a point inside the image must sample it: {inside:?}"
+        );
     }
 
     #[test]
@@ -329,5 +403,110 @@ mod tests {
         assert!((tensor[centre] - (127.0 - 127.5) / 128.0).abs() < 1e-5);
         assert!((tensor[plane + centre] - (128.0 - 127.5) / 128.0).abs() < 1e-5);
         assert!((tensor[2 * plane + centre] - (129.0 - 127.5) / 128.0).abs() < 1e-5);
+    }
+
+    fn strict_tests() -> bool {
+        std::env::var("FCS_STRICT_TESTS").is_ok_and(|v| v != "0" && !v.is_empty())
+    }
+
+    fn refiner_model() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("fcs-core sits in the workspace root")
+            .join(DEFAULT_MODEL)
+    }
+
+    /// `refine` must report how many faces it changed, and change them.
+    ///
+    /// Every other test here works on the geometry helpers, so `refine` and `predict` had no
+    /// coverage at all: `refine -> 0`, `refine -> 1` and `refined += 1` becoming `-=` all
+    /// survived. Two detections, so a hard-coded 1 is distinguishable from a real count.
+    #[test]
+    fn refine_reports_and_applies_both_predictions() {
+        let model = refiner_model();
+        let Some(refiner) = EyeRefiner::load_from(&model) else {
+            assert!(
+                !strict_tests(),
+                "FCS_STRICT_TESTS: the refiner did not load from {model:?}"
+            );
+            eprintln!("skipped: no refiner model or ONNX Runtime");
+            return;
+        };
+
+        let image =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(400, 400, Rgba([90, 120, 150, 255])));
+        // Two boxes of different sizes at different places, so one prediction cannot stand in
+        // for the other.
+        let mut detections = vec![
+            detection_at(box_at(40.0, 50.0, 90.0, 110.0)),
+            detection_at(box_at(220.0, 180.0, 130.0, 70.0)),
+        ];
+        let refined = refiner.refine(&image, &mut detections);
+        assert_eq!(refined, 2, "both detections should have been refined");
+
+        for (index, detection) in detections.iter().enumerate() {
+            let (left, right) = (detection.landmarks[0], detection.landmarks[1]);
+            assert!(
+                left.is_some() && right.is_some(),
+                "detection {index} kept absent eyes"
+            );
+            // The eyes must land inside the expanded crop, which is the only claim that holds
+            // for an arbitrary image: a mapping error puts them far outside it.
+            let crop = CropGeometry::for_box(&detection.bbox);
+            for point in [left.unwrap(), right.unwrap()] {
+                assert!(
+                    (point.x - crop.centre_x).abs() <= crop.side
+                        && (point.y - crop.centre_y).abs() <= crop.side,
+                    "detection {index}: eye {point:?} is outside the crop around \
+                     ({}, {}) of side {}",
+                    crop.centre_x,
+                    crop.centre_y,
+                    crop.side
+                );
+            }
+        }
+
+        // The untrained three stay absent: the refiner replaces two points, not five.
+        for detection in &detections {
+            for (index, landmark) in detection.landmarks.iter().enumerate().skip(2) {
+                assert!(landmark.is_none(), "landmark {index} should stay absent");
+            }
+        }
+    }
+
+    /// A box with no area is skipped rather than sampled, and reported as not refined.
+    #[test]
+    fn a_degenerate_box_is_not_refined() {
+        let model = refiner_model();
+        let Some(refiner) = EyeRefiner::load_from(&model) else {
+            assert!(
+                !strict_tests(),
+                "FCS_STRICT_TESTS: the refiner did not load"
+            );
+            return;
+        };
+        let image =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(64, 64, Rgba([10, 20, 30, 255])));
+        for bbox in [
+            box_at(10.0, 10.0, 0.0, 30.0),
+            box_at(10.0, 10.0, 30.0, 0.0),
+            box_at(10.0, 10.0, 0.0, 0.0),
+        ] {
+            let mut detections = vec![detection_at(bbox)];
+            assert_eq!(
+                refiner.refine(&image, &mut detections),
+                0,
+                "a zero-area box must not be refined"
+            );
+            assert!(detections[0].landmarks[0].is_none());
+        }
+    }
+
+    fn detection_at(bbox: BoundingBox) -> Detection {
+        Detection {
+            bbox,
+            landmarks: [None; 5],
+            score: 0.9,
+        }
     }
 }
