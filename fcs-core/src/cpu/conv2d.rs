@@ -569,6 +569,24 @@ mod tests {
         assert_eq!(rows_per_task(1, 5, 4), 1);
     }
 
+    /// `reference` below calls `output_dim` too, so the shape-agreement test moves with any
+    /// mutation of it and cannot see one: replacing the `/ stride` with `* stride` left every
+    /// conv test passing and only showed up as a timeout, when the inflated dimensions made
+    /// `scrfd_parity` grind. Assert the arithmetic directly, with terms that do not collapse —
+    /// stride 3 and padding 2 are distinct from each other and from the kernel.
+    #[test]
+    fn output_dim_matches_the_convolution_formula() {
+        // (13 + 2*2 - 5)/3 + 1 = 12/3 + 1 = 5.
+        assert_eq!(output_dim(13, 5, 3, 2), 5);
+        // Stride is a division, not a multiplication: halving it must roughly double the output.
+        assert_eq!(output_dim(13, 5, 1, 2), 13);
+        // Padding widens, the kernel narrows, and neither is the other's inverse here.
+        assert_eq!(output_dim(13, 5, 1, 0), 9);
+        assert_eq!(output_dim(13, 1, 1, 0), 13);
+        // A kernel larger than the padded input saturates to a single output, never underflows.
+        assert_eq!(output_dim(3, 9, 2, 1), 1);
+    }
+
     /// Whatever path `conv2d` picks must agree with the reference. Each fast path is valid only
     /// for some shapes: a 3x1 kernel, an unpadded or strided 1x1, a strided depthwise layer or a
     /// depth multiplier of 2 routed to one of them computes the wrong thing, and the detector's

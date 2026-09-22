@@ -340,8 +340,13 @@ fn rounded_polygon(vertices: &[Point], radius: f32, segments: usize) -> Vec<Poin
 
         let start_angle = (start.y - center.y).atan2(start.x - center.x);
         let end_angle = (end.y - center.y).atan2(end.x - center.x);
+        // Both angles come from `atan2`, so each is in (-PI, PI] and the difference is in
+        // (-TAU, TAU): one addition always lands it in (0, TAU]. This was a `while`, which
+        // is the same thing for any finite input but turns every mutation of the condition
+        // or the step into a hang — three of them, reported as timeouts rather than as the
+        // caught mutants they are under an `if`.
         let mut delta = end_angle - start_angle;
-        while delta <= 0.0 {
+        if delta <= 0.0 {
             delta += TAU;
         }
         let steps = segments.max(3);
@@ -758,6 +763,12 @@ mod tests {
         // Midway round the arc, 45 degrees from centre (2, 2) at radius 2.
         let inset = 2.0 - 2.0 * std::f32::consts::FRAC_1_SQRT_2;
         approx_point(pts[4], inset, inset);
+        // A quarter of the way round, at 202.5 degrees from the same centre. Indices 0, 4
+        // and 8 are all multiples of `steps / 2`, so a `delta` off by a whole turn shifts
+        // them by a multiple of TAU and lands them back on themselves: every point checked
+        // above agreed with a mutant that swept the arc backwards the long way. An odd
+        // index does not, which is what makes the sweep direction observable.
+        approx_point(pts[2], 0.152_24, 1.234_63);
 
         // The next corner picks up at the far end of the top edge.
         approx_point(pts[9], 8.0, 0.0);

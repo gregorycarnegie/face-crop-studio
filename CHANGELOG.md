@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone while four mutant jobs contend for one GPU: `fcs-utils` baselined at 5.3 s for a 27 s
   timeout while its slowest *passing* mutant took 17.4 s. Three mutants were being reported as
   timeouts whose tests had already printed FAILED, and a timeout reads as a missed mutant.
+- **`rounded_polygon` normalises its arc sweep with an `if` instead of a `while`.** Both angles
+  come from `atan2`, so one addition of TAU always suffices; the loop was identical for every
+  finite input but turned any mutation of its condition or step into a hang.
+
+### Fixed (testing)
+
+- **`output_dim` is asserted directly** in `fcs-core`'s CPU convolution. The shape-agreement test
+  compares against a reference that calls `output_dim` too, so both sides moved together and
+  replacing its `/ stride` with `* stride` left every convolution test passing -- surfacing only
+  as a mutation-testing timeout, when the inflated dimensions made `scrfd_parity` grind.
+- **A rounded-polygon arc point is checked at an index that is not a multiple of `steps / 2`.**
+  The three points the test did check were all invariant under an arc swept backwards the long
+  way round, so a mutant that shifted the sweep by a whole turn agreed with every assertion.
 
 ## [2.0.0] - 2026-09-21
 
