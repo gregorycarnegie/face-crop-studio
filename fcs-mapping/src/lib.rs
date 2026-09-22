@@ -6,7 +6,6 @@
 
 use anyhow::{Context, Result};
 use calamine::{Reader as _, open_workbook_auto};
-use rusqlite::Connection;
 use std::path::Path;
 
 mod common;
@@ -124,8 +123,7 @@ pub fn inspect_mapping_sources(
 
 /// Enumerates SQLite tables in the supplied database.
 pub fn list_sqlite_tables(path: &Path) -> Result<Vec<String>> {
-    let conn = Connection::open(path)
-        .with_context(|| format!("failed to open sqlite database {}", path.display()))?;
+    let (conn, _denied) = sqlite::open_guarded(path)?;
     list_sqlite_tables_conn(&conn)
 }
 

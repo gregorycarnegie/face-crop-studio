@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build, and by then Linux and Windows had already uploaded their artifacts -- a half-built
   v2.0.0 with seven of eight platforms.
 
+### Security
+
+- **Custom SQL mapping queries are now guarded by SQLite, not by a keyword denylist.** A mapping
+  database opens read-only (`SQLITE_OPEN_READ_ONLY`, and without rusqlite's default
+  `SQLITE_OPEN_URI`, under which a path spelled `file:x.db?mode=rwc` reopens writable), and a
+  `Connection::authorizer` allowlist permits only reads, functions and recursion while SQLite
+  compiles the statement. Everything else is refused by default, including actions a future
+  SQLite may add. The twelve-word denylist it replaces was guarding a different thing than it
+  looked like: `DROP TABLE t` reaches the authorizer as a delete from `sqlite_master`, and
+  `CREATE INDEX` and `CREATE VIEW` both arrive as inserts into it. Both guards are kept because
+  neither covers the other -- `VACUUM` raises no authorization callback at all and is stopped
+  only by the read-only flags.
+- **A missing mapping database is now an error** rather than being created as an empty file, a
+  side effect of the read-only open flags.
+
 ### Added
 
 - **CI parses every installer script** (`bash -n`). These run only inside a release build, so a

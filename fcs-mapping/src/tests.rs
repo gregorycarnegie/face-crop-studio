@@ -5,6 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use rusqlite::Connection;
 use tempfile::tempdir;
 
 fn write_text(path: &Path, contents: &str) {
@@ -22,6 +23,128 @@ fn write_sqlite(dir: &Path, name: &str, setup_sql: &str) -> PathBuf {
     let conn = Connection::open(&path).expect("open sqlite");
     conn.execute_batch(setup_sql).expect("seed sqlite");
     path
+}
+
+/// The guard that does not depend on enumerating anything.
+///
+/// Driven through `open_guarded` rather than through `load_mapping_preview`, deliberately:
+/// `validate_sql_query` would reject every one of these on the SELECT prefix before SQLite
+/// saw them, so going through the front door would prove only that the prefix check works.
+/// The point of the authorizer is that it still refuses them if nothing else does.
+#[test]
+fn the_authorizer_refuses_every_action_but_reading() {
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(
+        dir.path(),
+        "guard.db",
+        // The index exists so REINDEX has something to reindex: with none, it compiles to a
+        // no-op and never reaches the authorizer at all.
+        "CREATE TABLE t (a TEXT); CREATE INDEX i ON t(a); INSERT INTO t VALUES ('v');",
+    );
+    let (conn, denied) = sqlite::open_guarded(&path).expect("open guarded");
+
+    // One case per action the authorizer reports, with the action it must name. `DROP TABLE`
+    // reaches SQLite as a delete from `sqlite_master`, which is why a denylist of statement
+    // keywords and an allowlist of actions are not the same shape of guard.
+    for (query, action) in [
+        ("INSERT INTO t VALUES ('z')", "Insert"),
+        ("DELETE FROM t", "Delete"),
+        ("UPDATE t SET a = 'z'", "Update"),
+        ("DROP TABLE t", "Delete"),
+        ("CREATE TABLE u (b TEXT)", "Insert"),
+        ("ALTER TABLE t RENAME TO u", "AlterTable"),
+        ("CREATE VIEW v AS SELECT a FROM t", "Insert"),
+        ("CREATE TRIGGER g AFTER UPDATE ON t BEGIN SELECT 1; END", "CreateTrigger"),
+        ("ATTACH 'other.db' AS o", "Attach"),
+        ("DETACH o", "Detach"),
+        ("PRAGMA journal_mode = wal", "Pragma"),
+        ("REINDEX", "Reindex"),
+    ] {
+        if let Ok(mut slot) = denied.lock() {
+            *slot = None;
+        }
+        conn.prepare(query)
+            .err()
+            .unwrap_or_else(|| panic!("{query} must not compile"));
+        let reported = denied.lock().unwrap().clone();
+        assert!(
+            reported.as_deref().is_some_and(|r| r.starts_with(action)),
+            "{query} should have been refused as {action}, got {reported:?}"
+        );
+    }
+
+    // And everything an honest read needs still compiles: the columns, the built-in
+    // functions, a recursive CTE, the schema table and the table-valued pragma functions
+    // the GUI uses to describe a database.
+    for query in [
+        "SELECT a FROM t",
+        "SELECT count(*), lower(a) FROM t",
+        "WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 3) SELECT i FROM c",
+        "SELECT name FROM sqlite_master",
+        "SELECT * FROM pragma_table_info('t')",
+    ] {
+        conn.prepare(query)
+            .unwrap_or_else(|e| panic!("{query} is a read and must compile: {e}"));
+    }
+}
+
+/// A refusal is remembered on the connection so the error can name it, which means the
+/// next failure on that connection must not inherit it. Unreachable through the reader
+/// today -- it compiles one user query per connection -- so this is the only thing that
+/// would notice a second `prepare` being added above.
+#[test]
+fn a_syntax_error_is_not_reported_as_the_previous_refusal() {
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(dir.path(), "stale.db", "CREATE TABLE t (a TEXT);");
+    let (conn, denied) = sqlite::open_guarded(&path).expect("open guarded");
+
+    let refused = sqlite::prepare_guarded(&conn, &denied, "DELETE FROM t")
+        .expect_err("a write is refused")
+        .to_string();
+    assert!(refused.contains("SQLite refused Delete"), "got: {refused}");
+
+    let syntax = sqlite::prepare_guarded(&conn, &denied, "SELECT a FROM t DROP")
+        .expect_err("not valid SQL")
+        .to_string();
+    assert!(
+        syntax.contains("failed to prepare") && !syntax.contains("SQLite refused"),
+        "the earlier refusal leaked into an unrelated failure: {syntax}"
+    );
+}
+
+/// Not redundant with the authorizer, which is why both are here: SQLite raises no
+/// authorization callback at all for `VACUUM`, so it compiles cleanly under the allowlist
+/// and only the read-only flags stop it when it runs. Asserted here because the reader
+/// never hands its connection out, so nothing else would notice the flags being loosened
+/// back to rusqlite's read-write default — which also includes `SQLITE_OPEN_URI`, under
+/// which a path spelled `file:x.db?mode=rwc` reopens writable.
+#[test]
+fn the_reader_opens_sqlite_read_only() {
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(dir.path(), "ro.db", "CREATE TABLE t (a TEXT);");
+
+    let conn = Connection::open_with_flags(&path, sqlite::READ_ONLY).expect("open read-only");
+    let err = conn
+        .execute_batch("INSERT INTO t VALUES ('x');")
+        .expect_err("a write must be refused by the engine too");
+    assert!(
+        err.to_string().to_ascii_lowercase().contains("readonly"),
+        "unexpected error: {err}"
+    );
+
+    // VACUUM is the case the authorizer does not see. It compiles, and then this stops it.
+    let (vacuum_conn, _denied) = sqlite::open_guarded(&path).expect("open guarded");
+    vacuum_conn
+        .prepare("VACUUM")
+        .expect("VACUUM raises no authorization callback")
+        .raw_execute()
+        .expect_err("but a read-only database must still refuse to be rewritten");
+
+    // Read-only also means the flags cannot conjure a database that is not there.
+    assert!(
+        Connection::open_with_flags(dir.path().join("absent.db"), sqlite::READ_ONLY).is_err(),
+        "a missing file must fail rather than be created empty"
+    );
 }
 
 #[test]
@@ -1069,41 +1192,6 @@ fn format_parquet_field_scalar_variants() {
 }
 
 #[test]
-fn validate_sql_remaining_forbidden_keywords_are_rejected() {
-    let dir = tempdir().unwrap();
-    let path = write_sqlite(dir.path(), "mapping.db", "CREATE TABLE t (a TEXT);");
-
-    let cases = [
-        ("SELECT a FROM t ALTER", "ALTER"),
-        ("SELECT a FROM t CREATE x", "CREATE"),
-        ("SELECT a FROM t REPLACE x", "REPLACE"),
-        ("SELECT a FROM t ATTACH x", "ATTACH"),
-        ("SELECT a FROM t DETACH x", "DETACH"),
-        ("SELECT a FROM t PRAGMA x", "PRAGMA"),
-        ("SELECT a FROM t REINDEX", "REINDEX"),
-        ("SELECT a FROM t VACUUM", "VACUUM"),
-        ("SELECT a FROM t INSERT x", "INSERT"),
-    ];
-
-    for (query, keyword) in cases {
-        let err = load_mapping_preview(
-            &path,
-            &MappingReadOptions {
-                format: Some(MappingFormat::Sqlite),
-                sql_query: Some(query.to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            err.contains(keyword),
-            "expected rejection for keyword {keyword} in query '{query}', got: {err}"
-        );
-    }
-}
-
-#[test]
 fn sqlite_blob_column_is_encoded_as_base64() {
     let dir = tempdir().unwrap();
     let path = write_sqlite(
@@ -1153,10 +1241,11 @@ fn sqlite_mapping_rejects_non_select_queries_and_semicolons() {
             "SELECT * FROM photos; DROP TABLE photos",
             "must not contain semicolons",
         ),
-        (
-            "SELECT * FROM photos DROP",
-            "must not contain the DROP keyword",
-        ),
+        // Not a keyword scan any more: a trailing DROP is simply not valid SQL, and SQLite
+        // says so while compiling it. Every statement that *would* write is already gone by
+        // the line above, which is why the authorizer never fires on this path — it is the
+        // guard for when it does.
+        ("SELECT * FROM photos DROP", "failed to prepare the SQL query"),
     ];
 
     for (query, expected) in bad_cases {
@@ -1227,12 +1316,13 @@ fn sqlite_preview_truncates_rows_but_counts_them_all() {
     assert!(preview.truncated);
 }
 
+/// A denylist scanned the query text for twelve words and had to hand-roll word boundaries
+/// so that ordinary table names survived; getting that wrong rejected real databases, and
+/// the scan itself was the one loop in this crate that a mutation could hang. The
+/// authorizer judges actions, not spelling, so these names are unremarkable to it — which
+/// is the improvement worth pinning.
 #[test]
-fn validate_sql_query_matches_forbidden_keywords_on_word_boundaries() {
-    // The guard scans for DDL/DML keywords but must only reject them as whole
-    // words, otherwise ordinary table names get caught. The existing coverage
-    // checks one substring case; these pin both sides of the boundary test
-    // and the scan-advance that lets a later match still be found.
+fn table_names_that_contain_a_keyword_are_read_normally() {
     let dir = tempdir().unwrap();
     let path = write_sqlite(
         dir.path(),
@@ -1240,30 +1330,28 @@ fn validate_sql_query_matches_forbidden_keywords_on_word_boundaries() {
         r#"
             CREATE TABLE undrop (source TEXT, output TEXT);
             CREATE TABLE droplet (source TEXT, output TEXT);
+            CREATE TABLE my_updates (source TEXT, output TEXT);
             INSERT INTO undrop VALUES ('a.jpg', 'out-a');
             INSERT INTO droplet VALUES ('b.jpg', 'out-b');
+            INSERT INTO my_updates VALUES ('c.jpg', 'out-c');
             "#,
     );
 
-    // Preceded by an alphanumeric: "unDROP" is not the DROP keyword.
-    assert!(
-        query_is_accepted(&path, "SELECT source, output FROM undrop").is_ok(),
-        "a keyword at the end of a longer word must be allowed"
-    );
-    // Followed by an alphanumeric: "DROPlet" is not the DROP keyword either.
-    assert!(
-        query_is_accepted(&path, "SELECT source, output FROM droplet").is_ok(),
-        "a keyword at the start of a longer word must be allowed"
-    );
+    // A keyword at the end of a longer word, at the start of one, and after an underscore
+    // — the three cases the boundary arithmetic had to get right.
+    for table in ["undrop", "droplet", "my_updates"] {
+        let query = format!("SELECT source, output FROM {table}");
+        assert!(
+            query_is_accepted(&path, &query).is_ok(),
+            "{table} is a table name, not a keyword"
+        );
+    }
 
-    // A non-matching occurrence must not stop the scan: the first DROP here
-    // is inside "undrop", the second is a real keyword at the very end.
-    let err = query_is_accepted(
-        &path,
-        "SELECT source FROM undrop WHERE source = source OR DROP",
-    )
-    .expect_err("the trailing DROP is a whole word");
-    assert!(err.contains("DROP keyword"), "unexpected error: {err}");
+    // A column named for a keyword is fine too, including in the results.
+    assert!(
+        query_is_accepted(&path, "SELECT source AS delete_me FROM undrop").is_ok(),
+        "an alias is not a statement"
+    );
 }
 
 #[test]
@@ -1281,36 +1369,9 @@ fn validate_sql_query_is_case_insensitive_and_trims() {
     // Leading whitespace and lower case still count as beginning with SELECT.
     assert!(query_is_accepted(&path, "   select source, output from photos").is_ok());
 
-    // And a lower-case DDL keyword is still caught.
-    let err = query_is_accepted(
-        &path,
-        "select source from photos where source = source or drop",
-    )
-    .expect_err("lower-case keywords are normalised before matching");
-    assert!(err.contains("DROP keyword"), "unexpected error: {err}");
-}
-
-#[test]
-fn validate_sql_query_rejects_each_forbidden_keyword() {
-    let dir = tempdir().unwrap();
-    let path = write_sqlite(
-        dir.path(),
-        "forbidden.db",
-        "CREATE TABLE photos (source TEXT, output TEXT);",
-    );
-
-    for keyword in [
-        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "REPLACE", "ATTACH", "DETACH",
-        "PRAGMA", "REINDEX", "VACUUM",
-    ] {
-        let query = format!("SELECT source FROM photos WHERE source = source OR {keyword}");
-        let err = match query_is_accepted(&path, &query) {
-            Ok(()) => panic!("{keyword} should have been rejected"),
-            Err(e) => e,
-        };
-        assert!(
-            err.contains(&format!("{keyword} keyword")),
-            "wrong error for {keyword}: {err}"
-        );
-    }
+    // The prefix check normalises case before it looks, so a lower-case write is still
+    // not a SELECT.
+    let err = query_is_accepted(&path, "  update photos set output = 'x'")
+        .expect_err("a lower-case write is still a write");
+    assert!(err.contains("must begin with SELECT"), "unexpected error: {err}");
 }
