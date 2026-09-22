@@ -693,6 +693,112 @@ mod tests {
         assert_eq!(tensor.len(), 3 * 640 * 640);
     }
 
+    /// Every term of `decode_level`, on a fixture where none of them can collapse.
+    ///
+    /// The 34 mutants that survived the first round of this work were all here, and the reason
+    /// is that `the_two_decode_paths_agree` cannot reach shared code: `decode_level` is called
+    /// by *both* paths, so mutating it changes both sides identically and they still agree. An
+    /// agreement test is blind to the code the two sides have in common.
+    ///
+    /// So this asserts absolute values, and the fixture is picked so each operator is
+    /// observable on its own:
+    ///
+    /// * a cell that is neither on row 0 nor column 0, so `cell % cells` and `cell / cells` are
+    ///   different non-zero numbers and `centre_y` is not zero;
+    /// * the second anchor, so `row / ANCHORS_PER_CELL` is not the identity;
+    /// * four different box distances, none of them 0 or 1, so no pair of `centre +- d * stride`
+    ///   terms agree;
+    /// * both landmarks, each with a non-zero dx *and* dy, so `index * 2` is exercised at 1 as
+    ///   well as 0 and the y arithmetic is not multiplied by zero;
+    /// * a letterbox scale of 1.6, because at 1.0 dividing by it is the identity and `/` can be
+    ///   swapped for `*` freely -- which is precisely what survived before.
+    #[test]
+    fn decode_level_computes_every_term_from_the_anchor() {
+        const STRIDE: f32 = 32.0;
+        const SCALE: f32 = 1.6;
+        let cells = (640 / 32) as usize; // 20
+        let rows = cells * cells * ANCHORS_PER_CELL;
+
+        // Cell (column 7, row 3), second anchor.
+        let (column, row_index) = (7usize, 3usize);
+        let cell = row_index * cells + column;
+        let row = cell * ANCHORS_PER_CELL + 1;
+
+        let mut scores = vec![0.0f32; rows];
+        let mut boxes = vec![0.0f32; rows * 4];
+        let mut points = vec![0.0f32; rows * LANDMARKS * 2];
+        scores[row] = 0.8;
+        // left, top, right, bottom -- all distinct, none 0 or 1.
+        let d = [0.25f32, 0.75, 1.5, 2.25];
+        boxes[row * 4..row * 4 + 4].copy_from_slice(&d);
+        // Two landmarks, four distinct non-zero distances.
+        let lm = [0.5f32, 0.375, -0.25, 0.625];
+        points[row * LANDMARKS * 2..row * LANDMARKS * 2 + 4].copy_from_slice(&lm);
+
+        let mut found = Vec::new();
+        decode_level(
+            &scores,
+            &boxes,
+            &points,
+            cells,
+            STRIDE,
+            Letterbox { scale: SCALE },
+            0.5,
+            &mut found,
+        );
+        assert_eq!(found.len(), 1, "one anchor was over threshold");
+        let got = &found[0];
+
+        let centre_x = column as f32 * STRIDE;
+        let centre_y = row_index as f32 * STRIDE;
+        let x1 = centre_x - d[0] * STRIDE;
+        let y1 = centre_y - d[1] * STRIDE;
+        let x2 = centre_x + d[2] * STRIDE;
+        let y2 = centre_y + d[3] * STRIDE;
+
+        let close = |got: f32, want: f32, what: &str| {
+            assert!(
+                (got - want).abs() < 1e-3,
+                "{what}: got {got}, expected {want}"
+            );
+        };
+        close(got.score, 0.8, "score");
+        close(got.bbox.x, x1 / SCALE, "box x");
+        close(got.bbox.y, y1 / SCALE, "box y");
+        close(got.bbox.width, (x2 - x1) / SCALE, "box width");
+        close(got.bbox.height, (y2 - y1) / SCALE, "box height");
+
+        // Nothing in the box may coincide, or a swapped pair would read as correct.
+        for (a, b) in [
+            (got.bbox.x, got.bbox.y),
+            (got.bbox.width, got.bbox.height),
+            (got.bbox.x, got.bbox.width),
+        ] {
+            assert!((a - b).abs() > 1.0, "fixture is degenerate: {a} vs {b}");
+        }
+
+        for index in 0..TRAINED_LANDMARKS {
+            let point = got.landmarks[index].expect("the two eyes are predicted");
+            close(
+                point.x,
+                (centre_x + lm[index * 2] * STRIDE) / SCALE,
+                "landmark x",
+            );
+            close(
+                point.y,
+                (centre_y + lm[index * 2 + 1] * STRIDE) / SCALE,
+                "landmark y",
+            );
+        }
+        // The two eyes must differ on both axes, or `index * 2` is not being read.
+        let (first, second) = (
+            got.landmarks[0].expect("eye 0"),
+            got.landmarks[1].expect("eye 1"),
+        );
+        assert!((first.x - second.x).abs() > 1.0, "the eyes share an x");
+        assert!((first.y - second.y).abs() > 1.0, "the eyes share a y");
+    }
+
     /// One anchor over threshold at stride 32, decoded by hand.
     fn single_detection_outputs(score: f32) -> Vec<fcs_ort::OutputTensor> {
         let mut outputs = Vec::new();
