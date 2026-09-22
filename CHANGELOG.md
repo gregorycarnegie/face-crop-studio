@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typo in one is invisible until a tag is pushed. The new check takes a second, fails if it finds
   no scripts to check, and was verified against the exact bug above.
 
+### Changed
+
+- **Mutation testing has a 120-second floor on the test timeout** (`minimum_test_timeout` in
+  `.cargo/mutants.toml`). The automatic timeout is five times the baseline, but the baseline runs
+  alone while four mutant jobs contend for one GPU: `fcs-utils` baselined at 5.3 s for a 27 s
+  timeout while its slowest *passing* mutant took 17.4 s. Three mutants were being reported as
+  timeouts whose tests had already printed FAILED, and a timeout reads as a missed mutant.
+
 ## [2.0.0] - 2026-09-21
 
 The licence question is closed: nothing shipped is trained on non-commercial data. YuNet is

@@ -63,3 +63,17 @@ exclude_globs = [
     # without a camera, so its mutants all survive.
     "fcs-utils/src/webcam.rs",
 ]
+
+# The auto timeout is baseline_test_time * 5, and the baseline runs alone while
+# the mutants run four-wide against one GPU. Measured September 2026: fcs-utils
+# baselined at 5.3 s (timeout 27 s) but its slowest *passing* mutant took 17.4 s,
+# and fcs-core baselined at 11.4 s (timeout 57 s) with a passing mutant at 42.5 s.
+# Three mutants were reported as timeouts whose tests had already printed FAILED
+# — caught, recorded as timeout, because `cargo test` only exits when the binary
+# does. A timeout reads as a missed mutant, so that is a silent loss.
+#
+# 120 s clears the measured tail on every package. The genuine hangs (the
+# `rounded_polygon` angle loop, `validate_sql_query`'s backwards scan,
+# `wait_for_gpu` with nothing polling) still stop here; they just cost 90 s more
+# each, which is minutes across a run measured in hours.
+minimum_test_timeout = 120
