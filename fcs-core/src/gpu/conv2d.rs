@@ -263,32 +263,7 @@ impl Conv2dPipeline {
             }
         };
 
-        // The selection order must match `main` in conv2d.wgsl, which is still the grouped
-        // fallback's entry point: pointwise, then depthwise, then ungrouped-general.
-        let pointwise = config.kernel_width == 1
-            && config.kernel_height == 1
-            && config.stride_x == 1
-            && config.stride_y == 1
-            && config.pad_x == 0
-            && config.pad_y == 0
-            && config.groups == 1;
-        let depthwise = config.kernel_width == 3
-            && config.kernel_height == 3
-            && config.stride_x == 1
-            && config.stride_y == 1
-            && config.pad_x == 1
-            && config.pad_y == 1
-            && config.groups == config.input_channels
-            && config.output_channels == config.input_channels;
-        let kernel = if pointwise {
-            Kernel::Pointwise
-        } else if depthwise {
-            Kernel::Depthwise
-        } else if config.groups == 1 {
-            Kernel::General
-        } else {
-            Kernel::Grouped
-        };
+        let kernel = kernel_for(config);
         // Pointwise and ungrouped-general gather the same inputs for every output channel,
         // so both take the four-channel tile; the other two take one channel per thread.
         let channel_tiled = matches!(kernel, Kernel::Pointwise | Kernel::General);
@@ -620,5 +595,142 @@ impl From<&Conv2dConfig> for Conv2dUniforms {
                 })
                 .unwrap_or(0),
         }
+    }
+}
+
+/// Which specialised kernel a config takes.
+///
+/// Pulled out of `encode` so it can be asserted without a GPU. Every one of these comparisons
+/// survived mutation while it was inline: a mis-route sends the convolution to the *general*
+/// kernel, which computes the same answer more slowly, so comparing output against a CPU
+/// reference cannot see it. What is wrong in that case is the dispatch, and the only way to
+/// check a dispatch is to look at it.
+///
+/// The selection order must match `main` in conv2d.wgsl, which is still the grouped fallback's
+/// entry point: pointwise, then depthwise, then ungrouped-general.
+fn kernel_for(config: &Conv2dConfig) -> Kernel {
+    let pointwise = config.kernel_width == 1
+        && config.kernel_height == 1
+        && config.stride_x == 1
+        && config.stride_y == 1
+        && config.pad_x == 0
+        && config.pad_y == 0
+        && config.groups == 1;
+    let depthwise = config.kernel_width == 3
+        && config.kernel_height == 3
+        && config.stride_x == 1
+        && config.stride_y == 1
+        && config.pad_x == 1
+        && config.pad_y == 1
+        && config.groups == config.input_channels
+        && config.output_channels == config.input_channels;
+    if pointwise {
+        Kernel::Pointwise
+    } else if depthwise {
+        Kernel::Depthwise
+    } else if config.groups == 1 {
+        Kernel::General
+    } else {
+        Kernel::Grouped
+    }
+}
+
+#[cfg(test)]
+mod kernel_selection_tests {
+    use super::*;
+    use crate::gpu::conv2d::{Conv2dChannels, Conv2dOptions, SpatialDims};
+
+    /// A config with every field distinct from every other, so one field standing in for
+    /// another cannot go unnoticed.
+    fn config(
+        kernel: (u32, u32),
+        stride: (u32, u32),
+        pad: (u32, u32),
+        groups: u32,
+        channels: (u32, u32),
+    ) -> Conv2dConfig {
+        Conv2dConfig::new(
+            1,
+            Conv2dChannels::new(channels.0, channels.1),
+            SpatialDims::new(12, 9),
+            SpatialDims::new(kernel.0, kernel.1),
+            SpatialDims::new(stride.0, stride.1),
+            SpatialDims::new(pad.0, pad.1),
+            Conv2dOptions::new(groups, None),
+        )
+        .expect("valid config")
+    }
+
+    #[test]
+    fn a_1x1_unpadded_ungrouped_convolution_is_pointwise() {
+        let c = config((1, 1), (1, 1), (0, 0), 1, (8, 16));
+        assert_eq!(kernel_for(&c), Kernel::Pointwise);
+    }
+
+    #[test]
+    fn a_3x3_same_padded_channelwise_convolution_is_depthwise() {
+        let c = config((3, 3), (1, 1), (1, 1), 8, (8, 8));
+        assert_eq!(kernel_for(&c), Kernel::Depthwise);
+    }
+
+    /// Each condition on its own: change one field and the kernel must change.
+    ///
+    /// This is what kills the `==` mutants. With them inline, flipping any one comparison sent
+    /// the convolution to `General`, which is still correct, so nothing failed.
+    #[test]
+    fn every_pointwise_condition_is_load_bearing() {
+        // Start from the pointwise config and break one thing at a time.
+        for (what, c) in [
+            ("kernel width", config((2, 1), (1, 1), (0, 0), 1, (8, 16))),
+            ("kernel height", config((1, 2), (1, 1), (0, 0), 1, (8, 16))),
+            ("stride x", config((1, 1), (2, 1), (0, 0), 1, (8, 16))),
+            ("stride y", config((1, 1), (1, 2), (0, 0), 1, (8, 16))),
+            ("pad x", config((1, 1), (1, 1), (1, 0), 1, (8, 16))),
+            ("pad y", config((1, 1), (1, 1), (0, 1), 1, (8, 16))),
+        ] {
+            assert_ne!(
+                kernel_for(&c),
+                Kernel::Pointwise,
+                "{what} should have disqualified the pointwise kernel"
+            );
+        }
+        // Grouped disqualifies it too, and lands on the grouped kernel rather than general.
+        let grouped = config((1, 1), (1, 1), (0, 0), 4, (8, 16));
+        assert_eq!(kernel_for(&grouped), Kernel::Grouped);
+    }
+
+    #[test]
+    fn every_depthwise_condition_is_load_bearing() {
+        for (what, c) in [
+            ("kernel width", config((2, 3), (1, 1), (1, 1), 8, (8, 8))),
+            ("kernel height", config((3, 2), (1, 1), (1, 1), 8, (8, 8))),
+            ("stride x", config((3, 3), (2, 1), (1, 1), 8, (8, 8))),
+            ("stride y", config((3, 3), (1, 2), (1, 1), 8, (8, 8))),
+            ("pad x", config((3, 3), (1, 1), (0, 1), 8, (8, 8))),
+            ("pad y", config((3, 3), (1, 1), (1, 0), 8, (8, 8))),
+            // groups != input channels, and output != input channels.
+            ("groups", config((3, 3), (1, 1), (1, 1), 4, (8, 8))),
+            ("output channels", config((3, 3), (1, 1), (1, 1), 8, (8, 16))),
+        ] {
+            assert_ne!(
+                kernel_for(&c),
+                Kernel::Depthwise,
+                "{what} should have disqualified the depthwise kernel"
+            );
+        }
+    }
+
+    /// The stem: 3x3 stride 2, ungrouped. Neither fast path, and not the grouped fallback.
+    #[test]
+    fn the_strided_stem_takes_the_general_kernel() {
+        let c = config((3, 3), (2, 2), (1, 1), 1, (3, 16));
+        assert_eq!(kernel_for(&c), Kernel::General);
+    }
+
+    /// Grouped but not depthwise is the one the detector never reaches.
+    #[test]
+    fn grouped_but_not_channelwise_takes_the_grouped_kernel() {
+        let c = config((3, 3), (1, 1), (1, 1), 4, (8, 16));
+        assert_eq!(kernel_for(&c), Kernel::Grouped);
     }
 }
