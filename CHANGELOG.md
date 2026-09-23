@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check, so the script exited 1 in 0.1 seconds with no output. It only shows up in a release
   build, and by then Linux and Windows had already uploaded their artifacts -- a half-built
   v2.0.0 with seven of eight platforms.
+- **`fcs_core::cpu::conv2d::conv2d` panicked when a kernel was wider than the padded input** on
+  its general path (dense or grouped, not depthwise). The bound on columns that could skip the
+  per-tap bounds check used `saturating_sub`, which turned "no column fits" into "column 0 fits",
+  so that column read past the end of the input plane. The depthwise path and the reference
+  implementation both handled the shape; the detector's own layers never produce it, so the app
+  was unaffected. Found while working out why two mutants in that bound survived.
 
 ### Security
 

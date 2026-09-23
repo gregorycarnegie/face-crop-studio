@@ -18,6 +18,7 @@
 //!   stem, so it is written for clarity rather than speed.
 
 use anyhow::Result;
+use std::ops::Range;
 use rayon::prelude::*;
 
 use super::tensor::Tensor;
@@ -153,6 +154,23 @@ fn rows_per_task(out_h: usize, planes: usize, threads: usize) -> usize {
     (rows.max(1)..=out_h)
         .find(|r| out_h.is_multiple_of(*r))
         .unwrap_or(1)
+}
+
+/// Output columns whose whole kernel window lies inside the image, so the general path can
+/// read them without a bounds check per tap.
+///
+/// Column `ox` reads input columns from `ox * stride - pad` for `kw` columns; it is interior
+/// when that span starts at or after 0 and ends at or before `w`. When the kernel is wider
+/// than the padded image no column qualifies and the range is empty. This used
+/// `saturating_sub`, which turned "no column" into "column 0": the general path then skipped
+/// the bounds checks for it and read past the end of the input plane.
+fn interior_columns(w: usize, kw: usize, stride: usize, pad: usize, out_w: usize) -> Range<usize> {
+    let hi = (w + pad)
+        .checked_sub(kw)
+        .map_or(0, |span| span / stride + 1)
+        .min(out_w);
+    let lo = pad.div_ceil(stride).min(hi);
+    lo..hi
 }
 
 /// Output spatial size for a given input, kernel, stride and padding.
@@ -399,12 +417,7 @@ fn conv_general(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> R
     let src = input.data();
     let act = config.activation;
 
-    // Widest output column whose whole kernel window is inside the image.
-    let x_interior_hi = {
-        let last = (w + pad).saturating_sub(kw) / stride + 1;
-        last.min(out_w)
-    };
-    let x_interior_lo = pad.div_ceil(stride).min(x_interior_hi);
+    let interior_cols = interior_columns(w, kw, stride, pad, out_w);
 
     let rpt = rows_per_task(out_h, n * c_out, rayon::current_num_threads());
     let rows_per_plane = out_h / rpt;
@@ -430,7 +443,7 @@ fn conv_general(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> R
 
                 for (ox, out) in out_row.iter_mut().enumerate() {
                     let ix0 = (ox * stride) as isize - pad as isize;
-                    let interior = rows_inside && ox >= x_interior_lo && ox < x_interior_hi;
+                    let interior = rows_inside && interior_cols.contains(&ox);
                     let mut acc = bias;
 
                     if interior {
@@ -569,6 +582,37 @@ mod tests {
         assert_eq!(rows_per_task(1, 5, 4), 1);
     }
 
+    /// `interior_columns` against its definition, over every small shape including the ones
+    /// where the kernel is wider than the padded image.
+    ///
+    /// The shape-agreement test can only see this bound from one side. A range that is too
+    /// narrow only sends columns through the bounds-checked path, which gives the same answer
+    /// more slowly, so shrinking it (`w - pad` for `w + pad`, or dropping the `+ 1`) left every
+    /// output identical. Too wide is the direction that corrupts, and it happened: a kernel
+    /// wider than the padded image made column 0 "interior" and the general path panicked.
+    #[test]
+    fn interior_columns_are_exactly_the_ones_whose_window_fits() {
+        for w in 1..=7 {
+            for kw in 1..=5 {
+                for stride in 1..=3 {
+                    for pad in 0..=2 {
+                        let out_w = output_dim(w, kw, stride, pad);
+                        // Both conditions are monotone in `ox`, so the set is one interval.
+                        let expected: Vec<usize> = (0..out_w)
+                            .filter(|&ox| {
+                                let start = (ox * stride) as isize - pad as isize;
+                                start >= 0 && start + kw as isize <= w as isize
+                            })
+                            .collect();
+                        let got: Vec<usize> =
+                            interior_columns(w, kw, stride, pad, out_w).collect();
+                        assert_eq!(got, expected, "w {w} kernel {kw} stride {stride} pad {pad}");
+                    }
+                }
+            }
+        }
+    }
+
     /// `reference` below calls `output_dim` too, so the shape-agreement test moves with any
     /// mutation of it and cannot see one: replacing the `/ stride` with `* stride` left every
     /// conv test passing and only showed up as a timeout, when the inflated dimensions made
@@ -597,8 +641,9 @@ mod tests {
         // (groups, out_channels): dense to 1 or 6 channels, depthwise with multiplier 1 or 2.
         let layers = [(1, 1), (1, 6), (c_in, c_in), (c_in, c_in * 2)];
         // 5x7 is non-square so axis swaps show; 3x3 is small enough that interior/border
-        // bounds go wrong visibly.
-        for (h, w) in [(5usize, 7usize), (3, 3)] {
+        // bounds go wrong visibly; 5x2 is narrower than a 3-wide kernel, so with no padding
+        // no column is interior at all -- the general path panicked there.
+        for (h, w) in [(5usize, 7usize), (3, 3), (5, 2)] {
             // Batch of 2 with the second item negated: batch 0 alone makes every
             // `batch * ...` offset 0.
             let mut data = ramp(2 * c_in * h * w, 30);
