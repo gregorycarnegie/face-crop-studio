@@ -73,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     definition over every small shape, which is also what found the panic above;
   - the GPU dispatch width (two) -- the shader returns early past the output edge, so a
     sixteen-fold over-dispatch changed no pixel. Extracted as `workgroups`, like `kernel_for`.
+- **The default model location is tested.** Every test loaded SCRFD and the eye refiner by
+  explicit path, so `ScrfdDetector::load` and `EyeRefiner::load` -- the calls the app actually
+  makes at startup -- could be replaced with `None` and nothing failed. Both had been accepted as
+  untestable, because `load` resolves `models/` against the working directory and changing that
+  is process-global. A test file of its own holding a single test has no other test to race
+  with, so `tests/default_model_location.rs` moves to the workspace root and requires both to
+  load, under `FCS_STRICT_TESTS`.
 
 ## [2.0.0] - 2026-09-21
 

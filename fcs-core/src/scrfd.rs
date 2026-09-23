@@ -898,10 +898,10 @@ mod tests {
     }
 
     /// `ScrfdDetector::load` resolves the model relative to the working directory, which under
-    /// `cargo test` is the crate root. It therefore returns `None` here whatever it does, so the
-    /// `-> None` mutant is indistinguishable. Accepted for the same reason as the refiner's:
-    /// killing it needs `set_current_dir`, which is process-global. `load_from` carries the
-    /// logic and is tested above.
+    /// `cargo test` is the crate root. It therefore returns `None` here whatever it does, so this
+    /// only pins the negative half. The positive half -- that `load` finds the model from the
+    /// workspace root -- needs `set_current_dir`, which is process-global, so it lives in
+    /// `tests/default_model_location.rs`, a binary with nothing else in it to race with.
     #[test]
     fn load_resolves_relative_to_the_working_directory() {
         assert!(

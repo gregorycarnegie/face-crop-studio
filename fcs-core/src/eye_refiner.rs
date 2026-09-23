@@ -567,12 +567,11 @@ mod tests {
 
     /// `EyeRefiner::load` resolves the model relative to the working directory, and under
     /// `cargo test` that is the crate root, which has no `models/`. So it returns `None` here
-    /// whatever it does, and a mutant replacing it with `None` is indistinguishable.
+    /// whatever it does, and this only pins the negative half.
     ///
-    /// Accepted rather than worked around: killing it would mean `set_current_dir`, which is
-    /// process-global and would make every other test in this binary order-dependent. The
-    /// logic worth testing is in `load_from`, which has its own coverage above; this wrapper is
-    /// one call to `resolve_data_path`, which is tested in `fcs-utils`.
+    /// The positive half needs `set_current_dir`, which is process-global and would make every
+    /// other test in this binary order-dependent. So it lives in
+    /// `tests/default_model_location.rs`, a binary holding that one test and nothing else.
     #[test]
     fn load_resolves_relative_to_the_working_directory() {
         // Documents the behaviour rather than asserting a path: from the crate root there is
