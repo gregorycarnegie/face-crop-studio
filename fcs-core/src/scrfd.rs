@@ -51,7 +51,7 @@ const LANDMARKS: usize = 5;
 const TRAINED_LANDMARKS: usize = 2;
 
 /// Workspace-relative location of the exported model.
-const DEFAULT_MODEL: &str = "models/scrfd80k_500m_640.onnx";
+pub(crate) const DEFAULT_MODEL: &str = "models/scrfd80k_500m_640.onnx";
 
 /// A loaded SCRFD detector, on whichever engine is available.
 #[derive(Debug)]

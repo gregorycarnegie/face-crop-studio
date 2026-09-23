@@ -136,10 +136,36 @@ impl FaceDetector {
 mod tests {
     use super::*;
 
+    fn strict_tests() -> bool {
+        std::env::var("FCS_STRICT_TESTS").is_ok_and(|v| v != "0" && !v.is_empty())
+    }
+
+    /// The shipped detector, loaded by explicit path from the workspace root.
+    ///
+    /// These tests used to call `FaceDetector::load`, which resolves `models/` against the
+    /// working directory -- under `cargo test` the crate root, which has none. So all three
+    /// skipped on every machine, and without consulting `FCS_STRICT_TESTS`, so strict CI
+    /// reported them as passing having run nothing. `load` itself is covered by
+    /// `tests/default_model_location.rs`.
+    fn detector() -> Option<FaceDetector> {
+        let model = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("fcs-core sits in the workspace root")
+            .join(crate::scrfd::DEFAULT_MODEL);
+        let detector = FaceDetector::load_from(&model);
+        if detector.is_none() {
+            assert!(
+                !strict_tests(),
+                "FCS_STRICT_TESTS: the detector did not load from {model:?}"
+            );
+            eprintln!("skipped: no detector model at {model:?}");
+        }
+        detector
+    }
+
     #[test]
     fn settings_change_shares_the_loaded_model() {
-        let Some(detector) = FaceDetector::load() else {
-            eprintln!("skipped: no detector model present");
+        let Some(detector) = detector() else {
             return;
         };
         let stricter = detector.with_settings(&DetectionSettings {
@@ -157,8 +183,7 @@ mod tests {
     /// field is given a value distinguishable from the default, and read back.
     #[test]
     fn every_setting_reaches_the_detector() {
-        let Some(detector) = FaceDetector::load() else {
-            eprintln!("skipped: no detector model present");
+        let Some(detector) = detector() else {
             return;
         };
         let configured = detector.with_settings(&DetectionSettings {
@@ -214,8 +239,7 @@ mod tests {
 
     #[test]
     fn detection_runs_on_whatever_engine_is_available() {
-        let Some(detector) = FaceDetector::load() else {
-            eprintln!("skipped: no detector model present");
+        let Some(detector) = detector() else {
             return;
         };
         let image = DynamicImage::ImageRgb8(image::RgbImage::new(64, 64));

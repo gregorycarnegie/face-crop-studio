@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is process-global. A test file of its own holding a single test has no other test to race
   with, so `tests/default_model_location.rs` moves to the workspace root and requires both to
   load, under `FCS_STRICT_TESTS`.
+- **Three `FaceDetector` tests had never run.** They called `FaceDetector::load`, which finds
+  nothing from the crate root, so they skipped on every machine -- and did so without
+  consulting `FCS_STRICT_TESTS`, so strict CI counted them as passes. One of them is the guard
+  for "a setting read into the struct but never passed to the model". They now load the model
+  by path from the workspace root and fail under strict when it is missing; all three pass.
 
 ## [2.0.0] - 2026-09-21
 
