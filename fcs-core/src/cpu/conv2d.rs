@@ -145,7 +145,13 @@ impl ConvWeights {
 ///
 /// `threads` is a parameter rather than read here so the arithmetic can be tested; callers pass
 /// `rayon::current_num_threads()`.
-fn rows_per_task(out_h: usize, planes: usize, threads: usize) -> usize {
+///
+/// Takes `batch` and `channels` rather than their product: every caller computed the plane
+/// count itself, and no output could tell a wrong one from a right one -- any value yields
+/// a divisor of `out_h`, so it only moves work between tasks. Inside, the multiplication is
+/// covered by this function's own test.
+fn rows_per_task(out_h: usize, batch: usize, channels: usize, threads: usize) -> usize {
+    let planes = batch * channels;
     // Several tasks per thread so rayon can balance a ragged tail.
     let target_tasks = threads.max(1) * 4;
     let wanted_per_plane = (target_tasks / planes.max(1)).max(1);
@@ -258,7 +264,7 @@ fn conv_pointwise(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) ->
     // Tasks are (plane, row-block) rather than whole planes: a 16-channel layer
     // would otherwise leave most threads idle, and those are the layers running
     // at the largest spatial sizes.
-    let rpt = rows_per_task(h, n * c_out, rayon::current_num_threads());
+    let rpt = rows_per_task(h, n, c_out, rayon::current_num_threads());
     let rows_per_plane = h / rpt;
 
     output
@@ -328,7 +334,7 @@ fn conv_depthwise(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) ->
     let act = config.activation;
     let kernel_area = kh * kw;
 
-    let rpt = rows_per_task(out_h, n * c, rayon::current_num_threads());
+    let rpt = rows_per_task(out_h, n, c, rayon::current_num_threads());
     let rows_per_plane = out_h / rpt;
 
     output
@@ -419,7 +425,7 @@ fn conv_general(input: &Tensor, weights: &ConvWeights, config: &ConvConfig) -> R
 
     let interior_cols = interior_columns(w, kw, stride, pad, out_w);
 
-    let rpt = rows_per_task(out_h, n * c_out, rayon::current_num_threads());
+    let rpt = rows_per_task(out_h, n, c_out, rayon::current_num_threads());
     let rows_per_plane = out_h / rpt;
 
     output
@@ -567,19 +573,24 @@ mod tests {
     #[test]
     fn rows_per_task_divides_the_output_and_scales_with_threads() {
         // 4 threads -> 16 tasks; 16 / 5 planes = 3 per plane; ceil(36 / 3) = 12, which divides 36.
-        assert_eq!(rows_per_task(36, 5, 4), 12);
+        assert_eq!(rows_per_task(36, 1, 5, 4), 12);
         assert_eq!(
-            rows_per_task(37, 5, 4),
+            rows_per_task(37, 1, 5, 4),
             37,
             "a prime height has no smaller divisor to round to"
         );
         assert_eq!(
-            rows_per_task(36, 20, 4),
+            rows_per_task(36, 4, 5, 4),
             36,
             "more planes than tasks: one task per plane"
         );
-        assert_eq!(rows_per_task(0, 5, 4), 1);
-        assert_eq!(rows_per_task(1, 5, 4), 1);
+        assert_eq!(rows_per_task(0, 1, 5, 4), 1);
+        assert_eq!(rows_per_task(1, 1, 5, 4), 1);
+        // Planes are batch times channels. With a batch of 1 above, `batch * channels` and
+        // `channels` are one number, so this pins the product with two factors that are not:
+        // 6 planes -> 2 per plane -> 18 rows, where 2 + 3 = 5 planes would give 12 and
+        // 2 / 3 = 0 (clamped to 1) would give 3.
+        assert_eq!(rows_per_task(36, 2, 3, 4), 18);
     }
 
     /// `interior_columns` against its definition, over every small shape including the ones

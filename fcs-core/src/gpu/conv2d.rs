@@ -264,9 +264,6 @@ impl Conv2dPipeline {
         };
 
         let kernel = kernel_for(config);
-        // Pointwise and ungrouped-general gather the same inputs for every output channel,
-        // so both take the four-channel tile; the other two take one channel per thread.
-        let channel_tiled = matches!(kernel, Kernel::Pointwise | Kernel::General);
         encoder.record_dispatch(
             context,
             match kernel {
@@ -276,17 +273,7 @@ impl Conv2dPipeline {
             },
             self.pipeline_for(device, kernel),
             &bind_group,
-            [
-                config
-                    .output_width
-                    .div_ceil(CONV_WORKGROUP_X * self.pixels_per_thread),
-                config.output_height.div_ceil(CONV_WORKGROUP_Y),
-                config.output_channels.div_ceil(if channel_tiled {
-                    POINTWISE_CHANNEL_TILE
-                } else {
-                    1
-                }),
-            ],
+            workgroups(config, kernel, self.pixels_per_thread),
         );
 
         Ok(output)
@@ -635,6 +622,28 @@ fn kernel_for(config: &Conv2dConfig) -> Kernel {
     }
 }
 
+/// Workgroups to dispatch for `config` on `kernel`. Each covers `CONV_WORKGROUP_X *
+/// pixels_per_thread` output columns, `CONV_WORKGROUP_Y` rows and, on the channel-tiled
+/// kernels, `POINTWISE_CHANNEL_TILE` output channels.
+///
+/// Its own function, like [`kernel_for`], so the counts can be asserted. The shader returns
+/// early past the output edge, so dispatching too many workgroups changes no pixel and no
+/// output comparison can see it: dividing the width by 12 or 2 columns per workgroup instead
+/// of 32 was up to a sixteen-fold over-dispatch that every GPU test passed.
+fn workgroups(config: &Conv2dConfig, kernel: Kernel, pixels_per_thread: u32) -> [u32; 3] {
+    // Pointwise and ungrouped-general gather the same inputs for every output channel, so
+    // both take the four-channel tile; the other two take one channel per thread.
+    let channel_tile = match kernel {
+        Kernel::Pointwise | Kernel::General => POINTWISE_CHANNEL_TILE,
+        Kernel::Depthwise | Kernel::Grouped => 1,
+    };
+    [
+        config.output_width.div_ceil(CONV_WORKGROUP_X * pixels_per_thread),
+        config.output_height.div_ceil(CONV_WORKGROUP_Y),
+        config.output_channels.div_ceil(channel_tile),
+    ]
+}
+
 #[cfg(test)]
 mod kernel_selection_tests {
     use super::*;
@@ -735,5 +744,40 @@ mod kernel_selection_tests {
     fn grouped_but_not_channelwise_takes_the_grouped_kernel() {
         let c = config((3, 3), (1, 1), (1, 1), 4, (8, 16));
         assert_eq!(kernel_for(&c), Kernel::Grouped);
+    }
+
+    /// The dispatch grid, with a width and channel count where every alternative divisor gives
+    /// a different answer: 40 columns over 32 per workgroup is 2, where 12 would give 4 and 2
+    /// would give 20; 17 rows over 8 is 3; 6 output channels over a tile of 4 is 2, where one
+    /// per thread would give 6. `pixels_per_thread` is 4, the value `GpuInferenceOps` builds
+    /// the pipeline with.
+    #[test]
+    fn the_dispatch_grid_divides_by_what_each_workgroup_covers() {
+        let pointwise = Conv2dConfig::new(
+            1,
+            Conv2dChannels::new(5, 6),
+            SpatialDims::new(40, 17),
+            SpatialDims::new(1, 1),
+            SpatialDims::new(1, 1),
+            SpatialDims::new(0, 0),
+            Conv2dOptions::new(1, None),
+        )
+        .expect("valid config");
+        assert_eq!(kernel_for(&pointwise), Kernel::Pointwise);
+        assert_eq!(workgroups(&pointwise, Kernel::Pointwise, 4), [2, 3, 2]);
+
+        // Depthwise takes one channel per thread, so the channel axis is not divided.
+        let depthwise = Conv2dConfig::new(
+            1,
+            Conv2dChannels::new(5, 5),
+            SpatialDims::new(40, 17),
+            SpatialDims::new(3, 3),
+            SpatialDims::new(1, 1),
+            SpatialDims::new(1, 1),
+            Conv2dOptions::new(5, None),
+        )
+        .expect("valid config");
+        assert_eq!(kernel_for(&depthwise), Kernel::Depthwise);
+        assert_eq!(workgroups(&depthwise, Kernel::Depthwise, 4), [2, 3, 5]);
     }
 }

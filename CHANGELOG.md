@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A rounded-polygon arc point is checked at an index that is not a multiple of `steps / 2`.**
   The three points the test did check were all invariant under an arc swept backwards the long
   way round, so a mutant that shifted the sweep by a whole turn agreed with every assertion.
+- **The last ten surviving convolution mutants are killed**, each by asserting a value that no
+  output comparison could see, because every wrong value it could take still gave the right
+  pixels:
+  - the plane count each CPU path passes to `rows_per_task` (six mutants) -- any value yields
+    a divisor of the height, so it only moves work between tasks. `rows_per_task` now takes
+    batch and channels and multiplies them itself, under its own test;
+  - the interior-column bound in the general path (two) -- too narrow only sends columns
+    through the bounds-checked path. Extracted as `interior_columns` and checked against its
+    definition over every small shape, which is also what found the panic above;
+  - the GPU dispatch width (two) -- the shader returns early past the output edge, so a
+    sixteen-fold over-dispatch changed no pixel. Extracted as `workgroups`, like `kernel_for`.
 
 ## [2.0.0] - 2026-09-21
 
