@@ -7,6 +7,7 @@ GPU accelerated face detection and cropping software built in Rust.
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
 ![WGSL](https://img.shields.io/badge/WGSL-GPU%20Compute-blue?logo=webgpu)
+[![SCRFD-80k](https://img.shields.io/badge/SCRFD-80k-purple)](tools/dataset/SCRFD_80K.md)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![CI](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml)
 [![Release](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml/badge.svg)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml)
