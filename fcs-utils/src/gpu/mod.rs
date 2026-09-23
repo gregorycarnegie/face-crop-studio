@@ -1018,6 +1018,21 @@ mod tests {
     }
 
     #[test]
+    fn an_adapter_exists_where_ci_requires_one() {
+        // CI sets FCS_REQUIRE_GPU on every leg, because every hosted runner has an adapter:
+        // WARP on Windows, Metal on macOS, lavapipe on Linux. Each GPU test skips on "no
+        // adapter" by design, so a leg that lost its adapter would otherwise report the same
+        // green as one that ran them all -- which is how the Linux legs spent their life. One
+        // failure here is enough to surface it; the skips elsewhere can stay as they are.
+        if std::env::var("FCS_REQUIRE_GPU").is_ok_and(|v| v != "0" && !v.is_empty()) {
+            assert!(
+                test_support::test_context().is_some(),
+                "FCS_REQUIRE_GPU is set but no GPU adapter was found"
+            );
+        }
+    }
+
+    #[test]
     fn a_forced_fallback_adapter_is_the_software_one() {
         let options = GpuContextOptions {
             respect_env: false,

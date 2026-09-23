@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI parses every installer script** (`bash -n`). These run only inside a release build, so a
   typo in one is invisible until a tag is pushed. The new check takes a second, fails if it finds
   no scripts to check, and was verified against the exact bug above.
+- **The Linux CI legs run the GPU tests**, on Mesa's lavapipe, a software Vulkan adapter. Until
+  now they skipped all of them: the hosted runners have no graphics card. They are free to run
+  on the CPU, as they already were without anyone noting it on Windows (WARP) and macOS (Metal)
+  -- so every WGSL shader and dispatch is now checked on all three backends. Software adapters
+  say nothing about speed or vendor drivers; they do say whether the numbers are right. Proven
+  in WSL first: with no driver 63 GPU tests skip, with lavapipe none do and none fail.
+- **`FCS_REQUIRE_GPU`**, set on every CI leg, fails a test when no adapter is found. GPU tests
+  skip on "no adapter" by design, so a leg that lost its adapter would otherwise report the same
+  green as one that ran them all -- which is how the Linux legs looked the whole time.
 
 ### Changed
 

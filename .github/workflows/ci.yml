@@ -102,8 +102,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows carries the coverage gate: it is the only leg with a usable
-          # GPU adapter, so it is the only one that reaches the wgpu code paths.
+          # Windows carries the coverage gate. It used to be described as the only
+          # leg reaching the wgpu code paths; it never was (macOS runs Metal), and
+          # since lavapipe went in below, every leg does.
           - name: Windows
             os: windows-latest
             coverage: true
@@ -203,6 +204,16 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.github/actions/linux-build-deps
 
+      # A software Vulkan adapter, so the Linux legs run the GPU tests instead of
+      # skipping every one of them. Mesa's lavapipe runs compute shaders on the CPU:
+      # it says nothing about speed or vendor drivers, but it checks every WGSL
+      # shader and dispatch on Vulkan, beside WARP (D3D12) on Windows and Metal on
+      # macOS. Here rather than in linux-build-deps, which release.yml shares and
+      # which has no use for it. The apt lists were refreshed by the step above.
+      - name: Install lavapipe (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
+
       - name: Fetch ONNX Runtime (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -257,8 +268,10 @@ jobs:
       # the models arrive via artifact, the runtime is downloaded above, and
       # the sample images are in-tree, so a skip here
       # means a broken path, not an unavailable asset. GPU-dependent tests still
-      # self-skip when no adapter is present — the hosted macOS and Linux runners
-      # have no usable GPU, so those legs cover the CPU paths only.
+      # self-skip when no adapter is present, which is right on a developer's
+      # machine and wrong here: every leg has one (WARP, Metal, lavapipe). So
+      # FCS_REQUIRE_GPU makes a missing adapter fail one test, instead of letting
+      # a leg that lost it report the same green as one that ran them all.
       - name: Test with coverage
         if: matrix.coverage
         # One instrumented run, not a second pass: `cargo llvm-cov nextest` wraps the same
@@ -274,6 +287,7 @@ jobs:
         shell: bash
         env:
           FCS_STRICT_TESTS: "1"
+          FCS_REQUIRE_GPU: "1"
           NEXTEST_PROFILE: ci
         run: |
           status=0
@@ -292,6 +306,7 @@ jobs:
         shell: bash
         env:
           FCS_STRICT_TESTS: "1"
+          FCS_REQUIRE_GPU: "1"
           NEXTEST_PROFILE: ci
         run: cargo nextest run --workspace --all-features
 
