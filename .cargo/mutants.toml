@@ -68,12 +68,22 @@ exclude_globs = [
 # the mutants run four-wide against one GPU. Measured September 2026: fcs-utils
 # baselined at 5.3 s (timeout 27 s) but its slowest *passing* mutant took 17.4 s,
 # and fcs-core baselined at 11.4 s (timeout 57 s) with a passing mutant at 42.5 s.
-# Three mutants were reported as timeouts whose tests had already printed FAILED
-# — caught, recorded as timeout, because `cargo test` only exits when the binary
-# does. A timeout reads as a missed mutant, so that is a silent loss.
+# A timeout reads as a missed mutant, so one caused by contention is a silent
+# loss. 120 s clears the measured tail on every package.
 #
-# 120 s clears the measured tail on every package. The genuine hangs (the
-# `rounded_polygon` angle loop, `validate_sql_query`'s backwards scan,
-# `wait_for_gpu` with nothing polling) still stop here; they just cost 90 s more
-# each, which is minutes across a run measured in hours.
+# A FAILED line in a timed-out mutant's log does not mean the timeout was
+# contention. `cargo test` exits only when the whole binary does, so one test can
+# fail while another, under the same mutant, never ends. Three mutants looked
+# "caught, just slow" and were expected to clear at 120 s. One did
+# (`apply_raster_mask_optimized`'s `4 * width`). The other two did not, and the
+# 2026-09-24 run showed why: `load_jpeg_exif`'s `index + 2` -> `- 2` makes the
+# segment walker stop advancing on short segments (a real loop), and
+# `calculate_crop_region`'s `out_h > 0.0` -> `>=`/`==` makes a zero-height aspect
+# infinite, so a test grinds through a u32::MAX-wide region (46 s alone, idle).
+# To tell which, find the test in the log that never reports.
+#
+# The genuine hangs stop here too; they just cost 90 s more each, which is
+# minutes across a run measured in hours. As of that run all six remaining
+# timeouts are genuine: `wait_for_gpu` (x2) with nothing polling,
+# `GpuStatusIndicator::pending` recursing through `Default`, and the three above.
 minimum_test_timeout = 120

@@ -56,8 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mutation testing has a 120-second floor on the test timeout** (`minimum_test_timeout` in
   `.cargo/mutants.toml`). The automatic timeout is five times the baseline, but the baseline runs
   alone while four mutant jobs contend for one GPU: `fcs-utils` baselined at 5.3 s for a 27 s
-  timeout while its slowest *passing* mutant took 17.4 s. Three mutants were being reported as
-  timeouts whose tests had already printed FAILED, and a timeout reads as a missed mutant.
+  timeout while its slowest *passing* mutant took 17.4 s. A timeout reads as a missed mutant, so
+  one caused by contention is a silent loss. Of three that looked like contention, one cleared at
+  120 s; the other two were genuine -- a test had printed FAILED while a different test under the
+  same mutant never ended, and `cargo test` waits for the whole binary. All six timeouts left
+  after the full run of 2026-09-24 are genuine hangs or grinds, each identified by name.
 - **`rounded_polygon` normalises its arc sweep with an `if` instead of a `while`.** Both angles
   come from `atan2`, so one addition of TAU always suffices; the loop was identical for every
   finite input but turned any mutation of its condition or step into a hang.
