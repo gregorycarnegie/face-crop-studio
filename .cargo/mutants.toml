@@ -125,9 +125,5 @@ minimum_test_timeout = 120
 # Not measurable on this host, which is not the same as equivalent:
 #
 #   get_vram_macos (x3): macOS only; neither Windows nor WSL can run it.
-#   <impl Drop for Environment/Session>::drop -> (): skips ReleaseEnv and
-#     ReleaseSession -- a native-handle leak no functional test can see. Killing
-#     them needs a fake OrtApi table (21 non-nullable extern fns) to count
-#     releases, which is more test than the two lines it guards.
 #   encode_path (x2 per platform): each variant only compiles on its own OS.
 #     The Windows one is caught here; the unix one is caught in WSL.

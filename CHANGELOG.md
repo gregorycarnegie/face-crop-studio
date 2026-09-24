@@ -109,6 +109,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   formula, the eye refiner's output-length check and `FaceDetector::load` are asserted directly.
   A third, redundant zero-radius guard in the GPU enhancer is removed -- `try_gpu_blur` and the
   CPU fallback already carried it, which is why its mutants could not be killed.
+- **ONNX Runtime handles are released, and a test proves it.** `Environment` and `Session` free
+  their native handles only in `Drop`, and no functional test can see a leak, so replacing either
+  `drop` with `()` survived. The test runs the real runtime through a copy of its API table whose
+  three release entries count their calls before forwarding, then requires exactly one of each.
 
 ### Removed
 

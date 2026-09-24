@@ -556,3 +556,87 @@ mod option_tests {
         ));
     }
 }
+
+/// `Drop` is the only place either type frees its native handles, and no functional test can see
+/// a leak: replacing either `drop` with `()` survived. So this runs the real runtime through a
+/// copy of its API table in which the three release entries count their calls and then forward to
+/// the real ones. Everything else in the table is the genuine function.
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    };
+
+    static ENV_RELEASES: AtomicUsize = AtomicUsize::new(0);
+    static MEMORY_INFO_RELEASES: AtomicUsize = AtomicUsize::new(0);
+    static SESSION_RELEASES: AtomicUsize = AtomicUsize::new(0);
+    /// The unpatched table the shims forward to, as an address: raw pointers are not `Sync`.
+    static REAL_API: OnceLock<usize> = OnceLock::new();
+
+    fn real() -> *const OrtApi {
+        *REAL_API.get().expect("set before any shim can run") as *const OrtApi
+    }
+
+    unsafe extern "system" fn release_env(env: *mut sys::OrtEnv) {
+        ENV_RELEASES.fetch_add(1, SeqCst);
+        unsafe { ((*real()).ReleaseEnv)(env) }
+    }
+
+    unsafe extern "system" fn release_memory_info(info: *mut sys::OrtMemoryInfo) {
+        MEMORY_INFO_RELEASES.fetch_add(1, SeqCst);
+        unsafe { ((*real()).ReleaseMemoryInfo)(info) }
+    }
+
+    unsafe extern "system" fn release_session(session: *mut sys::OrtSession) {
+        SESSION_RELEASES.fetch_add(1, SeqCst);
+        unsafe { ((*real()).ReleaseSession)(session) }
+    }
+
+    #[test]
+    fn dropping_a_session_and_its_environment_releases_each_handle_once() {
+        let strict = std::env::var("FCS_STRICT_TESTS").is_ok_and(|v| v != "0" && !v.is_empty());
+        let model = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("fcs-ort sits in the workspace root")
+            .join("models/eye_refiner.onnx");
+        let Some(mut runtime) = crate::locate() else {
+            assert!(!strict, "FCS_STRICT_TESTS: no ONNX Runtime");
+            eprintln!("skipped: no ONNX Runtime");
+            return;
+        };
+        if !model.exists() {
+            assert!(!strict, "FCS_STRICT_TESTS: no model at {model:?}");
+            eprintln!("skipped: no model at {model:?}");
+            return;
+        }
+
+        // Dropping the environment drops its `Runtime`, and with it a library handle. A second
+        // handle, never closed, keeps the module mapped for the rest of the process: unloading
+        // ONNX Runtime while its global thread pools exist is not something to test by accident.
+        // SAFETY: the same library `locate` already loaded and validated.
+        std::mem::forget(unsafe { libloading::Library::new(runtime.path()) }.expect("reload"));
+
+        // SAFETY: `OrtApi` is a `repr(C)` table of plain pointers, so a bitwise copy is an
+        // equally valid table; leaking it gives it the process lifetime the runtime assumes.
+        let mut table = unsafe { ptr::read(runtime.api) };
+        REAL_API.get_or_init(|| runtime.api as usize);
+        table.ReleaseEnv = release_env;
+        table.ReleaseMemoryInfo = release_memory_info;
+        table.ReleaseSession = release_session;
+        runtime.api = Box::leak(Box::new(table));
+
+        let environment = Arc::new(Environment::from_runtime(runtime).expect("environment"));
+        let session =
+            Session::new(&environment, &model, SessionOptions::default()).expect("session");
+
+        drop(session);
+        assert_eq!(SESSION_RELEASES.load(SeqCst), 1, "a dropped session must release its handle");
+        assert_eq!(ENV_RELEASES.load(SeqCst), 0, "the environment is still held");
+
+        drop(environment);
+        assert_eq!(ENV_RELEASES.load(SeqCst), 1, "a dropped environment must release the env");
+        assert_eq!(MEMORY_INFO_RELEASES.load(SeqCst), 1, "and its memory info");
+    }
+}
