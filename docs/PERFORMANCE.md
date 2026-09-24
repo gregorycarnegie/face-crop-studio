@@ -635,6 +635,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Delete the three unread GUI caches, and `lru` | up to ~1.3 GB no longer retained; 179 lines | `fcs-gui` |
 | 30 s deadline on every GPU wait; one test device per binary | no runtime change; `fcs-utils` suite 2.6x faster, harness hang gone | `fcs-utils/src/gpu/mod.rs` |
 | Stem sized from its input tensor | none at 640; makes a 320 input runnable (75) | `gpu/graph.rs` |
+| One submission per SCRFD forward pass | **-1.6 to -1.8 ms** a detection: -44% on a 4090, -7% on an iGPU. Bit-identical on the 1,239-image folder. YuNet's runtime had this; SCRFD's port had lost it | `scrfd/gpu.rs` |
 
 Output-changing rows, each adopted only after the output was reviewed: the GPU
 cropper deletion (Lanczos3 instead of fixed 2x2 taps; 18% of quality labels shift,

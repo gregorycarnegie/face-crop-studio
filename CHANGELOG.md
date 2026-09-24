@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The built-in GPU engine submits each SCRFD forward pass once instead of 66 times**, recording
+  every step into one command buffer. It is **-1.6 to -1.8 ms a detection**: 3.59 -> 2.02 ms on an
+  RTX 4090 (-44%) and 24.0 -> 22.2 ms on a Radeon iGPU (-7%), paired over 40 blocks of 50 runs
+  with every block faster, and bit-identical on every head output of all 1,239 images in the
+  reference folder on both adapters. YuNet's runtime had made exactly this change; SCRFD's WGSL
+  port, written when YuNet was replaced, went back to one submission per op. Only machines
+  without ONNX Runtime use this engine.
 - **Mutation testing has a 120-second floor on the test timeout** (`minimum_test_timeout` in
   `.cargo/mutants.toml`). The automatic timeout is five times the baseline, but the baseline runs
   alone while four mutant jobs contend for one GPU: `fcs-utils` baselined at 5.3 s for a 27 s
@@ -119,8 +126,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`GpuInferenceOps::encode_resize2x_add_tensors` and its fused upsample-and-add pipeline.** It
   was experiment 36's optimisation for YuNet's neck, and its only caller went with YuNet in 2.0,
   leaving a shader compiled at every GPU start and never dispatched. SCRFD's neck has the same
-  upsample-then-add shape twice, so the fusion could be brought back from `6ed93b3` for two
-  dispatches per forward pass; that is a performance change to measure, not dead code to keep.
+  upsample-then-add shape twice, so the fusion was brought back and measured before this entry was
+  final: bit-identical on all 1,239 images of the reference folder on both a 4090 and a Radeon
+  iGPU, and not measurably faster -- +0.025 +/- 0.037 ms and -0.049 +/- 0.160 ms paired, with the
+  pass batched as above. Two dispatches out of 66 are not where the time goes, so it stays deleted.
 
 ## [2.0.0] - 2026-09-21
 

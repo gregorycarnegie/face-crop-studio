@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use crate::{
     gpu::{
         ActivationKind, GpuInferenceOps, GpuTensor,
+        utils::ComputeDispatch,
         conv2d::{Conv2dChannels, Conv2dConfig, Conv2dOptions, SpatialDims},
     },
     scrfd::plan::Step,
@@ -81,11 +82,49 @@ impl ScrfdGpuWeights {
 }
 
 /// Run every step on the GPU and return the nine head outputs, in the topology's output order.
+///
+/// The whole forward pass is recorded into one command buffer and submitted once. Submitting op
+/// by op -- 66 queue submissions per detection -- was what SCRFD's port had fallen back to when
+/// it replaced YuNet, whose runtime had already made this change for the same reason.
 pub fn run(
     ops: &GpuInferenceOps,
     input: &GpuTensor,
     weights: &ScrfdGpuWeights,
 ) -> Result<Vec<GpuTensor>> {
+    let mut encoder =
+        ops.context()
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("scrfd"),
+            });
+    // Every slot is held until after the submit. A tensor dropped while the pass is still being
+    // recorded would hand its buffer back to the pool, where another thread could take it and
+    // submit its own work first -- ahead of this pass, which still reads that buffer.
+    let slots = if ops.context().profiler().is_some() {
+        // Per-dispatch timestamps need a pass per dispatch, which recording through the encoder
+        // gives.
+        encode(&mut encoder, ops, input, weights)?
+    } else {
+        // One pass for everything: wgpu still inserts the barriers between dispatches that
+        // pooled-buffer reuse needs.
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("scrfd_forward"),
+            timestamp_writes: None,
+        });
+        encode(&mut pass, ops, input, weights)?
+    };
+    ops.context().queue().submit(Some(encoder.finish()));
+    outputs(&slots)
+}
+
+/// Record every step into `dispatch` and return all the slots, intermediates included, so the
+/// caller decides when they may be released.
+fn encode(
+    dispatch: &mut impl ComputeDispatch,
+    ops: &GpuInferenceOps,
+    input: &GpuTensor,
+    weights: &ScrfdGpuWeights,
+) -> Result<Vec<Option<GpuTensor>>> {
     let mut slots: Vec<Option<GpuTensor>> = Vec::with_capacity(super::topology::STEPS.len() + 1);
     slots.push(Some(input.clone()));
 
@@ -119,19 +158,24 @@ pub fn run(
                 let (w, b) = weights.convs[index]
                     .as_ref()
                     .context("a Conv step without weights: the plan and the weights disagree")?;
-                ops.conv2d_tensor(source, w, b, &config)
+                ops.encode_conv2d_tensor(dispatch, source, w, b, &config)
                     .with_context(|| format!("step {index}: conv"))?
             }
             Step::Add { a, b } => ops
-                .add_tensors(slot(&slots, a, index)?, slot(&slots, b, index)?)
+                .encode_add_tensors(dispatch, slot(&slots, a, index)?, slot(&slots, b, index)?)
                 .with_context(|| format!("step {index}: add"))?,
             Step::Upsample2x { input } => ops
-                .resize2x_tensor(slot(&slots, input, index)?)
+                .encode_resize2x_tensor(dispatch, slot(&slots, input, index)?)
                 .with_context(|| format!("step {index}: upsample"))?,
         };
         slots.push(Some(produced));
     }
 
+    Ok(slots)
+}
+
+/// The head outputs, in the topology's output order.
+fn outputs(slots: &[Option<GpuTensor>]) -> Result<Vec<GpuTensor>> {
     super::topology::OUTPUTS
         .iter()
         .map(|&at| {
