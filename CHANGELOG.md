@@ -98,6 +98,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for "a setting read into the struct but never passed to the model". They now load the model
   by path from the workspace root and fail under strict when it is missing; all three pass.
 
+### Removed
+
+- **`GpuInferenceOps::encode_resize2x_add_tensors` and its fused upsample-and-add pipeline.** It
+  was experiment 36's optimisation for YuNet's neck, and its only caller went with YuNet in 2.0,
+  leaving a shader compiled at every GPU start and never dispatched. SCRFD's neck has the same
+  upsample-then-add shape twice, so the fusion could be brought back from `6ed93b3` for two
+  dispatches per forward pass; that is a performance change to measure, not dead code to keep.
+
 ## [2.0.0] - 2026-09-21
 
 The licence question is closed: nothing shipped is trained on non-commercial data. YuNet is

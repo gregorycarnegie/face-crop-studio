@@ -4,7 +4,7 @@ use super::{
     conv2d::{Conv2dConfig, Conv2dPipeline, Conv2dTensors},
     max_pool::{MaxPoolConfig, MaxPoolPipeline},
     tensor::GpuTensor,
-    upsample2x::{ResizeAddPipeline, Upsample2xPipeline},
+    upsample2x::Upsample2xPipeline,
     utils::ComputeDispatch,
 };
 
@@ -25,7 +25,6 @@ pub struct GpuInferenceOps {
     max_pool: MaxPoolPipeline,
     add: AddPipeline,
     upsample2x: Upsample2xPipeline,
-    resize2x_add: ResizeAddPipeline,
 }
 
 impl GpuInferenceOps {
@@ -64,15 +63,7 @@ impl GpuInferenceOps {
             );
             Upsample2xPipeline::new(device)?
         };
-        let resize2x_add = {
-            let _g = fcs_utils::telemetry::timing_guard(
-                "fcs_core::compile_resize2x_add",
-                log::Level::Trace,
-            );
-            ResizeAddPipeline::new(device)?
-        };
         Ok(Self {
-            resize2x_add,
             conv2d,
             activation,
             max_pool,
@@ -336,18 +327,5 @@ impl GpuInferenceOps {
         self.ensure_same_context(tensor, "resize tensor")?;
         self.upsample2x
             .encode(encoder, &self.context, &self.buffer_pool, tensor)
-    }
-
-    /// `upsample2x(small) + skip` in one dispatch, for an upsample nothing else reads.
-    pub fn encode_resize2x_add_tensors(
-        &self,
-        encoder: &mut impl ComputeDispatch,
-        small: &GpuTensor,
-        skip: &GpuTensor,
-    ) -> Result<GpuTensor> {
-        self.ensure_same_context(small, "resize2x_add small")?;
-        self.ensure_same_context(skip, "resize2x_add skip")?;
-        self.resize2x_add
-            .encode(encoder, &self.context, &self.buffer_pool, small, skip)
     }
 }

@@ -54,4 +54,3 @@ pub use tensor::{GpuTensor, TensorShape};
 const MAX_POOL_WGSL: &str = include_str!("pool.wgsl");
 const ADD_WGSL: &str = include_str!("add.wgsl");
 const UPSAMPLE2X_WGSL: &str = include_str!("resize2x.wgsl");
-const RESIZE2X_ADD_WGSL: &str = include_str!("resize2x_add.wgsl");
