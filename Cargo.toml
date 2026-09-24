@@ -57,7 +57,7 @@ fcs-utils = { path = "fcs-utils" }
 anyhow = "1.0.104"
 env_logger = "0.11.11"
 log = "0.4.34"
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 
 # CLI and desktop UI
 arboard = "3.6.1"
