@@ -303,6 +303,14 @@ impl GpuEnvMode {
     }
 }
 
+impl DetectArgs {
+    /// Whether a mapping file was given without `--crop`. The mapping only renames crops, so
+    /// such a run has nothing to apply it to yet -- worth a notice rather than silence.
+    pub(crate) fn mapping_waits_for_crop(&self) -> bool {
+        self.mapping_file.is_some() && !self.crop
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +323,19 @@ mod tests {
     #[test]
     fn gpu_env_mode_ignore_does_not_respect_env() {
         assert!(!GpuEnvMode::Ignore.respects_env());
+    }
+
+    #[test]
+    fn a_mapping_file_waits_for_crop_only_without_it() {
+        let parse = |flags: &[&str]| {
+            // `--input` is required outside watch mode, whatever the field's type says.
+            let mut argv = vec!["fcs-cli", "--input", "photo.jpg"];
+            argv.extend_from_slice(flags);
+            <DetectArgs as clap::Parser>::try_parse_from(argv).expect("valid arguments")
+        };
+        assert!(parse(&["--mapping-file", "m.csv"]).mapping_waits_for_crop());
+        assert!(!parse(&["--mapping-file", "m.csv", "--crop"]).mapping_waits_for_crop());
+        assert!(!parse(&[]).mapping_waits_for_crop());
+        assert!(!parse(&["--crop"]).mapping_waits_for_crop());
     }
 }

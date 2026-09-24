@@ -131,6 +131,14 @@ mod tests {
         Tensor::new(1, c, h, w, data).expect("valid tensor")
     }
 
+    /// `pooled_dim` directly. The pooling tests use 2x2 windows on 4x4 inputs, where
+    /// `padded - kernel` and `padded / kernel` are both 2.
+    #[test]
+    fn pooled_dim_is_the_floor_formula() {
+        // (13 + 2 - 3) / 2 + 1 = 7, where (13 + 2) / 3 / 2 + 1 would be 3.
+        assert_eq!(pooled_dim(13, 1, 3, 2).expect("fits"), 7);
+    }
+
     #[test]
     fn max_pool_2x2_halves_each_dimension() {
         // 4x4 counting up; each 2x2 window's max is its bottom-right corner.

@@ -624,3 +624,22 @@ fn conv2d_bind_groups_are_reused_across_dispatches() {
         "bind group cache hit rate collapsed: {hits} hits, {misses} misses"
     );
 }
+
+/// `memory_usage` is the pool's figure, and a pooled tensor registers in it. Both halves matter:
+/// a hard-coded 0 or 1 fails the first, and any other number the second.
+#[test]
+fn memory_usage_reports_the_buffer_pool() {
+    let Some(ops) = gpu_ops() else {
+        return;
+    };
+    let _tensor = GpuTensor::uninitialized_with_pool(
+        ops.context().clone(),
+        Some(ops.buffer_pool().clone()),
+        [1usize, 3, 5, 7],
+        Some("memory_usage_test"),
+    )
+    .expect("allocate pooled tensor");
+    let usage = ops.memory_usage();
+    assert!(usage > 1, "a 105-element pooled tensor must register, got {usage}");
+    assert_eq!(usage, ops.buffer_pool().memory_usage());
+}

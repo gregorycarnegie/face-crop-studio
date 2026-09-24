@@ -111,7 +111,7 @@ fn main() -> Result<()> {
 
     let detector = build_cli_detector(&model_path, &settings.detection)?;
 
-    if args.mapping_file.is_some() && !args.crop {
+    if args.mapping_waits_for_crop() {
         info!(
             "Mapping loaded without --crop; output overrides will be applied when cropping is executed."
         );

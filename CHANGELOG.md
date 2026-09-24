@@ -97,6 +97,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consulting `FCS_STRICT_TESTS`, so strict CI counted them as passes. One of them is the guard
   for "a setting read into the struct but never passed to the model". They now load the model
   by path from the workspace root and fail under strict when it is missing; all three pass.
+- **Every reachable surviving mutant is killed; what is left is equivalent or unmeasurable here.**
+  The full run of 2026-09-24 missed 75. 33 now have tests, 8 went with dead code (below), and
+  the rest are listed with their reasons in `.cargo/mutants.toml`, so a future run is checked
+  against that list rather than re-triaged. Among the tests: a zero blur radius switches
+  sharpening and background blur off on both engines -- that is a contract, not a fast path,
+  because `fast_blur` at radius 0 still changes pixels (the first draft of this list called
+  those mutants equivalent until a probe showed otherwise); telemetry output is now asserted
+  through a per-thread log capture, and the tests that flip the global telemetry switch share a
+  lock, closing a latent race between them; the GPU engine's accessors, the pooled-dimension
+  formula, the eye refiner's output-length check and `FaceDetector::load` are asserted directly.
+  A third, redundant zero-radius guard in the GPU enhancer is removed -- `try_gpu_blur` and the
+  CPU fallback already carried it, which is why its mutants could not be killed.
 
 ### Removed
 

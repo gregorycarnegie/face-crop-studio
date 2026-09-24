@@ -201,4 +201,40 @@ mod tests {
              decoration"
         );
     }
+
+    #[test]
+    fn debug_names_the_backend() {
+        assert_eq!(
+            format!("{:?}", EnhancementRuntime::cpu_only()),
+            r#"EnhancementRuntime { backend: "cpu" }"#
+        );
+    }
+
+    /// With a GPU context the runtime names the adapter it runs on; the CPU case is above. The
+    /// shared test context, never a new device.
+    #[test]
+    fn a_gpu_runtime_names_its_adapter() {
+        let Some(context) = crate::gpu::test_support::test_context() else {
+            return;
+        };
+        let expected = context.adapter_info().name.clone();
+        let runtime = EnhancementRuntime::new(Some(context));
+        assert_eq!(runtime.adapter_name(), Some(expected));
+    }
+
+    /// The CPU shape mask is the pipeline's, applied to a copy.
+    #[test]
+    fn the_cpu_shape_mask_matches_the_pipeline() {
+        let runtime = EnhancementRuntime::cpu_only();
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            12,
+            9,
+            image::Rgba([90, 120, 150, 255]),
+        ));
+        let color = RgbaColor::opaque(10, 20, 30);
+        let masked = runtime.apply_shape_mask(&image, &CropShape::Ellipse, 0.3, 0.5, color);
+        let mut expected = image.clone();
+        apply_shape_mask_dynamic(&mut expected, &CropShape::Ellipse, 0.3, 0.5, color);
+        assert_eq!(masked.to_rgba8(), expected.to_rgba8());
+    }
 }

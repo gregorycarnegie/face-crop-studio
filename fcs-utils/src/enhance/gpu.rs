@@ -114,7 +114,10 @@ impl WgpuEnhancer {
         }
 
         let combined_sharp = (settings.unsharp_amount + settings.sharpness).clamp(0.0, 2.0);
-        if combined_sharp > 0.0 && settings.unsharp_radius > 0.0 {
+        // No radius check here: `try_gpu_blur` declines a zero radius and `apply_unsharp_mask`
+        // returns its input for one, so a third guard could only ever agree with them -- which
+        // is exactly how its mutants survived.
+        if combined_sharp > 0.0 {
             if let Some(blurred) = self.try_gpu_blur(&out, settings.unsharp_radius)? {
                 out = apply_unsharp_with_preblur(&out, &blurred, combined_sharp);
             } else {
@@ -283,6 +286,53 @@ mod tests {
             d.unsharp_amount > 0.0,
             "defaults are expected to sharpen; neutral() exists because of it"
         );
+    }
+
+    /// Noise, not a flat colour or a gradient: `fast_blur` at radius 0 has to visibly change
+    /// something for a test to see it run.
+    fn noisy(w: u32, h: u32) -> DynamicImage {
+        DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, y| {
+            let v = (x * 37 + y * 91 + x * y * 13) % 256;
+            image::Rgba([v as u8, (v * 7 % 256) as u8, (255 - v) as u8, 255])
+        }))
+    }
+
+    /// The GPU path must agree with the CPU pipeline that a zero radius switches the
+    /// blur-based effects off. The CPU pipeline needs its own radius guard because it calls
+    /// `fast_blur`, which still changes pixels at radius 0; here `try_gpu_blur` and the CPU
+    /// fallbacks carry that guard, and this pins that they do.
+    #[test]
+    fn a_zero_radius_switches_the_blur_based_effects_off() {
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let enhancer = WgpuEnhancer::new(ctx).expect("init");
+        let image = noisy(24, 18);
+        let untouched = enhancer
+            .apply(&image, &neutral(), None)
+            .expect("apply")
+            .to_rgba8();
+        for (name, settings) in [
+            (
+                "sharpening",
+                EnhancementSettings {
+                    sharpness: 0.8,
+                    unsharp_radius: 0.0,
+                    ..neutral()
+                },
+            ),
+            (
+                "background blur",
+                EnhancementSettings {
+                    background_blur: true,
+                    background_blur_radius: 0.0,
+                    ..neutral()
+                },
+            ),
+        ] {
+            let out = enhancer.apply(&image, &settings, None).expect("apply").to_rgba8();
+            assert_eq!(out, untouched, "{name} at radius 0 changed the image");
+        }
     }
 
     #[test]

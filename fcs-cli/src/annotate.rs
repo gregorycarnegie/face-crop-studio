@@ -285,6 +285,28 @@ mod tests {
     /// Drawing happens in RGBA and JPEG has no alpha channel, so encoding refused outright and
     /// `--annotate` wrote a 0-byte file for every `.jpg` input -- the commonest source there is.
     /// It has to come back out as a decodable JPEG of the same size as the input.
+    /// Only JPEG, which has no alpha channel, is flattened; a PNG keeps its transparency. The
+    /// JPEG test cannot see `!=` in place of `==`, because `write_to` flattens JPEG by itself --
+    /// the mutant's real effect lands on every other format.
+    #[test]
+    fn annotating_a_png_keeps_its_alpha_channel() {
+        let dir = tempdir().expect("tempdir");
+        let img_path = dir.path().join("cutout.png");
+        let out_dir = dir.path().join("annotated");
+        std::fs::create_dir_all(&out_dir).expect("create output dir");
+
+        let mut rgba = RgbaImage::from_pixel(80, 60, image::Rgba([90, 120, 150, 255]));
+        // Transparent, and well away from the box and landmarks drawn below.
+        rgba.put_pixel(79, 59, image::Rgba([0, 0, 0, 0]));
+        let det = make_detection(10.0, 10.0, 30.0, 30.0);
+
+        let written = annotate_image(&DynamicImage::ImageRgba8(rgba), &img_path, &[det], &out_dir)
+            .expect("annotate a png");
+        let decoded = image::open(&written).expect("the output must be a decodable image");
+        assert_eq!(decoded.color(), image::ColorType::Rgba8, "the alpha channel must survive");
+        assert_eq!(decoded.to_rgba8().get_pixel(79, 59)[3], 0);
+    }
+
     #[test]
     fn annotating_a_jpeg_source_writes_a_real_jpeg() {
         let dir = tempdir().expect("tempdir");

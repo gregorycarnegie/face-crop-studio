@@ -1017,6 +1017,24 @@ mod tests {
         }
     }
 
+    /// The status event reaches the log exactly when telemetry allows Info. `emit_telemetry` is
+    /// how callers publish it, and nothing had tested it at all.
+    #[test]
+    fn gpu_status_telemetry_is_emitted_only_when_allowed() {
+        use crate::telemetry::{configure, lock_state, log_capture::capture};
+        let _state = lock_state();
+        let status = GpuStatusIndicator::pending();
+        configure(true, log::LevelFilter::Info);
+        let on = capture(|| status.emit_telemetry());
+        configure(false, log::LevelFilter::Off);
+        let off = capture(|| status.emit_telemetry());
+        assert!(
+            on.iter().any(|l| l.contains("\"event\":\"gpu_status\"")),
+            "telemetry on must emit the event: {on:?}"
+        );
+        assert!(off.is_empty(), "telemetry off must emit nothing: {off:?}");
+    }
+
     #[test]
     fn an_adapter_exists_where_ci_requires_one() {
         // CI sets FCS_REQUIRE_GPU on every leg, because every hosted runner has an adapter:

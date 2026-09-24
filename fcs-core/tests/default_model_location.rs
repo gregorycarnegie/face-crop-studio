@@ -7,7 +7,7 @@
 //! process-global -- which is why this is a test binary of its own holding exactly one test.
 //! There is nothing else in this process for the change to race with.
 
-use fcs_core::{EyeRefiner, ScrfdDetector};
+use fcs_core::{EyeRefiner, FaceDetector, ScrfdDetector};
 use std::path::Path;
 
 /// Fail instead of skipping, for CI.
@@ -44,5 +44,11 @@ fn both_models_load_from_the_default_location() {
     assert!(
         EyeRefiner::load().is_some(),
         "the eye refiner did not load from the default location"
+    );
+    // The wrapper the application actually calls, which only forwards to `ScrfdDetector::load`
+    // -- and so was just as untested.
+    assert!(
+        FaceDetector::load().is_some(),
+        "FaceDetector did not load from the default location"
     );
 }

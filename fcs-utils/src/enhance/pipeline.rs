@@ -62,3 +62,51 @@ pub fn apply_enhancements(
 
     DynamicImage::ImageRgba8(buf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Noise, not a flat colour or a gradient: `fast_blur` at radius 0 has to visibly change
+    /// something for a test to see it run.
+    fn noisy(w: u32, h: u32) -> DynamicImage {
+        DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, y| {
+            let v = (x * 37 + y * 91 + x * y * 13) % 256;
+            image::Rgba([v as u8, (v * 7 % 256) as u8, (255 - v) as u8, 255])
+        }))
+    }
+
+    /// A zero radius switches the blur-based effects off even when their amount is set. That
+    /// is more than a fast path: `fast_blur` at radius 0 still changes pixels, so running an
+    /// effect there alters an image the settings leave alone.
+    #[test]
+    fn a_zero_radius_switches_the_blur_based_effects_off() {
+        let base = EnhancementSettings {
+            unsharp_amount: 0.0,
+            sharpness: 0.0,
+            ..EnhancementSettings::default()
+        };
+        let untouched = apply_enhancements(&noisy(24, 18), &base, None).to_rgba8();
+        for (name, settings) in [
+            (
+                "sharpening",
+                EnhancementSettings {
+                    sharpness: 0.8,
+                    unsharp_radius: 0.0,
+                    ..base.clone()
+                },
+            ),
+            (
+                "background blur",
+                EnhancementSettings {
+                    background_blur: true,
+                    background_blur_radius: 0.0,
+                    ..base.clone()
+                },
+            ),
+        ] {
+            let out = apply_enhancements(&noisy(24, 18), &settings, None).to_rgba8();
+            assert_eq!(out, untouched, "{name} at radius 0 changed the image");
+        }
+    }
+}

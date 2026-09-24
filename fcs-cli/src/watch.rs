@@ -166,7 +166,7 @@ pub fn run(
     // Without --crop or --annotate a batch run writes nothing, and one-shot mode prints
     // its detections at the end -- which watch mode never reaches. Say so once, rather
     // than letting it look like the watcher is failing to notice files.
-    if !crop_enabled && annotate_dir.is_none() {
+    if writes_nothing(crop_enabled, annotate_dir.as_deref()) {
         warn!("Neither --crop nor --annotate is set, so nothing will be written to disk.");
     }
 
@@ -252,6 +252,13 @@ fn process_batch(
         summary.crops_saved,
         summary.crops_skipped_quality
     );
+}
+
+/// Whether a watch run has nowhere to put its results. Without `--crop` or `--annotate` a batch
+/// run writes nothing, and one-shot mode prints its detections at the end -- which watch mode
+/// never reaches, so it says so up front instead of looking as if it missed every file.
+fn writes_nothing(crop_enabled: bool, annotate_dir: Option<&Path>) -> bool {
+    !crop_enabled && annotate_dir.is_none()
 }
 
 #[cfg(test)]
@@ -425,5 +432,14 @@ mod tests {
         }
         // And with neither flag set there is nothing to check.
         assert_eq!(self_feeding_output(watched, None, None), None);
+    }
+
+    #[test]
+    fn only_a_run_with_neither_output_writes_nothing() {
+        let dir = Path::new("annotated");
+        assert!(writes_nothing(false, None));
+        assert!(!writes_nothing(true, None));
+        assert!(!writes_nothing(false, Some(dir)));
+        assert!(!writes_nothing(true, Some(dir)));
     }
 }

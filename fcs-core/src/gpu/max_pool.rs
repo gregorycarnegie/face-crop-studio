@@ -225,3 +225,16 @@ struct MaxPoolUniforms {
     stride: u32,
     pad: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every dimension differs, so no two can trade places unnoticed: 9x7 through a 3-wide,
+    /// stride-2, pad-1 window is 5 wide and 4 high.
+    #[test]
+    fn output_dims_are_batch_channels_height_width() {
+        let config = MaxPoolConfig::new(1, 3, 9, 7, 3, 2, 1).expect("valid config");
+        assert_eq!(config.output_dims(), [1, 3, 4, 5]);
+    }
+}

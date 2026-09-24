@@ -87,3 +87,47 @@ exclude_globs = [
 # timeouts are genuine: `wait_for_gpu` (x2) with nothing polling,
 # `GpuStatusIndicator::pending` recursing through `Default`, and the three above.
 minimum_test_timeout = 120
+
+# ---------------------------------------------------------------------------
+# Known survivors, verified 2026-09-24. A full run should miss exactly these;
+# anything else in missed.txt is new and needs a look. Listed rather than put in
+# `exclude_re`, because a name-based exclusion cannot tell two same-shaped
+# mutants in one function apart (apply_enhancements has four `> -> >=`: two
+# below, two killed) and a line-based one goes stale silently.
+#
+# Equivalent -- no test can tell them from the original:
+#
+#   `| -> ^` on wgpu::BufferUsages (GpuTensor::to_vec, tensor_usage x2,
+#     create_uniform_buffer): every flag is one distinct bit, so A|B == A^B.
+#   apply_nms_in_place `len < 200` (<=, ==, >): picks naive or grid NMS, and
+#     `grid_nms_matches_naive_reference` (proptest) pins them equal.
+#   apply_nms_naive `keep + 1 -> keep * 1`: the kept box also suppresses itself,
+#     but a kept box's flag is never read again and the list is truncated to keep.
+#   scrfd preprocess `ratio > 1 -> >=`: both arms give the same pair at 1.0
+#     (pinned, with the reasoning, in its own test).
+#   apply_enhancements / WgpuEnhancer::apply, skin `amount > 0 -> >=` and
+#     sharpening `combined > 0 -> >=`: skin smoothing and unsharp at amount 0 are
+#     exact identities (checked on pixels, not assumed).
+#   background_blur_from_rgba `< / > -> <= / >=` at 0.81 and 1.21: the blend
+#     weight is 0 or 1 exactly there, matching the branch the mutant takes.
+#   skin_smooth_rgba `y + dy`, `x + dx` -> `-`: a symmetric kernel over a
+#     symmetric range visits the same neighbours with the same weights.
+#   laplacian_variance `w > 512`, `h > 512` -> `>=`: at exactly 512 the fit is
+#     the image's own size, and that Triangle resize is an identity (checked).
+#   laplacian_variance `sum += -> -=`: the variance uses only the mean squared.
+#   best_fit_index `< -> <=`: breaks a tie between interchangeable buffers.
+#   pixel_adjust FLAG_EXPOSURE `1 << 0 -> 1 >> 0`: both are 1.
+#   load_jpeg_exif `index + 4 < len -> <=`: the extra iteration still reads in
+#     range, and any EXIF segment there would overrun and break.
+#   TempFile::keep -> (): after the rename the temp path is gone, so Drop's
+#     remove_file fails with NotFound and is ignored.
+#
+# Not measurable on this host, which is not the same as equivalent:
+#
+#   get_vram_macos (x3): macOS only; neither Windows nor WSL can run it.
+#   <impl Drop for Environment/Session>::drop -> (): skips ReleaseEnv and
+#     ReleaseSession -- a native-handle leak no functional test can see. Killing
+#     them needs a fake OrtApi table (21 non-nullable extern fns) to count
+#     releases, which is more test than the two lines it guards.
+#   encode_path (x2 per platform): each variant only compiles on its own OS.
+#     The Windows one is caught here; the unix one is caught in WSL.

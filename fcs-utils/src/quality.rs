@@ -253,6 +253,26 @@ pub fn estimate_sharpness(img: &DynamicImage) -> (f64, Quality) {
 mod tests {
     use super::*;
 
+    /// A tall image and its wide twin both exceed the analysis size along one axis, so both are
+    /// downscaled, and a pattern symmetric under transposition scores alike either way. `h ==`
+    /// in place of `h >` would skip the downscale for every tall image and score it at full
+    /// resolution, where a one-pixel checkerboard is nothing but edges.
+    #[test]
+    fn a_tall_image_scores_like_its_wide_twin() {
+        let checker = |w, h| {
+            DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, y| {
+                let v = if (x + y) % 2 == 0 { 0 } else { 255 };
+                image::Rgba([v, v, v, 255])
+            }))
+        };
+        let tall = laplacian_variance(&checker(64, 1024));
+        let wide = laplacian_variance(&checker(1024, 64));
+        assert!(
+            (tall - wide).abs() <= 1.0 + 0.01 * tall.max(wide),
+            "tall {tall}, wide {wide}"
+        );
+    }
+
     #[test]
     fn quality_downscale_matches_image_crate_dimensions() {
         // `laplacian_variance` now resizes to explicit dimensions instead of asking

@@ -1134,4 +1134,34 @@ pub(crate) mod tests {
         assert_eq!(filtered.len(), 1, "exactly one face is requested");
         assert_eq!(filtered[0].index, 1, "the second face is index 1");
     }
+
+    /// The eye positions reach red-eye removal. Given, it recolours the eye; empty, it has
+    /// nothing to aim at. Dropping the `!` swaps the two, so a crop with eyes would get none.
+    #[test]
+    fn build_processed_crop_passes_the_eyes_to_red_eye_removal() {
+        let settings = AppSettings::default();
+        let runtime = no_gpu_runtime();
+        let red = DynamicImage::ImageRgba8(RgbaImage::from_pixel(16, 16, Rgba([220, 30, 30, 255])));
+        let enhancement = Arc::new(fcs_utils::EnhancementSettings {
+            red_eye_removal: true,
+            ..fcs_utils::EnhancementSettings::default()
+        });
+        let det = sample_detection(0.0, 0.0, 16.0, 16.0, 0.9);
+        let eyes = [fcs_utils::RedEye {
+            x: 8.0,
+            y: 8.0,
+            radius: 6.0,
+            _pad: 0.0,
+        }];
+        let crop = |eyes: &[fcs_utils::RedEye]| {
+            build_processed_crop(0, &det, red.clone(), &settings, Some(&enhancement), &runtime, eyes)
+                .image
+                .to_rgba8()
+        };
+        assert_ne!(
+            crop(&eyes),
+            crop(&[]),
+            "passing the eyes must change what red-eye removal does"
+        );
+    }
 }

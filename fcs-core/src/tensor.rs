@@ -87,6 +87,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn into_vec_hands_back_the_buffer() {
+        let data = [1.5, -2.0, 3.25];
+        let tensor = Tensor::from_shape(&[1, 3], &data).expect("valid");
+        assert_eq!(tensor.into_vec(), data);
+    }
+
+    #[test]
     fn from_shape_rejects_a_length_that_disagrees() {
         let err = Tensor::from_shape(&[2, 3], &[0.0; 5]).expect_err("5 != 6");
         assert!(format!("{err}").contains("needs 6"), "{err}");

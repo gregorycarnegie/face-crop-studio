@@ -175,6 +175,9 @@ mod tests {
         });
         assert_eq!(stricter.model_name(), "SCRFD-80k");
         assert_eq!(stricter.inference_backend(), detector.inference_backend());
+        // Both sides above come from the same accessor, so they agree whatever it returns. This
+        // pins what it returns; `ScrfdDetector::engine` is itself pinned to the known names.
+        assert_eq!(detector.inference_backend(), detector.scrfd.engine());
         // Re-wrapping must not reload: both share one Arc.
         assert!(Arc::ptr_eq(&detector.scrfd, &stricter.scrfd));
     }

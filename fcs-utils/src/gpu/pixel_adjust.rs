@@ -231,6 +231,19 @@ impl GpuPixelAdjust {
 mod tests {
     use super::*;
 
+    /// Neutral settings need no pass; one setting off neutral does. Forcing `true` only costs
+    /// time, but the function states a contract and callers skip the GPU on it.
+    #[test]
+    fn needs_adjustment_only_when_a_setting_leaves_neutral() {
+        assert!(!GpuPixelAdjust::needs_adjustment(
+            &EnhancementSettings::default()
+        ));
+        assert!(GpuPixelAdjust::needs_adjustment(&EnhancementSettings {
+            exposure_stops: 0.5,
+            ..EnhancementSettings::default()
+        }));
+    }
+
     // Which adjustments are live, and the bitmask handed to the shader,
     // decide whether the GPU path runs at all and which branches it takes.
     // Both are plain CPU logic and neither had any coverage.

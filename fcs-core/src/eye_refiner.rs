@@ -132,22 +132,34 @@ impl EyeRefiner {
             }
         };
         let eyes = outputs.first()?;
-        if eyes.data.len() < 4 {
-            warn!(
-                "eye refiner returned {} values, expected 4; keeping detector landmarks",
-                eyes.data.len()
-            );
-            return None;
-        }
-
-        // The model is trained against points divided by the crop side, so its outputs are in
-        // units of the crop, not of the image.
-        let size = SIZE as f32;
+        let [left, right] = eye_points(&eyes.data)?;
         Some([
-            crop.image_point(eyes.data[0] * size, eyes.data[1] * size),
-            crop.image_point(eyes.data[2] * size, eyes.data[3] * size),
+            crop.image_point(left.0, left.1),
+            crop.image_point(right.0, right.1),
         ])
     }
+}
+
+/// The two eye points in the model's output, in crop pixels, or `None` when it returned too few
+/// values to hold them.
+///
+/// Its own function so the length check can be tested: inside `predict` it sat behind a real
+/// inference, and the model never returns the wrong length on request.
+fn eye_points(values: &[f32]) -> Option<[(f32, f32); 2]> {
+    if values.len() < 4 {
+        warn!(
+            "eye refiner returned {} values, expected 4; keeping detector landmarks",
+            values.len()
+        );
+        return None;
+    }
+    // The model is trained against points divided by the crop side, so its outputs are in
+    // units of the crop, not of the image.
+    let size = SIZE as f32;
+    Some([
+        (values[0] * size, values[1] * size),
+        (values[2] * size, values[3] * size),
+    ])
 }
 
 /// The square crop the network sees, and the mapping back out of it.
@@ -563,6 +575,18 @@ mod tests {
                 "channel {channel}: got {value} expected {expected}"
             );
         }
+    }
+
+    /// Three values are one short of two points and must be refused rather than read past the
+    /// end; four are exactly enough; a fifth is ignored. Between them they tell `<` from `<=`,
+    /// `==` and `>`.
+    #[test]
+    fn eye_points_needs_four_values_and_scales_them_to_the_crop() {
+        assert_eq!(eye_points(&[0.25, 0.5, 0.75]), None);
+        let size = SIZE as f32;
+        let expected = [(0.25 * size, 0.5 * size), (0.75 * size, 0.125 * size)];
+        assert_eq!(eye_points(&[0.25, 0.5, 0.75, 0.125]), Some(expected));
+        assert_eq!(eye_points(&[0.25, 0.5, 0.75, 0.125, 9.0]), Some(expected));
     }
 
     /// `EyeRefiner::load` resolves the model relative to the working directory, and under

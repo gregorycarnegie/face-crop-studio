@@ -953,3 +953,23 @@ fn xmp_segment_fits_exactly_at_the_u16_limit_and_not_one_block_past_it() {
     // One more byte adds a whole base64 block, four chars over.
     assert!(xmp_segment_of(vec![0xFF, 0xD8], &"x".repeat(48_883)).is_none());
 }
+
+/// "default" is a keyword, not an unknown value. Without its explicit arm it would still come
+/// out as `Default`, by way of the fallback -- which logs that the user typed something
+/// unrecognised.
+#[test]
+fn png_compression_default_keyword_parses_without_a_warning() {
+    use crate::telemetry::log_capture::capture;
+    let mut parsed = None;
+    let lines = capture(|| parsed = Some(PngCompression::parse("default")));
+    assert_eq!(parsed, Some(PngCompression::Default));
+    assert!(lines.is_empty(), "{lines:?}");
+    // The capture does see the fallback's warning, so the empty result above means something.
+    let lines = capture(|| {
+        PngCompression::parse("bogus");
+    });
+    assert!(
+        lines.iter().any(|l| l.contains("Unknown PNG compression")),
+        "{lines:?}"
+    );
+}

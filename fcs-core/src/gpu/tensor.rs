@@ -395,6 +395,17 @@ mod tests {
     }
 
     #[test]
+    fn size_bytes_is_four_bytes_per_element() {
+        let Some(ctx) = test_context() else {
+            return;
+        };
+        let data = vec![0.0f32; 2 * 3 * 5 * 7];
+        let tensor = GpuTensor::from_slice(ctx, [2usize, 3, 5, 7], &data, Some("size_test"))
+            .expect("tensor upload");
+        assert_eq!(tensor.size_bytes(), 210 * 4);
+    }
+
+    #[test]
     fn pooled_tensors_return_buffers() {
         let Some(ctx) = test_context() else {
             return;

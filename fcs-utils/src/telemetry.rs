@@ -156,6 +156,64 @@ fn filter_from_index(value: u8) -> LevelFilter {
     }
 }
 
+/// Serialises the tests that change the global telemetry state.
+///
+/// `configure` writes two process-wide atomics and the harness runs tests on parallel threads,
+/// so without this one test's `reset()` can land between another's `configure` and its
+/// assertion.
+#[cfg(test)]
+pub(crate) fn lock_state() -> std::sync::MutexGuard<'static, ()> {
+    static STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Records what one thread logs, for tests that need to see a log line.
+///
+/// It reports itself enabled only on a thread inside [`log_capture::capture`], so installing
+/// it changes what `log_enabled!` says nowhere else --
+/// `timing_guard_if_requires_every_condition_to_hold` relies on `log_enabled!` being false
+/// with no logger listening.
+#[cfg(test)]
+pub(crate) mod log_capture {
+    use log::{Log, Metadata, Record};
+    use std::cell::{Cell, RefCell};
+    use std::sync::Once;
+
+    thread_local! {
+        static CAPTURING: Cell<bool> = const { Cell::new(false) };
+        static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    struct Capture;
+
+    impl Log for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            CAPTURING.with(Cell::get)
+        }
+
+        fn log(&self, record: &Record<'_>) {
+            if CAPTURING.with(Cell::get) {
+                LINES.with(|lines| lines.borrow_mut().push(record.args().to_string()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    /// Run `f` and return every line it logged on this thread.
+    pub(crate) fn capture(f: impl FnOnce()) -> Vec<String> {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            log::set_logger(&Capture).expect("no other logger in this test binary");
+            log::set_max_level(log::LevelFilter::Trace);
+        });
+        CAPTURING.with(|c| c.set(true));
+        f();
+        CAPTURING.with(|c| c.set(false));
+        LINES.with(|lines| std::mem::take(&mut *lines.borrow_mut()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +225,7 @@ mod tests {
 
     #[test]
     fn configure_roundtrips_enabled_flag_and_level() {
+        let _state = lock_state();
         configure(true, LevelFilter::Debug);
         assert!(telemetry_enabled());
         assert_eq!(telemetry_level(), LevelFilter::Debug);
@@ -178,6 +237,7 @@ mod tests {
 
     #[test]
     fn telemetry_allows_respects_enabled_flag() {
+        let _state = lock_state();
         reset();
         // Disabled → never allowed regardless of level.
         assert!(!telemetry_allows(Level::Error));
@@ -194,6 +254,7 @@ mod tests {
 
     #[test]
     fn telemetry_allows_all_levels_at_trace() {
+        let _state = lock_state();
         configure(true, LevelFilter::Trace);
         for level in [
             Level::Error,
@@ -243,6 +304,7 @@ mod tests {
 
     #[test]
     fn elapsed_advances_and_finish_returns_a_real_duration() {
+        let _state = lock_state();
         reset();
         let guard = timing_guard_if("op", Level::Error, false);
 
@@ -282,6 +344,7 @@ mod tests {
     /// constructor that `timing_guard_if` itself calls.
     #[test]
     fn finish_reports_a_duration_and_the_active_flag_round_trips() {
+        let _state = lock_state();
         reset();
 
         let guard = TimingGuard::new("op".into(), Level::Error, true);
@@ -307,6 +370,7 @@ mod tests {
 
     #[test]
     fn timing_guard_if_requires_every_condition_to_hold() {
+        let _state = lock_state();
         // `active` is `enabled && telemetry_allows(level) && log_enabled!(..)`.
         // An `||` in place of either `&&` would activate the guard when only one
         // condition held, so check the two failing combinations independently.
@@ -373,5 +437,20 @@ mod tests {
             );
         }
         assert_eq!(filter_index(LevelFilter::Off), 0);
+    }
+
+    /// An active guard reports its duration when it drops; an inactive one says nothing. Built
+    /// directly, so the global telemetry state plays no part.
+    #[test]
+    fn an_active_guard_logs_its_duration_on_drop() {
+        let lines =
+            log_capture::capture(|| drop(TimingGuard::new("probe_op".into(), Level::Info, true)));
+        assert!(
+            lines.iter().any(|l| l.starts_with("probe_op completed in")),
+            "{lines:?}"
+        );
+        let lines =
+            log_capture::capture(|| drop(TimingGuard::new("quiet_op".into(), Level::Info, false)));
+        assert!(lines.is_empty(), "an inactive guard must not log: {lines:?}");
     }
 }
