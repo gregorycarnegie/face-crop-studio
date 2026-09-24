@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-09-24
+
+Fixes, one security hardening and a speed-up; nothing to do before upgrading. The macOS build that
+2.0.0 never shipped now builds. Custom SQL mapping queries are held read-only by SQLite itself
+rather than by a keyword list. The built-in GPU engine -- what runs on machines without ONNX
+Runtime -- detects 1.6 to 1.8 ms faster. Most of the rest came out of mutation testing: tests that
+had been passing without running, a CPU convolution panic in a public function, and a GPU pipeline
+nothing called.
+
+One public method is gone, `fcs_core::gpu::GpuInferenceOps::encode_resize2x_add_tensors`, which
+would make this a major by the letter of semver. It is a patch because nothing could have called
+it: its only caller went with YuNet in 2.0.0, and the crates are not published.
+
 ### Fixed
 
 - **The macOS release build exited immediately.** Removing YuNet from
@@ -2269,7 +2282,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0...v2.0.0
 [1.8.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.6.0...v1.7.0
