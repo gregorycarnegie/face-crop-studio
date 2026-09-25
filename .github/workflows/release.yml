@@ -11,12 +11,12 @@ env:
   # Keep these checksums in sync with ci.yml. Both models are this project's own exports, so
   # neither can be regenerated from a public URL: they are fetched from release assets, and
   # these digests are the only thing standing between a swapped upload and a shipped build.
-  EYE_REFINER_SHA256: b01dd218b46a7466eb13125b011e81b57e2e2e252794c403029db1d7c7628e76
-  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1/eye_refiner.onnx
+  EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
+  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1.1/eye_refiner.onnx
   # The detector trained on this project's own data (tools/dataset/SCRFD_80K.md). Like the
   # refiner it cannot be regenerated from a public URL, so it is fetched and checksummed.
-  SCRFD_SHA256: f31f1f01ca33d24184059bba0627a54b8351e6f2b167474a4d71f2361ea53c39
-  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2/scrfd80k_500m_640.onnx
+  SCRFD_SHA256: 2437def9510f2af6431a5b2090ae9f357bc189cb0223be1b6c4d4ff085798e64
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2.1/scrfd80k_500m_640.onnx
 
 jobs:
   shader-validation:

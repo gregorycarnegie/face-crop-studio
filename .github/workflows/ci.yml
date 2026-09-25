@@ -26,10 +26,10 @@ env:
   # Match the runtime shipped by release.yml.
   ORT_VERSION: "1.24.4"
   # Keep these checksums and URLs in sync with release.yml.
-  EYE_REFINER_SHA256: b01dd218b46a7466eb13125b011e81b57e2e2e252794c403029db1d7c7628e76
-  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1/eye_refiner.onnx
-  SCRFD_SHA256: f31f1f01ca33d24184059bba0627a54b8351e6f2b167474a4d71f2361ea53c39
-  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2/scrfd80k_500m_640.onnx
+  EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
+  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1.1/eye_refiner.onnx
+  SCRFD_SHA256: 2437def9510f2af6431a5b2090ae9f357bc189cb0223be1b6c4d4ff085798e64
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2.1/scrfd80k_500m_640.onnx
 
 jobs:
   # Fetch and verify the models once, then hand them to every platform leg as an artifact.

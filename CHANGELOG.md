@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The two models are licensed CC BY 4.0, and say so inside the file.** The code stays
+  `MIT OR Apache-2.0`; the detector and the eye refiner can be reused, commercially too, with
+  credit. Each `.onnx` now carries its source repository, licence, credit line and input/output
+  description in its ONNX metadata, which Netron and ONNX Runtime's `get_modelmeta()` show, so the
+  credit survives the file being copied out of an installer. Graph and weights are unchanged and
+  outputs bit-identical; the digests change, so the assets moved to `models-scrfd-80k-v2.1` and
+  `models-eye-refiner-v1.1`. `tools/dataset/stamp_model_metadata.py` writes the fields, and both
+  exporters call it.
+
 ## [2.0.1] - 2026-09-24
 
 Fixes, one security hardening and a speed-up; nothing to do before upgrading. The macOS build that

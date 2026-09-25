@@ -8,7 +8,8 @@ GPU accelerated face detection and cropping software built in Rust.
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
 ![WGSL](https://img.shields.io/badge/WGSL-GPU%20Compute-blue?logo=webgpu)
 [![SCRFD-80k](https://img.shields.io/badge/SCRFD-80k-purple)](tools/dataset/SCRFD_80K.md)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/code-MIT%20OR%20Apache--2.0-green)
+[![Models](https://img.shields.io/badge/models-CC%20BY%204.0-green)](models/README.md#licence)
 [![CI](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml)
 [![Release](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml/badge.svg)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml)
 
@@ -321,3 +322,11 @@ Mutation testing is deliberately not in CI: every mutant is a fresh incremental 
 - [Performance guide](docs/PERFORMANCE.md) – performance profile and optimization notes.
 - [OpenCV parity snapshot](docs/parity_report.md) – detection/crop parity against the OpenCV reference.
 - [Release runbook](docs/release_runbook.md) – the Windows-first release process.
+
+## Licence
+
+The code is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option. The two trained models in [`models/`](models/README.md) are licensed separately under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/): reuse them freely, including
+commercially, as long as you credit Face Crop Studio. See [models/README.md](models/README.md#licence)
+for the credit line.

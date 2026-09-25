@@ -18,10 +18,14 @@ export that does not match is worse than none, because it looks like a model.
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stamp_model_metadata import stamp  # same directory by design
 
 
 class RawHead(torch.nn.Module):
@@ -160,6 +164,7 @@ def main() -> None:
     )
     folded = fold_batchnorm(args.out)
     print(f"folded {folded} BatchNorm nodes into their convolutions, keeping their names")
+    stamp(args.out, "scrfd")  # credit travels with the file; verified below like the rest
 
     try:
         import onnxruntime as rt
