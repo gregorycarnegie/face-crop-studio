@@ -35,7 +35,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 </p>
 
 <p align="center">
-  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, preprocess on CPU or GPU, run inference, postprocess detections, and crop faces" width="900"/></a><br/>
+  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, letterbox it, run SCRFD on ONNX Runtime, the WGSL kernels or the CPU graph, decode and suppress detections, optionally refine the eyes, and crop faces" width="900"/></a><br/>
   <sub><strong>Detection pipeline</strong> - per-image flow from image load through preprocessing, inference, postprocessing, and per-face cropping.</sub>
 </p>
 

@@ -146,7 +146,7 @@ def main() -> None:
     # `do_constant_folding=False` on purpose. Folding is what makes the graph fast, but torch's
     # folding discards the module paths: the folded run produced 82 tensors named
     # `onnx::Conv_533` out of 118. `fcs-core`'s built-in CPU and WGSL engines look weights up by
-    # name (`crate::yunet::onnx`), and those numbers are assigned per export, so anything
+    # name (`crate::onnx`), and those numbers are assigned per export, so anything
     # pinned to them breaks the next time the model is regenerated. So the BatchNorms are
     # folded below instead, which keeps every name and produces the same numbers.
     torch.onnx.export(

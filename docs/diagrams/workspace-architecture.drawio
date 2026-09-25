@@ -20,26 +20,26 @@
         <mxCell id="core" value="fcs-core — face detection and cropping pipeline" style="swimlane;startSize=30;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=13;collapsible=0;" vertex="1" parent="1">
           <mxGeometry x="520" y="280" width="660" height="380" as="geometry" />
         </mxCell>
-        <mxCell id="pre" value="&lt;b&gt;preprocess.rs&lt;/b&gt;&lt;br&gt;letterbox fit&lt;br&gt;CPU or WGSL resize" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="pre" value="&lt;b&gt;scrfd.rs&lt;/b&gt;&lt;br&gt;ScrfdDetector&lt;br&gt;letterbox · decode&lt;br&gt;engine picked at load" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="20" y="50" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="model" value="&lt;b&gt;model.rs&lt;/b&gt;&lt;br&gt;one inference backend:&lt;br&gt;ONNX Runtime (ort_backend.rs)&lt;br&gt;built-in CPU graph (cpu/)&lt;br&gt;WGSL GPU graph (gpu/)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="model" value="&lt;b&gt;three engines, one network&lt;/b&gt;&lt;br&gt;ONNX Runtime (fcs-ort)&lt;br&gt;built-in CPU graph&lt;br&gt;(cpu/ · scrfd/plan.rs)&lt;br&gt;WGSL GPU graph&lt;br&gt;(gpu/ · scrfd/gpu.rs)&lt;br&gt;66 steps from scrfd/topology.rs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="235" y="50" width="190" height="170" as="geometry" />
         </mxCell>
-        <mxCell id="post" value="&lt;b&gt;postprocess.rs · nms.rs&lt;/b&gt;&lt;br&gt;decode · score gate&lt;br&gt;non-max suppression" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="post" value="&lt;b&gt;postprocess.rs · nms.rs&lt;/b&gt;&lt;br&gt;detection types&lt;br&gt;non-max suppression" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="450" y="50" width="190" height="90" as="geometry" />
         </mxCell>
         <mxCell id="crop" value="&lt;b&gt;cropper.rs · face_cropper.rs&lt;/b&gt;&lt;br&gt;crop region · padding&lt;br&gt;eye-line alignment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="450" y="170" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="yunet" value="&lt;b&gt;yunet/&lt;/b&gt;&lt;br&gt;ONNX initializer parsing&lt;br&gt;(prost)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="onnx" value="&lt;b&gt;onnx/&lt;/b&gt;&lt;br&gt;ONNX initializer parsing&lt;br&gt;(prost) · weights by name" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="20" y="170" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="misc" value="&lt;b&gt;detector.rs&lt;/b&gt; — YuNetDetector facade · presets · model_config · tensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="misc" value="&lt;b&gt;face_detector.rs&lt;/b&gt; — FaceDetector facade · &lt;b&gt;eye_refiner.rs&lt;/b&gt; (ONNX Runtime only) · presets · tensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="20" y="290" width="620" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="models" value="&lt;b&gt;models/*.onnx&lt;/b&gt;&lt;br&gt;YuNet 2023mar · 640 and 320" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="models" value="&lt;b&gt;models/*.onnx&lt;/b&gt;&lt;br&gt;SCRFD-80k 500M, 640 · eye refiner" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="1240" y="280" width="300" height="100" as="geometry" />
         </mxCell>
         <mxCell id="ort" value="&lt;b&gt;fcs-ort&lt;/b&gt;&lt;br&gt;ONNX Runtime discovery&lt;br&gt;and C API bindings&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;libloading · validates API ≥ 1.24&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="1">
@@ -131,7 +131,7 @@
         <mxCell id="i3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="core" source="post" target="crop">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="i4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.97;entryDx=0;entryDy=0;" edge="1" parent="core" source="yunet" target="model">
+        <mxCell id="i4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.97;entryDx=0;entryDy=0;" edge="1" parent="core" source="onnx" target="model">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
       </root>

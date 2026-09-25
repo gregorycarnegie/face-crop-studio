@@ -226,8 +226,8 @@ impl ScrfdDetector {
 /// Resize into the top-left of a square canvas and normalise, as the model was trained.
 ///
 /// Three details that are all load-bearing, and all silent when wrong: the source goes to the
-/// **top-left** rather than being centred the way `crate::preprocess` letterboxes; channels
-/// are **RGB**, not the BGR that module produces; and the padding is normalised along with everything
+/// **top-left** rather than being centred the way YuNet's preprocessing letterboxed; channels
+/// are **RGB**, not the BGR it produced; and the padding is normalised along with everything
 /// else. The Python builds a zeroed `uint8` canvas and then subtracts, so the padding is
 /// `(0 - 127.5) / 128`, not zero, and a model fed zeroed padding sees a border it never met.
 pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
