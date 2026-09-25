@@ -132,7 +132,7 @@ pub(super) fn unsharp_with_preblur_rgba(
         .zip(blurred.as_raw().par_chunks_exact(4))
         .for_each(|((dst, s), b)| {
             // ponytail: plain a*b+c and saturating cast, not mul_add/round —
-            // both are libm calls on the SSE2 baseline this project targets.
+            // load/convert-bound, so FMA benched slower even on x86-64-v3.
             for c in 0..3usize {
                 let src_val = s[c] as f32;
                 let diff = src_val - b[c] as f32;

@@ -155,7 +155,7 @@ pub(super) fn apply_histogram_equalization(img: &DynamicImage) -> DynamicImage {
 pub(super) fn saturation_in_place(buf: &mut RgbaImage, saturation: f32) {
     let multiplier = saturation.clamp(0.0, 2.5);
     // ponytail: plain ops + saturating float->u8 cast so LLVM autovectorizes;
-    // mul_add/round are libm calls on the SSE2 baseline and benched 12-50x slower.
+    // mul_add benched ~13% slower even as one vfmadd on x86-64-v3.
     for pixel in buf.as_mut().as_chunks_mut::<4>().0 {
         let r = pixel[0] as f32;
         let g = pixel[1] as f32;

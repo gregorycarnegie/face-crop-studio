@@ -1078,9 +1078,17 @@ still true:
   `fast_image_resize`, which are hand-vectorised already.
 
 Related: `f32::mul_add` and `f32::round` were removed from the same loops. On the pre-v3 SSE2
-baseline both compiled to software libm calls; `mul_add` stayed slower even with FMA enabled,
-because its single-rounding guarantee blocks reassociation. The hot loops use plain `a * b + c`
-and a saturating `(x + 0.5) as u8` cast instead, marked with `ponytail:` comments at each site.
+baseline both compiled to software libm calls. The hot loops use plain `a * b + c` and a
+saturating `(x + 0.5) as u8` cast instead, marked with `ponytail:` comments at each site.
+
+Re-measured on the v3 build (2026-09-25), where `mul_add` is a single `vfmadd`. It still does
+not pay. Reassociation is not the reason: Rust never contracts or reassociates plain `a * b + c`
+either. These loops are bound by loads, stores and u8↔f32 conversion, not by arithmetic.
+Single-threaded, 1024²: saturation 1.69 → 1.91 ms and unsharp 2.04 → 2.16 ms (slower with FMA);
+the 9x9 skin bilateral 44-50 → 44-46 ms, within noise and dominated by the colour-LUT gather.
+The CPU convolution (`cpu/conv2d.rs`) behaves the same: `mul_add` in all four accumulation
+loops left `engine_speed`'s built-in CPU graph at 23-27 ms either way. The WGSL accumulation
+loops already use `fma()`, and the shaders that do not are index math or one `mix` per pixel.
 
 ---
 

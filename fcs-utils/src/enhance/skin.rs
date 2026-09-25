@@ -145,8 +145,8 @@ pub(super) fn skin_smooth_rgba(
                         let color_dist_sq = (dr * dr + dg * dg + db * db) as usize;
                         let weight = spatial_w * color_lut[color_dist_sq];
 
-                        // ponytail: plain a*b+c, not mul_add — fma is a libm
-                        // call on the SSE2 baseline this project targets.
+                        // ponytail: plain a*b+c, not mul_add — no faster even as one
+                        // vfmadd on x86-64-v3; the LUT gather dominates (PERFORMANCE.md).
                         sum_r += weight * neighbor[0] as f32;
                         sum_g += weight * neighbor[1] as f32;
                         sum_b += weight * neighbor[2] as f32;
