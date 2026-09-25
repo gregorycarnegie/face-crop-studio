@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-09-25
+
+Licensing and documentation only; nothing to do before upgrading, and detection and cropping
+behave exactly as in 2.0.1. The bundled models now carry a licence of their own, CC BY 4.0, and
+name their source inside the file, so they can be reused with credit wherever they end up.
+
 ### Changed
 
 - **The two models are licensed CC BY 4.0, and say so inside the file.** The code stays
@@ -17,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outputs bit-identical; the digests change, so the assets moved to `models-scrfd-80k-v2.1` and
   `models-eye-refiner-v1.1`. `tools/dataset/stamp_model_metadata.py` writes the fields, and both
   exporters call it.
+
+### Documentation
+
+- **The architecture diagrams showed YuNet a release after it left.** The detection pipeline now
+  follows SCRFD: the CPU letterbox, the engine picked once at load, one decode for all three
+  engines, and the optional eye refiner before cropping. The workspace diagram names the current
+  `fcs-core` modules.
 
 ## [2.0.1] - 2026-09-24
 
@@ -2293,7 +2306,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0...v2.0.0
 [1.8.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.7.0...v1.8.0
