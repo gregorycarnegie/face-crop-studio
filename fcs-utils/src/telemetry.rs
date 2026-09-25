@@ -164,7 +164,9 @@ fn filter_from_index(value: u8) -> LevelFilter {
 #[cfg(test)]
 pub(crate) fn lock_state() -> std::sync::MutexGuard<'static, ()> {
     static STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Records what one thread logs, for tests that need to see a log line.
@@ -451,6 +453,9 @@ mod tests {
         );
         let lines =
             log_capture::capture(|| drop(TimingGuard::new("quiet_op".into(), Level::Info, false)));
-        assert!(lines.is_empty(), "an inactive guard must not log: {lines:?}");
+        assert!(
+            lines.is_empty(),
+            "an inactive guard must not log: {lines:?}"
+        );
     }
 }

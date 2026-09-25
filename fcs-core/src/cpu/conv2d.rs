@@ -18,8 +18,8 @@
 //!   stem, so it is written for clarity rather than speed.
 
 use anyhow::Result;
-use std::ops::Range;
 use rayon::prelude::*;
+use std::ops::Range;
 
 use super::tensor::Tensor;
 
@@ -615,8 +615,7 @@ mod tests {
                                 start >= 0 && start + kw as isize <= w as isize
                             })
                             .collect();
-                        let got: Vec<usize> =
-                            interior_columns(w, kw, stride, pad, out_w).collect();
+                        let got: Vec<usize> = interior_columns(w, kw, stride, pad, out_w).collect();
                         assert_eq!(got, expected, "w {w} kernel {kw} stride {stride} pad {pad}");
                     }
                 }

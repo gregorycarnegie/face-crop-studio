@@ -1154,9 +1154,17 @@ pub(crate) mod tests {
             _pad: 0.0,
         }];
         let crop = |eyes: &[fcs_utils::RedEye]| {
-            build_processed_crop(0, &det, red.clone(), &settings, Some(&enhancement), &runtime, eyes)
-                .image
-                .to_rgba8()
+            build_processed_crop(
+                0,
+                &det,
+                red.clone(),
+                &settings,
+                Some(&enhancement),
+                &runtime,
+                eyes,
+            )
+            .image
+            .to_rgba8()
         };
         assert_ne!(
             crop(&eyes),

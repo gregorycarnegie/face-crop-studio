@@ -640,6 +640,9 @@ fn memory_usage_reports_the_buffer_pool() {
     )
     .expect("allocate pooled tensor");
     let usage = ops.memory_usage();
-    assert!(usage > 1, "a 105-element pooled tensor must register, got {usage}");
+    assert!(
+        usage > 1,
+        "a 105-element pooled tensor must register, got {usage}"
+    );
     assert_eq!(usage, ops.buffer_pool().memory_usage());
 }

@@ -632,11 +632,23 @@ mod drop_tests {
             Session::new(&environment, &model, SessionOptions::default()).expect("session");
 
         drop(session);
-        assert_eq!(SESSION_RELEASES.load(SeqCst), 1, "a dropped session must release its handle");
-        assert_eq!(ENV_RELEASES.load(SeqCst), 0, "the environment is still held");
+        assert_eq!(
+            SESSION_RELEASES.load(SeqCst),
+            1,
+            "a dropped session must release its handle"
+        );
+        assert_eq!(
+            ENV_RELEASES.load(SeqCst),
+            0,
+            "the environment is still held"
+        );
 
         drop(environment);
-        assert_eq!(ENV_RELEASES.load(SeqCst), 1, "a dropped environment must release the env");
+        assert_eq!(
+            ENV_RELEASES.load(SeqCst),
+            1,
+            "a dropped environment must release the env"
+        );
         assert_eq!(MEMORY_INFO_RELEASES.load(SeqCst), 1, "and its memory info");
     }
 }

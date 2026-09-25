@@ -1,11 +1,11 @@
 use super::{
     encode_bytes, format_excel_cell, format_excel_header, format_parquet_field, quote_identifier, *,
 };
+use rusqlite::Connection;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use rusqlite::Connection;
 use tempfile::tempdir;
 
 fn write_text(path: &Path, contents: &str) {
@@ -54,7 +54,10 @@ fn the_authorizer_refuses_every_action_but_reading() {
         ("CREATE TABLE u (b TEXT)", "Insert"),
         ("ALTER TABLE t RENAME TO u", "AlterTable"),
         ("CREATE VIEW v AS SELECT a FROM t", "Insert"),
-        ("CREATE TRIGGER g AFTER UPDATE ON t BEGIN SELECT 1; END", "CreateTrigger"),
+        (
+            "CREATE TRIGGER g AFTER UPDATE ON t BEGIN SELECT 1; END",
+            "CreateTrigger",
+        ),
         ("ATTACH 'other.db' AS o", "Attach"),
         ("DETACH o", "Detach"),
         ("PRAGMA journal_mode = wal", "Pragma"),
@@ -1245,7 +1248,10 @@ fn sqlite_mapping_rejects_non_select_queries_and_semicolons() {
         // says so while compiling it. Every statement that *would* write is already gone by
         // the line above, which is why the authorizer never fires on this path — it is the
         // guard for when it does.
-        ("SELECT * FROM photos DROP", "failed to prepare the SQL query"),
+        (
+            "SELECT * FROM photos DROP",
+            "failed to prepare the SQL query",
+        ),
     ];
 
     for (query, expected) in bad_cases {
@@ -1373,5 +1379,8 @@ fn validate_sql_query_is_case_insensitive_and_trims() {
     // not a SELECT.
     let err = query_is_accepted(&path, "  update photos set output = 'x'")
         .expect_err("a lower-case write is still a write");
-    assert!(err.contains("must begin with SELECT"), "unexpected error: {err}");
+    assert!(
+        err.contains("must begin with SELECT"),
+        "unexpected error: {err}"
+    );
 }

@@ -84,11 +84,12 @@ pub(super) fn prepare_guarded<'c>(
     if let Ok(mut slot) = denied.lock() {
         *slot = None;
     }
-    conn.prepare(sql)
-        .map_err(|err| match denied.lock().ok().and_then(|slot| slot.clone()) {
+    conn.prepare(sql).map_err(
+        |err| match denied.lock().ok().and_then(|slot| slot.clone()) {
             Some(action) => anyhow!("custom SQL queries may only read; SQLite refused {action}"),
             None => anyhow::Error::new(err).context("failed to prepare the SQL query"),
-        })
+        },
+    )
 }
 
 pub(super) fn table_sqlite_internal(

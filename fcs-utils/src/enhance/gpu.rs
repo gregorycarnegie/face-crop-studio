@@ -330,7 +330,10 @@ mod tests {
                 },
             ),
         ] {
-            let out = enhancer.apply(&image, &settings, None).expect("apply").to_rgba8();
+            let out = enhancer
+                .apply(&image, &settings, None)
+                .expect("apply")
+                .to_rgba8();
             assert_eq!(out, untouched, "{name} at radius 0 changed the image");
         }
     }

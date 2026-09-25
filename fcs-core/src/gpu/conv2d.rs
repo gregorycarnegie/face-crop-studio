@@ -638,7 +638,9 @@ fn workgroups(config: &Conv2dConfig, kernel: Kernel, pixels_per_thread: u32) -> 
         Kernel::Depthwise | Kernel::Grouped => 1,
     };
     [
-        config.output_width.div_ceil(CONV_WORKGROUP_X * pixels_per_thread),
+        config
+            .output_width
+            .div_ceil(CONV_WORKGROUP_X * pixels_per_thread),
         config.output_height.div_ceil(CONV_WORKGROUP_Y),
         config.output_channels.div_ceil(channel_tile),
     ]

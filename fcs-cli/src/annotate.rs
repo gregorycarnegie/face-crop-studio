@@ -303,7 +303,11 @@ mod tests {
         let written = annotate_image(&DynamicImage::ImageRgba8(rgba), &img_path, &[det], &out_dir)
             .expect("annotate a png");
         let decoded = image::open(&written).expect("the output must be a decodable image");
-        assert_eq!(decoded.color(), image::ColorType::Rgba8, "the alpha channel must survive");
+        assert_eq!(
+            decoded.color(),
+            image::ColorType::Rgba8,
+            "the alpha channel must survive"
+        );
         assert_eq!(decoded.to_rgba8().get_pixel(79, 59)[3], 0);
     }
 

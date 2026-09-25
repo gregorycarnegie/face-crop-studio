@@ -12,8 +12,8 @@ use anyhow::{Context, Result};
 use crate::{
     gpu::{
         ActivationKind, GpuInferenceOps, GpuTensor,
-        utils::ComputeDispatch,
         conv2d::{Conv2dChannels, Conv2dConfig, Conv2dOptions, SpatialDims},
+        utils::ComputeDispatch,
     },
     scrfd::plan::Step,
 };
