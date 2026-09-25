@@ -277,7 +277,7 @@ class Handler(BaseHTTPRequestHandler):
             f.write(json.dumps(rec) + "\n")
         self._send(200, b"ok", "text/plain")
 
-    def log_message(self, format, *args):  # noqa: A002 - matches BaseHTTPRequestHandler
+    def log_message(self, format, *args):  # `format` matches BaseHTTPRequestHandler
         pass  # one line per served image is just noise
 
 

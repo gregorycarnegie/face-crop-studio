@@ -60,7 +60,7 @@ for rec in json.loads(DETECTIONS.read_text(encoding="utf-8")):
         detected[stem].append((d["score"], (x, y, x + w, y + h)))
 
 truth, ignore, sizes = defaultdict(list), defaultdict(list), {}
-import csv  # noqa: E402  (kept next to its only use)
+import csv  # kept next to its only use
 
 for split in ("validation", "test"):
     with open(DATA / f"faces-{split}-annotations-bbox.csv", newline="", encoding="utf-8") as f:

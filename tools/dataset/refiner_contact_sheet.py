@@ -27,7 +27,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from train_eye_refiner import Refiner  # noqa: E402 - same directory by design
+from train_eye_refiner import Refiner  # same directory by design
 
 
 def stem_of(path: str) -> str:

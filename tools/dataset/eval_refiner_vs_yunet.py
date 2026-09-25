@@ -24,7 +24,7 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from train_eye_refiner import Refiner, usable  # noqa: E402 - same directory by design
+from train_eye_refiner import Refiner, usable  # same directory by design
 
 
 def iou(a, b):
