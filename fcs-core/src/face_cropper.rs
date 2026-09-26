@@ -96,8 +96,7 @@ fn eye_line_angle(detection: &Detection, settings: &CropSettings) -> Option<f32>
     if !settings.eye_line_align {
         return None;
     }
-    let (Some(left_eye), Some(right_eye)) = (detection.landmarks[0], detection.landmarks[1])
-    else {
+    let (Some(left_eye), Some(right_eye)) = (detection.landmarks[0], detection.landmarks[1]) else {
         return None;
     };
     // Angle of the eye line relative to horizontal in source image coords, taken from the
@@ -1035,9 +1034,8 @@ mod tests {
             eye_line_align: true,
         };
 
-        let out =
-            crop_face_from_image(&DynamicImage::ImageRgba8(photo), &detection, &settings)
-                .to_rgba8();
+        let out = crop_face_from_image(&DynamicImage::ImageRgba8(photo), &detection, &settings)
+            .to_rgba8();
         let eyes = eye_positions(&detection, 200, 200, &settings);
         assert!(
             (eyes[0].y - eyes[1].y).abs() < 1e-3,
