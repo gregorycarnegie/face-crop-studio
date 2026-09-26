@@ -23,6 +23,8 @@ cargo run -p fcs-cli -- \
 
 The `--crop` flag enables the crop pipeline, respecting the selected preset. Results are saved to the `crops/` directory.
 
+Crops already in the output directory from an earlier run are replaced. Add `--keep-existing` to keep them and save the new crops beside them as `alex_face1(2).png`, `(3)`…. Two images in the same run that would produce the same name never replace each other either way; the second gets a `(2)`.
+
 ## Enforce Minimum Quality
 
 ```bash

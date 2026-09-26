@@ -1033,12 +1033,35 @@ fn output_claims_rename_a_clash_between_sources_only() {
     assert_eq!(claims.claim(out.clone(), a), out, "same source, same file");
     assert_eq!(
         claims.claim(out.clone(), b),
-        PathBuf::from("out").join("portrait_face1_2.png")
+        PathBuf::from("out").join("portrait_face1(2).png")
     );
     // Case-only differences are the same file on Windows and macOS.
     let upper = PathBuf::from("out").join("Portrait_face1.png");
     assert_eq!(
         claims.claim(upper, Path::new("c/portrait.jpg")),
-        PathBuf::from("out").join("Portrait_face1_3.png")
+        PathBuf::from("out").join("Portrait_face1(3).png")
     );
+}
+
+/// A file from an earlier run is replaced under `Overwrite` and kept under `KeepBoth`, where the
+/// new crop takes the next free `(n)` name -- skipping one that also exists.
+#[test]
+fn output_claims_follow_the_overwrite_policy_for_existing_files() {
+    let dir = tempdir().unwrap();
+    let existing = dir.path().join("x.jpg");
+    fs::write(&existing, b"old").unwrap();
+    fs::write(dir.path().join("x(2).jpg"), b"older").unwrap();
+    let source = Path::new("x.jpg");
+
+    let overwrite = OutputClaims::new(OverwritePolicy::Overwrite);
+    assert_eq!(overwrite.claim(existing.clone(), source), existing);
+
+    let keep = OutputClaims::new(OverwritePolicy::KeepBoth);
+    assert_eq!(
+        keep.claim(existing.clone(), source),
+        dir.path().join("x(3).jpg")
+    );
+    // A name nobody has used is taken as it is.
+    let fresh = dir.path().join("y.jpg");
+    assert_eq!(keep.claim(fresh.clone(), Path::new("y.jpg")), fresh);
 }

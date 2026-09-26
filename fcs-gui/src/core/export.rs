@@ -4,8 +4,8 @@ use crate::types::{App2, BatchFile, BatchFileStatus, JobMessage};
 
 use fcs_core::{CropSettings as CoreCropSettings, Detection, FaceDetector, crop_face_from_image};
 use fcs_utils::{
-    ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, append_suffix_to_filename,
-    load_image, quality::Quality, save_dynamic_image,
+    ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, OverwritePolicy,
+    append_suffix_to_filename, load_image, quality::Quality, save_dynamic_image,
 };
 use image::{DynamicImage, GenericImageView};
 use log::{error, info, warn};
@@ -13,6 +13,7 @@ use rayon::prelude::*;
 use rfd::FileDialog;
 use std::{
     cmp::Ordering,
+    collections::HashMap,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{
@@ -60,16 +61,63 @@ pub fn export_one_face(app: &mut App2, face_index: usize) {
     export_preview_faces(app, vec![face_index], "Export failed");
 }
 
+/// An export waiting on the user's answer about files it would replace.
+pub struct PendingExport {
+    pub output_dir: PathBuf,
+    pub kind: PendingKind,
+    /// Files already in the folder that this export would (or, for a batch, could) replace.
+    pub conflicts: Vec<PathBuf>,
+}
+
+pub enum PendingKind {
+    Faces(Vec<usize>),
+    Batch,
+}
+
+/// The overwrite dialog's answer: `None` cancels.
+pub fn resolve_pending_export(app: &mut App2, choice: Option<OverwritePolicy>) {
+    let Some(pending) = app.pending_export.take() else {
+        return;
+    };
+    let Some(policy) = choice else {
+        app.show_success("Export cancelled");
+        return;
+    };
+    match pending.kind {
+        PendingKind::Faces(selected) => {
+            write_preview_faces(app, selected, &pending.output_dir, policy)
+        }
+        PendingKind::Batch => run_batch_export(app, pending.output_dir, policy),
+    }
+}
+
+/// Where a preview face is saved. Known before cropping, so clashes can be asked about first.
+fn preview_face_path(app: &App2, face_index: usize, output_dir: &Path) -> Option<PathBuf> {
+    let det = app.preview.detections.get(face_index)?;
+    let stem = app
+        .preview
+        .image_path
+        .as_deref()
+        .and_then(Path::file_stem)
+        .and_then(|s| s.to_str())
+        .unwrap_or("face");
+    let ext = output_extension(app.settings.crop.output_format);
+    let mut filename = format!("{stem}_face_{:02}.{ext}", face_index + 1);
+    if let Some(suffix) = quality_suffix(&app.settings, det.quality) {
+        filename = append_suffix_to_filename(&filename, suffix);
+    }
+    Some(output_dir.join(filename))
+}
+
 fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str) {
     if selected.is_empty() {
         app.show_error(error_title, "No faces selected for export");
         return;
     }
-
-    let Some(source_image) = app.preview.source_image.as_ref() else {
+    if app.preview.source_image.is_none() {
         app.show_error(error_title, "No image loaded");
         return;
-    };
+    }
 
     let Some(output_dir) = FileDialog::new().set_title("Export crops").pick_folder() else {
         return;
@@ -83,46 +131,63 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
         return;
     }
 
-    let detections = &app.preview.detections;
-    let source_path = app.preview.image_path.as_deref();
-    let settings = &app.settings;
-    // The same runtime the CLI and the batch path use, so the three agree about whether
-    // enhancement runs on the shaders.
-    let enhancement = &app.gpu.enhancement;
-    let output_options = OutputOptions::from_crop_settings(&settings.crop);
-    let ext = output_extension(settings.crop.output_format);
-    let source_stem = source_path
-        .and_then(Path::file_stem)
-        .and_then(|s| s.to_str())
-        .unwrap_or("face");
+    let conflicts: Vec<PathBuf> = selected
+        .iter()
+        .filter_map(|&i| preview_face_path(app, i, &output_dir))
+        .filter(|path| path.exists())
+        .collect();
+    if conflicts.is_empty() {
+        write_preview_faces(app, selected, &output_dir, OverwritePolicy::Overwrite);
+    } else {
+        app.pending_export = Some(PendingExport {
+            output_dir,
+            kind: PendingKind::Faces(selected),
+            conflicts,
+        });
+    }
+}
+
+fn write_preview_faces(
+    app: &mut App2,
+    selected: Vec<usize>,
+    output_dir: &Path,
+    policy: OverwritePolicy,
+) {
+    let Some(source_image) = app.preview.source_image.clone() else {
+        app.show_error("Export failed", "No image loaded");
+        return;
+    };
+    let source_path = app.preview.image_path.clone();
+    let output_options = OutputOptions::from_crop_settings(&app.settings.crop);
+    let claims = OutputClaims::new(policy);
 
     let mut exported = 0usize;
     let mut failed = 0usize;
 
     for face_index in selected {
-        let Some(det) = detections.get(face_index) else {
+        let (Some(det), Some(planned)) = (
+            app.preview.detections.get(face_index),
+            preview_face_path(app, face_index, output_dir),
+        ) else {
             failed += 1;
             continue;
         };
+        let output_path = claims.claim(planned, source_path.as_deref().unwrap_or(Path::new("")));
 
+        // The same runtime the CLI and the batch path use, so the three agree about whether
+        // enhancement runs on the shaders.
         let crop = finish_face(
-            source_image,
+            &source_image,
             &det.edited_detection(),
-            &settings.crop,
-            &settings.enhance,
-            enhancement,
+            &app.settings.crop,
+            &app.settings.enhance,
+            &app.gpu.enhancement,
         )
         .image;
 
-        let mut filename = format!("{source_stem}_face_{:02}.{ext}", face_index + 1);
-        if let Some(suffix) = quality_suffix(settings, det.quality) {
-            filename = append_suffix_to_filename(&filename, suffix);
-        }
-        let output_path = output_dir.join(filename);
-
         let metadata_ctx = MetadataContext {
-            source_path,
-            crop_settings: Some(&settings.crop),
+            source_path: source_path.as_deref(),
+            crop_settings: Some(&app.settings.crop),
             detection_score: Some(det.detection.score),
             quality: Some(det.quality),
             quality_score: Some(det.quality_score),
@@ -171,16 +236,10 @@ pub fn start_batch_export(app: &mut App2) {
         return;
     }
 
-    let Some(detector) = app.detector.clone() else {
+    if app.detector.is_none() {
         app.show_error("Batch export failed", "No detector loaded");
         return;
-    };
-    // Batch export detects for itself rather than reusing the canvas's detections, so it needs
-    // the refiner too. Without this, exported crops would be levelled by YuNet's eye points
-    // while the preview beside them shows refined ones.
-    let eye_refiner = app.eye_refiner.clone();
-    // Cheap to clone: the enhancer sits behind an Arc, so every worker shares one.
-    let enhancement = app.gpu.enhancement.clone();
+    }
 
     let Some(output_dir) = FileDialog::new()
         .set_title("Export batch crops")
@@ -196,6 +255,119 @@ pub fn start_batch_export(app: &mut App2) {
         );
         return;
     }
+
+    let ext = output_extension(app.settings.crop.output_format);
+    let conflicts = batch_conflicts(&app.batch_files, &output_dir, ext);
+    if conflicts.is_empty() {
+        run_batch_export(app, output_dir, OverwritePolicy::Overwrite);
+    } else {
+        app.pending_export = Some(PendingExport {
+            output_dir,
+            kind: PendingKind::Batch,
+            conflicts,
+        });
+    }
+}
+
+/// Existing files in the output folder that a batch could replace.
+///
+/// A batch's names depend on how many faces each image turns out to have, so this matches the
+/// names a queued image can produce rather than exact ones: `{stem}_face_NN[_highq|_medq|_lowq]`
+/// by default, and `{name}` or `{name}_faceN` for a mapped output name.
+fn batch_conflicts(files: &[BatchFile], output_dir: &Path, ext: &str) -> Vec<PathBuf> {
+    let mut listings: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut conflicts = Vec::new();
+    for file in files {
+        let (dir, stem, mapped) = match &file.output_override {
+            Some(target) => {
+                let safe = sanitize_relative_path(target);
+                let stem = safe
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("output")
+                    .to_owned();
+                let parent = safe.parent().unwrap_or_else(|| Path::new(""));
+                (output_dir.join(parent), stem, true)
+            }
+            None => {
+                let stem = file
+                    .path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("face")
+                    .to_owned();
+                (output_dir.to_path_buf(), stem, false)
+            }
+        };
+        let listing = listings.entry(dir.clone()).or_insert_with(|| {
+            std::fs::read_dir(&dir)
+                .map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        conflicts.extend(
+            listing
+                .iter()
+                .filter(|existing| {
+                    existing
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|name| could_write(name, &stem, ext, mapped))
+                })
+                .cloned(),
+        );
+    }
+    conflicts.sort();
+    conflicts.dedup();
+    conflicts
+}
+
+/// Whether `name` is one a batch could write for an image whose output stem is `stem`.
+fn could_write(name: &str, stem: &str, ext: &str, mapped: bool) -> bool {
+    let (name, stem) = (name.to_lowercase(), stem.to_lowercase());
+    let Some(rest) = name
+        .strip_prefix(&stem)
+        .and_then(|rest| rest.strip_suffix(&format!(".{ext}")))
+    else {
+        return false;
+    };
+    let digits = |s: &str| s.len() - s.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if mapped {
+        return rest.is_empty()
+            || rest
+                .strip_prefix("_face")
+                .is_some_and(|n| !n.is_empty() && digits(n) == n.len());
+    }
+    let Some(rest) = rest.strip_prefix("_face_") else {
+        return false;
+    };
+    let n = digits(rest);
+    n >= 2 && ["", "_highq", "_medq", "_lowq"].contains(&&rest[n..])
+}
+
+/// Run a batch into `output_dir`, the overwrite question already settled.
+fn run_batch_export(app: &mut App2, output_dir: PathBuf, policy: OverwritePolicy) {
+    // Checked again: the dialog may have been open while something else started a batch.
+    if app.batch_running {
+        app.show_error("Batch export failed", "A batch is already running");
+        return;
+    }
+    let Some(detector) = app.detector.clone() else {
+        app.show_error("Batch export failed", "No detector loaded");
+        return;
+    };
+    // Batch export detects for itself rather than reusing the canvas's detections, so it needs
+    // the refiner too. Without this, exported crops would be levelled by YuNet's eye points
+    // while the preview beside them shows refined ones.
+    let eye_refiner = app.eye_refiner.clone();
+    // Cheap to clone: the enhancer sits behind an Arc, so every worker shares one.
+    let enhancement = app.gpu.enhancement.clone();
 
     // Keyed by path, not queue position: the queue can still be edited while this runs, and a
     // removed row shifted every later index onto the wrong file. Queue paths are unique.
@@ -243,6 +415,7 @@ pub fn start_batch_export(app: &mut App2) {
                     &tx,
                     &completed,
                     &failed,
+                    policy,
                 );
                 let _ = tx.send(JobMessage::BatchComplete {
                     completed: completed.load(AtomicOrdering::Relaxed),
@@ -263,7 +436,7 @@ pub fn start_batch_export(app: &mut App2) {
         let inner_settings = settings.clone();
         let inner_completed = completed.clone();
         let inner_failed = failed.clone();
-        let claims = OutputClaims::default();
+        let claims = OutputClaims::new(policy);
 
         pool.install(move || {
             // `for_each_with` clones the init once per worker thread, so the
@@ -368,8 +541,9 @@ fn run_batch_sequential(
     tx: &std::sync::mpsc::Sender<JobMessage>,
     completed: &AtomicUsize,
     failed: &AtomicUsize,
+    policy: OverwritePolicy,
 ) {
-    let claims = OutputClaims::default();
+    let claims = OutputClaims::new(policy);
     for (path, output_override) in tasks {
         let _ = tx.send(JobMessage::BatchProgress {
             path: path.clone(),
@@ -811,5 +985,80 @@ mod tests {
         }
         assert!(exported >= 2, "each copy exports at least one face");
         assert_eq!(std::fs::read_dir(&out).unwrap().count(), exported);
+    }
+
+    /// Only names a batch could actually write count as clashes: not a kept `(2)` copy, not
+    /// another extension, not a longer stem that merely starts the same way.
+    #[test]
+    fn could_write_matches_only_names_a_batch_produces() {
+        assert!(could_write(
+            "portrait_face_01.png",
+            "portrait",
+            "png",
+            false
+        ));
+        assert!(could_write(
+            "Portrait_Face_12_highq.png",
+            "portrait",
+            "png",
+            false
+        ));
+        assert!(!could_write(
+            "portrait_face_01(2).png",
+            "portrait",
+            "png",
+            false
+        ));
+        assert!(!could_write(
+            "portrait_face_01.jpg",
+            "portrait",
+            "png",
+            false
+        ));
+        assert!(!could_write(
+            "portrait2_face_01.png",
+            "portrait",
+            "png",
+            false
+        ));
+        assert!(!could_write(
+            "portrait_face_1.png",
+            "portrait",
+            "png",
+            false
+        ));
+
+        assert!(could_write("jane.png", "jane", "png", true));
+        assert!(could_write("jane_face2.png", "jane", "png", true));
+        assert!(!could_write("jane_face.png", "jane", "png", true));
+        assert!(!could_write("janet.png", "jane", "png", true));
+    }
+
+    #[test]
+    fn batch_conflicts_lists_existing_files_the_queue_could_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a_face_01.png", "a_face_01(2).png", "b.png", "other.png"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("mapped")).unwrap();
+        std::fs::write(dir.path().join("mapped").join("jane.png"), b"x").unwrap();
+        let file = |path: &str, output_override: Option<&str>| BatchFile {
+            path: PathBuf::from(path),
+            status: BatchFileStatus::Pending,
+            output_override: output_override.map(PathBuf::from),
+        };
+        let queue = [
+            file("in/a.jpg", None),
+            file("in/b.jpg", None),
+            file("in/c.jpg", Some("mapped/jane.jpg")),
+        ];
+
+        assert_eq!(
+            batch_conflicts(&queue, dir.path(), "png"),
+            vec![
+                dir.path().join("a_face_01.png"),
+                dir.path().join("mapped").join("jane.png"),
+            ]
+        );
     }
 }

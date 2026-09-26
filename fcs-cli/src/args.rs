@@ -107,6 +107,12 @@ pub struct DetectArgs {
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
 
+    /// Keep crops already in the output directory, saving new ones as `name(2).ext`,
+    /// `name(3).ext`... instead of replacing them. Crops within one run never replace each other
+    /// either way.
+    #[arg(long)]
+    pub keep_existing: bool,
+
     /// Preset name for output size (e.g., LinkedIn, Passport, Instagram). If set, overrides --output-width/--output-height.
     #[arg(long)]
     pub preset: Option<String>,
@@ -304,6 +310,15 @@ impl GpuEnvMode {
 }
 
 impl DetectArgs {
+    /// What to do about an output file left by an earlier run.
+    pub(crate) fn overwrite_policy(&self) -> fcs_utils::OverwritePolicy {
+        if self.keep_existing {
+            fcs_utils::OverwritePolicy::KeepBoth
+        } else {
+            fcs_utils::OverwritePolicy::Overwrite
+        }
+    }
+
     /// Whether a mapping file was given without `--crop`. The mapping only renames crops, so
     /// such a run has nothing to apply it to yet -- worth a notice rather than silence.
     pub(crate) fn mapping_waits_for_crop(&self) -> bool {

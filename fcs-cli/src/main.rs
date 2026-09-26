@@ -163,7 +163,7 @@ fn main() -> Result<()> {
         args: &args,
         counters: &counters,
         eye_refiner: &eye_refiner,
-        claims: Default::default(),
+        claims: fcs_utils::OutputClaims::new(args.overwrite_policy()),
     };
 
     // ponytail: Rayon's default pool, one worker per logical processor. No pool is built here,

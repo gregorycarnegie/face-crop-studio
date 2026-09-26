@@ -129,51 +129,75 @@ pub fn append_suffix_to_filename(name: &str, suffix: &str) -> String {
     }
 }
 
+/// What to do when an export's file name already exists on disk from before the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverwritePolicy {
+    /// Replace the existing file. The CLI's behaviour, and the GUI's once the user agrees.
+    #[default]
+    Overwrite,
+    /// Keep it, and save the new crop as `name(2).ext`, `name(3).ext`...
+    KeepBoth,
+}
+
 /// Destinations already taken in one batch, so two sources that name the same file get
 /// distinct names instead of the later silently replacing the earlier.
 ///
 /// `a/portrait.jpg` and `b/portrait.jpg` both become `portrait_face1.png` under the default
-/// naming, and the writer replaces what it finds. Files from earlier runs are still replaced;
-/// only a clash within the batch is renamed.
+/// naming, and the writer replaces what it finds. A clash within the batch is always renamed;
+/// a file left by an earlier run is replaced or kept according to the [`OverwritePolicy`].
 ///
 /// ponytail: first come, first served, so under a parallel batch which clashing source keeps the
 /// plain name depends on completion order. Nothing is lost either way; a pre-pass over every
 /// planned name would make it deterministic.
 #[derive(Debug, Default)]
-pub struct OutputClaims(std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>);
+pub struct OutputClaims {
+    taken: std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>,
+    policy: OverwritePolicy,
+}
 
 impl OutputClaims {
-    /// `path` itself, or `path` with `_2`, `_3`... before the extension if a different source
-    /// already claimed it. The same source claiming again gets the same path back, so a watched
-    /// file that is saved twice still replaces its own output.
+    /// Claims for one batch under `policy`.
+    pub fn new(policy: OverwritePolicy) -> Self {
+        Self {
+            policy,
+            ..Self::default()
+        }
+    }
+
+    /// `path` itself, or `path` with `(2)`, `(3)`... before the extension if a different source
+    /// already claimed it -- or, under [`OverwritePolicy::KeepBoth`], if it already exists on
+    /// disk. The same source claiming again gets the same path back, so a watched file that is
+    /// saved twice still replaces its own output.
     ///
     /// Compared without case: Windows and macOS treat `Portrait_face1.png` and
-    /// `portrait_face1.png` as one file.
+    /// `portrait_face1.png` as one file. The existence check runs under the lock, so two workers
+    /// cannot both settle on the same free name.
     pub fn claim(&self, path: std::path::PathBuf, source: &Path) -> std::path::PathBuf {
-        let mut claims = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        use std::collections::hash_map::Entry;
+        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mut candidate = path.clone();
         for n in 2.. {
-            match claims.entry(candidate.to_string_lossy().to_lowercase()) {
-                std::collections::hash_map::Entry::Vacant(slot) => {
+            match taken.entry(candidate.to_string_lossy().to_lowercase()) {
+                Entry::Occupied(owner) if owner.get() == source => break,
+                Entry::Vacant(slot)
+                    if self.policy == OverwritePolicy::Overwrite || !candidate.exists() =>
+                {
                     slot.insert(source.to_path_buf());
                     break;
                 }
-                std::collections::hash_map::Entry::Occupied(owner) if owner.get() == source => {
-                    break;
-                }
-                std::collections::hash_map::Entry::Occupied(_) => {
+                _ => {
                     candidate =
-                        path.with_file_name(append_suffix_to_filename(&name, &format!("_{n}")));
+                        path.with_file_name(append_suffix_to_filename(&name, &format!("({n})")));
                 }
             }
         }
         if candidate != path {
-            log::warn!(
-                "{} is already an output of this batch; saving {}'s crop as {}",
+            log::info!(
+                "{} is taken; saving {}'s crop as {}",
                 path.display(),
                 source.display(),
                 candidate.display()

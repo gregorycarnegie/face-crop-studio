@@ -37,6 +37,8 @@ Every export — single faces and batches — goes through the same enhancement 
 
 - Configure metadata mode (Preserve, Strip, or Custom) and author custom tags in `key=value` format. Tags are written for PNG/JPEG/WebP exports when the metadata mode allows it.
 - Exports respect the auto-detected format, or the explicit format picker if auto-detect is disabled.
+- **Export crops** saves the selected faces only; **Run batch** processes the whole queue.
+- If an export would replace files already in the folder, you are asked first: **Overwrite**, **Save as new files** (the new crops are named like `photo_face_01(2).jpg`), or **Cancel**.
 - Filename suffixes derived from quality (`_highq`, etc.) are appended when the option is enabled in Quality Rules.
 
 ## Batch Mode

@@ -170,6 +170,7 @@ impl App2 {
             redo_stack: Vec::new(),
             show_crop_overlay: true,
             result_preview: Default::default(),
+            pending_export: None,
             crop_history,
             crop_history_index: 0,
             crop_fill_hex_input,
@@ -421,6 +422,12 @@ impl App for App2 {
 
         if self.show_about {
             show_about_window(root_ui.ctx(), &mut self.show_about);
+        }
+        if let Some(pending) = &self.pending_export {
+            let choice = show_overwrite_dialog(root_ui.ctx(), pending);
+            if let Some(choice) = choice {
+                crate::core::export::resolve_pending_export(self, choice);
+            }
         }
     }
 }
@@ -1185,6 +1192,78 @@ fn collect_supported_images_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 
     images.sort();
     Ok(images)
+}
+
+// ── Overwrite dialog ──────────────────────────────────────────────────────────
+
+/// Ask what to do about files an export would replace. `Some(None)` is Cancel; `None` means the
+/// user has not answered yet.
+fn show_overwrite_dialog(
+    ctx: &egui::Context,
+    pending: &crate::core::export::PendingExport,
+) -> Option<Option<fcs_utils::OverwritePolicy>> {
+    use crate::{core::export::PendingKind, theme::P};
+    use fcs_utils::OverwritePolicy;
+
+    const LISTED: usize = 6;
+    let mut choice = None;
+    let response = egui::Modal::new(egui::Id::new("overwrite_dialog")).show(ctx, |ui| {
+        ui.set_width(420.0);
+        ui.label(
+            egui::RichText::new("Some files already exist")
+                .size(16.0)
+                .color(P::INK)
+                .strong(),
+        );
+        ui.add_space(8.0);
+        let count = pending.conflicts.len();
+        let folder = pending.output_dir.display();
+        ui.label(match pending.kind {
+            PendingKind::Faces(_) => {
+                format!("{count} crop(s) would replace existing files in {folder}:")
+            }
+            PendingKind::Batch => {
+                format!("This batch may replace {count} existing file(s) in {folder}:")
+            }
+        });
+        ui.add_space(4.0);
+        for path in pending.conflicts.iter().take(LISTED) {
+            let name = path
+                .strip_prefix(&pending.output_dir)
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            ui.label(egui::RichText::new(name).monospace().color(P::INK2));
+        }
+        if count > LISTED {
+            ui.label(egui::RichText::new(format!("…and {} more", count - LISTED)).color(P::INK3));
+        }
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "Save as new files keeps them, naming the new crops like photo_face_01(2).jpg.",
+            )
+            .size(11.5)
+            .color(P::INK3),
+        );
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if ui.button("Overwrite").clicked() {
+                choice = Some(Some(OverwritePolicy::Overwrite));
+            }
+            if ui.button("Save as new files").clicked() {
+                choice = Some(Some(OverwritePolicy::KeepBoth));
+            }
+            if ui.button("Cancel").clicked() {
+                choice = Some(None);
+            }
+        });
+    });
+    // Escape or a click outside is Cancel.
+    if choice.is_none() && response.should_close() {
+        choice = Some(None);
+    }
+    choice
 }
 
 // ── About dialog ──────────────────────────────────────────────────────────────

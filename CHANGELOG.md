@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected face on the canvas as it will be exported: cropped, enhanced, shaped and filled. It
   re-renders in the background as crop and enhancement settings change, through the same function
   export uses, so it cannot disagree with the saved file.
+- **The GUI asks before replacing existing files.** When an export or batch would write over
+  files already in the folder, a dialog lists them and offers **Overwrite**, **Save as new
+  files** (the new crops become `photo_face_01(2).jpg`, `(3)`…) or **Cancel**. A batch's names
+  depend on what it detects, so it lists every existing file a queued image could produce.
+- **`--keep-existing` for the CLI**, the non-interactive equivalent: crops already in the output
+  directory are kept and new ones saved as `(2)`, `(3)`…. Without it the CLI replaces them, as
+  before. Webcam crops, whose frame numbers restart every session, honour it too.
 
 ### Fixed
 
@@ -22,8 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   512 points now use the CPU mask, which takes every point.
 - **Batch exports no longer overwrite each other.** `a/portrait.jpg` and `b/portrait.jpg` both
   became `portrait_face1.png`, and the second replaced the first while the summary counted two
-  saves. A name already written in the same batch now gets `_2`, `_3`… and a warning, in the
-  CLI and the GUI. Files from earlier runs are still replaced.
+  saves. A name already written in the same batch now gets `(2)`, `(3)`…, in the CLI and the
+  GUI. Files from earlier runs are replaced unless the GUI's dialog or `--keep-existing` says otherwise.
 - **The CLI exits non-zero when a crop could not be saved.** It logged the failure and returned
   success. The rest of the batch still runs; the summary line gains `crops_failed=`.
 - **`--no-gpu` now keeps detection on the CPU.** It disabled the GPU for enhancement only; the
@@ -36,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path, and a detection finishing mid-batch no longer re-enables "Run batch".
 
 ### Changed
+
+- **"Export crops" exports only the selected faces.** With no face selected it used to start a
+  whole batch, which "Run batch" is for; it now says nothing is selected.
+- **The Python parity test checks the eye points**, not only boxes and scores, on faces scored
+  0.5 or more (worst measured: 0.51% of box width; the gate is 5%).
 
 - **One crop-finishing order for every export path.** CLI, webcam, GUI single-face export and
   GUI batch now all enhance, score, then shape and fill (`EnhancementRuntime::finish_crop`).

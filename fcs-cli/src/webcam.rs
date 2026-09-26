@@ -85,6 +85,9 @@ pub fn run_webcam_mode(
     let max_frames = args.webcam_frames;
     let continuous_mode = max_frames == 0;
     let mut frame_count = 0u32;
+    // Frame numbers restart at 1 every session, so without `--keep-existing` a new session
+    // replaces the last one's crops.
+    let claims = fcs_utils::OutputClaims::new(args.overwrite_policy());
     let mut total_faces = 0usize;
 
     if continuous_mode {
@@ -192,7 +195,8 @@ pub fn run_webcam_mode(
                     out_name = append_suffix_to_filename(&out_name, suffix);
                 }
 
-                let out_path = out_dir.join(&out_name);
+                let out_path =
+                    claims.claim(out_dir.join(&out_name), std::path::Path::new("webcam"));
 
                 let metadata_ctx = MetadataContext {
                     source_path: None,

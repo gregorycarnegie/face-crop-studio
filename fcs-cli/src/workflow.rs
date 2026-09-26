@@ -669,6 +669,42 @@ pub(crate) mod tests {
         assert_eq!(fs::read_dir(dir.path()).expect("output dir").count(), 2);
     }
 
+    /// A crop left by an earlier run is replaced by default and kept under `--keep-existing`,
+    /// where the new one is saved beside it as `(2)`.
+    #[test]
+    fn keep_existing_saves_beside_an_earlier_runs_crop() {
+        let settings = crop_settings_app();
+        let runtime = no_gpu_runtime();
+        let filter = Arc::new(QualityFilter::new(None));
+        let detections = vec![sample_detection(2.0, 2.0, 8.0, 8.0, 0.9)];
+        let enhancement = None;
+        for (flags, expected) in [
+            (&["--input", "x.jpg"][..], 1),
+            (&["--input", "x.jpg", "--keep-existing"][..], 2),
+        ] {
+            let dir = tempdir().expect("temp directory should be created");
+            fs::write(dir.path().join("portrait_face1.png"), b"earlier run").unwrap();
+            let args = parse_args(flags);
+            let counters = ProgressCounters::default();
+            let mut ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+            ctx.claims = fcs_utils::OutputClaims::new(args.overwrite_policy());
+            process_crops(
+                &ctx,
+                &sample_image(24, 24),
+                Path::new("portrait.jpg"),
+                &detections,
+                dir.path(),
+                None,
+            );
+            assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                fs::read_dir(dir.path()).expect("output dir").count(),
+                expected,
+                "{flags:?}"
+            );
+        }
+    }
+
     /// A crop that cannot be written is counted, which is what makes `main` exit non-zero.
     #[test]
     fn a_failed_save_is_counted() {

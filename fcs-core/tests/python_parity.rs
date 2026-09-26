@@ -2,7 +2,7 @@
 //!
 //! This checks the full inference and decoding path against saved Python results.
 //! The ONNX Runtime parity tests compare raw tensors, while this also checks preprocessing,
-//! box decoding, landmarks, and suppression on real photographs.
+//! box decoding, the two eye landmarks, and suppression on real photographs.
 //!
 //! The reference is `tools/dataset/scrfd_detect.py`: the same checkpoint
 //! (`work_dirs/oi80k/epoch_100.pth`), run through torch on CUDA in WSL, decoded by the numpy
@@ -59,9 +59,23 @@ const MAX_SCORE_DRIFT: f32 = 0.02;
 const MAX_MEDIAN_RELATIVE: f32 = 0.01;
 const MAX_ANY_RELATIVE: f32 = 0.15;
 
-/// A face in the reference: pixel corners plus the score it was found at.
+/// Worst eye point on a confident face (>= [`REQUIRED_SCORE`]), as a fraction of box width.
+/// Measured at 0.51%; ten times that is still well short of a wrong convention, which moves
+/// every eye by tens of percent.
+///
+/// Borderline faces are reported, not gated. On one fixture a 0.41 face 28 px wide has both
+/// eyes 12.7 px lower in the reference: exactly one stride-8 cell at that image's scale, so the
+/// two sides kept neighbouring anchors in suppression -- the same rounding that
+/// [`REQUIRED_SCORE`] exists to tolerate.
+const MAX_EYE_RELATIVE: f32 = 0.05;
+
+/// A face in the reference: pixel corners, the two eye points, and the score it was found at.
+///
+/// Only the eyes: the model was trained on eye points alone, so the other three landmark slots
+/// hold whatever the untrained head emits, and the Rust side reports them as `None`.
 struct Expected {
     corners: [f32; 4],
+    eyes: [[f32; 2]; 2],
     score: f32,
 }
 
@@ -147,6 +161,10 @@ fn the_rust_path_agrees_with_the_python_reference() {
     let mut worst_case = String::new();
     let mut worst_box = 0.0f32;
     let mut offenders: Vec<(String, f32, f32)> = Vec::new();
+    // Worst eye-point distance per matched face, as a fraction of its box width, split by
+    // whether the face is confident enough to be gated.
+    let mut eye_relative: Vec<f32> = Vec::new();
+    let mut eye_borderline: Vec<(String, f32)> = Vec::new();
 
     for record in records.iter() {
         let path = record["image"]
@@ -164,8 +182,14 @@ fn the_rust_path_agrees_with_the_python_reference() {
                         let b = d["bbox"].as_array()?;
                         let v: Vec<f32> =
                             b.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect();
+                        let lm = d["landmarks"].as_array()?;
+                        let point = |i: usize| -> Option<[f32; 2]> {
+                            let p = lm.get(i)?.as_array()?;
+                            Some([p.first()?.as_f64()? as f32, p.get(1)?.as_f64()? as f32])
+                        };
                         Some(Expected {
                             corners: [v[0], v[1], v[0] + v[2], v[1] + v[3]],
+                            eyes: [point(0)?, point(1)?],
                             score,
                         })
                     })
@@ -206,6 +230,19 @@ fn the_rust_path_agrees_with_the_python_reference() {
                         .max((detection.bbox.x + detection.bbox.width - want.corners[2]).abs())
                         .max((detection.bbox.y + detection.bbox.height - want.corners[3]).abs());
                     offenders.push((name.clone(), gap, gap / detection.bbox.width.max(1.0)));
+                    // A missing eye is as wrong as a misplaced one: the reference has both.
+                    let eye_gap = (0..2)
+                        .map(|i| match detection.landmarks[i] {
+                            Some(p) => (p.x - want.eyes[i][0]).hypot(p.y - want.eyes[i][1]),
+                            None => f32::INFINITY,
+                        })
+                        .fold(0.0f32, f32::max);
+                    let eye_gap = eye_gap / detection.bbox.width.max(1.0);
+                    if detection.score >= REQUIRED_SCORE {
+                        eye_relative.push(eye_gap);
+                    } else {
+                        eye_borderline.push((name.clone(), eye_gap));
+                    }
                     if gap > worst_box {
                         worst_box = gap;
                         worst_case = format!(
@@ -265,6 +302,24 @@ fn the_rust_path_agrees_with_the_python_reference() {
         max * 100.0
     );
 
+    eye_relative.sort_by(f32::total_cmp);
+    let eye_median = eye_relative
+        .get(eye_relative.len() / 2)
+        .copied()
+        .unwrap_or(0.0);
+    let eye_max = eye_relative.last().copied().unwrap_or(0.0);
+    println!(
+        "  eye error (>= {REQUIRED_SCORE})      median {:.2}%, max {:.2}% of box width",
+        eye_median * 100.0,
+        eye_max * 100.0
+    );
+    for (name, gap) in eye_borderline.iter().filter(|b| b.1 > MAX_EYE_RELATIVE) {
+        println!(
+            "    borderline face, eyes {:.1}% out, not gated  {name}",
+            gap * 100.0
+        );
+    }
+
     assert!(
         compared > 0,
         "no images were readable, so nothing was compared"
@@ -288,6 +343,16 @@ fn the_rust_path_agrees_with_the_python_reference() {
         "the typical box is {:.2}% out, more than {:.2}% -- that is systematic, not rounding",
         median * 100.0,
         MAX_MEDIAN_RELATIVE * 100.0
+    );
+    assert!(
+        !eye_relative.is_empty(),
+        "no confident face matched, so the eye points were never compared"
+    );
+    assert!(
+        eye_max <= MAX_EYE_RELATIVE,
+        "an eye point on a confident face is {:.2}% of its box out, past {:.0}% --          the landmark decode or its letterbox mapping disagrees",
+        eye_max * 100.0,
+        MAX_EYE_RELATIVE * 100.0
     );
     assert!(
         max <= MAX_ANY_RELATIVE,

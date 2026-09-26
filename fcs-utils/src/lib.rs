@@ -95,7 +95,7 @@ pub use image_utils::{
 };
 use log::LevelFilter;
 pub use output::{
-    ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, PngCompression,
+    ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, OverwritePolicy, PngCompression,
     append_suffix_to_filename, save_dynamic_image,
 };
 pub use quality::{Quality, QualityFilter, estimate_sharpness, laplacian_variance};

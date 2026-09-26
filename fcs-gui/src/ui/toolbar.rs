@@ -28,12 +28,10 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 ui.add_space(4.0);
 
                 // Secondary action: Export
+                // Selected faces only. It used to start a whole batch when nothing was selected,
+                // which "Run batch" is for.
                 if ghost_btn(ui, "Export crops") {
-                    if app.selected_faces.is_empty() && !app.batch_files.is_empty() {
-                        crate::core::export::start_batch_export(app);
-                    } else {
-                        crate::core::export::export_selected_faces(app);
-                    }
+                    crate::core::export::export_selected_faces(app);
                 }
                 tb_sep(ui);
 

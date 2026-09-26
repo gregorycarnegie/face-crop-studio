@@ -592,6 +592,8 @@ pub struct App2 {
     pub redo_stack: Vec<EditSnapshot>,
     pub show_crop_overlay: bool,
     pub result_preview: crate::core::result_preview::ResultPreview,
+    /// An export waiting for the overwrite dialog.
+    pub pending_export: Option<crate::core::export::PendingExport>,
     pub crop_history: Vec<ConfigCropSettings>,
     pub crop_history_index: usize,
     pub crop_fill_hex_input: String,
