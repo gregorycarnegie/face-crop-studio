@@ -82,6 +82,30 @@ fn blit_region(
     }
 }
 
+/// The eye-line tilt to undo, in radians, or `None` when alignment is off or an eye is missing.
+///
+/// Index 0 lies on the viewer's left of the face and index 1 on the viewer's right --
+/// measured across 10,880 large detections, that holds for 99.8% of them. It is the
+/// usual RetinaFace/YuNet order, where index 0 is the subject's *own* right eye. These
+/// names are screen-relative on purpose: read anatomically, "left eye" is the mirror of
+/// this, and that reading has already produced one mirrored landmark mapping elsewhere.
+/// Both eyes or nothing. Aligning from one point is not possible, and the sentinel this
+/// replaced made a missing eye look like a real one at the origin -- which rotated the
+/// crop 45 degrees when the other eye happened to sit diagonally from it.
+fn eye_line_angle(detection: &Detection, settings: &CropSettings) -> Option<f32> {
+    if !settings.eye_line_align {
+        return None;
+    }
+    let (Some(left_eye), Some(right_eye)) = (detection.landmarks[0], detection.landmarks[1])
+    else {
+        return None;
+    };
+    // Angle of the eye line relative to horizontal in source image coords, taken from the
+    // viewer's left eye towards the viewer's right. Positive angle = the eye on the right
+    // sits lower on screen; rotate by -angle to level them.
+    Some((right_eye.y - left_eye.y).atan2(right_eye.x - left_eye.x))
+}
+
 /// Map the two eye landmarks into output-crop coordinates, for targeted red-eye removal.
 ///
 /// Empty when either eye is absent: one point is not a pair, and there is nothing to aim at.
@@ -104,13 +128,22 @@ pub fn eye_positions(
     let face_h_out =
         detection.bbox.height / region.height.max(1) as f32 * settings.output_height as f32;
     let radius = (face_h_out * 0.12).max(4.0);
+    // Eye-line alignment turns the crop about its centre, so the eyes have to turn with it
+    // or red-eye removal aims at where they were before levelling.
+    let (sin, cos) = eye_line_angle(detection, settings).map_or((0.0, 1.0), f32::sin_cos);
+    let half_w = region.width.max(1) as f32 / 2.0;
+    let half_h = region.height.max(1) as f32 / 2.0;
     [right, left]
         .iter()
-        .map(|lm| fcs_utils::RedEye {
-            x: (lm.x - region.x as f32) * sx,
-            y: (lm.y - region.y as f32) * sy,
-            radius,
-            _pad: 0.0,
+        .map(|lm| {
+            let px = lm.x - region.x as f32 - half_w;
+            let py = lm.y - region.y as f32 - half_h;
+            fcs_utils::RedEye {
+                x: (cos * px + sin * py + half_w) * sx,
+                y: (cos * py - sin * px + half_h) * sy,
+                radius,
+                _pad: 0.0,
+            }
         })
         .collect()
 }
@@ -163,24 +196,8 @@ pub fn crop_face_from_image(
         return DynamicImage::ImageRgba8(padded_canvas(img, &region, fill));
     }
 
-    // Index 0 lies on the viewer's left of the face and index 1 on the viewer's right --
-    // measured across 10,880 large detections, that holds for 99.8% of them. It is the
-    // usual RetinaFace/YuNet order, where index 0 is the subject's *own* right eye. These
-    // names are screen-relative on purpose: read anatomically, "left eye" is the mirror of
-    // this, and that reading has already produced one mirrored landmark mapping elsewhere.
-    // Both eyes or nothing. Aligning from one point is not possible, and the sentinel this
-    // replaced made a missing eye look like a real one at the origin -- which rotated the
-    // crop 45 degrees when the other eye happened to sit diagonally from it.
-    let eyes = (detection.landmarks[0], detection.landmarks[1]);
-    let canvas = match eyes {
-        (Some(left_eye), Some(right_eye)) if settings.eye_line_align => {
-            // Angle of the eye line relative to horizontal in source image coords, taken from
-            // the viewer's left eye towards the viewer's right. Positive angle = the eye on
-            // the right sits lower on screen; rotate by -angle to level them.
-            let dx = right_eye.x - left_eye.x;
-            let dy = right_eye.y - left_eye.y;
-            let angle = dy.atan2(dx); // radians; counter-clockwise positive
-
+    let canvas = match eye_line_angle(detection, settings) {
+        Some(angle) => {
             // Rotating the finished crop pulled its corners in from outside it, and those were
             // filled even where the photo had pixels (issue #5). So crop a margin wide enough
             // to cover the turned rectangle, rotate about the same centre, and keep the middle.
@@ -215,7 +232,7 @@ pub fn crop_face_from_image(
             );
             out
         }
-        _ => padded_canvas(img, &region, fill),
+        None => padded_canvas(img, &region, fill),
     };
 
     // Through `fast_image_resize` rather than `image::imageops::resize`: the latter samples
@@ -979,6 +996,77 @@ mod tests {
     }
 
     /// One eye absent means no targets: red-eye removal has nothing to aim at with half a pair.
+    #[test]
+    fn eye_positions_follow_the_eye_line_rotation() {
+        // Red-eye removal is aimed with `eye_positions`, so with alignment on they have to
+        // land where the rotated crop actually put the eyes. Mark each eye in the photo, crop,
+        // and find the marks again: until this was fixed, the targets sat on the unrotated
+        // positions, several pixels off at this tilt.
+        let eye_at = [(80.0f32, 88.0f32), (118.0f32, 108.0f32)];
+        let mut photo = RgbaImage::from_pixel(200, 200, Rgba([128, 128, 128, 255]));
+        for &(ex, ey) in &eye_at {
+            for y in ey as u32 - 1..=ey as u32 + 1 {
+                for x in ex as u32 - 1..=ex as u32 + 1 {
+                    photo.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+                }
+            }
+        }
+        let mut detection = detection_at(BoundingBox {
+            x: 70.0,
+            y: 70.0,
+            width: 60.0,
+            height: 60.0,
+        });
+        for (slot, &(x, y)) in detection.landmarks.iter_mut().zip(&eye_at) {
+            // The marks are 3x3 blocks whose centre is the middle of pixel (x, y).
+            *slot = Some(crate::postprocess::Landmark {
+                x: x + 0.5,
+                y: y + 0.5,
+            });
+        }
+        let settings = CropSettings {
+            output_width: 120,
+            output_height: 120,
+            face_height_pct: 50.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: true,
+        };
+
+        let out =
+            crop_face_from_image(&DynamicImage::ImageRgba8(photo), &detection, &settings)
+                .to_rgba8();
+        let eyes = eye_positions(&detection, 200, 200, &settings);
+        assert!(
+            (eyes[0].y - eyes[1].y).abs() < 1e-3,
+            "a levelled crop has level eyes"
+        );
+
+        for eye in &eyes {
+            // Redness-weighted centroid of the mark nearest this target.
+            let (mut sum, mut sx, mut sy) = (0.0f32, 0.0f32, 0.0f32);
+            for (x, y, p) in out.enumerate_pixels() {
+                let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+                let red = (p[0] as f32 - p[1] as f32).max(0.0);
+                if (cx - eye.x).hypot(cy - eye.y) < 12.0 {
+                    sum += red;
+                    sx += red * cx;
+                    sy += red * cy;
+                }
+            }
+            assert!(sum > 0.0, "no mark near ({}, {})", eye.x, eye.y);
+            let (mx, my) = (sx / sum, sy / sum);
+            assert!(
+                (mx - eye.x).hypot(my - eye.y) < 1.0,
+                "target ({}, {}) but the eye landed at ({mx}, {my})",
+                eye.x,
+                eye.y
+            );
+        }
+    }
+
     #[test]
     fn eye_positions_are_empty_unless_both_eyes_are_present() {
         let bbox = BoundingBox {

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Eye-line alignment no longer paints the padding colour over the photo.** The crop was cut
+  out first and rotated afterwards, so the corners it swung in were filled even where the
+  photo carried on past them, at any tilt. It now crops a margin wide enough for the turn
+  before rotating, and the padding colour appears only where the crop really runs off the
+  image ([#5](https://github.com/gregorycarnegie/face-crop-studio/issues/5)).
+- **Red-eye removal aims at the eyes in aligned crops.** Its targets were mapped into the crop
+  without the eye-line rotation, so with alignment on they sat where the eyes were before
+  levelling. They now turn with the crop, in the CLI, webcam and GUI export alike.
+
 ## [2.1.0] - 2026-09-26
 
 Face Crop Studio no longer ships or loads ONNX Runtime. Detection and the eye refiner run on the
