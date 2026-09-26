@@ -27,6 +27,15 @@ Runtime.
   instead of 76 ms on one thread (ONNX Runtime took 12.7 ms). Outputs still match ONNX Runtime
   within the existing 2e-3 tolerance. `fcs_core::cpu::nchwc` replaces `fcs_core::cpu::conv2d`
   and `fcs_core::cpu::ops`, which are removed.
+- **The detector times both engines at load and keeps the faster.** It used to take the GPU
+  whenever there was one. With ONNX Runtime gone, an integrated GPU would then have been slower
+  than the CPU: 27 ms per detection where the CPU graph takes 8. Now, when a GPU loads, the
+  WGSL engine and the CPU graph each run the network a few times. The GPU keeps the job unless
+  the CPU is more than 25% faster, because in a batch the CPU's cores are also decoding and
+  cropping other images. An RTX 4090 keeps the GPU (2.7 ms against 5.0); an integrated GPU
+  switches to the CPU graph (32 ms against 5). The startup log shows both times. Loading
+  takes up to about 0.2 s longer on an integrated GPU. `ScrfdDetector::load_builtin` is
+  removed; `load_from` does this.
 - **The eye refiner runs without ONNX Runtime**, on the same CPU kernels. It takes 0.8 ms per
   face including the crop resample, where ONNX Runtime took 0.9 ms for the network alone. It
   has no GPU path; one face is too little work to be worth an upload.
@@ -38,13 +47,6 @@ Runtime.
   `fcs-ort` remains as a development-only parity oracle for tests and benchmarks.
   `tools/verify_package.py` runs a packaged CLI from an empty directory with the runtime
   pointed at a missing file, and checks that it detects and aligns eyes anyway.
-
-### Known issues
-
-- **On machines whose only GPU is integrated, detection is slower than before.** The app
-  picks the WGSL engine whenever a GPU exists, and on an integrated GPU that takes about 27 ms
-  per detection. ONNX Runtime took 7 ms there, and the new CPU graph takes about 10 ms. Picking
-  the faster engine at load is planned.
 
 ## [2.0.2] - 2026-09-25
 

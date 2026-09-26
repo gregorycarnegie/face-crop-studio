@@ -59,11 +59,10 @@ pub struct ScrfdDetector {
     backend: Backend,
 }
 
-/// Where the network actually runs.
-///
-/// The WGSL engine first, then the built-in CPU graph. Both were checked against ONNX
-/// Runtime (used only in tests and benchmarks) on the same
-/// input: 1.1e-05 between GPU and ONNX Runtime, 1.2e-05 between CPU and ONNX Runtime.
+/// Where the network actually runs: whichever of the two measured faster at load (see
+/// [`prefer_gpu`]). Both were checked against ONNX Runtime (used only in tests and
+/// benchmarks) on the same input: 1.1e-05 between GPU and ONNX Runtime, 1.2e-05 between CPU
+/// and ONNX Runtime.
 #[derive(Debug)]
 enum Backend {
     Gpu(Box<(crate::gpu::GpuInferenceOps, gpu::ScrfdGpuWeights)>),
@@ -86,49 +85,118 @@ impl ScrfdDetector {
     }
 
     /// Load from an explicit path. See [`Self::load`] for the `None` cases.
-    pub fn load_from<P: AsRef<Path>>(path: P) -> Option<Self> {
-        Self::load_builtin(path)
-    }
-
-    /// Load onto the built-in engines, for a machine with no ONNX Runtime.
     ///
-    /// The GPU is tried first and the CPU graph is the floor. This is what lets SCRFD ship
-    /// everywhere, and so what lets YuNet -- trained on WIDER FACE, "non-commercial academic
-    /// research only" -- leave the packages.
-    pub fn load_builtin<P: AsRef<Path>>(path: P) -> Option<Self> {
+    /// With a GPU, both engines are loaded and timed on one input, and the slower is dropped.
+    /// Neither wins everywhere: on an RTX 4090 the WGSL engine takes 2 ms to the CPU graph's
+    /// 5.5, and on an integrated GPU it takes 22 ms to the same CPU's 7.5. The probe costs a
+    /// few detections' time at load. Without a GPU, or when it fails, the CPU graph is the
+    /// floor.
+    pub fn load_from<P: AsRef<Path>>(path: P) -> Option<Self> {
         let path = path.as_ref();
         if !path.exists() {
             debug!("SCRFD not loaded: no model at {}", path.display());
             return None;
         }
 
-        match fcs_utils::GpuContext::init_with_fallback(&Default::default()) {
+        let cpu = match plan::ScrfdWeights::load(path) {
+            Ok(weights) => Self {
+                backend: Backend::Cpu(Box::new(weights)),
+            },
+            Err(err) => {
+                warn!("SCRFD at {} would not load ({err})", path.display());
+                return None;
+            }
+        };
+        let gpu = match fcs_utils::GpuContext::init_with_fallback(&Default::default()) {
             fcs_utils::GpuAvailability::Available(context) => {
                 match crate::gpu::GpuInferenceOps::new(context, None)
                     .and_then(|ops| Ok((gpu::ScrfdGpuWeights::load(&ops, path)?, ops)))
                 {
-                    Ok((weights, ops)) => {
-                        info!("SCRFD on the WGSL engine, from {}", path.display());
-                        return Some(Self {
-                            backend: Backend::Gpu(Box::new((ops, weights))),
-                        });
+                    Ok((weights, ops)) => Self {
+                        backend: Backend::Gpu(Box::new((ops, weights))),
+                    },
+                    Err(err) => {
+                        warn!("SCRFD on the GPU failed ({err}); using the CPU graph");
+                        return Some(cpu);
                     }
-                    Err(err) => warn!("SCRFD on the GPU failed ({err}); trying the CPU graph"),
                 }
             }
-            other => debug!("no GPU for SCRFD ({other:?}); using the CPU graph"),
-        }
-
-        match plan::ScrfdWeights::load(path) {
-            Ok(weights) => {
-                info!("SCRFD on the built-in CPU graph, from {}", path.display());
-                Some(Self {
-                    backend: Backend::Cpu(Box::new(weights)),
-                })
+            other => {
+                debug!("no GPU for SCRFD ({other:?}); using the CPU graph");
+                return Some(cpu);
             }
-            Err(err) => {
-                warn!("SCRFD at {} would not load ({err})", path.display());
-                None
+        };
+
+        let chosen = match (gpu.probe_ms(), cpu.probe_ms()) {
+            (Ok(gpu_ms), Ok(cpu_ms)) => {
+                let use_gpu = prefer_gpu(gpu_ms, cpu_ms);
+                info!(
+                    "SCRFD timed at load: wgsl-gpu {gpu_ms:.1} ms, cpu-graph {cpu_ms:.1} ms; using {}",
+                    if use_gpu { "wgsl-gpu" } else { "cpu-graph" }
+                );
+                if use_gpu { gpu } else { cpu }
+            }
+            (Err(err), _) => {
+                warn!("SCRFD on the GPU failed its first run ({err}); using the CPU graph");
+                cpu
+            }
+            // The CPU graph failing where the GPU ran is not a reason to give up the GPU.
+            (Ok(_), Err(err)) => {
+                warn!("SCRFD's CPU graph failed its first run ({err}); using the GPU");
+                gpu
+            }
+        };
+        info!("SCRFD on {} from {}", chosen.engine(), path.display());
+        Some(chosen)
+    }
+
+    /// Median time of the network alone, in milliseconds, after untimed runs that absorb
+    /// first-use costs (buffer allocation, the GPU's lazy pipeline state). One warm-up was not
+    /// enough: an RTX 4090 still read 4.1 ms against its steady 2.
+    fn probe_ms(&self) -> Result<f64> {
+        const WARMUP: usize = 3;
+        const RUNS: usize = 3;
+        let side = INPUT_SIZE as usize;
+        let input = vec![0.0f32; 3 * side * side];
+        for _ in 0..WARMUP {
+            self.infer(input.clone())?;
+        }
+        let mut times = (0..RUNS)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                self.infer(input.clone())?;
+                Ok(started.elapsed().as_secs_f64() * 1e3)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        times.sort_by(f64::total_cmp);
+        Ok(times[RUNS / 2])
+    }
+
+    /// Run the network on a preprocessed input and read back the nine head maps.
+    fn infer(&self, input: Vec<f32>) -> Result<Vec<(Vec<f32>, [usize; 4])>> {
+        let side = INPUT_SIZE as usize;
+        match &self.backend {
+            Backend::Gpu(boxed) => {
+                let (ops, weights) = boxed.as_ref();
+                let uploaded =
+                    ops.upload_tensor(vec![1, 3, side, side], &input, Some("scrfd input"))?;
+                gpu::run(ops, &uploaded, weights)?
+                    .iter()
+                    .map(|tensor| {
+                        let dims = tensor.shape().dims();
+                        Ok((tensor.to_vec()?, [dims[0], dims[1], dims[2], dims[3]]))
+                    })
+                    .collect()
+            }
+            Backend::Cpu(weights) => {
+                let tensor = crate::cpu::tensor::Tensor::new(1, 3, side, side, input)?;
+                Ok(plan::run(tensor, weights)?
+                    .into_iter()
+                    .map(|t| {
+                        let dims = [t.batch(), t.channels(), t.height(), t.width()];
+                        (t.into_data(), dims)
+                    })
+                    .collect())
             }
         }
     }
@@ -153,42 +221,21 @@ impl ScrfdDetector {
         nms_threshold: f32,
     ) -> Result<Vec<Detection>> {
         let (input, letterbox) = preprocess(image, INPUT_SIZE);
-        let side = INPUT_SIZE as usize;
-        let shape = [1usize, 3, side, side];
-
-        let mut detections = match &self.backend {
-            Backend::Gpu(boxed) => {
-                let (ops, weights) = boxed.as_ref();
-                let uploaded = ops.upload_tensor(shape.to_vec(), &input, Some("scrfd input"))?;
-                let outputs = gpu::run(ops, &uploaded, weights)?;
-                let maps = outputs
-                    .iter()
-                    .map(|tensor| {
-                        let dims = tensor.shape().dims();
-                        Ok((tensor.to_vec()?, [dims[0], dims[1], dims[2], dims[3]]))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?
-            }
-            Backend::Cpu(weights) => {
-                let tensor = crate::cpu::tensor::Tensor::new(1, 3, side, side, input)?;
-                let outputs = plan::run(tensor, weights)?;
-                let maps: Vec<(Vec<f32>, [usize; 4])> = outputs
-                    .iter()
-                    .map(|t| {
-                        (
-                            t.data().to_vec(),
-                            [t.batch(), t.channels(), t.height(), t.width()],
-                        )
-                    })
-                    .collect();
-                decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?
-            }
-        };
+        let mut detections =
+            decode_maps(&self.infer(input)?, letterbox, score_threshold, INPUT_SIZE)?;
         detections.sort_by(|a, b| b.score.total_cmp(&a.score));
         apply_nms_in_place(&mut detections, nms_threshold);
         Ok(detections)
     }
+}
+
+/// Whether the GPU should run the network, given each engine's time at load.
+///
+/// The GPU keeps the job unless the CPU graph is more than 25% faster. The probe runs on idle
+/// cores, but in a batch those cores are decoding and cropping other images, and GPU
+/// inference leaves them free for it; a near tie measured idle is a GPU win under load.
+fn prefer_gpu(gpu_ms: f64, cpu_ms: f64) -> bool {
+    cpu_ms * 1.25 >= gpu_ms
 }
 
 /// Resize into the top-left of a square canvas and normalise, as the model was trained.
@@ -617,13 +664,13 @@ mod tests {
         );
     }
 
-    /// Loading the shipped model must succeed, and `load_builtin` must too.
+    /// Loading the shipped model must succeed.
     ///
-    /// Both returned `Option`, and every other test skipped on `None`, so `-> None` mutants were
-    /// invisible: the suite skipped and passed. Under `FCS_STRICT_TESTS` -- which CI sets -- an
-    /// absent detector is now a failure, which is what makes those mutants reachable.
+    /// Loading returns `Option`, and every other test skipped on `None`, so `-> None` mutants
+    /// were invisible: the suite skipped and passed. Under `FCS_STRICT_TESTS` -- which CI sets
+    /// -- an absent detector is now a failure, which is what makes those mutants reachable.
     #[test]
-    fn the_shipped_model_loads_on_both_entry_points() {
+    fn the_shipped_model_loads() {
         let model = default_model_for_test();
         if !model.exists() {
             assert!(!strict_tests(), "FCS_STRICT_TESTS: no model at {model:?}");
@@ -634,15 +681,24 @@ mod tests {
             ScrfdDetector::load_from(&model).is_some(),
             "load_from returned None for a model that exists"
         );
-        assert!(
-            ScrfdDetector::load_builtin(&model).is_some(),
-            "load_builtin returned None: the built-in engines are the floor and must always load"
-        );
         // And the negative case, which is what the `!path.exists()` guard is for.
         assert!(
-            ScrfdDetector::load_builtin(model.with_file_name("absent.onnx")).is_none(),
+            ScrfdDetector::load_from(model.with_file_name("absent.onnx")).is_none(),
             "a missing file must not produce a detector"
         );
+    }
+
+    /// The two machines the rule was written for, and the boundary between them.
+    #[test]
+    fn the_gpu_keeps_the_job_unless_the_cpu_is_clearly_faster() {
+        assert!(prefer_gpu(2.0, 5.5), "RTX 4090: the GPU is faster");
+        assert!(
+            !prefer_gpu(22.0, 7.5),
+            "integrated GPU: the CPU is three times faster"
+        );
+        assert!(prefer_gpu(10.0, 9.0), "a near tie goes to the GPU");
+        assert!(prefer_gpu(10.0, 8.0), "exactly 25% faster is still a tie");
+        assert!(!prefer_gpu(10.0, 7.9), "past 25% the CPU takes it");
     }
 
     /// A square image takes either branch of the aspect-ratio test and must come out the same.
