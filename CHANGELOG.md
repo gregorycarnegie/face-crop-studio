@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-26
+
 Face Crop Studio no longer ships or loads ONNX Runtime. Detection and the eye refiner run on the
 built-in engines only: the WGSL kernels on a GPU, and a rewritten CPU graph everywhere else. The
 CPU graph is now 5-6x faster and as fast as ONNX Runtime was on one thread, and the eye
-refiner runs on it in 0.75 ms per face.
+refiner runs on it in 0.75 ms per face. Nothing to do before upgrading: the detector and its
+outputs are the same, and there is less to install.
+
+`fcs_core::cpu::conv2d`, `fcs_core::cpu::ops` and `ScrfdDetector::load_builtin` are removed,
+which would make this a major by the letter of semver. It is a minor for the reason 2.0.1 was
+a patch: the crates are not published, so the workspace is their only caller, and it moved
+with them.
 
 ### Changed
 
@@ -2350,7 +2358,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v1.8.0...v2.0.0
