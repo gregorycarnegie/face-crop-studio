@@ -27,6 +27,57 @@ pub const BLOCK: usize = 8;
 /// used by all of them, which is what the tile exists for.
 const FILTERS: usize = 4;
 
+/// Buffers of activations nothing will read again, reused for later outputs.
+///
+/// A network run used to allocate every layer's output afresh -- up to 6.5 MB each, 66 times
+/// -- and the allocator hands large freed blocks back to the OS, so each run paid page faults
+/// on memory it had just released. Recycling instead is ONNX Runtime's memory planning in its
+/// simplest form: a buffer that comes back is still committed, and often still in cache.
+#[derive(Debug, Default)]
+pub struct Arena {
+    free: Vec<Vec<f32x8>>,
+}
+
+impl Arena {
+    /// Give back a tensor that nothing will read again.
+    pub fn recycle(&mut self, tensor: Blocked) {
+        self.free.push(tensor.data);
+    }
+
+    /// Whether it holds no buffers.
+    pub fn is_empty(&self) -> bool {
+        self.free.is_empty()
+    }
+
+    /// Room for `len` elements: the smallest free buffer that fits, or a new one.
+    fn take(&mut self, len: usize) -> Vec<MaybeUninit<f32x8>> {
+        let fit = self
+            .free
+            .iter()
+            .enumerate()
+            .filter(|(_, buffer)| buffer.capacity() >= len)
+            .min_by_key(|(_, buffer)| buffer.capacity())
+            .map(|(index, _)| index);
+        let buffer = match fit {
+            Some(index) => self.free.swap_remove(index),
+            None => Vec::with_capacity(len),
+        };
+        let mut buffer = std::mem::ManuallyDrop::new(buffer);
+        // SAFETY: `MaybeUninit<f32x8>` has the layout of `f32x8`, and treating initialised
+        // contents as uninitialised only forgets what they were.
+        let mut data = unsafe {
+            Vec::from_raw_parts(
+                buffer.as_mut_ptr().cast::<MaybeUninit<f32x8>>(),
+                0,
+                buffer.capacity(),
+            )
+        };
+        // SAFETY: the capacity is at least `len`, and `MaybeUninit` needs no initialisation.
+        unsafe { data.set_len(len) };
+        data
+    }
+}
+
 /// Activations with channels grouped in blocks of [`BLOCK`].
 ///
 /// Element `((n * blocks + c / 8) * height + y) * width + x` holds channels
@@ -42,7 +93,8 @@ pub struct Blocked {
 }
 
 impl Blocked {
-    /// A tensor whose every element `fill` writes, allocated without zeroing it first.
+    /// A tensor whose every element `fill` writes, in a buffer from `arena` that is not
+    /// zeroed first.
     ///
     /// Zeroing is a single-threaded memset of up to 6.5 MB per layer, and it was what kept
     /// the graph from scaling past four threads: every kernel overwrites its whole output
@@ -53,6 +105,7 @@ impl Blocked {
     ///
     /// `fill` must write every element of the slice it is given.
     unsafe fn written(
+        arena: &mut Arena,
         batch: usize,
         channels: usize,
         height: usize,
@@ -60,9 +113,7 @@ impl Blocked {
         fill: impl FnOnce(&mut [MaybeUninit<f32x8>]),
     ) -> Self {
         let len = batch * channels.div_ceil(BLOCK) * height * width;
-        let mut data: Vec<MaybeUninit<f32x8>> = Vec::with_capacity(len);
-        // SAFETY: `MaybeUninit` needs no initialisation, and the capacity is `len`.
-        unsafe { data.set_len(len) };
+        let mut data = arena.take(len);
         if cfg!(debug_assertions) {
             data.fill(MaybeUninit::new(f32x8::splat(f32::NAN)));
         }
@@ -362,6 +413,7 @@ impl OutPtr {
 /// Dense convolution, fusing an optional ReLU. Covers KxK at any stride and padding,
 /// including 1x1, reading either blocked or NCHW input (see [`Source`]).
 pub fn conv(
+    arena: &mut Arena,
     input: Source<'_>,
     weights: &DenseWeights,
     stride: usize,
@@ -413,7 +465,7 @@ pub fn conv(
     // SAFETY: the jobs cover every (batch item, block group, row, column chunk), and each
     // `Row::run` writes every column of its chunk for each of its blocks.
     let output = unsafe {
-        Blocked::written(batch, out_channels, full_h, full_w, |data| {
+        Blocked::written(arena, batch, out_channels, full_h, full_w, |data| {
             let out = OutPtr(data.as_mut_ptr());
             (0..jobs)
                 .into_par_iter()
@@ -573,6 +625,7 @@ impl Row<'_> {
 
 /// Depthwise convolution (`groups == channels`), fusing an optional ReLU.
 pub fn depthwise(
+    arena: &mut Arena,
     input: &Blocked,
     weights: &DepthwiseWeights,
     stride: usize,
@@ -596,7 +649,7 @@ pub fn depthwise(
 
     // SAFETY: one task per output row, and each writes every column of it.
     let output = unsafe {
-        Blocked::written(input.batch, input.channels, out_h, out_w, |data| {
+        Blocked::written(arena, input.batch, input.channels, out_h, out_w, |data| {
             data.par_chunks_mut(out_w.max(1))
                 .with_min_len(min_len(rows))
                 .enumerate()
@@ -676,7 +729,7 @@ impl DepthwiseRow<'_> {
 }
 
 /// Elementwise sum of two tensors of one shape.
-pub fn add(lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
+pub fn add(arena: &mut Arena, lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
     ensure!(
         (lhs.batch, lhs.channels, lhs.height, lhs.width)
             == (rhs.batch, rhs.channels, rhs.height, rhs.width),
@@ -684,26 +737,33 @@ pub fn add(lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
     );
     // SAFETY: the chunks of `data`, `lhs` and `rhs` line up one to one, all of one length.
     let out = unsafe {
-        Blocked::written(lhs.batch, lhs.channels, lhs.height, lhs.width, |data| {
-            data.par_chunks_mut(4096)
-                .zip(lhs.data.par_chunks(4096).zip(rhs.data.par_chunks(4096)))
-                .for_each(|(o, (a, b))| {
-                    for (o, (a, b)) in o.iter_mut().zip(a.iter().zip(b)) {
-                        o.write(*a + *b);
-                    }
-                });
-        })
+        Blocked::written(
+            arena,
+            lhs.batch,
+            lhs.channels,
+            lhs.height,
+            lhs.width,
+            |data| {
+                data.par_chunks_mut(4096)
+                    .zip(lhs.data.par_chunks(4096).zip(rhs.data.par_chunks(4096)))
+                    .for_each(|(o, (a, b))| {
+                        for (o, (a, b)) in o.iter_mut().zip(a.iter().zip(b)) {
+                            o.write(*a + *b);
+                        }
+                    });
+            },
+        )
     };
     Ok(out)
 }
 
 /// Nearest-neighbour 2x upsample.
-pub fn upsample2x(input: &Blocked) -> Result<Blocked> {
+pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
     let (h, w) = (input.height, input.width);
     let rows = input.batch * input.blocks() * h * 2;
     // SAFETY: one task per output row, and each writes every column of it.
     let output = unsafe {
-        Blocked::written(input.batch, input.channels, h * 2, w * 2, |data| {
+        Blocked::written(arena, input.batch, input.channels, h * 2, w * 2, |data| {
             data.par_chunks_mut((w * 2).max(1))
                 .with_min_len(min_len(rows))
                 .enumerate()
@@ -819,12 +879,28 @@ mod tests {
                     let what = format!("{c_in}->{c_out} {h}x{w} k{k} s{stride} p{pad}");
                     // NCHW input as blocks of one, and blocked input.
                     let from_nchw = DenseWeights::new(c_out, c_in, k, 1, &wts, &bias).unwrap();
-                    let got = conv((&input).into(), &from_nchw, stride, pad, true).unwrap();
+                    let got = conv(
+                        &mut Arena::default(),
+                        (&input).into(),
+                        &from_nchw,
+                        stride,
+                        pad,
+                        true,
+                    )
+                    .unwrap();
                     assert_close(&got.to_nchw(0, c_out).unwrap(), &reference, &what);
                     let packed = blocked(&input);
                     let from_blocked =
                         DenseWeights::new(c_out, c_in, k, BLOCK, &wts, &bias).unwrap();
-                    let got = conv((&packed).into(), &from_blocked, stride, pad, true).unwrap();
+                    let got = conv(
+                        &mut Arena::default(),
+                        (&packed).into(),
+                        &from_blocked,
+                        stride,
+                        pad,
+                        true,
+                    )
+                    .unwrap();
                     assert_close(&got.to_nchw(0, c_out).unwrap(), &reference, &what);
                 }
             }
@@ -841,7 +917,15 @@ mod tests {
                     let bias = ramp(c, 5);
                     let reference = reference(&input, &wts, &bias, c, 3, stride, pad, c, false);
                     let weights = DepthwiseWeights::new(c, 3, &wts, &bias).unwrap();
-                    let got = depthwise(&blocked(&input), &weights, stride, pad, false).unwrap();
+                    let got = depthwise(
+                        &mut Arena::default(),
+                        &blocked(&input),
+                        &weights,
+                        stride,
+                        pad,
+                        false,
+                    )
+                    .unwrap();
                     assert_close(
                         &got.to_nchw(0, c).unwrap(),
                         &reference,
@@ -856,14 +940,17 @@ mod tests {
     fn add_upsample_and_channel_ranges_round_trip() {
         let a = Tensor::new(2, 11, 3, 4, ramp(2 * 11 * 12, 6)).unwrap();
         let b = Tensor::new(2, 11, 3, 4, ramp(2 * 11 * 12, 7)).unwrap();
-        let sum = add(&blocked(&a), &blocked(&b))
+        let sum = add(&mut Arena::default(), &blocked(&a), &blocked(&b))
             .unwrap()
             .to_nchw(0, 11)
             .unwrap();
         let want: Vec<f32> = a.data().iter().zip(b.data()).map(|(x, y)| x + y).collect();
         assert_eq!(sum.data(), want, "add");
 
-        let up = upsample2x(&blocked(&a)).unwrap().to_nchw(0, 11).unwrap();
+        let up = upsample2x(&mut Arena::default(), &blocked(&a))
+            .unwrap()
+            .to_nchw(0, 11)
+            .unwrap();
         assert_eq!(up.dims(), [2, 11, 6, 8]);
         for n in 0..2 {
             for c in 0..11 {
@@ -881,6 +968,32 @@ mod tests {
                 assert_eq!(part.plane_slice(n, c), a.plane_slice(n, c + 6));
             }
         }
+    }
+
+    /// A recycled buffer is reused for an output that fits, and its old contents never leak
+    /// into the new tensor.
+    #[test]
+    fn a_recycled_buffer_is_reused_and_fully_overwritten() {
+        let mut arena = Arena::default();
+        let big = blocked(&Tensor::new(1, 16, 9, 9, ramp(16 * 81, 9)).unwrap());
+        let address = big.data.as_ptr();
+        arena.recycle(big);
+
+        let input = Tensor::new(1, 5, 4, 6, ramp(5 * 24, 10)).unwrap();
+        let (wts, bias) = (ramp(13 * 5 * 9, 11), ramp(13, 12));
+        let weights = DenseWeights::new(13, 5, 3, 1, &wts, &bias).unwrap();
+        let got = conv(&mut arena, (&input).into(), &weights, 1, 1, false).unwrap();
+        assert_eq!(
+            got.data.as_ptr(),
+            address,
+            "the free buffer should have been reused"
+        );
+        assert!(arena.free.is_empty());
+        assert_close(
+            &got.to_nchw(0, 13).unwrap(),
+            &reference(&input, &wts, &bias, 13, 3, 1, 1, 1, false),
+            "conv into a recycled buffer",
+        );
     }
 
     #[test]

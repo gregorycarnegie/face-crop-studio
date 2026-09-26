@@ -13,11 +13,13 @@
 //! the shared ONNX initializer reader; everything about the shape of the network is compiled
 //! in. A model with a different architecture will fail to load rather than half-run.
 
+use std::sync::Mutex;
+
 use anyhow::{Context, Result};
 
 use crate::{
     cpu::{
-        nchwc::{self, BLOCK, Blocked, DenseWeights, DepthwiseWeights, Source},
+        nchwc::{self, Arena, BLOCK, Blocked, DenseWeights, DepthwiseWeights, Source},
         tensor::Tensor,
     },
     onnx::OnnxInitializerMap,
@@ -67,6 +69,39 @@ pub enum Step {
 #[derive(Debug)]
 pub struct ScrfdWeights {
     convs: Vec<Prepared>,
+    /// For each step, the slots nothing reads after it, whose buffers go back to the arena.
+    frees: Vec<Vec<usize>>,
+    /// The last run's buffers, for the next run to start from. A run that finds it already
+    /// taken, because another is in flight, starts empty and allocates.
+    arena: Mutex<Arena>,
+}
+
+/// For each step, the slots whose last reader it is.
+///
+/// Never slot 0, the NCHW input, which the caller owns, and never an output. The neck reads
+/// backbone levels produced long before it, so this is a scan of the whole plan rather than
+/// "the previous step".
+fn last_reads(steps: &[Step], outputs: &[usize]) -> Vec<Vec<usize>> {
+    let mut last = vec![None; steps.len() + 1];
+    for (index, step) in steps.iter().enumerate() {
+        match *step {
+            Step::Conv { input, .. } | Step::Upsample2x { input } => last[input] = Some(index),
+            Step::Add { a, b } => {
+                last[a] = Some(index);
+                last[b] = Some(index);
+            }
+        }
+    }
+    let mut frees = vec![Vec::new(); steps.len()];
+    for (slot, at) in last.into_iter().enumerate() {
+        if let Some(at) = at
+            && slot != 0
+            && !outputs.contains(&slot)
+        {
+            frees[at].push(slot);
+        }
+    }
+    frees
 }
 
 /// What a step runs with, once sibling convolutions are merged.
@@ -212,7 +247,11 @@ impl ScrfdWeights {
             convs.push(Prepared::Dense { weights, split });
             convs.extend((1..count).map(|_| Prepared::Merged));
         }
-        Ok(Self { convs })
+        Ok(Self {
+            convs,
+            frees: last_reads(steps, &super::topology::OUTPUTS),
+            arena: Mutex::default(),
+        })
     }
 }
 
@@ -228,6 +267,8 @@ enum Slot {
         first: usize,
         count: usize,
     },
+    /// A tensor nothing reads any more, its buffer back in the arena.
+    Freed,
 }
 
 /// Run every step and return the nine head outputs, in the topology's output order.
@@ -235,15 +276,16 @@ enum Slot {
 /// Activations stay in the blocked layout from the first convolution, which reads the NCHW
 /// input directly, to the outputs, which are the only tensors converted back.
 ///
-/// Slots are kept for the whole pass rather than freed once consumed: the neck reads backbone
-/// levels produced long before it, so liveness is not simply "the previous step".
+/// Each activation's buffer is recycled after its last reader, and the recycled buffers are
+/// kept for the next run.
 pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
+    let mut arena = std::mem::take(&mut *lock(&weights.arena));
     let mut slots = Vec::with_capacity(super::topology::STEPS.len() + 1);
     slots.push(Slot::Input);
     let mut merged: Vec<Blocked> = Vec::new();
 
     for (index, step) in super::topology::STEPS.iter().enumerate() {
-        let produced = match *step {
+        let produced: Option<Blocked> = match *step {
             Step::Conv {
                 input: from,
                 stride,
@@ -256,10 +298,10 @@ pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
                         Some(Slot::Input) => Source::from(&input),
                         _ => Source::from(blocked(&slots, from, index)?),
                     };
-                    let output = nchwc::conv(source, weights, stride, pad, relu)
+                    let output = nchwc::conv(&mut arena, source, weights, stride, pad, relu)
                         .with_context(|| format!("step {index}: conv"))?;
                     if split.len() == 1 {
-                        output
+                        Some(output)
                     } else {
                         let mut first = 0;
                         for &count in split {
@@ -271,37 +313,77 @@ pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
                             first += count;
                         }
                         merged.push(output);
-                        continue;
+                        None
                     }
                 }
-                Prepared::Depthwise(weights) => {
-                    nchwc::depthwise(blocked(&slots, from, index)?, weights, stride, pad, relu)
-                        .with_context(|| format!("step {index}: depthwise conv"))?
-                }
+                Prepared::Depthwise(weights) => Some(
+                    nchwc::depthwise(
+                        &mut arena,
+                        blocked(&slots, from, index)?,
+                        weights,
+                        stride,
+                        pad,
+                        relu,
+                    )
+                    .with_context(|| format!("step {index}: depthwise conv"))?,
+                ),
                 // Its slot was pushed by the merged convolution, in step order.
-                Prepared::Merged => continue,
+                Prepared::Merged => None,
                 Prepared::NoWeights => anyhow::bail!(
                     "step {index}: a Conv step without weights: the plan and the weights disagree"
                 ),
             },
-            Step::Add { a, b } => {
-                nchwc::add(blocked(&slots, a, index)?, blocked(&slots, b, index)?)
-                    .with_context(|| format!("step {index}: add"))?
-            }
-            Step::Upsample2x { input: from } => nchwc::upsample2x(blocked(&slots, from, index)?)
-                .with_context(|| format!("step {index}: upsample"))?,
+            Step::Add { a, b } => Some(
+                nchwc::add(
+                    &mut arena,
+                    blocked(&slots, a, index)?,
+                    blocked(&slots, b, index)?,
+                )
+                .with_context(|| format!("step {index}: add"))?,
+            ),
+            Step::Upsample2x { input: from } => Some(
+                nchwc::upsample2x(&mut arena, blocked(&slots, from, index)?)
+                    .with_context(|| format!("step {index}: upsample"))?,
+            ),
         };
-        slots.push(Slot::Data(produced));
+        if let Some(tensor) = produced {
+            slots.push(Slot::Data(tensor));
+        }
+        for &slot in &weights.frees[index] {
+            if let Slot::Data(tensor) = std::mem::replace(&mut slots[slot], Slot::Freed) {
+                arena.recycle(tensor);
+            }
+        }
     }
 
-    super::topology::OUTPUTS
+    let outputs = super::topology::OUTPUTS
         .iter()
         .map(|&at| match slots.get(at) {
             Some(Slot::Data(tensor)) => tensor.to_nchw(0, tensor.channels()),
             Some(&Slot::Part { of, first, count }) => merged[of].to_nchw(first, count),
             _ => anyhow::bail!("output slot {at} was never written"),
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    for slot in slots {
+        if let Slot::Data(tensor) = slot {
+            arena.recycle(tensor);
+        }
+    }
+    merged.into_iter().for_each(|tensor| arena.recycle(tensor));
+    let mut kept = lock(&weights.arena);
+    // Keep one run's worth: if a concurrent run already put its buffers back, these go.
+    if kept.is_empty() {
+        *kept = arena;
+    }
+    Ok(outputs)
+}
+
+/// The arena holds only buffers, so one a panicking run left behind is as good as any.
+fn lock(arena: &Mutex<Arena>) -> std::sync::MutexGuard<'_, Arena> {
+    arena
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The whole tensor in slot `at`, for step `step` to read.
@@ -310,6 +392,9 @@ fn blocked(slots: &[Slot], at: usize, step: usize) -> Result<&Blocked> {
         Some(Slot::Data(tensor)) => Ok(tensor),
         Some(Slot::Input) => {
             anyhow::bail!("step {step} reads the NCHW input with a kernel that needs blocks")
+        }
+        Some(Slot::Freed) => {
+            anyhow::bail!("step {step} reads slot {at} after the plan recycled it")
         }
         Some(Slot::Part { .. }) => {
             anyhow::bail!("step {step} reads slot {at}, part of a merged convolution")
@@ -365,6 +450,38 @@ mod tests {
         // 57-59 and 64-66 -- every one of `OUTPUTS`. Nothing else shares an input and a
         // geometry.
         assert_eq!(groups, [(49, 3), (56, 3), (63, 3)]);
+    }
+
+    #[test]
+    fn slots_are_freed_after_their_last_reader_and_outputs_never() {
+        let steps = &super::super::topology::STEPS;
+        let outputs = super::super::topology::OUTPUTS;
+        let frees = last_reads(steps, &outputs);
+        let freed: Vec<usize> = frees.iter().flatten().copied().collect();
+        let mut unique = freed.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), freed.len(), "a slot freed twice");
+        assert!(!freed.contains(&0), "the caller's input was freed");
+        for output in outputs {
+            assert!(!freed.contains(&output), "output slot {output} was freed");
+        }
+        for (index, step) in steps.iter().enumerate() {
+            let reads = match *step {
+                Step::Conv { input, .. } | Step::Upsample2x { input } => vec![input],
+                Step::Add { a, b } => vec![a, b],
+            };
+            for read in reads {
+                let at = frees.iter().position(|slots| slots.contains(&read));
+                assert!(
+                    at.is_none_or(|at| at >= index),
+                    "slot {read} freed at step {at:?}, before step {index} reads it"
+                );
+            }
+        }
+        // Every slot but the input and the nine outputs is some step's input, so all of them
+        // come back: nothing is left for the end of the run to catch.
+        assert_eq!(freed.len(), steps.len() - outputs.len());
     }
 
     #[test]

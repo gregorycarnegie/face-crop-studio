@@ -163,11 +163,24 @@ fn the_builtin_cpu_graph_matches_onnx_runtime() {
     };
 
     let weights = ScrfdWeights::load(&model).expect("weights load by name");
-    let ours = plan::run(
-        Tensor::new(1, 3, side, side, input).expect("input tensor"),
-        &weights,
-    )
-    .expect("the CPU graph runs");
+    let run = || {
+        plan::run(
+            Tensor::new(1, 3, side, side, input.clone()).expect("input tensor"),
+            &weights,
+        )
+        .expect("the CPU graph runs")
+    };
+    let ours = run();
+    // The second run computes into the first run's recycled buffers, so stale contents or a
+    // buffer handed out twice would show here and not on a fresh start.
+    let again = run();
+    for (index, (first, second)) in ours.iter().zip(&again).enumerate() {
+        assert_eq!(
+            first.data(),
+            second.data(),
+            "output {index} changed on a rerun"
+        );
+    }
 
     assert_eq!(
         ours.len(),

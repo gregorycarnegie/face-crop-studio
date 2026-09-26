@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Face Crop Studio no longer ships or loads ONNX Runtime. Detection and the eye refiner run on the
 built-in engines only: the WGSL kernels on a GPU, and a rewritten CPU graph everywhere else. The
-CPU graph is now 3-4x faster, and the eye refiner runs on it as fast as it did under ONNX
+CPU graph is now 4-5x faster, and the eye refiner runs on it as fast as it did under ONNX
 Runtime.
 
 ### Changed
@@ -20,11 +20,13 @@ Runtime.
   design (`snchwc.cpp` and its FMA3 kernel), written with `wide::f32x8`, so the same code runs
   as AVX2 on x86-64 and as NEON on Apple silicon. Each detection level's class, box and
   keypoint heads also run as one convolution instead of three, and layer outputs are no
-  longer zeroed on one thread before being written. On a Ryzen 7950X the SCRFD network takes
-  7.6 ms instead of 25 ms at the default thread count, and 18.5 ms instead of 76 ms on one
-  thread (ONNX Runtime took 12.7 ms). Outputs still match ONNX Runtime within the existing
-  2e-3 tolerance. `fcs_core::cpu::nchwc` replaces `fcs_core::cpu::conv2d` and
-  `fcs_core::cpu::ops`, which are removed.
+  longer zeroed on one thread before being written. Each layer's output buffer goes back to
+  a free list once nothing reads it, and the free list is kept between detections, so a run
+  no longer page-faults on memory the previous run just released. On a Ryzen 7950X the SCRFD
+  network takes about 5.5 ms instead of 25 ms at the default thread count, and 17.7 ms
+  instead of 76 ms on one thread (ONNX Runtime took 12.7 ms). Outputs still match ONNX Runtime
+  within the existing 2e-3 tolerance. `fcs_core::cpu::nchwc` replaces `fcs_core::cpu::conv2d`
+  and `fcs_core::cpu::ops`, which are removed.
 - **The eye refiner runs without ONNX Runtime**, on the same CPU kernels. It takes 0.8 ms per
   face including the crop resample, where ONNX Runtime took 0.9 ms for the network alone. It
   has no GPU path; one face is too little work to be worth an upload.

@@ -10,7 +10,7 @@ use anyhow::{Context, Result, ensure};
 
 use crate::{
     cpu::{
-        nchwc::{self, BLOCK, Blocked, DenseWeights},
+        nchwc::{self, Arena, BLOCK, Blocked, DenseWeights},
         tensor::Tensor,
     },
     onnx::OnnxInitializerMap,
@@ -90,6 +90,7 @@ impl Weights {
 
     pub(super) fn run(&self, input: Vec<f32>) -> Result<[f32; 4]> {
         let crop = Tensor::new(1, 3, SIZE, SIZE, input)?;
+        let mut arena = Arena::default();
         let mut x: Option<Blocked> = None;
         for (index, weights) in self.convs.iter().enumerate() {
             let source = match &x {
@@ -97,10 +98,11 @@ impl Weights {
                 None => (&crop).into(),
             };
             let stride = if index % 2 == 0 { 2 } else { 1 };
-            x = Some(
-                nchwc::conv(source, weights, stride, 1, true)
-                    .with_context(|| format!("eye refiner convolution {index}"))?,
-            );
+            let next = nchwc::conv(&mut arena, source, weights, stride, 1, true)
+                .with_context(|| format!("eye refiner convolution {index}"))?;
+            if let Some(done) = x.replace(next) {
+                arena.recycle(done);
+            }
         }
         let mut v = x
             .context("eye refiner has no convolutions")?
