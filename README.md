@@ -15,11 +15,12 @@ GPU accelerated face detection and cropping software built in Rust.
 
 Face Crop Studio is a Rust workspace that wraps a face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Both CPU and GPU acceleration paths are supported via wgpu/WGSL compute shaders for preprocessing, enhancement, and inference.
 
-The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open Images photographs, so the shipped weights carry no non-commercial restriction. It runs on ONNX Runtime, on WGSL compute shaders, or on a built-in CPU graph, picking whichever is available.
+The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open Images photographs, so the shipped weights carry no non-commercial restriction. It runs on WGSL compute shaders, falling back to a built-in Rust CPU graph. Neither detection nor eye refinement loads an ONNX Runtime library.
 
 ## Crates
 
-- **`fcs-core`** – Loads the detector, decodes its outputs, and implements the crop calculation logic. Holds all three inference engines – ONNX Runtime, WGSL compute shaders, and a pure-Rust CPU graph – plus GPU-accelerated preprocessing (see `ARCHITECTURE.md` for details).
+- **`fcs-core`** – Loads the detector, decodes its outputs, and implements the crop calculation logic. Holds the WGSL and pure-Rust CPU inference engines (see `ARCHITECTURE.md` for details).
+- **`fcs-ort`** – Development-only ONNX Runtime oracle for parity tests and benchmarks; excluded from application dependencies and release packages.
 - **`fcs-utils`** – Shared helpers: configuration structs, Laplacian-variance quality scoring, enhancement pipeline (CPU and GPU paths with 7 WGSL compute shaders), and output encoders with metadata support.
 - **`fcs-mapping`** – Tabular ingestion for the batch mapping workflow: reads CSV, Excel, Parquet, and SQLite tables into source-image/output-name pairs. Standalone — it depends on no other workspace crate.
 - **`fcs-cli`** – Command-line frontend aimed at batch processing and automation with optional GPU acceleration (auto-detected, with fallback to CPU). Features GPU context pooling for efficient batch operations. Example invocations are documented in `docs/cli_recipes.md`.
@@ -46,7 +47,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 - **Face height targeting** – Configure how large the face should appear in the final crop (10–100%). The cropper preserves the requested aspect ratio and records any padding needed so crops can extend beyond the source image without distortion.
 - **Padding colour control** – Empty pixels introduced by out-of-bounds crops are filled with a configurable colour (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
-- **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner replaces the detector's eye points when ONNX Runtime is present, cutting median eye-line error from 4.05° to 1.18° against hand-clicked ground truth (93.3% of faces within 5° against 57.6%). Without the runtime the detector's own points are used, so the feature degrades rather than failing.
+- **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner runs on the built-in Rust CPU engine, cutting median eye-line error from 4.05° to 1.18° against hand-clicked ground truth (93.3% of faces within 5° against 57.6%). No ONNX Runtime library is needed; if the model is missing or incompatible, the detector's own points are used.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
 - **Enhancement pipeline** – Optional post-crop adjustments (auto colour, exposure, brightness, contrast, saturation, sharpening, skin smoothing, red-eye removal, and portrait background blur) with both CPU (pure Rust) and GPU (WGSL compute shaders) implementations.
 - **Camera RAW input** – DNG, CR2, CR3, NEF, ARW, RW2, ORF, RAF, SRW, and PEF decode via a pure-Rust pipeline in both CLI and GUI, alongside the standard formats (PNG, JPEG, WebP, TIFF, BMP, AVIF, HEIC). Unsupported DNG variants are skipped rather than crashing a batch.

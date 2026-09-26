@@ -126,7 +126,7 @@ impl FaceDetector {
         "SCRFD-80k"
     }
 
-    /// Which engine it is running on: ONNX Runtime, the WGSL kernels, or the CPU graph.
+    /// Which engine it is running on: the WGSL kernels or the CPU graph.
     pub fn inference_backend(&self) -> &'static str {
         self.scrfd.engine()
     }

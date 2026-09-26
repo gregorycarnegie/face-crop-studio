@@ -23,7 +23,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.98.0"
-  # Match the runtime shipped by release.yml.
+  # Test oracle only; application packages contain no ONNX Runtime.
   ORT_VERSION: "1.24.4"
   # Keep these checksums and URLs in sync with release.yml.
   EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
@@ -323,3 +323,12 @@ jobs:
       # fcs-gui are only linted on the platform that compiles them.
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
+
+      - name: Check application dependencies exclude ONNX Runtime
+        shell: bash
+        run: |
+          cargo tree -p fcs-cli -p fcs-gui --all-features --edges normal,build --prefix none > "$RUNNER_TEMP/application-dependencies.txt"
+          if grep -q '^fcs-ort ' "$RUNNER_TEMP/application-dependencies.txt"; then
+            echo "fcs-ort must remain a development-only dependency"
+            exit 1
+          fi

@@ -40,6 +40,8 @@ coverage.txt
 # Anchored to the repo root so crate-level `tests/` directories (e.g.
 # fcs-core/tests/) stay tracked; only a root-level scratch dir is ignored.
 /benchmarks/
+# Local ONNX Runtime source reference for the Rust port.
+/onnxruntime/
 nul
 out.json
 /scripts/

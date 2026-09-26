@@ -1,8 +1,8 @@
 //! Face detection and cropping with SCRFD.
 //!
 //! Start with [`FaceDetector`] to load the model once and detect faces in images. It picks its
-//! own engine: ONNX Runtime when a compatible shared library is available, then the WGSL compute
-//! kernels, then the built-in CPU graph, so detection works with no external runtime and no GPU.
+//! own engine: WGSL compute kernels when available, then the built-in CPU graph.
+//! Detection and eye refinement need no external inference runtime.
 //! The ONNX model file is supplied by the caller.
 //!
 //! # Detect and crop

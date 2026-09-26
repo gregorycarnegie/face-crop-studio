@@ -2,7 +2,7 @@
 # Assemble a Face Crop Studio .app bundle and .dmg from a release binary.
 #
 # Run from the repo root. Assumes:
-#   - target/aarch64-apple-darwin/release/fcs-gui exists (built by caller)
+#   - target/aarch64-apple-darwin/release/fcs-gui and fcs-cli exist (built by caller)
 #   - models/eye_refiner.onnx exists (fetched by caller from a release asset)
 #   - models/scrfd80k_500m_640.onnx exists (likewise)
 #   - librsvg (rsvg-convert), create-dmg installed via Homebrew
@@ -36,10 +36,13 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 DMG_PATH="$DIST_DIR/face-crop-studio-${VERSION}-${TARGET_TRIPLE}.dmg"
 
 BIN_SRC="target/${TARGET_TRIPLE}/release/${BINARY_NAME}"
-if [ ! -f "$BIN_SRC" ]; then
-    echo "error: release binary missing at $BIN_SRC" >&2
-    exit 1
-fi
+CLI_SRC="target/${TARGET_TRIPLE}/release/fcs-cli"
+for binary in "$BIN_SRC" "$CLI_SRC"; do
+    if [ ! -f "$binary" ]; then
+        echo "error: release binary missing at $binary" >&2
+        exit 1
+    fi
+done
 if [ ! -f "$REFINER_FILE" ]; then
     echo "error: eye refiner missing at $REFINER_FILE" >&2
     exit 1
@@ -89,25 +92,10 @@ sed -e "s|{{VERSION}}|$VERSION|g" \
 
 # --- Binary + bundled assets -------------------------------------------------
 cp "$BIN_SRC" "$APP_DIR/Contents/MacOS/$BINARY_NAME"
-chmod +x "$APP_DIR/Contents/MacOS/$BINARY_NAME"
+cp "$CLI_SRC" "$APP_DIR/Contents/MacOS/fcs-cli"
+chmod +x "$APP_DIR/Contents/MacOS/$BINARY_NAME" "$APP_DIR/Contents/MacOS/fcs-cli"
 cp "$REFINER_FILE" "$APP_DIR/Contents/MacOS/models/"
 cp "$DETECTOR_FILE" "$APP_DIR/Contents/MacOS/models/"
-
-# ONNX Runtime, beside the executable where fcs-ort looks first. Optional: with
-# no FCS_ORT_LIB the bundle still works and uses the built-in CPU graph, so a
-# local build needs no download.
-ORT_LIB="${FCS_ORT_LIB:-}"
-if [ -n "$ORT_LIB" ]; then
-    if [ ! -f "$ORT_LIB" ]; then
-        echo "error: FCS_ORT_LIB is set but $ORT_LIB does not exist" >&2
-        exit 1
-    fi
-    cp "$ORT_LIB" "$APP_DIR/Contents/MacOS/libonnxruntime.dylib"
-    chmod 644 "$APP_DIR/Contents/MacOS/libonnxruntime.dylib"
-    echo "Bundled ONNX Runtime from $ORT_LIB"
-else
-    echo "No FCS_ORT_LIB set; bundling without ONNX Runtime (built-in graph only)"
-fi
 
 if [ -d samples ]; then
     cp -R samples "$APP_DIR/Contents/Resources/samples"
@@ -121,21 +109,14 @@ done
 SIGNING_IDENTITY="${APPLE_DEVELOPER_ID_NAME:-}"
 if [ -n "$SIGNING_IDENTITY" ]; then
     echo "Signing bundle with: $SIGNING_IDENTITY"
-    # Sign inner binary first, then bundle (deep is deprecated for nested signing).
-    # The bundled dylib is nested code and has to be signed before the bundle,
-    # or the `codesign --verify --deep --strict` below rejects the result. No
-    # entitlements: those apply to executables, not to libraries.
-    if [ -f "$APP_DIR/Contents/MacOS/libonnxruntime.dylib" ]; then
+    # Sign both executables before signing the enclosing bundle.
+    for binary in "$BINARY_NAME" fcs-cli; do
         codesign --force --sign "$SIGNING_IDENTITY" \
                  --options runtime \
+                 --entitlements installer/macos/entitlements.plist \
                  --timestamp \
-                 "$APP_DIR/Contents/MacOS/libonnxruntime.dylib"
-    fi
-    codesign --force --sign "$SIGNING_IDENTITY" \
-             --options runtime \
-             --entitlements installer/macos/entitlements.plist \
-             --timestamp \
-             "$APP_DIR/Contents/MacOS/$BINARY_NAME"
+                 "$APP_DIR/Contents/MacOS/$binary"
+    done
     codesign --force --sign "$SIGNING_IDENTITY" \
              --options runtime \
              --entitlements installer/macos/entitlements.plist \

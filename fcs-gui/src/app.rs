@@ -278,8 +278,8 @@ const STATUS_DETECTOR_PENDING: &str = "Starting the detector…";
 
 /// Names the detector and the engine it landed on.
 ///
-/// One detector ships, but it runs on ONNX Runtime, the WGSL kernels or the built-in CPU graph
-/// depending on what is installed, and that choice is a large speed difference. Until this said
+/// One detector ships, using the WGSL kernels or the built-in CPU graph depending on
+/// GPU availability, and that choice affects speed. Until this said
 /// so, the only way to find out which was running was the log.
 fn initial_status_line(detector: Option<&fcs_core::FaceDetector>) -> String {
     match detector {

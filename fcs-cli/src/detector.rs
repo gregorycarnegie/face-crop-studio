@@ -7,8 +7,8 @@ use log::info;
 
 /// Build the detector the CLI will use.
 ///
-/// There is one detector now, and it brings its own engine selection -- ONNX Runtime, the WGSL
-/// kernels, or the built-in CPU graph -- so the GPU settings that used to choose YuNet's
+/// There is one detector now, and it brings its own engine selection -- the WGSL
+/// kernels or the built-in CPU graph -- so the GPU settings that used to choose YuNet's
 /// backend no longer have anything to choose. The whole of `settings` is passed through:
 /// `confidence` is on this detector's own scale (see `fcs_utils::config::DEFAULT_CONFIDENCE`),
 /// and `--nms-threshold` and `--top-k` reach it too.

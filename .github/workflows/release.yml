@@ -244,31 +244,11 @@ jobs:
 
           Remove-Item $CertPath -Force
 
-      - name: Fetch ONNX Runtime
-        shell: pwsh
-        env:
-          # The minor version IS the ONNX Runtime API version, and it must be at
-          # least fcs_ort::REQUIRED_API_VERSION or fcs-ort rejects the library and
-          # silently drops to the slower built-in graph. The smoke test after
-          # packaging is what actually catches a mismatch.
-          ORT_VERSION: "1.24.4"
-        run: |
-          $Zip = "$env:RUNNER_TEMP/onnxruntime.zip"
-          $Url = "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip"
-          Invoke-WebRequest -Uri $Url -OutFile $Zip
-          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP/ort" -Force
-          $OrtDir = (Get-ChildItem "$env:RUNNER_TEMP/ort" -Directory | Select-Object -First 1).FullName
-          if (-not (Test-Path "$OrtDir/lib/onnxruntime.dll")) {
-            throw "onnxruntime.dll not found under $OrtDir"
-          }
-          "ORT_DIR=$OrtDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
       - name: Package artifacts
         shell: pwsh
         run: |
           $DistName = $env:DIST_NAME
           $DistDir = "dist/$DistName"
-          $OrtDir = $env:ORT_DIR
           New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
           New-Item -ItemType Directory -Force -Path "$DistDir/models" | Out-Null
 
@@ -293,9 +273,6 @@ jobs:
             Copy-Item LICENSE-MIT "$DistDir/LICENSE-MIT"
           }
 
-          Copy-Item "$OrtDir/lib/onnxruntime.dll" "$DistDir/onnxruntime.dll"
-          Copy-Item "$OrtDir/LICENSE" "$DistDir/LICENSE-onnxruntime"
-
           Compress-Archive -Path "$DistDir/*" -DestinationPath "dist/$DistName.zip" -Force
 
       - name: Verify packaged model path
@@ -312,31 +289,12 @@ jobs:
             }
           }
 
-      - name: Verify the packaged build uses ONNX Runtime
+      - name: Verify packaged inference without ONNX Runtime
         shell: pwsh
-        # Running the packaged binary is the only check that covers every way
-        # this can silently degrade: a missing DLL, one placed where fcs-ort does
-        # not look, a version older than REQUIRED_API_VERSION, or a missing
-        # dependency of the DLL itself. Each of those falls back to the built-in
-        # CPU graph and ships quietly ~3x slower, so a hard failure is wanted.
         run: |
           $DistDir = "dist/$env:DIST_NAME"
-          if (-not (Test-Path "$DistDir/onnxruntime.dll")) {
-            throw "onnxruntime.dll missing from the package"
-          }
-          $env:RUST_LOG = "info"
-          $Out = & "$DistDir/fcs-cli.exe" --input "$DistDir/samples/sample_01.jpg" `
-                   --output-dir "$env:RUNNER_TEMP/ort-smoke" --no-gpu 2>&1 | Out-String
-          Write-Host $Out
-          # Matches "Detector: <model> on onnxruntime". The model name is deliberately not
-          # pinned: either detector on ONNX Runtime is a correct package, and this check is
-          # about the runtime, whose absence degrades silently to the ~3x slower built-in graph.
-          # It caught its own staleness once -- the log line used to read "Detection backend:
-          # onnxruntime" and the rename slipped past every local check, because nothing but a
-          # tagged build runs this.
-          if ($Out -notmatch "Detector: .+ on onnxruntime") {
-            throw "packaged build did not select ONNX Runtime; it fell back to another backend"
-          }
+          python tools/verify_package.py "$DistDir" "$DistDir/fcs-cli.exe" "$DistDir/samples/sample_01.jpg"
+          if ($LASTEXITCODE -ne 0) { throw "packaged inference check failed" }
 
       - name: Build NSIS installer
         if: matrix.arch == 'x86_64'
@@ -620,27 +578,7 @@ jobs:
           brew install dav1d libheif pkg-config librsvg create-dmg nasm
 
       - name: Build release binary (aarch64-apple-darwin)
-        run: cargo build --release -p fcs-gui --target aarch64-apple-darwin
-
-      - name: Fetch ONNX Runtime
-        env:
-          # Minor version == the ONNX Runtime API version, and must be at least
-          # fcs_ort::REQUIRED_API_VERSION or fcs-ort rejects the library and
-          # silently falls back to the slower built-in graph. Only an arm64
-          # build is published for this release, which is all this job targets.
-          ORT_VERSION: "1.24.4"
-        run: |
-          set -euo pipefail
-          Url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-arm64-${ORT_VERSION}.tgz"
-          curl -fsSL -o /tmp/onnxruntime.tgz "$Url"
-          mkdir -p /tmp/ort && tar -xzf /tmp/onnxruntime.tgz -C /tmp/ort --strip-components=1
-          # The archive ships a versioned dylib plus symlinks; resolve to the
-          # real file so the bundle gets a file rather than a dangling link,
-          # which would also fail codesign.
-          Lib="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' /tmp/ort/lib/libonnxruntime.dylib)"
-          test -f "$Lib"
-          echo "FCS_ORT_LIB=$Lib" >> "$GITHUB_ENV"
-          echo "Using $Lib"
+        run: cargo build --release -p fcs-gui -p fcs-cli --target aarch64-apple-darwin
 
       - name: Import Developer ID certificate
         # Mirrors the Windows signing pattern: only runs if the cert secret is
@@ -676,19 +614,11 @@ jobs:
           Version="${RawVersion#v}"
           bash installer/macos/build_macos.sh "$Version"
 
-      - name: Verify the packaged bundle uses ONNX Runtime
-        # Mirrors the Windows and Linux checks. Every way this degrades is
-        # silent — a missing dylib, one where fcs-ort does not look, a version
-        # below REQUIRED_API_VERSION, an unmet dependency — and each falls back
-        # to the built-in graph, shipping ~3x slower with no error. fcs-gui
-        # needs a display, so the loader is exercised through fcs-ort's own
-        # suite against the exact dylib that was bundled.
+      - name: Verify packaged inference without ONNX Runtime
         run: |
           set -euo pipefail
-          Dylib="dist/macos/Face Crop Studio.app/Contents/MacOS/libonnxruntime.dylib"
-          test -f "$Dylib"
-          ORT_DYLIB_PATH="$Dylib" \
-            cargo test --release -p fcs-ort --test end_to_end -- --nocapture
+          App="dist/macos/Face Crop Studio.app"
+          python3 tools/verify_package.py "$App" "$App/Contents/MacOS/fcs-cli" "$App/Contents/Resources/samples/sample_01.jpg"
 
       - name: Generate checksums
         shell: bash
@@ -732,13 +662,10 @@ jobs:
           - arch: x86_64
             runner: ubuntu-22.04
             appimagetool-arch: x86_64
-            # Microsoft's archive slug, which differs from both of the above.
-            ort-arch: x64
           - arch: arm64
             # Free for public repositories, same glibc baseline as the x64 leg.
             runner: ubuntu-22.04-arm
             appimagetool-arch: aarch64
-            ort-arch: aarch64
 
     steps:
       - uses: actions/checkout@v4
@@ -784,50 +711,26 @@ jobs:
           sudo ln -sf /opt/appimagetool/AppRun /usr/local/bin/appimagetool
 
       - name: Build release binary
-        run: cargo build --release -p fcs-gui
-
-      - name: Fetch ONNX Runtime
-        env:
-          # Minor version == the ONNX Runtime API version, and must be at least
-          # fcs_ort::REQUIRED_API_VERSION or fcs-ort rejects the library and
-          # silently falls back to the slower built-in graph.
-          ORT_VERSION: "1.24.4"
-          ORT_ARCH: ${{ matrix.ort-arch }}
-        run: |
-          set -euo pipefail
-          Url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ORT_VERSION}.tgz"
-          curl -fsSL -o /tmp/onnxruntime.tgz "$Url"
-          mkdir -p /tmp/ort && tar -xzf /tmp/onnxruntime.tgz -C /tmp/ort --strip-components=1
-          # The archive ships a versioned .so plus symlinks; resolve to the real
-          # file so the copy into the package is a file, not a dangling link.
-          Lib="$(readlink -f /tmp/ort/lib/libonnxruntime.so)"
-          test -f "$Lib"
-          echo "FCS_ORT_LIB=$Lib" >> "$GITHUB_ENV"
-          echo "Using $Lib"
+        run: cargo build --release -p fcs-gui -p fcs-cli
 
       - name: Build AppImage and .deb
         # build_linux.sh derives the arch slug from uname -m, so both legs use
-        # the same invocation. FCS_ORT_LIB is picked up from the environment.
+        # the same invocation.
         run: |
           RawVersion="${{ github.ref_name }}"
           Version="${RawVersion#v}"
           bash installer/linux/build_linux.sh "$Version"
           ls -lh dist/linux
 
-      - name: Verify the packaged build uses ONNX Runtime
-        # Running the packaged binary is the only check covering every way this
-        # degrades silently: a missing library, one where fcs-ort does not look,
-        # a version below REQUIRED_API_VERSION, or an unmet dependency of the
-        # library itself. Each falls back to the built-in graph and ships ~3x
-        # slower with no error.
+      - name: Verify packaged inference without ONNX Runtime
         run: |
           set -euo pipefail
           AppDir="dist/linux/face-crop-studio.AppDir"
-          test -f "$AppDir/usr/bin/libonnxruntime.so"
-          # fcs-gui needs a display; fcs-ort's own suite exercises the loader
-          # against the very library that was packaged, which is the part at risk.
-          ORT_DYLIB_PATH="$AppDir/usr/bin/libonnxruntime.so" \
-            cargo test --release -p fcs-ort --test end_to_end -- --nocapture
+          python3 tools/verify_package.py "$AppDir" "$AppDir/usr/bin/fcs-cli" "$AppDir/usr/share/face-crop-studio/samples/sample_01.jpg"
+          DebDir="$RUNNER_TEMP/fcs-deb-smoke"
+          mkdir -p "$DebDir"
+          dpkg-deb -x dist/linux/*.deb "$DebDir"
+          python3 tools/verify_package.py "$DebDir" "$DebDir/usr/bin/fcs-cli" "$DebDir/usr/share/face-crop-studio/samples/sample_01.jpg"
 
       - name: Generate checksums
         shell: bash

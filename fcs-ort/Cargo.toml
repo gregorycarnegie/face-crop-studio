@@ -4,7 +4,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 version.workspace = true
-description = "Face Crop Studio ONNX Runtime bindings — a narrow, incrementally grown wrapper over the ONNX Runtime C API."
+description = "Development-only ONNX Runtime oracle for Face Crop Studio parity tests and benchmarks."
 
 [dependencies]
 libloading.workspace = true

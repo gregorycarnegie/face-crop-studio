@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytemuck.workspace = true
-fcs-ort.workspace = true
 fcs-utils.workspace = true
 image.workspace = true
 imageproc.workspace = true
@@ -21,8 +20,11 @@ prost.workspace = true
 rayon.workspace = true
 serde.workspace = true
 wgpu.workspace = true
+wide.workspace = true
 
 [dev-dependencies]
+# Independent inference oracle for parity tests and benchmarks only.
+fcs-ort.workspace = true
 criterion.workspace = true
 # Dev-only: lets the profiling examples switch on the runtime's `timing_guard` lines.
 env_logger.workspace = true

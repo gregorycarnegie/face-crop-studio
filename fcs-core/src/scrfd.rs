@@ -5,8 +5,8 @@
 //! YuNet missed while missing 13 it found (`tools/dataset/SCRFD_80K.md`). It cost about 10%
 //! more per image: 6.4 ms against 5.8 at 640x640 on ONNX Runtime.
 //!
-//! **It is the only detector.** It runs on all three engines -- ONNX Runtime, the WGSL kernels
-//! (`gpu`), or the built-in CPU graph (`plan`) -- which agree to about 1e-05 and produce
+//! **It is the only detector.** It runs on the WGSL kernels (`gpu`) or the built-in CPU
+//! graph (`plan`). Both agree with the test-only ONNX Runtime oracle to about 1e-05 and produce
 //! identical detections, so there is nothing a machine can be missing that leaves it without a
 //! detector. That is what let YuNet go: its weights come from WIDER FACE, "non-commercial
 //! academic research only". [`ScrfdDetector::load`] still returns `None` when the model file
@@ -47,7 +47,7 @@ const ANCHORS_PER_CELL: usize = 2;
 const LANDMARKS: usize = 5;
 
 /// How many of those five this model was actually taught: the two eyes, and nothing else.
-/// See the note in [`decode`] on why the rest are reported absent rather than passed through.
+/// See the note in `decode_level` on why the rest are reported absent rather than passed through.
 const TRAINED_LANDMARKS: usize = 2;
 
 /// Workspace-relative location of the exported model.
@@ -61,12 +61,11 @@ pub struct ScrfdDetector {
 
 /// Where the network actually runs.
 ///
-/// ONNX Runtime first because it is the fastest and every release bundles it, then the WGSL
-/// engine, then the built-in CPU graph. All three were checked against each other on the same
+/// The WGSL engine first, then the built-in CPU graph. Both were checked against ONNX
+/// Runtime (used only in tests and benchmarks) on the same
 /// input: 1.1e-05 between GPU and ONNX Runtime, 1.2e-05 between CPU and ONNX Runtime.
 #[derive(Debug)]
 enum Backend {
-    Ort(fcs_ort::Session),
     Gpu(Box<(crate::gpu::GpuInferenceOps, gpu::ScrfdGpuWeights)>),
     Cpu(Box<plan::ScrfdWeights>),
 }
@@ -81,40 +80,14 @@ pub struct Letterbox {
 impl ScrfdDetector {
     /// Load from the default location, or `None` when it cannot run.
     ///
-    /// `None` is the ordinary outcome without ONNX Runtime, not an error: the caller keeps
-    /// whatever detector it already has.
+    /// Returns `None` if the model is missing or cannot load on either built-in engine.
     pub fn load() -> Option<Self> {
         Self::load_from(fcs_utils::resolve_data_path(DEFAULT_MODEL))
     }
 
     /// Load from an explicit path. See [`Self::load`] for the `None` cases.
     pub fn load_from<P: AsRef<Path>>(path: P) -> Option<Self> {
-        let path = path.as_ref();
-        if !path.exists() {
-            debug!("SCRFD not loaded: no model at {}", path.display());
-            return None;
-        }
-        let Some(environment) = fcs_ort::Environment::shared() else {
-            // Not a failure any more: the same network runs on the built-in engines, which is
-            // what lets YuNet leave the packages entirely.
-            debug!("no ONNX Runtime for SCRFD; using the built-in engines");
-            return Self::load_builtin(path);
-        };
-        match fcs_ort::Session::new(&environment, path, fcs_ort::SessionOptions::default()) {
-            Ok(session) => {
-                info!("SCRFD detector loaded from {}", path.display());
-                Some(Self {
-                    backend: Backend::Ort(session),
-                })
-            }
-            Err(err) => {
-                warn!(
-                    "SCRFD at {} failed to open a session ({err}); using the built-in engines",
-                    path.display()
-                );
-                Self::load_builtin(path)
-            }
-        }
+        Self::load_builtin(path)
     }
 
     /// Load onto the built-in engines, for a machine with no ONNX Runtime.
@@ -163,7 +136,6 @@ impl ScrfdDetector {
     /// Which engine is running, for logs.
     pub fn engine(&self) -> &'static str {
         match self.backend {
-            Backend::Ort(_) => "onnxruntime",
             Backend::Gpu(_) => "wgsl-gpu",
             Backend::Cpu(_) => "cpu-graph",
         }
@@ -185,10 +157,6 @@ impl ScrfdDetector {
         let shape = [1usize, 3, side, side];
 
         let mut detections = match &self.backend {
-            Backend::Ort(session) => {
-                let outputs = session.run(&input, &shape)?;
-                decode(&outputs, letterbox, score_threshold, INPUT_SIZE)?
-            }
             Backend::Gpu(boxed) => {
                 let (ops, weights) = boxed.as_ref();
                 let uploaded = ops.upload_tensor(shape.to_vec(), &input, Some("scrfd input"))?;
@@ -268,7 +236,8 @@ pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
 /// tensor came from (1 = score, 4 = box distance, 10 = keypoint distance) and the row count says
 /// which stride (640/8 squared times two anchors = 12,800, then 3,200, then 800). Matching by
 /// index would work today and break silently the first time the exporter reorders anything.
-pub(crate) fn decode(
+#[cfg(test)]
+fn decode(
     outputs: &[fcs_ort::OutputTensor],
     letterbox: Letterbox,
     score_threshold: f32,
@@ -435,6 +404,7 @@ fn deployment_rows(
 }
 
 /// The tensor with this row count and channel count, or a readable error.
+#[cfg(test)]
 fn find<'a>(
     outputs: &'a [fcs_ort::OutputTensor],
     rows: usize,
@@ -567,8 +537,8 @@ mod tests {
     /// The two decode paths must produce identical detections from identical data.
     ///
     /// This is the test the engine-parity suite cannot be: `tests/scrfd_parity.rs` compares the
-    /// nine head tensors *before* decoding, and `tests/python_parity.rs` only ever runs the ONNX
-    /// Runtime path. So `decode_maps` and `deployment_rows` -- the decode every machine without
+    /// nine head tensors *before* decoding. The former ONNX Runtime decoder stays test-only
+    /// as an independent layout check. So `decode_maps` and `deployment_rows` -- the decode every machine without
     /// ONNX Runtime uses, which is the whole reason the built-in engines exist -- had no test at
     /// all. A mutation run found 70 survivors in this file, most of them their arithmetic.
     ///
@@ -631,7 +601,7 @@ mod tests {
     /// `engine` names the backend, and the GPU parity tests *skip* on anything unexpected -- so
     /// a mutant returning `""` made those tests skip and pass. Pinned here instead.
     #[test]
-    fn engine_reports_one_of_the_three_known_backends() {
+    fn engine_reports_a_builtin_backend() {
         let Some(detector) = ScrfdDetector::load_from(default_model_for_test()) else {
             assert!(
                 !strict_tests(),
@@ -642,7 +612,7 @@ mod tests {
         };
         let engine = detector.engine();
         assert!(
-            ["onnxruntime", "wgsl-gpu", "cpu-graph"].contains(&engine),
+            ["wgsl-gpu", "cpu-graph"].contains(&engine),
             "unknown engine name {engine:?}"
         );
     }

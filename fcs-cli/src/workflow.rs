@@ -35,9 +35,9 @@ pub(crate) struct BatchContext<'a> {
     pub(crate) runtime: &'a Arc<gpu::CliGpuRuntime>,
     pub(crate) args: &'a DetectArgs,
     pub(crate) counters: &'a ProgressCounters,
-    /// Better eye points for levelling crops, when the model and a runtime are both present.
+    /// Better eye points for levelling crops, when the model is present.
     /// `None` is ordinary -- the detector's own landmarks are used instead. Built once and
-    /// shared: `fcs_ort::Session` allows concurrent runs, so the parallel loop needs no lock.
+    /// shared: immutable Rust weights allow concurrent runs without a lock.
     pub(crate) eye_refiner: &'a Option<fcs_core::EyeRefiner>,
 }
 
@@ -542,10 +542,10 @@ pub(crate) mod tests {
         Some(Arc::new(detector))
     }
 
-    /// No test here exercises the refiner: it needs an ONNX Runtime and a model file, and
+    /// No test here exercises the refiner: it needs its own model file, and
     /// these tests are about the plumbing around detection. A `static` rather than a parameter
     /// so `batch_ctx`'s signature and every caller stay untouched; `'static` coerces to any
-    /// `'a`, and `EyeRefiner` is `Sync` because `fcs_ort::Session` is.
+    /// `'a`, and `EyeRefiner` is `Sync` because its weights are immutable.
     static NO_EYE_REFINER: Option<fcs_core::EyeRefiner> = None;
 
     /// Assemble the per-run context the workflow functions take. Every field is a reference,

@@ -1,24 +1,8 @@
-//! ONNX Runtime discovery and loading for Face Crop Studio.
+//! Development-only ONNX Runtime oracle for parity tests and benchmarks.
 //!
-//! This crate exists to take over from the `ort` crate one piece at a time. It
-//! currently owns exactly one job — finding a usable ONNX Runtime and proving
-//! it is usable — while `fcs-core` still uses `ort` for sessions and tensors.
-//! See [`sys`] for how to grow the C API surface safely.
-//!
-//! # Why the validation is this careful
-//!
-//! `ort` has no fallible initialisation: it calls `.expect()` inside a `#[cold]`
-//! non-unwinding function, the failure poisons a global mutex, and the process
-//! **aborts** somewhere `catch_unwind` cannot reach. So anything `ort` would
-//! reject has to be rejected here first, before any `ort` API is touched.
-//!
-//! That is not theoretical. Several unrelated desktop applications install an
-//! `onnxruntime.dll` on PATH; a machine carrying a 1.17 copy resolves the bare
-//! library name to it, and a probe that checks only that the file loads and
-//! exports `OrtGetApiBase` passes it straight through to an abort at startup.
-//! [`locate`] therefore reproduces `ort`'s own path resolution *and* its
-//! version rule, and adds the ABI check `ort` does not do: asking the library
-//! for the exact API version wanted.
+//! Application crates do not load this library. Tests locate and validate an explicit
+//! runtime or one discoverable by the platform loader. A candidate must supply API 24;
+//! holding the validated library open keeps its function pointers valid for sessions.
 
 pub mod session;
 pub mod sys;
@@ -33,9 +17,7 @@ use std::{
 /// API version this build requires. For ONNX Runtime this equals the minor
 /// version: `ORT_API_VERSION` of `N` means `1.N.x`.
 ///
-/// While `fcs-core` still depends on `ort`, this MUST match the `api-NN`
-/// feature selected for `ort` in the workspace manifest. If this is lower,
-/// `fcs-core` accepts a library that `ort` then aborts on.
+/// Keep this in sync with the runtime downloaded by the parity-test CI job.
 pub const REQUIRED_API_VERSION: u32 = 24;
 
 /// Number of `OrtApi` fields declared in [`sys`].

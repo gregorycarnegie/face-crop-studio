@@ -97,8 +97,8 @@ pub struct DetectArgs {
 
     /// Rotate each crop so the eyes are level.
     ///
-    /// Uses the bundled eye refiner when ONNX Runtime and `models/eye_refiner.onnx` are both
-    /// present, and the detector's own eye points otherwise. There is no negative form: the
+    /// Uses the built-in eye refiner when `models/eye_refiner.onnx` is present,
+    /// and the detector's own eye points otherwise. There is no negative form: the
     /// setting defaults to off, so omitting this leaves it off.
     #[arg(long)]
     pub eye_line_align: bool,

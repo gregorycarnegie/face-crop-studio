@@ -45,9 +45,8 @@ pub fn build_detector(
     let model_path = resolve_data_path(configured_model_path);
     let model_path_display = model_path.display().to_string();
 
-    // The detector, on whichever engine is available: ONNX Runtime, the WGSL kernels, or the
-    // built-in CPU graph. Loaded off the UI thread (experiment 81): it opens a session or
-    // compiles shaders, neither of which belongs in a frame.
+    // The detector uses WGSL kernels or the built-in CPU graph. Load weights and compile
+    // shaders off the UI thread (experiment 81); neither belongs in a frame.
     let detector_result = FaceDetector::load_from(&model_path)
         .map(|detector| detector.with_settings(&settings.detection))
         .with_context(|| format!("no detector model at {model_path_display}"));

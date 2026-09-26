@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Face Crop Studio no longer ships or loads ONNX Runtime. Detection and the eye refiner run on the
+built-in engines only: the WGSL kernels on a GPU, and a rewritten CPU graph everywhere else. The
+CPU graph is now 3-4x faster, and the eye refiner runs on it as fast as it did under ONNX
+Runtime.
+
+### Changed
+
+- **The CPU engine runs convolutions the way ONNX Runtime does.** Activations are stored with
+  channels in blocks of eight, one SIMD vector per pixel, and each convolution keeps a tile of
+  output channels x pixels in registers while it reads its input once. This is MLAS's NCHWc
+  design (`snchwc.cpp` and its FMA3 kernel), written with `wide::f32x8`, so the same code runs
+  as AVX2 on x86-64 and as NEON on Apple silicon. Each detection level's class, box and
+  keypoint heads also run as one convolution instead of three, and layer outputs are no
+  longer zeroed on one thread before being written. On a Ryzen 7950X the SCRFD network takes
+  7.6 ms instead of 25 ms at the default thread count, and 18.5 ms instead of 76 ms on one
+  thread (ONNX Runtime took 12.7 ms). Outputs still match ONNX Runtime within the existing
+  2e-3 tolerance. `fcs_core::cpu::nchwc` replaces `fcs_core::cpu::conv2d` and
+  `fcs_core::cpu::ops`, which are removed.
+- **The eye refiner runs without ONNX Runtime**, on the same CPU kernels. It takes 0.8 ms per
+  face including the crop resample, where ONNX Runtime took 0.9 ms for the network alone. It
+  has no GPU path; one face is too little work to be worth an upload.
+
+### Removed
+
+- **ONNX Runtime is no longer bundled or loaded.** Releases for all three platforms ship
+  without it, and CI checks that `fcs-ort` never becomes an application dependency again.
+  `fcs-ort` remains as a development-only parity oracle for tests and benchmarks.
+  `tools/verify_package.py` runs a packaged CLI from an empty directory with the runtime
+  pointed at a missing file, and checks that it detects and aligns eyes anyway.
+
+### Known issues
+
+- **On machines whose only GPU is integrated, detection is slower than before.** The app
+  picks the WGSL engine whenever a GPU exists, and on an integrated GPU that takes about 27 ms
+  per detection. ONNX Runtime took 7 ms there, and the new CPU graph takes about 10 ms. Picking
+  the faster engine at load is planned.
+
 ## [2.0.2] - 2026-09-25
 
 Licensing and documentation only; nothing to do before upgrading, and detection and cropping

@@ -1,14 +1,12 @@
 //! Does the Rust SCRFD path agree with the Python one it was ported from?
 //!
-//! **This is the only test in the workspace that checks this project against something it did
-//! not write.** Everything else — the three engines agreeing to 1e-05, the golden crop regions,
-//! the CLI snapshot — compares the project against itself, which proves the parts are
-//! consistent, not that they are right. `tract` used to fill this role by interpreting the ONNX
-//! file, and it left with YuNet.
+//! This checks the full inference and decoding path against saved Python results.
+//! The ONNX Runtime parity tests compare raw tensors, while this also checks preprocessing,
+//! box decoding, landmarks, and suppression on real photographs.
 //!
 //! The reference is `tools/dataset/scrfd_detect.py`: the same checkpoint
 //! (`work_dirs/oi80k/epoch_100.pth`), run through torch on CUDA in WSL, decoded by the numpy
-//! reference in `eval_eye_error.py`. This side runs the exported ONNX through `fcs_ort` and
+//! reference in `eval_eye_error.py`. This side runs the exported ONNX through the built-in engines and
 //! `fcs_core::scrfd`. Agreement therefore covers the whole chain at once: the top-left
 //! letterbox, RGB channel order, normalised padding, the export, and the decode — every one of
 //! which was wrong at some point during the port, and none of which a self-comparison catches.
@@ -21,7 +19,7 @@
 //! why these eight and how to regenerate the reference.
 //!
 //! ```text
-//! ORT_DYLIB_PATH=.../onnxruntime.dll cargo test -p fcs-core --test python_parity
+//! cargo test -p fcs-core --test python_parity
 //! ```
 //!
 //! `FCS_PARITY_REFERENCE=<path/to/detections.json>` points it at a bigger corpus instead — the
@@ -120,16 +118,16 @@ fn the_rust_path_agrees_with_the_python_reference() {
     // directory, which for a test is the crate root rather than the workspace root.
     let model = repo_root().join("models/scrfd80k_500m_640.onnx");
     let Some(detector) = ScrfdDetector::load_from(&model) else {
-        // The model and the runtime are both things CI provides, so their absence is a
+        // The model is supplied by CI, so its absence is a
         // misconfiguration rather than a fact about the machine.
         if strict() {
             panic!(
-                "FCS_STRICT_TESTS: SCRFD did not load from {}; set ORT_DYLIB_PATH and fetch the model",
+                "FCS_STRICT_TESTS: SCRFD did not load from {}; fetch the model",
                 model.display()
             );
         }
         eprintln!(
-            "skipped: SCRFD did not load from {} (set ORT_DYLIB_PATH and fetch the model)",
+            "skipped: SCRFD did not load from {} (fetch the model)",
             model.display()
         );
         return;

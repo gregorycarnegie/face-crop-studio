@@ -264,10 +264,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 // Right: model status
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
-                    // Named from the detector that actually loaded, not hard-coded: SCRFD is
-                    // preferred and YuNet is the fallback, so which one is running depends on
-                    // whether ONNX Runtime is present. This badge said "YuNet 640" while SCRFD
-                    // was doing the work.
+                    // Name the model that actually loaded; an absent model gets a separate badge.
                     let (dot_color, status_text) = match app.detector.as_deref() {
                         Some(detector) => (P::LIME, format!("{} · ready", detector.model_name())),
                         None => (P::ROSE, "no model".to_string()),

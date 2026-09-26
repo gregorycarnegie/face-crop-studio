@@ -1087,7 +1087,9 @@ either. These loops are bound by loads, stores and u8↔f32 conversion, not by a
 Single-threaded, 1024²: saturation 1.69 → 1.91 ms and unsharp 2.04 → 2.16 ms (slower with FMA);
 the 9x9 skin bilateral 44-50 → 44-46 ms, within noise and dominated by the colour-LUT gather.
 The CPU convolution (`cpu/conv2d.rs`) behaves the same: `mul_add` in all four accumulation
-loops left `engine_speed`'s built-in CPU graph at 23-27 ms either way. The WGSL accumulation
+loops left `engine_speed`'s built-in CPU graph at 23-27 ms either way. (That kernel was
+replaced on 2026-09-26 by `cpu/nchwc.rs`, which is built on `mul_add`: its register tiles are
+compute-bound where the old scalar loops were not, and the graph went to 7.6 ms.) The WGSL accumulation
 loops already use `fma()`, and the shaders that do not are index math or one `mix` per pixel.
 
 ---

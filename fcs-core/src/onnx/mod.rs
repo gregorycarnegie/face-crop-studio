@@ -15,7 +15,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use bytemuck::cast_slice;
 use prost::Message;
 use proto::{self as pb, DATA_TYPE_FLOAT};
 
@@ -104,16 +103,28 @@ impl OnnxTensor {
             .collect::<Result<Vec<_>>>()?;
 
         let data = if !proto.raw_data.is_empty() {
-            let floats = cast_slice::<u8, f32>(&proto.raw_data);
-            floats.to_vec()
+            let (floats, remainder) = proto.raw_data.as_chunks::<4>();
+            anyhow::ensure!(
+                remainder.is_empty(),
+                "initializer '{}' has an incomplete float payload",
+                proto.name
+            );
+            floats
+                .iter()
+                .map(|&bytes| f32::from_le_bytes(bytes))
+                .collect()
         } else if !proto.float_data.is_empty() {
             proto.float_data.clone()
         } else {
             return Err(anyhow!("initializer '{}' has no data payload", proto.name));
         };
 
+        let expected = dims
+            .iter()
+            .try_fold(1usize, |size, &dim| size.checked_mul(dim))
+            .context("initializer shape overflows usize")?;
         anyhow::ensure!(
-            data.len() == dims.iter().product::<usize>(),
+            data.len() == expected,
             "initializer '{}' data length ({}) does not match shape {:?}",
             proto.name,
             data.len(),
@@ -138,6 +149,23 @@ impl OnnxTensor {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn raw_floats_are_little_endian_and_malformed_payloads_return_errors() {
+        let mut tensor = pb::TensorProto {
+            name: "raw".into(),
+            dims: vec![1],
+            data_type: DATA_TYPE_FLOAT,
+            raw_data: 1.25f32.to_le_bytes().to_vec(),
+            ..Default::default()
+        };
+        assert_eq!(OnnxTensor::from_proto(&tensor).unwrap().data(), &[1.25]);
+        tensor.raw_data.pop();
+        assert!(OnnxTensor::from_proto(&tensor).is_err());
+        tensor.raw_data = 1.25f32.to_le_bytes().to_vec();
+        tensor.dims = vec![i64::MAX, i64::MAX, 8];
+        assert!(OnnxTensor::from_proto(&tensor).is_err());
+    }
 
     /// Build a minimal ONNX file holding just the named float initializers.
     ///

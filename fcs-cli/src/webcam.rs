@@ -75,9 +75,8 @@ pub fn run_webcam_mode(
         None
     };
 
-    // Built once, outside the frame loop: opening an ONNX session per frame would cost far
-    // more than the detection it refines. `None` when alignment is off, or when no runtime or
-    // model is present -- see `fcs_core::EyeRefiner::load`.
+    // Load weights once, outside the frame loop. `None` when alignment is off or the
+    // model cannot load -- see `fcs_core::EyeRefiner::load`.
     let eye_refiner = settings
         .crop
         .eye_line_align

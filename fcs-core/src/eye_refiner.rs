@@ -13,12 +13,11 @@
 //! it lives here rather than inside the detector, and the reason replacing the detector does
 //! not disturb it.
 //!
-//! **It runs only under ONNX Runtime.** The built-in CPU graph and the WGSL kernels cover the
-//! ops the detector needs, which do not include
-//! this model's `GlobalAveragePool` and `Gemm`. Rather than hand-write a second topology
-//! twice, [`EyeRefiner::load`] returns `None` when no runtime or no model file is present and
-//! callers keep the detector's own landmarks. Releases bundle the runtime on all three
-//! platforms, so that fallback is for source builds, not for users.
+//! The fixed graph runs in Rust on the CPU, using the detector's convolution kernels.
+//! No ONNX Runtime library is needed. If the model is absent or incompatible, callers
+//! keep the detector's own landmarks.
+
+mod native;
 
 use std::path::Path;
 
@@ -43,18 +42,18 @@ const DEFAULT_MODEL: &str = "models/eye_refiner.onnx";
 
 /// A loaded eye-point refiner.
 ///
-/// Construct once with [`Self::load`] and share it; `fcs_ort::Session` allows concurrent
-/// runs, so batch processing needs neither a lock nor a pool.
+/// Construct once with [`Self::load`] and share it; weights are immutable and each run
+/// owns its activations, so batch processing needs no lock.
 #[derive(Debug)]
 pub struct EyeRefiner {
-    session: fcs_ort::Session,
+    weights: native::Weights,
 }
 
 impl EyeRefiner {
     /// Load the refiner from the default location, or return `None` if it cannot run.
     ///
-    /// `None` is the ordinary outcome on a source build with no ONNX Runtime, not an error:
-    /// the caller keeps whatever landmarks the detector produced.
+    /// Returns `None` if the model is missing or incompatible; the caller keeps the
+    /// detector's own landmarks.
     pub fn load() -> Option<Self> {
         Self::load_from(fcs_utils::resolve_data_path(DEFAULT_MODEL))
     }
@@ -69,23 +68,19 @@ impl EyeRefiner {
             );
             return None;
         }
-        let environment = fcs_ort::Environment::shared().or_else(|| {
-            debug!(
-                "eye refiner not loaded: no compatible ONNX Runtime; keeping detector landmarks"
-            );
-            None
-        })?;
-        match fcs_ort::Session::new(&environment, path, fcs_ort::SessionOptions::default()) {
-            Ok(session) => {
-                info!("eye refiner loaded from {}", path.display());
-                Some(Self { session })
+        match native::Weights::load(path) {
+            Ok(weights) => {
+                info!(
+                    "eye refiner on the built-in CPU graph, from {}",
+                    path.display()
+                );
+                Some(Self { weights })
             }
             Err(err) => {
                 // A model that will not open is worth a louder line than an absent one: the
-                // file is there, so this is a corrupt or incompatible export rather than a
-                // build without the optional runtime.
+                // file is there, so this is a corrupt or incompatible export.
                 warn!(
-                    "eye refiner at {} failed to open a session ({err}); keeping detector landmarks",
+                    "eye refiner at {} failed to load ({err}); keeping detector landmarks",
                     path.display()
                 );
                 None
@@ -102,10 +97,8 @@ impl EyeRefiner {
     /// Returns how many detections were refined, for the caller to log.
     pub fn refine(&self, image: &DynamicImage, detections: &mut [Detection]) -> usize {
         let mut refined = 0;
-        // ponytail: one forward pass per face. The graph takes a dynamic batch dimension, so
-        // faces could be stacked into a single run -- worth doing if a workload ever puts many
-        // faces in one frame, since the per-run overhead then dominates. Typical photographs
-        // hold one to three.
+        // ponytail: one forward pass per face. Add batched inference if photographs with
+        // many faces make per-run overhead significant; typical photographs hold one to three.
         for detection in detections.iter_mut() {
             if let Some([left, right]) = self.predict(image, &detection.bbox) {
                 detection.landmarks[0] = Some(left);
@@ -124,15 +117,14 @@ impl EyeRefiner {
         let crop = CropGeometry::for_box(bbox);
         let input = crop.sample(image);
 
-        let outputs = match self.session.run(&input, &[1, 3, SIZE, SIZE]) {
-            Ok(outputs) => outputs,
+        let eyes = match self.weights.run(input) {
+            Ok(eyes) => eyes,
             Err(err) => {
                 warn!("eye refiner inference failed ({err}); keeping detector landmarks");
                 return None;
             }
         };
-        let eyes = outputs.first()?;
-        let [left, right] = eye_points(&eyes.data)?;
+        let [left, right] = eye_points(&eyes)?;
         Some([
             crop.image_point(left.0, left.1),
             crop.image_point(right.0, right.1),
@@ -417,11 +409,11 @@ mod tests {
         assert!((tensor[2 * plane + centre] - (129.0 - 127.5) / 128.0).abs() < 1e-5);
     }
 
-    fn strict_tests() -> bool {
+    pub(super) fn strict_tests() -> bool {
         std::env::var("FCS_STRICT_TESTS").is_ok_and(|v| v != "0" && !v.is_empty())
     }
 
-    fn refiner_model() -> std::path::PathBuf {
+    pub(super) fn refiner_model() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("fcs-core sits in the workspace root")
@@ -441,7 +433,7 @@ mod tests {
                 !strict_tests(),
                 "FCS_STRICT_TESTS: the refiner did not load from {model:?}"
             );
-            eprintln!("skipped: no refiner model or ONNX Runtime");
+            eprintln!("skipped: no compatible refiner model");
             return;
         };
 

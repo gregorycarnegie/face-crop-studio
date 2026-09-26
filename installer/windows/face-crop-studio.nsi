@@ -73,6 +73,9 @@ FunctionEnd
 Section "Application Files (required)" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
+  ; Remove the inference runtime left by an older installation.
+  Delete "$INSTDIR\onnxruntime.dll"
+  Delete "$INSTDIR\LICENSE-onnxruntime"
   File /r "${DIST_DIR}\*.*"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -138,7 +141,7 @@ Section "Uninstall"
   ; and assets are added or renamed without needing manual updates here.
   ; Wildcards cover all present and future executables / icons / docs.
   Delete "$INSTDIR\*.exe"     ; fcs-gui.exe, fcs-cli.exe, Uninstall.exe
-  Delete "$INSTDIR\*.dll"     ; onnxruntime.dll
+  Delete "$INSTDIR\onnxruntime.dll" ; legacy installations
   Delete "$INSTDIR\*.ico"
   Delete "$INSTDIR\*.md"
   Delete "$INSTDIR\LICENSE-*"

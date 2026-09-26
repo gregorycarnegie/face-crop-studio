@@ -23,24 +23,19 @@ fn both_models_load_from_the_default_location() {
         .expect("fcs-core sits in the workspace root");
     std::env::set_current_dir(root).expect("move to the workspace root");
 
-    // The prerequisites, checked separately from the loads: skipping because a model or the
-    // runtime is absent is fine outside CI, but skipping because `load` itself returned `None`
+    // The prerequisites, checked separately from the loads: skipping because a model
+    // is absent is fine outside CI, but skipping because `load` itself returned `None`
     // would hide exactly the failure this test is for.
-    let models = Path::new("models").is_dir();
-    let runtime = fcs_ort::Environment::shared().is_some();
-    if !(models && runtime) {
-        assert!(
-            !strict(),
-            "FCS_STRICT_TESTS: models/ present: {models}, ONNX Runtime present: {runtime}"
-        );
-        eprintln!("skipped: models/ present: {models}, ONNX Runtime present: {runtime}");
+    let models = Path::new("models/scrfd80k_500m_640.onnx").is_file()
+        && Path::new("models/eye_refiner.onnx").is_file();
+    if !models {
+        assert!(!strict(), "FCS_STRICT_TESTS: required models missing");
+        eprintln!("skipped: required models missing");
         return;
     }
 
-    assert!(
-        ScrfdDetector::load().is_some(),
-        "SCRFD did not load from the default location"
-    );
+    let detector = ScrfdDetector::load().expect("SCRFD loads from the default location");
+    eprintln!("detector backend: {}", detector.engine());
     assert!(
         EyeRefiner::load().is_some(),
         "the eye refiner did not load from the default location"

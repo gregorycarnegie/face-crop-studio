@@ -166,26 +166,63 @@ fn main() -> Result<()> {
         println!(
             "\nend to end through ScrfdDetector::detect (preprocess + network + decode + NMS):"
         );
-        for (label, detector) in [
-            (
-                "as the app loads it",
-                scrfd::ScrfdDetector::load_from(&model),
-            ),
-            (
-                "built-in engines only",
-                scrfd::ScrfdDetector::load_builtin(&model),
-            ),
-        ] {
-            match detector {
-                Some(detector) => {
-                    let ms = time_ms(|| {
-                        detector.detect(&image, 0.5, 0.4)?;
-                        Ok(())
-                    })?;
-                    println!("  {label:<24} on {:<12} {ms:8.2} ms", detector.engine());
-                }
-                None => println!("  {label:<24} unavailable"),
+        match scrfd::ScrfdDetector::load_from(&model) {
+            Some(detector) => {
+                let ms = time_ms(|| {
+                    detector.detect(&image, 0.5, 0.4)?;
+                    Ok(())
+                })?;
+                println!("  application on {:<12} {ms:8.2} ms", detector.engine());
             }
+            None => println!("  application unavailable"),
+        }
+    }
+
+    // --- Eye refiner: one 112x112 forward pass per face, after detection ---
+    let refiner_model = model.with_file_name("eye_refiner.onnx");
+    if refiner_model.exists() {
+        const SIZE: usize = 112;
+        println!(
+            "
+eye refiner, one face ({SIZE}x{SIZE} input):"
+        );
+        if let Some(environment) = fcs_ort::Environment::shared() {
+            let face: Vec<f32> = (0..3 * SIZE * SIZE)
+                .map(|i| (i as f64 * 0.01).sin() as f32)
+                .collect();
+            let session = fcs_ort::Session::new(
+                &environment,
+                &refiner_model,
+                fcs_ort::SessionOptions::default(),
+            )?;
+            let ms = time_ms(|| {
+                session.run(&face, &[1, 3, SIZE, SIZE])?;
+                Ok(())
+            })?;
+            println!("  onnxruntime, network only            {ms:8.2} ms");
+        }
+        // Through the shipping API, so this includes the crop resample the app pays too.
+        let faces = match (&image_path, scrfd::ScrfdDetector::load_from(&model)) {
+            (Some(path), Some(detector)) => {
+                let image = fcs_utils::load_image(path)?;
+                let found = detector.detect(&image, 0.5, 0.4)?;
+                found.first().cloned().map(|face| (image, face))
+            }
+            _ => None,
+        };
+        match faces {
+            Some((image, face)) => {
+                let refiner = fcs_core::eye_refiner::EyeRefiner::load_from(&refiner_model)
+                    .context("eye refiner would not load")?;
+                let ms = time_ms(|| {
+                    refiner.refine(&image, &mut [face.clone()]);
+                    Ok(())
+                })?;
+                println!("  built-in CPU graph, refine()         {ms:8.2} ms");
+            }
+            None => println!(
+                "  built-in CPU graph                     skipped (needs an image with a face)"
+            ),
         }
     }
 

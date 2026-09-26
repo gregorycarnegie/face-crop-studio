@@ -194,12 +194,12 @@ mod tests {
     #[test]
     fn gpu_label_names_a_gpu_only_when_detection_uses_one() {
         let available = GpuStatusIndicator::available("RTX 4090", "Dx12", None, None, None);
-        assert_eq!(gpu_label(&available, Some("onnxruntime")), "GPU · RTX 4090");
+        assert_eq!(gpu_label(&available, Some("cpu-graph")), "GPU · RTX 4090");
         assert_eq!(gpu_label(&available, None), "GPU · RTX 4090");
 
         // GPU off (or preprocessing off): no adapter, and nothing should say GPU...
         let disabled = GpuStatusIndicator::disabled("GPU preprocessing disabled");
-        assert_eq!(gpu_label(&disabled, Some("onnxruntime")), "CPU");
+        assert_eq!(gpu_label(&disabled, Some("cpu-graph")), "CPU");
         // ...unless inference is still on the GPU.
         assert_eq!(
             gpu_label(&disabled, Some("wgsl-gpu")),

@@ -17,8 +17,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     cpu::{
-        conv2d::{Activation, ConvConfig, ConvWeights, conv2d},
-        ops::{add, resize2x},
+        nchwc::{self, BLOCK, Blocked, DenseWeights, DepthwiseWeights, Source},
         tensor::Tensor,
     },
     onnx::OnnxInitializerMap,
@@ -67,7 +66,54 @@ pub enum Step {
 /// The network's weights, read once by name and held in step order.
 #[derive(Debug)]
 pub struct ScrfdWeights {
-    convs: Vec<Option<ConvWeights>>,
+    convs: Vec<Prepared>,
+}
+
+/// What a step runs with, once sibling convolutions are merged.
+#[derive(Debug)]
+enum Prepared {
+    /// An add or an upsample: no weights.
+    NoWeights,
+    /// A dense convolution covering this step and the `split.len() - 1` steps after it,
+    /// which read the same input with the same geometry. `split` is each step's share of the
+    /// output channels, in step order.
+    Dense {
+        weights: DenseWeights,
+        split: Vec<usize>,
+    },
+    /// A depthwise convolution.
+    Depthwise(DepthwiseWeights),
+    /// Written by the merged convolution of an earlier step.
+    Merged,
+}
+
+/// How many steps from `at` onwards are dense convolutions of one input with one geometry,
+/// and so can run as a single wider convolution.
+///
+/// Each level's class, box and keypoint heads are three such steps (64->2, 64->8, 64->20).
+/// Run apart, each reads the same input: merged, it is read once, and the 2-channel class head
+/// stops wasting six of its block's eight lanes.
+fn siblings(steps: &[Step], at: usize) -> usize {
+    let key = |step: &Step| match *step {
+        Step::Conv {
+            input,
+            in_per_group,
+            kernel,
+            stride,
+            pad,
+            groups: 1,
+            relu,
+            ..
+        } => Some((input, in_per_group, kernel, stride, pad, relu)),
+        _ => None,
+    };
+    let Some(first) = key(&steps[at]) else {
+        return 1;
+    };
+    steps[at..]
+        .iter()
+        .take_while(|step| key(step) == Some(first))
+        .count()
 }
 
 impl ScrfdWeights {
@@ -89,103 +135,187 @@ impl ScrfdWeights {
         let map = OnnxInitializerMap::load(path, &names)
             .with_context(|| format!("reading SCRFD weights from {}", path.display()))?;
 
-        let mut convs = Vec::with_capacity(super::topology::STEPS.len());
-        for step in super::topology::STEPS {
-            convs.push(match step {
-                Step::Conv {
+        let steps = &super::topology::STEPS;
+        let mut convs = Vec::with_capacity(steps.len());
+        while convs.len() < steps.len() {
+            let at = convs.len();
+            if !matches!(steps[at], Step::Conv { .. }) {
+                convs.push(Prepared::NoWeights);
+                continue;
+            }
+            if let Step::Conv {
+                weight,
+                bias,
+                out_channels,
+                in_per_group: 1,
+                kernel,
+                groups,
+                ..
+            } = steps[at]
+                && groups == out_channels
+                && groups > 1
+            {
+                let bias = if bias.is_empty() {
+                    vec![0.0; out_channels]
+                } else {
+                    map.tensor(bias)?.data().to_vec()
+                };
+                convs.push(Prepared::Depthwise(
+                    DepthwiseWeights::new(out_channels, kernel, map.tensor(weight)?.data(), &bias)
+                        .with_context(|| weight.to_string())?,
+                ));
+                continue;
+            }
+            let count = siblings(steps, at);
+            let (mut data, mut biases, mut split) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut in_per, mut side) = (0, 0);
+            for step in &steps[at..at + count] {
+                let Step::Conv {
                     weight,
                     bias,
                     out_channels,
                     in_per_group,
                     kernel,
+                    groups,
                     ..
-                } => {
-                    let tensor = map.tensor(weight)?;
-                    let expected = out_channels * in_per_group * kernel * kernel;
-                    anyhow::ensure!(
-                        tensor.data().len() == expected,
-                        "{weight} holds {} values, the topology expects {expected}",
-                        tensor.data().len()
-                    );
-                    let bias = if bias.is_empty() {
-                        vec![0.0; out_channels]
-                    } else {
-                        map.tensor(bias)?.data().to_vec()
-                    };
-                    Some(ConvWeights {
-                        out_channels,
-                        in_channels_per_group: in_per_group,
-                        kernel_h: kernel,
-                        kernel_w: kernel,
-                        data: tensor.data().to_vec(),
-                        bias,
-                    })
+                } = *step
+                else {
+                    unreachable!("siblings counts only convolutions");
+                };
+                anyhow::ensure!(
+                    groups == 1,
+                    "{weight}: grouped convolution that is not depthwise; the plan has no kernel for it"
+                );
+                let tensor = map.tensor(weight)?;
+                let expected = out_channels * in_per_group * kernel * kernel;
+                anyhow::ensure!(
+                    tensor.data().len() == expected,
+                    "{weight} holds {} values, the topology expects {expected}",
+                    tensor.data().len()
+                );
+                data.extend_from_slice(tensor.data());
+                if bias.is_empty() {
+                    biases.extend(std::iter::repeat_n(0.0, out_channels));
+                } else {
+                    biases.extend_from_slice(map.tensor(bias)?.data());
                 }
-                _ => None,
-            });
+                split.push(out_channels);
+                (in_per, side) = (in_per_group, kernel);
+            }
+            // Slot 0 is the NCHW network input, read as blocks of one channel.
+            let Step::Conv { input, .. } = steps[at] else {
+                unreachable!("checked above");
+            };
+            let block_in = if input == 0 { 1 } else { BLOCK };
+            let weights =
+                DenseWeights::new(split.iter().sum(), in_per, side, block_in, &data, &biases)?;
+            convs.push(Prepared::Dense { weights, split });
+            convs.extend((1..count).map(|_| Prepared::Merged));
         }
         Ok(Self { convs })
     }
 }
 
+/// What a slot holds during a run.
+enum Slot {
+    /// Slot 0: the NCHW network input, held apart.
+    Input,
+    /// A whole activation tensor.
+    Data(Blocked),
+    /// Channels `first..first + count` of a merged convolution's output, `merged[of]`.
+    Part {
+        of: usize,
+        first: usize,
+        count: usize,
+    },
+}
+
 /// Run every step and return the nine head outputs, in the topology's output order.
+///
+/// Activations stay in the blocked layout from the first convolution, which reads the NCHW
+/// input directly, to the outputs, which are the only tensors converted back.
 ///
 /// Slots are kept for the whole pass rather than freed once consumed: the neck reads backbone
 /// levels produced long before it, so liveness is not simply "the previous step".
 pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
-    let mut slots: Vec<Option<Tensor>> = Vec::with_capacity(super::topology::STEPS.len() + 1);
-    slots.push(Some(input));
+    let mut slots = Vec::with_capacity(super::topology::STEPS.len() + 1);
+    slots.push(Slot::Input);
+    let mut merged: Vec<Blocked> = Vec::new();
 
     for (index, step) in super::topology::STEPS.iter().enumerate() {
         let produced = match *step {
             Step::Conv {
-                input,
+                input: from,
                 stride,
                 pad,
-                groups,
                 relu,
                 ..
-            } => {
-                let source = slot(&slots, input, index)?;
-                let config = ConvConfig {
-                    stride,
-                    padding: pad,
-                    groups,
-                    activation: if relu {
-                        Activation::Relu
+            } => match &weights.convs[index] {
+                Prepared::Dense { weights, split } => {
+                    let source = match slots.get(from) {
+                        Some(Slot::Input) => Source::from(&input),
+                        _ => Source::from(blocked(&slots, from, index)?),
+                    };
+                    let output = nchwc::conv(source, weights, stride, pad, relu)
+                        .with_context(|| format!("step {index}: conv"))?;
+                    if split.len() == 1 {
+                        output
                     } else {
-                        Activation::None
-                    },
-                };
-                let weights = weights.convs[index]
-                    .as_ref()
-                    .context("a Conv step without weights: the plan and the weights disagree")?;
-                conv2d(source, weights, &config).with_context(|| format!("step {index}: conv"))?
+                        let mut first = 0;
+                        for &count in split {
+                            slots.push(Slot::Part {
+                                of: merged.len(),
+                                first,
+                                count,
+                            });
+                            first += count;
+                        }
+                        merged.push(output);
+                        continue;
+                    }
+                }
+                Prepared::Depthwise(weights) => {
+                    nchwc::depthwise(blocked(&slots, from, index)?, weights, stride, pad, relu)
+                        .with_context(|| format!("step {index}: depthwise conv"))?
+                }
+                // Its slot was pushed by the merged convolution, in step order.
+                Prepared::Merged => continue,
+                Prepared::NoWeights => anyhow::bail!(
+                    "step {index}: a Conv step without weights: the plan and the weights disagree"
+                ),
+            },
+            Step::Add { a, b } => {
+                nchwc::add(blocked(&slots, a, index)?, blocked(&slots, b, index)?)
+                    .with_context(|| format!("step {index}: add"))?
             }
-            Step::Add { a, b } => add(slot(&slots, a, index)?, slot(&slots, b, index)?)
-                .with_context(|| format!("step {index}: add"))?,
-            Step::Upsample2x { input } => resize2x(slot(&slots, input, index)?)
+            Step::Upsample2x { input: from } => nchwc::upsample2x(blocked(&slots, from, index)?)
                 .with_context(|| format!("step {index}: upsample"))?,
         };
-        slots.push(Some(produced));
+        slots.push(Slot::Data(produced));
     }
 
     super::topology::OUTPUTS
         .iter()
-        .map(|&at| {
-            slots
-                .get(at)
-                .and_then(|s| s.clone())
-                .with_context(|| format!("output slot {at} was never written"))
+        .map(|&at| match slots.get(at) {
+            Some(Slot::Data(tensor)) => tensor.to_nchw(0, tensor.channels()),
+            Some(&Slot::Part { of, first, count }) => merged[of].to_nchw(first, count),
+            _ => anyhow::bail!("output slot {at} was never written"),
         })
         .collect()
 }
 
-fn slot(slots: &[Option<Tensor>], at: usize, step: usize) -> Result<&Tensor> {
-    slots
-        .get(at)
-        .and_then(|s| s.as_ref())
-        .with_context(|| format!("step {step} reads slot {at}, which does not exist yet"))
+/// The whole tensor in slot `at`, for step `step` to read.
+fn blocked(slots: &[Slot], at: usize, step: usize) -> Result<&Blocked> {
+    match slots.get(at) {
+        Some(Slot::Data(tensor)) => Ok(tensor),
+        Some(Slot::Input) => {
+            anyhow::bail!("step {step} reads the NCHW input with a kernel that needs blocks")
+        }
+        Some(Slot::Part { .. }) => {
+            anyhow::bail!("step {step} reads slot {at}, part of a merged convolution")
+        }
+        None => anyhow::bail!("step {step} reads slot {at}, which does not exist yet"),
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +347,24 @@ mod tests {
                 "output slot {output} is past the end of the plan"
             );
         }
+    }
+
+    #[test]
+    fn each_level_merges_exactly_its_three_heads() {
+        let steps = &super::super::topology::STEPS;
+        let mut groups = Vec::new();
+        let mut at = 0;
+        while at < steps.len() {
+            let count = siblings(steps, at);
+            if count > 1 {
+                groups.push((at, count));
+            }
+            at += count;
+        }
+        // The class, box and keypoint heads of strides 8, 16 and 32, writing slots 50-52,
+        // 57-59 and 64-66 -- every one of `OUTPUTS`. Nothing else shares an input and a
+        // geometry.
+        assert_eq!(groups, [(49, 3), (56, 3), (63, 3)]);
     }
 
     #[test]
