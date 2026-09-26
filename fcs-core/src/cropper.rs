@@ -61,6 +61,22 @@ pub struct CropRegion {
 }
 
 impl CropRegion {
+    /// The region `(x, y, width, height)` in an `img_w` x `img_h` source, with the padding
+    /// each side needs where it runs past the image.
+    pub fn new(x: i32, y: i32, width: u32, height: u32, img_w: u32, img_h: u32) -> Self {
+        let (x_i, y_i) = (x as i64, y as i64);
+        Self {
+            x,
+            y,
+            width,
+            height,
+            pad_left: (-x_i).max(0) as u32,
+            pad_top: (-y_i).max(0) as u32,
+            pad_right: (x_i + width as i64 - img_w as i64).max(0) as u32,
+            pad_bottom: (y_i + height as i64 - img_h as i64).max(0) as u32,
+        }
+    }
+
     /// Returns true if any padding is required to realize this crop.
     pub fn requires_padding(&self) -> bool {
         self.pad_left > 0 || self.pad_top > 0 || self.pad_right > 0 || self.pad_bottom > 0
@@ -282,28 +298,7 @@ pub fn calculate_crop_region(
     let width = src_w.round().clamp(1.0, u32::MAX as f32) as u32;
     let height = src_h.round().clamp(1.0, u32::MAX as f32) as u32;
 
-    let x_i = x as i64;
-    let y_i = y as i64;
-    let width_i = width as i64;
-    let height_i = height as i64;
-    let img_w_i = img_w as i64;
-    let img_h_i = img_h as i64;
-
-    let pad_left = (-x_i).max(0) as u32;
-    let pad_top = (-y_i).max(0) as u32;
-    let pad_right = (x_i + width_i - img_w_i).max(0) as u32;
-    let pad_bottom = (y_i + height_i - img_h_i).max(0) as u32;
-
-    CropRegion {
-        x,
-        y,
-        width,
-        height,
-        pad_left,
-        pad_top,
-        pad_right,
-        pad_bottom,
-    }
+    CropRegion::new(x, y, width, height, img_w, img_h)
 }
 
 #[cfg(test)]

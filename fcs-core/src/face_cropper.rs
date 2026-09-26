@@ -9,7 +9,7 @@ use crate::{
 };
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
-use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
+use imageproc::geometric_transformations::{Border, Interpolation, Projection, warp_into};
 
 /// Copy the in-bounds source region `(x, y, w, h)` onto the padded canvas at `offset`.
 ///
@@ -115,6 +115,28 @@ pub fn eye_positions(
         .collect()
 }
 
+/// `region` cut out of `img`, with `fill` wherever it runs past the image.
+fn padded_canvas(img: &DynamicImage, region: &CropRegion, fill: Rgba<u8>) -> RgbaImage {
+    let (img_w, img_h) = img.dimensions();
+    let canvas_width = region.width.max(1);
+    let canvas_height = region.height.max(1);
+    let mut canvas = RgbaImage::from_pixel(canvas_width, canvas_height, fill);
+
+    // `in_bounds_rect` returns `None` rather than a zero-sized rect, so there is
+    // nothing left to filter out here.
+    if let Some((src_x, src_y, src_w, src_h)) = region.in_bounds_rect(img_w, img_h) {
+        let offset_x = region.pad_left.min(canvas_width.saturating_sub(1));
+        let offset_y = region.pad_top.min(canvas_height.saturating_sub(1));
+        blit_region(
+            img,
+            (src_x, src_y, src_w, src_h),
+            &mut canvas,
+            (offset_x, offset_y),
+        );
+    }
+    canvas
+}
+
 /// Crop a face from `img` according to `detection` and `settings`.
 ///
 /// The returned image is resized to `settings.output_width` x `settings.output_height`.
@@ -135,61 +157,65 @@ pub fn crop_face_from_image(
         settings.fill_color.blue,
         settings.fill_color.alpha,
     ]);
-    let mut canvas = RgbaImage::from_pixel(canvas_width, canvas_height, fill);
-
-    // `in_bounds_rect` returns `None` rather than a zero-sized rect, so there is
-    // nothing left to filter out here.
-    if let Some((src_x, src_y, src_w, src_h)) = region.in_bounds_rect(img_w, img_h) {
-        let offset_x = region.pad_left.min(canvas_width.saturating_sub(1));
-        let offset_y = region.pad_top.min(canvas_height.saturating_sub(1));
-        blit_region(
-            img,
-            (src_x, src_y, src_w, src_h),
-            &mut canvas,
-            (offset_x, offset_y),
-        );
-    }
 
     // If output dimensions are zero, return the raw (possibly padded) crop as DynamicImage.
     if settings.output_width == 0 || settings.output_height == 0 {
-        return DynamicImage::ImageRgba8(canvas);
+        return DynamicImage::ImageRgba8(padded_canvas(img, &region, fill));
     }
 
-    let canvas = if settings.eye_line_align {
-        // Index 0 lies on the viewer's left of the face and index 1 on the viewer's right --
-        // measured across 10,880 large detections, that holds for 99.8% of them. It is the
-        // usual RetinaFace/YuNet order, where index 0 is the subject's *own* right eye. These
-        // names are screen-relative on purpose: read anatomically, "left eye" is the mirror of
-        // this, and that reading has already produced one mirrored landmark mapping elsewhere.
-        // Both eyes or nothing. Aligning from one point is not possible, and the sentinel this
-        // replaced made a missing eye look like a real one at the origin -- which rotated the
-        // crop 45 degrees when the other eye happened to sit diagonally from it.
-        if let (Some(left_eye), Some(right_eye)) = (detection.landmarks[0], detection.landmarks[1])
-        {
+    // Index 0 lies on the viewer's left of the face and index 1 on the viewer's right --
+    // measured across 10,880 large detections, that holds for 99.8% of them. It is the
+    // usual RetinaFace/YuNet order, where index 0 is the subject's *own* right eye. These
+    // names are screen-relative on purpose: read anatomically, "left eye" is the mirror of
+    // this, and that reading has already produced one mirrored landmark mapping elsewhere.
+    // Both eyes or nothing. Aligning from one point is not possible, and the sentinel this
+    // replaced made a missing eye look like a real one at the origin -- which rotated the
+    // crop 45 degrees when the other eye happened to sit diagonally from it.
+    let eyes = (detection.landmarks[0], detection.landmarks[1]);
+    let canvas = match eyes {
+        (Some(left_eye), Some(right_eye)) if settings.eye_line_align => {
             // Angle of the eye line relative to horizontal in source image coords, taken from
             // the viewer's left eye towards the viewer's right. Positive angle = the eye on
             // the right sits lower on screen; rotate by -angle to level them.
             let dx = right_eye.x - left_eye.x;
             let dy = right_eye.y - left_eye.y;
             let angle = dy.atan2(dx); // radians; counter-clockwise positive
-            let fill = Rgba([
-                settings.fill_color.red,
-                settings.fill_color.green,
-                settings.fill_color.blue,
-                settings.fill_color.alpha,
-            ]);
-            // rotate_about_center rotates counter-clockwise, so pass -angle to level the eyes.
-            rotate_about_center(
-                &canvas,
-                -angle,
+
+            // Rotating the finished crop pulled its corners in from outside it, and those were
+            // filled even where the photo had pixels (issue #5). So crop a margin wide enough
+            // to cover the turned rectangle, rotate about the same centre, and keep the middle.
+            // The fill colour is left only where the rotated crop really runs off the photo.
+            let (w, h) = (canvas_width as f32, canvas_height as f32);
+            let (sin, cos) = (angle.sin().abs(), angle.cos().abs());
+            // +1 so bilinear sampling at the rim still reads a real neighbour.
+            let mx = ((w * cos + h * sin - w) / 2.0).ceil() as u32 + 1;
+            let my = ((w * sin + h * cos - h) / 2.0).ceil() as u32 + 1;
+            let grown = CropRegion::new(
+                region.x - mx as i32,
+                region.y - my as i32,
+                canvas_width + 2 * mx,
+                canvas_height + 2 * my,
+                img_w,
+                img_h,
+            );
+            let source = padded_canvas(img, &grown, fill);
+            let (cx, cy) = (w / 2.0, h / 2.0);
+            // rotate_about_center rotates counter-clockwise, so -angle levels the eyes. The
+            // outer translate drops the margin in the same warp.
+            let projection = Projection::translate(cx, cy)
+                * Projection::rotate(-angle)
+                * Projection::translate(-(cx + mx as f32), -(cy + my as f32));
+            let mut out = RgbaImage::from_pixel(canvas_width, canvas_height, fill);
+            warp_into(
+                &source,
+                projection,
                 Interpolation::Bilinear,
                 Border::Constant(fill),
-            )
-        } else {
-            canvas
+                &mut out,
+            );
+            out
         }
-    } else {
-        canvas
+        _ => padded_canvas(img, &region, fill),
     };
 
     // Through `fast_image_resize` rather than `image::imageops::resize`: the latter samples
@@ -599,25 +625,33 @@ mod tests {
         };
         let got = crop_face_from_image(&img, &detection, &aligned).to_rgba8();
 
-        // The unrotated canvas: same crop, no alignment, no resize.
-        let raw = CropSettings {
-            output_width: 0,
-            output_height: 0,
-            eye_line_align: false,
-            ..aligned.clone()
-        };
-        let canvas = crop_face_from_image(&img, &detection, &raw).to_rgba8();
-
-        // dx and dy are left-minus-right, and the canvas is turned by the
-        // negation of that angle to level the eyes.
+        // Built straight from the source rather than from the unrotated crop: every output
+        // pixel is read from the photo at its rotated position about the crop centre. Turning
+        // the finished crop instead is what filled the corners in issue #5.
+        let region = calculate_crop_region(32, 32, bbox, &aligned);
+        let (w, h) = (region.width, region.height);
+        let centre = (
+            region.x as f32 + w as f32 / 2.0,
+            region.y as f32 + h as f32 / 2.0,
+        );
+        // dx and dy are left-minus-right, and the crop is turned by the negation of that
+        // angle to level the eyes -- so reading back from output to source turns by +angle.
         let dx = left_eye.0 - right_eye.0;
         let dy = left_eye.1 - right_eye.1;
-        let angle = dy.atan2(dx);
-        let rotated = rotate_about_center(
-            &canvas,
-            -angle,
+        let (sin, cos) = dy.atan2(dx).sin_cos();
+        let mut rotated = RgbaImage::new(w, h);
+        imageproc::geometric_transformations::warp_into_with(
+            &img.to_rgba8(),
+            |x, y| {
+                let (px, py) = (x - w as f32 / 2.0, y - h as f32 / 2.0);
+                (
+                    cos * px - sin * py + centre.0,
+                    sin * px + cos * py + centre.1,
+                )
+            },
             Interpolation::Bilinear,
             Border::Constant(Rgba([fill.red, fill.green, fill.blue, fill.alpha])),
+            &mut rotated,
         );
         let want = image::imageops::resize(
             &DynamicImage::ImageRgba8(rotated),
@@ -642,6 +676,39 @@ mod tests {
         assert!(
             worst <= 4,
             "max channel difference {worst} is larger than resampling rounding"
+        );
+    }
+
+    #[test]
+    fn eye_line_rotation_fills_only_where_the_photo_ends() {
+        // Issue #5: the crop was cut out first and rotated afterwards, so its corners were
+        // filled even though the photo carried on past them. Here the photo is uniform and
+        // reaches well beyond the turned crop, so no fill colour may appear at all.
+        let photo = Rgba([90, 140, 60, 255]);
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(96, 96, photo));
+        let mut detection = detection_at(BoundingBox {
+            x: 38.0,
+            y: 38.0,
+            width: 20.0,
+            height: 20.0,
+        });
+        detection.landmarks[0] = Some(crate::postprocess::Landmark { x: 42.0, y: 44.0 });
+        detection.landmarks[1] = Some(crate::postprocess::Landmark { x: 54.0, y: 50.0 });
+        let settings = CropSettings {
+            output_width: 32,
+            output_height: 40,
+            face_height_pct: 50.0,
+            positioning_mode: crate::cropper::PositioningMode::Center,
+            horizontal_offset: 0.0,
+            vertical_offset: 0.0,
+            fill_color: FillColor::opaque(0, 0, 0),
+            eye_line_align: true,
+        };
+
+        let out = crop_face_from_image(&img, &detection, &settings).to_rgba8();
+        assert!(
+            out.pixels().all(|p| *p == photo),
+            "fill colour appeared inside the photo"
         );
     }
 
