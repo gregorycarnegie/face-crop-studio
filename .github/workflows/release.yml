@@ -19,6 +19,10 @@ env:
   SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2.1/scrfd80k_500m_640.onnx
 
 jobs:
+  # The full CI suite, the same one master runs. Nothing is published unless it passes.
+  tests:
+    uses: ./.github/workflows/ci.yml
+
   shader-validation:
     name: Validate WGSL shaders
     runs-on: ubuntu-24.04
@@ -79,8 +83,6 @@ jobs:
     name: Windows Release Artifacts (${{ matrix.arch }})
     needs: [shader-validation, prepare-models]
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       # A matrix of one, kept deliberately: Windows arm64 is blocked upstream,
@@ -402,20 +404,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          # Any tag with a suffix (v1.5.1-rc1) is a release candidate.
-          # Without this every RC publishes as a full release and becomes
-          # the repo's "Latest", which is what users and the
-          # releases/latest API endpoint see.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            dist/*.zip
-            dist/*-setup.exe
-            dist/*.msi
-            dist/SHA256SUMS-windows-${{ matrix.arch }}.txt
-
   msix-package:
     name: MSIX Store Package
     needs: [windows-release]
@@ -486,7 +474,7 @@ jobs:
 
   store-submit:
     name: Submit to Microsoft Store
-    needs: [msix-package]
+    needs: [msix-package, publish]
     runs-on: windows-latest
     # Skipped entirely until MSSTORE_PRODUCT_ID is set as a repository variable.
     # Tag-only: a workflow_dispatch run has no release version to submit.
@@ -535,8 +523,6 @@ jobs:
     name: macOS Release Artifacts (Apple Silicon)
     needs: [shader-validation, prepare-models]
     runs-on: macos-latest
-    permissions:
-      contents: write
     env:
       # Evaluated once at job start so signing/notarization steps can skip
       # gracefully when the Apple secrets aren't configured.
@@ -635,24 +621,10 @@ jobs:
             dist/macos/*.dmg
             dist/macos/SHA256SUMS-macos-arm64.txt
 
-      - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          # Any tag with a suffix (v1.5.1-rc1) is a release candidate.
-          # Without this every RC publishes as a full release and becomes
-          # the repo's "Latest", which is what users and the
-          # releases/latest API endpoint see.
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
-            dist/macos/*.dmg
-            dist/macos/SHA256SUMS-macos-arm64.txt
-
   linux-release:
     name: Linux Release Artifacts (${{ matrix.arch }})
     needs: [shader-validation, prepare-models]
     runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -748,6 +720,24 @@ jobs:
             dist/linux/*.deb
             dist/linux/SHA256SUMS-linux-${{ matrix.arch }}.txt
 
+  # One publish step, after the tests and every package. Each platform used to publish its own
+  # assets as soon as it finished, so a release could go out with one platform missing -- which
+  # happened once, after a macOS packaging failure.
+  publish:
+    name: Publish GitHub release
+    needs: [tests, windows-release, macos-release, linux-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-release-artifacts*"
+          path: dist
+          merge-multiple: true
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -756,7 +746,12 @@ jobs:
           # the repo's "Latest", which is what users and the
           # releases/latest API endpoint see.
           prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
           files: |
-            dist/linux/*.AppImage
-            dist/linux/*.deb
-            dist/linux/SHA256SUMS-linux-${{ matrix.arch }}.txt
+            dist/*.zip
+            dist/*-setup.exe
+            dist/*.msi
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/SHA256SUMS-*.txt

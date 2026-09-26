@@ -6,8 +6,7 @@ use anyhow::{Context, Result};
 use fcs_core::{FaceDetector, crop_face_from_image};
 use fcs_utils::{
     MetadataContext, OutputOptions, QualityFilter, WebcamCapture, append_suffix_to_filename,
-    config::AppSettings, estimate_sharpness, list_webcam_devices, normalize_path,
-    save_dynamic_image,
+    config::AppSettings, list_webcam_devices, normalize_path, save_dynamic_image,
 };
 use log::{debug, info, warn};
 
@@ -162,19 +161,17 @@ pub fn run_webcam_mode(
             let output_options = OutputOptions::from_crop_settings(&settings.crop);
 
             for (idx, det) in output.detections.iter().enumerate() {
-                let mut crop_img = crop_face_from_image(&frame, det, &core_settings);
-
-                if let Some(enh) = enhancement_settings.as_ref() {
-                    let eyes =
-                        fcs_core::eye_positions(det, frame.width(), frame.height(), &core_settings);
-                    crop_img = gpu_runtime.enhance(
-                        &crop_img,
-                        enh,
-                        (!eyes.is_empty()).then_some(&eyes[..]),
-                    );
-                }
-
-                let (quality_score, quality) = estimate_sharpness(&crop_img);
+                let crop_img = crop_face_from_image(&frame, det, &core_settings);
+                let eyes =
+                    fcs_core::eye_positions(det, frame.width(), frame.height(), &core_settings);
+                let finished = gpu_runtime.finish_crop(
+                    crop_img,
+                    &settings.crop,
+                    enhancement_settings.as_deref(),
+                    (!eyes.is_empty()).then_some(&eyes[..]),
+                );
+                let (crop_img, quality, quality_score) =
+                    (finished.image, finished.quality, finished.quality_score);
 
                 if quality_filter.should_skip(quality) {
                     debug!(
@@ -185,14 +182,6 @@ pub fn run_webcam_mode(
                     );
                     continue;
                 }
-
-                crop_img = gpu_runtime.apply_shape_mask(
-                    &crop_img,
-                    &settings.crop.shape,
-                    settings.crop.vignette_softness,
-                    settings.crop.vignette_intensity,
-                    settings.crop.vignette_color,
-                );
 
                 let ext =
                     crate::output_path::normalized_output_extension(settings.crop.output_format);

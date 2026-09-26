@@ -21,7 +21,14 @@ use log::warn;
 
 use super::{EnhancementSettings, WgpuEnhancer, apply_enhancements};
 use crate::gpu::red_eye::RedEye;
-use crate::{color::RgbaColor, gpu::GpuContext, shape::CropShape, shape::apply_shape_mask_dynamic};
+use crate::{
+    color::RgbaColor,
+    config::CropSettings,
+    gpu::GpuContext,
+    quality::{Quality, estimate_sharpness},
+    shape::CropShape,
+    shape::apply_shape_mask_dynamic,
+};
 
 /// Enhancement and shape masking, on the GPU when one is available.
 ///
@@ -120,7 +127,8 @@ impl EnhancementRuntime {
                 vignette_color,
             ) {
                 Ok(Some(masked)) => return masked,
-                // `Ok(None)` means the shape needs no GPU work, not that it failed.
+                // `Ok(None)` means the GPU pass does not take this shape (a rectangle, or an
+                // outline too dense for it), not that it failed.
                 Ok(None) => {}
                 Err(err) => warn!("GPU shape mask failed: {err}; falling back to the CPU"),
             }
@@ -135,6 +143,75 @@ impl EnhancementRuntime {
         );
         cpu
     }
+
+    /// Everything after the geometric crop, in the one order every export path uses: enhance,
+    /// score sharpness, then shape and fill.
+    ///
+    /// The GUI used to shape before enhancing and score last, the CLI the other way round and
+    /// without the fill, so the same face could pass the quality rules in one front-end and fail
+    /// them in the other. Scoring comes before the shape because the mask edge and the fill are
+    /// not detail in the subject.
+    pub fn finish_crop(
+        &self,
+        crop: DynamicImage,
+        crop_settings: &CropSettings,
+        enhancement: Option<&EnhancementSettings>,
+        eyes: Option<&[RedEye]>,
+    ) -> FinishedCrop {
+        let enhanced = match enhancement {
+            Some(settings) => self.enhance(&crop, settings, eyes),
+            None => crop,
+        };
+        let (quality_score, quality) = estimate_sharpness(&enhanced);
+        let shaped = self.apply_shape_mask(
+            &enhanced,
+            &crop_settings.shape,
+            crop_settings.vignette_softness,
+            crop_settings.vignette_intensity,
+            crop_settings.vignette_color,
+        );
+        FinishedCrop {
+            image: fill_transparent(shaped, crop_settings.fill_color),
+            quality,
+            quality_score,
+        }
+    }
+}
+
+/// A crop ready to save, with the sharpness it was judged by.
+#[derive(Clone, Debug)]
+pub struct FinishedCrop {
+    /// Enhanced, shaped and filled.
+    pub image: DynamicImage,
+    /// Sharpness band of the enhanced crop before the shape.
+    pub quality: Quality,
+    /// The Laplacian variance behind `quality`.
+    pub quality_score: f64,
+}
+
+/// Composite `image` over `fill` ("over", straight alpha). A transparent fill keeps the shape's
+/// transparency for PNG/WebP; an opaque one is what makes a shaped JPEG show its shape at all,
+/// since the JPEG encoder drops alpha and would otherwise expose the pixels under the mask.
+fn fill_transparent(image: DynamicImage, fill: RgbaColor) -> DynamicImage {
+    let mut rgba = image.into_rgba8();
+    let bg_a = fill.alpha as f32 / 255.0;
+    let bg = [fill.red as f32, fill.green as f32, fill.blue as f32];
+    for px in rgba.pixels_mut() {
+        let src_a = px[3] as f32 / 255.0;
+        if src_a >= 1.0 {
+            continue;
+        }
+        let out_a = src_a + bg_a * (1.0 - src_a);
+        if out_a <= 0.0 {
+            px.0 = [0, 0, 0, 0];
+            continue;
+        }
+        for c in 0..3 {
+            px[c] = ((px[c] as f32 * src_a + bg[c] * bg_a * (1.0 - src_a)) / out_a).round() as u8;
+        }
+        px[3] = (out_a * 255.0).round() as u8;
+    }
+    DynamicImage::ImageRgba8(rgba)
 }
 
 #[cfg(test)]
@@ -236,5 +313,97 @@ mod tests {
         let mut expected = image.clone();
         apply_shape_mask_dynamic(&mut expected, &CropShape::Ellipse, 0.3, 0.5, color);
         assert_eq!(masked.to_rgba8(), expected.to_rgba8());
+    }
+
+    /// Scored before the shape, then shaped and composited over the fill: an ellipse's corners
+    /// take an opaque fill, a transparent fill leaves them transparent, and the score is the
+    /// unshaped crop's.
+    #[test]
+    fn finish_crop_scores_then_shapes_and_fills() {
+        let runtime = EnhancementRuntime::cpu_only();
+        let checker = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(16, 16, |x, y| {
+            let v = if (x + y) % 2 == 0 { 250 } else { 5 };
+            image::Rgba([v, v, v, 255])
+        }));
+        let mut settings = CropSettings {
+            shape: CropShape::Ellipse,
+            fill_color: RgbaColor::opaque(200, 10, 50),
+            ..CropSettings::default()
+        };
+
+        let filled = runtime.finish_crop(checker.clone(), &settings, None, None);
+        assert_eq!(filled.quality_score, estimate_sharpness(&checker).0);
+        assert_eq!(
+            filled.image.to_rgba8().get_pixel(0, 0).0,
+            [200, 10, 50, 255]
+        );
+
+        settings.fill_color = RgbaColor {
+            alpha: 0,
+            ..settings.fill_color
+        };
+        let clear = runtime
+            .finish_crop(checker, &settings, None, None)
+            .image
+            .to_rgba8();
+        assert_eq!(clear.get_pixel(0, 0)[3], 0);
+        // The centre is inside the ellipse and must come through untouched.
+        assert_eq!(clear.get_pixel(8, 8).0, [250, 250, 250, 255]);
+    }
+
+    /// Dense outlines -- a Koch rectangle at 4 iterations is 1,024 points, a 9-sided Koch
+    /// polygon at 3 is 576 -- used to be cut to their first 512 points on the GPU, closing the
+    /// shape along a diagonal. They now take the CPU mask, so the two paths agree exactly.
+    #[test]
+    fn dense_outlines_match_the_cpu_mask_on_the_gpu_path() {
+        let Some(context) = crate::gpu::test_support::test_context() else {
+            eprintln!("skipped: no GPU");
+            return;
+        };
+        let runtime = EnhancementRuntime::new(Some(context));
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            96,
+            96,
+            image::Rgba([90, 120, 150, 255]),
+        ));
+        let color = RgbaColor::opaque(0, 0, 0);
+        for shape in [
+            CropShape::KochRectangle { iterations: 4 },
+            CropShape::KochPolygon {
+                sides: 9,
+                rotation_deg: 0.0,
+                iterations: 3,
+            },
+        ] {
+            let mut expected = image.clone();
+            apply_shape_mask_dynamic(&mut expected, &shape, 0.0, 1.0, color);
+            let masked = runtime.apply_shape_mask(&image, &shape, 0.0, 1.0, color);
+            assert_eq!(masked.to_rgba8(), expected.to_rgba8(), "{shape:?}");
+        }
+    }
+
+    /// The CPU rasteriser at the densest Koch rectangle keeps the shape's 180-degree symmetry;
+    /// a truncated outline covers one side and not the other.
+    #[test]
+    fn the_densest_koch_rectangle_is_symmetric() {
+        let size = 128;
+        let mut image = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            size,
+            size,
+            image::Rgba([255, 255, 255, 255]),
+        ));
+        let shape = CropShape::KochRectangle { iterations: 5 };
+        apply_shape_mask_dynamic(&mut image, &shape, 0.0, 1.0, RgbaColor::opaque(0, 0, 0));
+        let rgba = image.to_rgba8();
+        let covered = |ys: std::ops::Range<u32>| {
+            ys.flat_map(|y| (0..size).map(move |x| (x, y)))
+                .filter(|&(x, y)| rgba.get_pixel(x, y)[3] > 127)
+                .count() as f64
+        };
+        let (top, bottom) = (covered(0..size / 2), covered(size / 2..size));
+        assert!(
+            top > 0.0 && (top - bottom).abs() / top < 0.02,
+            "{top} vs {bottom}"
+        );
     }
 }

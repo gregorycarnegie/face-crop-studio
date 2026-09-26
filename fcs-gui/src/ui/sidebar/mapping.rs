@@ -165,7 +165,7 @@ pub(super) fn show_mapping(ui: &mut Ui, app: &mut App2) {
             ui.horizontal(|ui| {
                 ui.add_space(pad);
                 let avail = ui.available_width() - pad;
-                let enabled = has_queue && has_detector && !app.is_busy;
+                let enabled = has_queue && has_detector && !app.is_busy && !app.batch_running;
                 ui.add_enabled_ui(enabled, |ui| {
                     if ui
                         .add_sized(

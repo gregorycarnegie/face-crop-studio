@@ -109,6 +109,13 @@ impl DetectionWithQuality {
     pub fn active_bbox(&self) -> BoundingBox {
         self.current_bbox
     }
+    /// The detection with the user's box edits applied, as cropping and export see it.
+    pub fn edited_detection(&self) -> Detection {
+        Detection {
+            bbox: self.current_bbox,
+            ..self.detection.clone()
+        }
+    }
     pub fn reset_bbox(&mut self) {
         self.current_bbox = self.original_bbox;
     }
@@ -315,12 +322,18 @@ pub enum JobMessage {
     WebcamError(String),
     WebcamStopped,
     BatchProgress {
-        index: usize,
+        path: PathBuf,
         status: BatchFileStatus,
     },
     BatchComplete {
         completed: usize,
         failed: usize,
+    },
+    /// A live result-preview render; `None` if it panicked.
+    ResultPreview {
+        generation: u64,
+        face: usize,
+        rendered: Option<(egui::ColorImage, Quality)>,
     },
 }
 
@@ -578,6 +591,7 @@ pub struct App2 {
     pub undo_stack: Vec<EditSnapshot>,
     pub redo_stack: Vec<EditSnapshot>,
     pub show_crop_overlay: bool,
+    pub result_preview: crate::core::result_preview::ResultPreview,
     pub crop_history: Vec<ConfigCropSettings>,
     pub crop_history_index: usize,
     pub crop_fill_hex_input: String,
@@ -607,6 +621,9 @@ pub struct App2 {
     pub last_error: Option<String>,
     pub last_detect_ms: Option<u64>,
     pub is_busy: bool,
+    /// A batch export is running. Separate from `is_busy`, which a detection clears when it
+    /// finishes: sharing it let a detection mid-batch re-enable "Run batch".
+    pub batch_running: bool,
     pub texture_seq: u64,
     pub job_counter: u64,
     pub current_job: Option<u64>,

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Live result preview in the GUI.** The toolbar's **Preview** toggle (or `Space`) shows the
+  selected face on the canvas as it will be exported: cropped, enhanced, shaped and filled. It
+  re-renders in the background as crop and enhancement settings change, through the same function
+  export uses, so it cannot disagree with the saved file.
+
+### Fixed
+
+- **Dense Koch shapes are no longer cut in half.** The GPU mask kept only the first 512 outline
+  points and closed the shape from there straight back to the start, slicing it along a
+  diagonal: a Koch rectangle from 4 iterations, a Koch polygon from 9 sides at 3. Outlines past
+  512 points now use the CPU mask, which takes every point.
+- **Batch exports no longer overwrite each other.** `a/portrait.jpg` and `b/portrait.jpg` both
+  became `portrait_face1.png`, and the second replaced the first while the summary counted two
+  saves. A name already written in the same batch now gets `_2`, `_3`… and a warning, in the
+  CLI and the GUI. Files from earlier runs are still replaced.
+- **The CLI exits non-zero when a crop could not be saved.** It logged the failure and returned
+  success. The rest of the batch still runs; the summary line gains `crops_failed=`.
+- **`--no-gpu` now keeps detection on the CPU.** It disabled the GPU for enhancement only; the
+  detector opened its own GPU context regardless. The GUI's GPU setting reaches it too.
+- **PNG exports no longer rotate twice.** Pixels are already turned upright on load, but a PNG
+  source's EXIF Orientation was copied into the export unchanged. It is now cleared, as the
+  JPEG path always did.
+- **The GUI batch queue can't send progress to the wrong row.** Progress was addressed by queue
+  position, so removing a row mid-batch shifted updates onto the next file. It is now keyed by
+  path, and a detection finishing mid-batch no longer re-enables "Run batch".
+
+### Changed
+
+- **One crop-finishing order for every export path.** CLI, webcam, GUI single-face export and
+  GUI batch now all enhance, score, then shape and fill (`EnhancementRuntime::finish_crop`).
+  The GUI used to shape before enhancing and score the shaped crop, so a face could pass the
+  quality rules in one front-end and fail in the other.
+- **CLI shaped crops are composited over the fill colour**, as the GUI's always were. The
+  default fill is opaque black, so a PNG ellipse now has black corners rather than transparent
+  ones; pass `--crop-fill-color "#00000000"` to keep them transparent.
+  Before this, a shaped JPEG from the CLI showed no shape at all.
+- **Semi-transparent fill edges are no longer darkened.** The GUI's composite stored
+  premultiplied colour in a straight-alpha image, darkening vignette and mask edges.
+- **Releases publish only when every platform built.** Each platform job used to publish on its
+  own, so one could ship while another failed. A single publish step now waits for the full
+  test suite and all packages.
+
 ## [2.1.1] - 2026-09-26
 
 ### Fixed

@@ -161,7 +161,7 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
         ui.add_space(margin);
         let avail = ui.available_width() - margin;
         let n = app.batch_files.len();
-        let enabled = !app.is_busy && app.detector.is_some();
+        let enabled = !app.is_busy && !app.batch_running && app.detector.is_some();
         ui.add_enabled_ui(enabled, |ui| {
             if ui
                 .add_sized(
@@ -218,7 +218,7 @@ pub(super) fn queue_action_bar(ui: &mut Ui, app: &mut App2) {
     });
 
     // ── Batch report ─────────────────────────────────────────────────────────
-    let has_results = !app.is_busy
+    let has_results = !app.batch_running
         && app.batch_files.iter().any(|f| {
             !matches!(
                 f.status,

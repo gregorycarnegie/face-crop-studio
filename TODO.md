@@ -4,14 +4,13 @@ Completed work lives in `CHANGELOG.md` and the git history. Only open items belo
 
 ## GPU cross-platform validation
 
-CI now builds, tests, and lints on Windows, macOS, and Linux, but only the Windows
-runner has a usable GPU adapter — the macOS and Linux legs cover the CPU paths and
-let the GPU tests self-skip. Validating the wgpu backends needs real hardware, or a
-software rasteriser wired into CI (`mesa-vulkan-drivers` on Linux), which risks
-tripping the nextest slow-timeout on the GPU parity suite.
+Every CI leg now has an adapter — WARP (D3D12) on Windows, Metal on macOS, and Mesa's
+lavapipe (Vulkan) on Linux — and `FCS_REQUIRE_GPU=1` makes a missing one fail rather than
+skip. That is correctness coverage of the shaders on three backends, run on software or
+virtual devices. It says nothing about speed or driver quirks on real hardware.
 
-- [ ] Test on macOS (Metal via wgpu).
-- [ ] Test on Linux (Vulkan via wgpu).
+- [ ] Test on real macOS hardware (Metal via wgpu).
+- [ ] Test on real Linux hardware (Vulkan via wgpu).
 
 ## Code signing (deferred)
 

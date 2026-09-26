@@ -11,7 +11,7 @@ mod types;
 mod writer;
 
 pub use types::{ImageFormatHint, MetadataContext, OutputOptions, PngCompression};
-pub use writer::{append_suffix_to_filename, save_dynamic_image};
+pub use writer::{OutputClaims, append_suffix_to_filename, save_dynamic_image};
 
 #[cfg(test)]
 use {

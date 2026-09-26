@@ -4,10 +4,10 @@ use crate::types::{App2, BatchFile, BatchFileStatus, JobMessage};
 
 use fcs_core::{CropSettings as CoreCropSettings, Detection, FaceDetector, crop_face_from_image};
 use fcs_utils::{
-    ImageFormatHint, MetadataContext, OutputOptions, append_suffix_to_filename, apply_shape_mask,
-    estimate_sharpness, load_image, quality::Quality, save_dynamic_image,
+    ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, append_suffix_to_filename,
+    load_image, quality::Quality, save_dynamic_image,
 };
-use image::{DynamicImage, GenericImageView, Rgba};
+use image::{DynamicImage, GenericImageView};
 use log::{error, info, warn};
 use rayon::prelude::*;
 use rfd::FileDialog;
@@ -21,48 +21,31 @@ use std::{
     },
 };
 
-/// Apply shape mask then composite transparent pixels onto `fill`.
-/// When `fill.alpha == 0` the output keeps its alpha channel (transparent PNG/WEBP).
-/// When `fill.alpha == 255` the output is fully opaque (safe for JPEG).
-fn apply_shape_and_fill(
-    crop: DynamicImage,
-    settings: &fcs_utils::config::CropSettings,
-) -> DynamicImage {
-    let mut rgba = crop.to_rgba8();
-    apply_shape_mask(
-        &mut rgba,
-        &settings.shape,
-        settings.vignette_softness,
-        settings.vignette_intensity,
-        settings.vignette_color,
-    );
-
-    let fill = settings.fill_color;
-    let bg_r = fill.red as f32;
-    let bg_g = fill.green as f32;
-    let bg_b = fill.blue as f32;
-    let bg_a = fill.alpha as f32 / 255.0;
-
-    for px in rgba.pixels_mut() {
-        let src_a = px[3] as f32 / 255.0;
-        if src_a >= 1.0 {
-            continue;
-        }
-        let inv = 1.0 - src_a;
-        let r = (px[0] as f32 * src_a + bg_r * bg_a * inv) as u8;
-        let g = (px[1] as f32 * src_a + bg_g * bg_a * inv) as u8;
-        let b = (px[2] as f32 * src_a + bg_b * bg_a * inv) as u8;
-        let a = ((src_a + bg_a * inv) * 255.0).min(255.0) as u8;
-        *px = Rgba([r, g, b, a]);
-    }
-    DynamicImage::ImageRgba8(rgba)
-}
-
 struct ExportCandidate {
     face_index: usize,
     quality: Quality,
     quality_score: f64,
     detection_score: f32,
+}
+
+/// One face of the loaded image as it will be exported: cropped, enhanced, scored, shaped and
+/// filled. The canvas's result preview calls this too, so what it shows is what gets saved.
+pub fn finish_face(
+    source: &DynamicImage,
+    detection: &Detection,
+    crop: &fcs_utils::config::CropSettings,
+    enhance: &fcs_utils::config::EnhanceSettings,
+    enhancement: &fcs_utils::EnhancementRuntime,
+) -> fcs_utils::FinishedCrop {
+    let core: CoreCropSettings = crop.into();
+    let raw = crop_face_from_image(source, detection, &core);
+    let eyes = fcs_core::eye_positions(detection, source.width(), source.height(), &core);
+    enhancement.finish_crop(
+        raw,
+        crop,
+        Some(&enhance.to_enhancement_settings()),
+        (!eyes.is_empty()).then_some(&eyes[..]),
+    )
 }
 
 /// Exports the currently selected preview faces after prompting for a folder.
@@ -106,7 +89,6 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
     // The same runtime the CLI and the batch path use, so the three agree about whether
     // enhancement runs on the shaders.
     let enhancement = &app.gpu.enhancement;
-    let crop_settings = app.build_crop_settings();
     let output_options = OutputOptions::from_crop_settings(&settings.crop);
     let ext = output_extension(settings.crop.output_format);
     let source_stem = source_path
@@ -123,25 +105,14 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
             continue;
         };
 
-        let detection_for_crop = Detection {
-            bbox: det.active_bbox(),
-            landmarks: det.detection.landmarks,
-            score: det.detection.score,
-        };
-        let raw_crop =
-            crop_face_from_image(source_image.as_ref(), &detection_for_crop, &crop_settings);
-        let shaped = apply_shape_and_fill(raw_crop, &settings.crop);
-        let eyes = fcs_core::eye_positions(
-            &detection_for_crop,
-            source_image.width(),
-            source_image.height(),
-            &crop_settings,
-        );
-        let crop = enhancement.enhance(
-            &shaped,
-            &settings.enhance.to_enhancement_settings(),
-            (!eyes.is_empty()).then_some(&eyes[..]),
-        );
+        let crop = finish_face(
+            source_image,
+            &det.edited_detection(),
+            &settings.crop,
+            &settings.enhance,
+            enhancement,
+        )
+        .image;
 
         let mut filename = format!("{source_stem}_face_{:02}.{ext}", face_index + 1);
         if let Some(suffix) = quality_suffix(settings, det.quality) {
@@ -189,6 +160,12 @@ fn export_preview_faces(app: &mut App2, selected: Vec<usize>, error_title: &str)
 
 /// Starts batch export processing for every queued image.
 pub fn start_batch_export(app: &mut App2) {
+    // The buttons that start a batch are disabled while one runs, but the toolbar and menu
+    // reach this too, and two batches writing one folder would race for the same names.
+    if app.batch_running {
+        app.show_error("Batch export failed", "A batch is already running");
+        return;
+    }
     if app.batch_files.is_empty() {
         app.show_error("Batch export failed", "No queued images");
         return;
@@ -220,11 +197,12 @@ pub fn start_batch_export(app: &mut App2) {
         return;
     }
 
+    // Keyed by path, not queue position: the queue can still be edited while this runs, and a
+    // removed row shifted every later index onto the wrong file. Queue paths are unique.
     let tasks: Vec<_> = app
         .batch_files
         .iter()
-        .enumerate()
-        .map(|(index, file)| (index, file.path.clone(), file.output_override.clone()))
+        .map(|file| (file.path.clone(), file.output_override.clone()))
         .collect();
 
     for file in &mut app.batch_files {
@@ -234,7 +212,7 @@ pub fn start_batch_export(app: &mut App2) {
     let settings = Arc::new(app.settings.clone());
     let parallelism = settings.resolved_batch_parallelism();
     let tx = app.job_tx.clone();
-    app.is_busy = true;
+    app.batch_running = true;
     app.show_success(format!(
         "Starting batch export of {} image(s) using {} worker(s)",
         tasks.len(),
@@ -285,15 +263,16 @@ pub fn start_batch_export(app: &mut App2) {
         let inner_settings = settings.clone();
         let inner_completed = completed.clone();
         let inner_failed = failed.clone();
+        let claims = OutputClaims::default();
 
         pool.install(move || {
             // `for_each_with` clones the init once per worker thread, so the
             // sender refcount bumps once per worker rather than once per task.
             tasks
                 .into_par_iter()
-                .for_each_with(inner_tx, |tx, (index, path, output_override)| {
+                .for_each_with(inner_tx, |tx, (path, output_override)| {
                     let _ = tx.send(JobMessage::BatchProgress {
-                        index,
+                        path: path.clone(),
                         status: BatchFileStatus::Processing,
                     });
 
@@ -301,8 +280,9 @@ pub fn start_batch_export(app: &mut App2) {
                         inner_detector.as_ref(),
                         inner_eye_refiner.as_deref(),
                         &inner_enhancement,
-                        path,
+                        path.clone(),
                         inner_output_dir.as_path(),
+                        &claims,
                         inner_settings.as_ref(),
                         output_override,
                     );
@@ -313,7 +293,7 @@ pub fn start_batch_export(app: &mut App2) {
                         inner_completed.fetch_add(1, AtomicOrdering::Relaxed);
                     }
 
-                    let _ = tx.send(JobMessage::BatchProgress { index, status });
+                    let _ = tx.send(JobMessage::BatchProgress { path, status });
                 });
         });
 
@@ -333,6 +313,7 @@ fn run_batch_job_panic_safe(
     enhancement: &fcs_utils::EnhancementRuntime,
     path: PathBuf,
     output_dir: &Path,
+    claims: &OutputClaims,
     settings: &fcs_utils::config::AppSettings,
     output_override: Option<PathBuf>,
 ) -> BatchFileStatus {
@@ -344,6 +325,7 @@ fn run_batch_job_panic_safe(
             enhancement,
             path,
             output_dir,
+            claims,
             settings,
             output_override,
         )
@@ -377,7 +359,7 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 // would exist to satisfy a counter rather than to remove repetition.
 #[allow(clippy::too_many_arguments)]
 fn run_batch_sequential(
-    tasks: Vec<(usize, PathBuf, Option<PathBuf>)>,
+    tasks: Vec<(PathBuf, Option<PathBuf>)>,
     detector: &FaceDetector,
     eye_refiner: Option<&fcs_core::EyeRefiner>,
     enhancement: &fcs_utils::EnhancementRuntime,
@@ -387,17 +369,19 @@ fn run_batch_sequential(
     completed: &AtomicUsize,
     failed: &AtomicUsize,
 ) {
-    for (index, path, output_override) in tasks {
+    let claims = OutputClaims::default();
+    for (path, output_override) in tasks {
         let _ = tx.send(JobMessage::BatchProgress {
-            index,
+            path: path.clone(),
             status: BatchFileStatus::Processing,
         });
         let status = run_batch_job_panic_safe(
             detector,
             eye_refiner,
             enhancement,
-            path,
+            path.clone(),
             output_dir,
+            &claims,
             settings,
             output_override,
         );
@@ -406,7 +390,7 @@ fn run_batch_sequential(
         } else {
             completed.fetch_add(1, AtomicOrdering::Relaxed);
         }
-        let _ = tx.send(JobMessage::BatchProgress { index, status });
+        let _ = tx.send(JobMessage::BatchProgress { path, status });
     }
 }
 
@@ -417,6 +401,7 @@ fn run_batch_job(
     enhancement: &fcs_utils::EnhancementRuntime,
     path: PathBuf,
     output_dir: &Path,
+    claims: &OutputClaims,
     settings: &fcs_utils::config::AppSettings,
     output_override: Option<PathBuf>,
 ) -> BatchFileStatus {
@@ -458,19 +443,20 @@ fn run_batch_job(
     let (src_w, src_h) = source_image.dimensions();
     for (face_index, detection) in detections.iter().enumerate() {
         let raw = crop_face_from_image(&source_image, detection, &crop_settings);
-        let shaped = apply_shape_and_fill(raw, &settings.crop);
         let eyes = fcs_core::eye_positions(detection, src_w, src_h, &crop_settings);
-        let crop = enhancement.enhance(
-            &shaped,
-            &settings.enhance.to_enhancement_settings(),
+        // The CLI's order, from the same function: the GUI used to shape first and score the
+        // shaped result, so the fill's edge could decide which faces passed the quality rules.
+        let finished = enhancement.finish_crop(
+            raw,
+            &settings.crop,
+            Some(&settings.enhance.to_enhancement_settings()),
             (!eyes.is_empty()).then_some(&eyes[..]),
         );
-        let (quality_score, quality) = estimate_sharpness(&crop);
-        crops.push(crop);
+        crops.push(finished.image);
         candidates.push(ExportCandidate {
             face_index,
-            quality,
-            quality_score,
+            quality: finished.quality,
+            quality_score: finished.quality_score,
             detection_score: detection.score,
         });
     }
@@ -500,13 +486,16 @@ fn run_batch_job(
             continue;
         };
 
-        let output_path = build_output_path(
-            output_dir,
+        let output_path = claims.claim(
+            build_output_path(
+                output_dir,
+                &path,
+                candidate,
+                settings,
+                output_override.as_ref(),
+                multi_face,
+            ),
             &path,
-            candidate,
-            settings,
-            output_override.as_ref(),
-            multi_face,
         );
         let metadata_ctx = MetadataContext {
             source_path: Some(path.as_path()),
@@ -781,5 +770,46 @@ mod tests {
         assert_eq!(json["images"].as_array().map(Vec::len), Some(5));
         assert_eq!(json["images"][3]["outcome"], "failed");
         assert_eq!(json["images"][3]["error"], "Failed to load: truncated");
+    }
+
+    /// `a/portrait.jpg` and `b/portrait.jpg` both default to `portrait_face_01`. Under one
+    /// batch's claims the second gets its own file instead of replacing the first.
+    #[test]
+    fn same_named_sources_in_one_batch_keep_both_crops() {
+        let Some(model) = fcs_utils::model_path("models/scrfd80k_500m_640.onnx").unwrap() else {
+            eprintln!("skipped: no model present");
+            return;
+        };
+        let detector = FaceDetector::load_from(model).expect("the shipped model loads");
+        let sample = fcs_utils::model_path("samples/sample_01.jpg")
+            .unwrap()
+            .expect("sample image");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let settings = fcs_utils::config::AppSettings::default();
+        let enhancement = fcs_utils::EnhancementRuntime::cpu_only();
+        let claims = OutputClaims::default();
+
+        let mut exported = 0;
+        for folder in ["a", "b"] {
+            let source = dir.path().join(folder).join("portrait.jpg");
+            std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+            std::fs::copy(&sample, &source).unwrap();
+            match run_batch_job(
+                &detector,
+                None,
+                &enhancement,
+                source,
+                &out,
+                &claims,
+                &settings,
+                None,
+            ) {
+                BatchFileStatus::Completed { faces_exported, .. } => exported += faces_exported,
+                other => panic!("batch job did not complete: {other:?}"),
+            }
+        }
+        assert!(exported >= 2, "each copy exports at least one face");
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), exported);
     }
 }

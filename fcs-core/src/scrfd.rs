@@ -92,6 +92,16 @@ impl ScrfdDetector {
     /// few detections' time at load. Without a GPU, or when it fails, the CPU graph is the
     /// floor.
     pub fn load_from<P: AsRef<Path>>(path: P) -> Option<Self> {
+        Self::load_from_with_gpu(path, &Default::default())
+    }
+
+    /// [`Self::load_from`] under the caller's GPU policy. `gpu.enabled = false` (`--no-gpu`,
+    /// the GUI toggle) means the CPU graph without probing the GPU at all; the other options
+    /// choose the adapter, the same way they do for the front-end's own GPU work.
+    pub fn load_from_with_gpu<P: AsRef<Path>>(
+        path: P,
+        gpu: &fcs_utils::GpuContextOptions,
+    ) -> Option<Self> {
         let path = path.as_ref();
         if !path.exists() {
             debug!("SCRFD not loaded: no model at {}", path.display());
@@ -107,7 +117,7 @@ impl ScrfdDetector {
                 return None;
             }
         };
-        let gpu = match fcs_utils::GpuContext::init_with_fallback(&Default::default()) {
+        let gpu = match fcs_utils::GpuContext::init_with_fallback(gpu) {
             fcs_utils::GpuAvailability::Available(context) => {
                 match crate::gpu::GpuInferenceOps::new(context, None)
                     .and_then(|ops| Ok((gpu::ScrfdGpuWeights::load(&ops, path)?, ops)))
@@ -662,6 +672,22 @@ mod tests {
             ["wgsl-gpu", "cpu-graph"].contains(&engine),
             "unknown engine name {engine:?}"
         );
+    }
+
+    /// `--no-gpu` used to reach the front-end's GPU work but not this: the detector opened its
+    /// own context with default options and reported `wgsl-gpu` anyway.
+    #[test]
+    fn a_disabled_gpu_policy_loads_the_cpu_graph() {
+        let model = default_model_for_test();
+        if !model.exists() {
+            assert!(!strict_tests(), "FCS_STRICT_TESTS: no model at {model:?}");
+            eprintln!("skipped: no model present");
+            return;
+        }
+        let detector =
+            ScrfdDetector::load_from_with_gpu(&model, &fcs_utils::GpuContextOptions::disabled())
+                .expect("the shipped model loads");
+        assert_eq!(detector.engine(), "cpu-graph");
     }
 
     /// Loading the shipped model must succeed.

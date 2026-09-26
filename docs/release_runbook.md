@@ -17,7 +17,7 @@ git tag v1.0.0-rc2
 git push origin v1.0.0-rc2
 ```
 
-This triggers the tag-based release workflow and publishes Windows assets for validation.
+This triggers the tag-based release workflow. It runs the full CI suite and builds every platform, and publishes the assets only once all of them succeed — a failure anywhere leaves nothing published.
 
 ## 3) Validate release artefacts
 

@@ -77,7 +77,9 @@ pub use color::{
     rgb_to_hsv,
 };
 pub use config::PositioningMode;
-pub use enhance::{EnhancementRuntime, EnhancementSettings, WgpuEnhancer, apply_enhancements};
+pub use enhance::{
+    EnhancementRuntime, EnhancementSettings, FinishedCrop, WgpuEnhancer, apply_enhancements,
+};
 #[cfg(feature = "fixtures")]
 pub use fixtures::{
     fixture_path, fixtures_dir, load_fixture_bytes, load_fixture_image, load_fixture_json,
@@ -93,8 +95,8 @@ pub use image_utils::{
 };
 use log::LevelFilter;
 pub use output::{
-    ImageFormatHint, MetadataContext, OutputOptions, PngCompression, append_suffix_to_filename,
-    save_dynamic_image,
+    ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, PngCompression,
+    append_suffix_to_filename, save_dynamic_image,
 };
 pub use quality::{Quality, QualityFilter, estimate_sharpness, laplacian_variance};
 pub use shape::{

@@ -15,7 +15,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 // Status dot + label
-                let (ready_dot, ready_text) = if app.is_busy {
+                let (ready_dot, ready_text) = if app.is_busy || app.batch_running {
                     (P::PEACH, "  Running".to_string())
                 } else if app.last_error.is_some() {
                     (P::ROSE, " Error".to_string())
@@ -64,7 +64,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
                         ui,
                         &format!("Batch {done} / {total}"),
                         P::PEACH,
-                        app.is_busy,
+                        app.batch_running,
                     );
                 }
 
@@ -90,7 +90,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
                     }
 
                     // Animated indeterminate progress bar when busy
-                    if app.is_busy {
+                    if app.is_busy || app.batch_running {
                         let (resp, painter) =
                             ui.allocate_painter(Vec2::new(140.0, 5.0), Sense::hover());
                         painter.rect_filled(resp.rect, 3.0, P::white_alpha(15));

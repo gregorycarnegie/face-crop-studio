@@ -39,6 +39,9 @@ pub(crate) struct BatchContext<'a> {
     /// `None` is ordinary -- the detector's own landmarks are used instead. Built once and
     /// shared: immutable Rust weights allow concurrent runs without a lock.
     pub(crate) eye_refiner: &'a Option<fcs_core::EyeRefiner>,
+    /// Output paths written so far, so same-named sources in different folders do not
+    /// replace each other's crops.
+    pub(crate) claims: fcs_utils::OutputClaims,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +126,7 @@ fn process_crops(
         runtime,
         args,
         counters,
+        claims,
         // Refinement already happened in `process_single_image`, before annotation, the JSON
         // records and this. Running it again here would pay for a second forward pass per face
         // to produce the points the detections already carry.
@@ -207,6 +211,8 @@ fn process_crops(
             )
         };
 
+        let out_path = claims.claim(out_path, image_path);
+
         if let Some(parent) = out_path.parent()
             && let Err(err) = fs::create_dir_all(parent)
         {
@@ -220,6 +226,8 @@ fn process_crops(
             }
             Err(e) => {
                 warn!("Failed to export crop {}: {e:?}", out_path.display());
+                // Counted so the run can fail: the exit status is the interface for scripts.
+                counters.crops_failed.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -325,33 +333,27 @@ fn build_detection_records(
 fn build_processed_crop(
     index: usize,
     detection: &Detection,
-    mut crop_img: DynamicImage,
+    crop_img: DynamicImage,
     settings: &AppSettings,
     enhancement_settings: Option<&Arc<fcs_utils::EnhancementSettings>>,
     runtime: &gpu::CliGpuRuntime,
     eyes: &[fcs_utils::RedEye],
 ) -> ProcessedCrop {
-    if let Some(enh) = enhancement_settings {
-        // Red-eye removal needs to know where the eyes are. This used to pass `None`, so in
-        // the CLI it had nothing to aim at while the GUI aimed properly.
-        let eyes = (!eyes.is_empty()).then_some(eyes);
-        crop_img = runtime.enhance(&crop_img, enh, eyes);
-    }
-
-    let (quality_score, quality) = estimate_sharpness(&crop_img);
-    crop_img = runtime.apply_shape_mask(
-        &crop_img,
-        &settings.crop.shape,
-        settings.crop.vignette_softness,
-        settings.crop.vignette_intensity,
-        settings.crop.vignette_color,
+    // Red-eye removal needs to know where the eyes are. This used to pass `None`, so in
+    // the CLI it had nothing to aim at while the GUI aimed properly.
+    let eyes = (!eyes.is_empty()).then_some(eyes);
+    let finished = runtime.finish_crop(
+        crop_img,
+        &settings.crop,
+        enhancement_settings.map(Arc::as_ref),
+        eyes,
     );
 
     ProcessedCrop {
         index,
-        image: crop_img,
-        quality,
-        quality_score,
+        image: finished.image,
+        quality: finished.quality,
+        quality_score: finished.quality_score,
         score: detection.score,
     }
 }
@@ -537,6 +539,7 @@ pub(crate) mod tests {
         let detector = build_cli_detector(
             &model_path,
             &fcs_utils::config::DetectionSettings::default(),
+            &Default::default(),
         )
         .expect("the bundled model builds a detector");
         Some(Arc::new(detector))
@@ -566,6 +569,7 @@ pub(crate) mod tests {
             args,
             counters,
             eye_refiner: &NO_EYE_REFINER,
+            claims: Default::default(),
         }
     }
 
@@ -636,6 +640,59 @@ pub(crate) mod tests {
             .expect("nested dir")
             .count();
         assert_eq!(written, 2);
+    }
+
+    /// `a/portrait.jpg` and `b/portrait.jpg` both default to `portrait_face1.png`. The second
+    /// used to replace the first while the summary counted two saves.
+    #[test]
+    fn same_named_sources_in_different_folders_keep_both_crops() {
+        let settings = crop_settings_app();
+        let runtime = no_gpu_runtime();
+        let filter = Arc::new(QualityFilter::new(None));
+        let args = parse_args(&["--input", "x.jpg"]);
+        let dir = tempdir().expect("temp directory should be created");
+        let counters = ProgressCounters::default();
+        let detections = vec![sample_detection(2.0, 2.0, 8.0, 8.0, 0.9)];
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+        for source in ["a/portrait.jpg", "b/portrait.jpg"] {
+            process_crops(
+                &ctx,
+                &sample_image(24, 24),
+                Path::new(source),
+                &detections,
+                dir.path(),
+                None,
+            );
+        }
+        assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 2);
+        assert_eq!(fs::read_dir(dir.path()).expect("output dir").count(), 2);
+    }
+
+    /// A crop that cannot be written is counted, which is what makes `main` exit non-zero.
+    #[test]
+    fn a_failed_save_is_counted() {
+        let settings = crop_settings_app();
+        let runtime = no_gpu_runtime();
+        let filter = Arc::new(QualityFilter::new(None));
+        let args = parse_args(&["--input", "x.jpg"]);
+        let dir = tempdir().expect("temp directory should be created");
+        // A directory where the crop's file should go makes the final rename fail.
+        fs::create_dir(dir.path().join("portrait_face1.png")).expect("blocking directory");
+        let counters = ProgressCounters::default();
+        let detections = vec![sample_detection(2.0, 2.0, 8.0, 8.0, 0.9)];
+        let enhancement = None;
+        let ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+        process_crops(
+            &ctx,
+            &sample_image(24, 24),
+            Path::new("portrait.jpg"),
+            &detections,
+            dir.path(),
+            None,
+        );
+        assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 0);
+        assert_eq!(counters.crops_failed.load(Ordering::Relaxed), 1);
     }
 
     #[test]

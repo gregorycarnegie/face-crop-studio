@@ -19,6 +19,8 @@ on:
   # are not retriggered once it recovers, and without this the only way to
   # re-run CI on an unchanged tree is an empty commit.
   workflow_dispatch:
+  # release.yml runs the whole suite through this before publishing anything.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always

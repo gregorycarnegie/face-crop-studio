@@ -370,6 +370,11 @@ fn stage(ui: &mut Ui, app: &mut App2) {
         stage_outer.max,
     );
 
+    if app.result_preview.enabled && !app.preview.detections.is_empty() {
+        result_preview_stage(ui, app, image_slot);
+        return;
+    }
+
     // fit_rect: canvas border frame, sized to the AABB of the rotated image, centred in image_slot.
     // draw_rect: original-proportion rect at the same scale — vertices are rotated around its
     //            centre, so the rotated mesh exactly fills fit_rect.
@@ -847,6 +852,71 @@ fn stage(ui: &mut Ui, app: &mut App2) {
             dragging,
         );
     }
+}
+
+/// The selected face as it will be exported, fitted to the stage over a checkerboard so that
+/// transparent corners read as transparent rather than as the stage colour.
+fn result_preview_stage(ui: &mut Ui, app: &mut App2, slot: egui::Rect) {
+    // Here rather than in `logic`: the inspector has already applied this frame's slider
+    // values, so a change is picked up now instead of on whatever frame comes next.
+    crate::core::result_preview::refresh(app, ui.ctx());
+    let state = &app.result_preview;
+    let painter = ui.painter();
+    let Some(texture) = &state.texture else {
+        painter.text(
+            slot.center(),
+            egui::Align2::CENTER_CENTER,
+            "Rendering preview…",
+            egui::FontId::proportional(14.0),
+            P::INK2,
+        );
+        return;
+    };
+
+    let size = texture.size_vec2();
+    let scale = (slot.width() / size.x).min(slot.height() / size.y);
+    let rect = egui::Rect::from_center_size(slot.center(), size * scale);
+    let cell = 12.0;
+    let mut y = rect.min.y;
+    while y < rect.max.y {
+        let mut x = rect.min.x;
+        while x < rect.max.x {
+            let odd = (((x - rect.min.x) / cell) as i32 + ((y - rect.min.y) / cell) as i32) % 2;
+            let square = egui::Rect::from_min_max(
+                egui::pos2(x, y),
+                egui::pos2((x + cell).min(rect.max.x), (y + cell).min(rect.max.y)),
+            );
+            painter.rect_filled(
+                square,
+                0.0,
+                if odd == 1 { P::white_alpha(18) } else { P::BG },
+            );
+            x += cell;
+        }
+        y += cell;
+    }
+    painter.image(
+        texture.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+
+    let mut label = match state.shown {
+        Some((face, quality)) => format!("Face {} · {quality:?} quality", face + 1),
+        None => "Preview".to_owned(),
+    };
+    if state.in_flight {
+        label.push_str(" · updating…");
+    }
+    label.push_str("   Space: back to the photo");
+    painter.text(
+        egui::pos2(rect.min.x, rect.min.y - 8.0),
+        egui::Align2::LEFT_BOTTOM,
+        label,
+        egui::FontId::monospace(11.0),
+        P::INK2,
+    );
 }
 
 fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {

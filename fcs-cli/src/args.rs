@@ -135,7 +135,7 @@ pub struct DetectArgs {
     #[arg(long, default_value_t = 0.0)]
     pub vertical_offset: f32,
 
-    /// Fill color for areas outside the source image when crops extend past the image edges (accepts #RRGGBB, rgb(), hsv()).
+    /// Fill color for areas outside the source image and outside the crop shape (accepts #RRGGBB, #RRGGBBAA, rgb(), hsv()). Zero alpha keeps shaped corners transparent.
     #[arg(long, value_name = "COLOR")]
     pub crop_fill_color: Option<String>,
 

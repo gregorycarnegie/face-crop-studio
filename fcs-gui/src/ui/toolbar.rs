@@ -79,6 +79,10 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 tb_sep(ui);
 
                 // Draw tool toggle
+                // The selected face as it will be exported; Space toggles it too.
+                if toggle_btn(ui, "Preview", app.result_preview.enabled) {
+                    app.result_preview.enabled = !app.result_preview.enabled;
+                }
                 if toggle_btn(ui, "Draw box", app.manual_box_tool_enabled) {
                     app.manual_box_tool_enabled = !app.manual_box_tool_enabled;
                     app.manual_box_draft = None;

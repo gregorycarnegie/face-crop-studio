@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use fcs_utils::{
-    CropShape, EnhancementRuntime, EnhancementSettings, GpuAvailability, GpuContext,
+    EnhancementRuntime, EnhancementSettings, FinishedCrop, GpuAvailability, GpuContext,
     GpuContextOptions, RedEye,
     config::AppSettings,
     gpu::{GpuStatusIndicator, GpuStatusMode},
@@ -26,35 +26,16 @@ impl CliGpuRuntime {
         log_gpu_status(&self.status);
     }
 
-    /// Enhance a crop, on the GPU when available.
-    ///
-    /// `eyes` used to be hard-coded `None` here, so red-eye removal had nothing to aim at in
-    /// the CLI while the GUI passed real positions. The mapping now lives in
-    /// `fcs_core::eye_positions`, reachable from both.
-    pub fn enhance(
+    /// Enhance, score, then shape and fill: the order every front-end exports in.
+    pub fn finish_crop(
         &self,
-        image: &DynamicImage,
-        settings: &EnhancementSettings,
+        crop: DynamicImage,
+        crop_settings: &fcs_utils::config::CropSettings,
+        enhancement: Option<&EnhancementSettings>,
         eyes: Option<&[RedEye]>,
-    ) -> DynamicImage {
-        self.enhancement.enhance(image, settings, eyes)
-    }
-
-    pub fn apply_shape_mask(
-        &self,
-        image: &DynamicImage,
-        shape: &CropShape,
-        vignette_softness: f32,
-        vignette_intensity: f32,
-        vignette_color: fcs_utils::color::RgbaColor,
-    ) -> DynamicImage {
-        self.enhancement.apply_shape_mask(
-            image,
-            shape,
-            vignette_softness,
-            vignette_intensity,
-            vignette_color,
-        )
+    ) -> FinishedCrop {
+        self.enhancement
+            .finish_crop(crop, crop_settings, enhancement, eyes)
     }
 }
 
@@ -233,31 +214,16 @@ mod tests {
     }
 
     #[test]
-    fn enhance_falls_back_to_cpu_and_preserves_dimensions() {
+    fn finish_crop_falls_back_to_cpu_and_preserves_dimensions() {
         let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
         let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
             20,
-            20,
+            30,
             image::Rgba([100, 120, 140, 255]),
         ));
+        let crop = fcs_utils::config::CropSettings::default();
         let enh = EnhancementSettings::default();
-        let result = runtime.enhance(&img, &enh, None);
-        assert_eq!(result.width(), 20);
-        assert_eq!(result.height(), 20);
-    }
-
-    #[test]
-    fn apply_shape_mask_falls_back_to_cpu_and_preserves_dimensions() {
-        use fcs_utils::{CropShape, color::RgbaColor};
-        let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
-        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
-            30,
-            30,
-            image::Rgba([200, 200, 200, 255]),
-        ));
-        let result =
-            runtime.apply_shape_mask(&img, &CropShape::Rectangle, 0.0, 0.0, RgbaColor::default());
-        assert_eq!(result.width(), 30);
-        assert_eq!(result.height(), 30);
+        let result = runtime.finish_crop(img, &crop, Some(&enh), None).image;
+        assert_eq!((result.width(), result.height()), (20, 30));
     }
 }

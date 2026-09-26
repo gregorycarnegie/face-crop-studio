@@ -128,3 +128,57 @@ pub fn append_suffix_to_filename(name: &str, suffix: &str) -> String {
         format!("{name}{suffix}")
     }
 }
+
+/// Destinations already taken in one batch, so two sources that name the same file get
+/// distinct names instead of the later silently replacing the earlier.
+///
+/// `a/portrait.jpg` and `b/portrait.jpg` both become `portrait_face1.png` under the default
+/// naming, and the writer replaces what it finds. Files from earlier runs are still replaced;
+/// only a clash within the batch is renamed.
+///
+/// ponytail: first come, first served, so under a parallel batch which clashing source keeps the
+/// plain name depends on completion order. Nothing is lost either way; a pre-pass over every
+/// planned name would make it deterministic.
+#[derive(Debug, Default)]
+pub struct OutputClaims(std::sync::Mutex<std::collections::HashMap<String, std::path::PathBuf>>);
+
+impl OutputClaims {
+    /// `path` itself, or `path` with `_2`, `_3`... before the extension if a different source
+    /// already claimed it. The same source claiming again gets the same path back, so a watched
+    /// file that is saved twice still replaces its own output.
+    ///
+    /// Compared without case: Windows and macOS treat `Portrait_face1.png` and
+    /// `portrait_face1.png` as one file.
+    pub fn claim(&self, path: std::path::PathBuf, source: &Path) -> std::path::PathBuf {
+        let mut claims = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut candidate = path.clone();
+        for n in 2.. {
+            match claims.entry(candidate.to_string_lossy().to_lowercase()) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(source.to_path_buf());
+                    break;
+                }
+                std::collections::hash_map::Entry::Occupied(owner) if owner.get() == source => {
+                    break;
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    candidate =
+                        path.with_file_name(append_suffix_to_filename(&name, &format!("_{n}")));
+                }
+            }
+        }
+        if candidate != path {
+            log::warn!(
+                "{} is already an output of this batch; saving {}'s crop as {}",
+                path.display(),
+                source.display(),
+                candidate.display()
+            );
+        }
+        candidate
+    }
+}

@@ -45,7 +45,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 
 - **Preset sizing** – LinkedIn, Passport, Instagram, ID Card, Avatar, Headshot, plus an explicit “Custom” mode.
 - **Face height targeting** – Configure how large the face should appear in the final crop (10–100%). The cropper preserves the requested aspect ratio and records any padding needed so crops can extend beyond the source image without distortion.
-- **Padding colour control** – Empty pixels introduced by out-of-bounds crops are filled with a configurable colour (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
+- **Padding colour control** – Empty pixels introduced by out-of-bounds crops, and the area outside a crop shape, are filled with a configurable colour (zero alpha keeps them transparent) (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
 - **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner runs on the built-in Rust CPU engine, cutting median eye-line error from 4.05° to 1.18° against hand-clicked ground truth (93.3% of faces within 5° against 57.6%). No ONNX Runtime library is needed; if the model is missing or incompatible, the detector's own points are used.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
@@ -59,10 +59,10 @@ High-level views of how the workspace fits together. Each image links to its edi
 
 The project includes comprehensive GPU acceleration via wgpu and WGSL compute shaders:
 
-- **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking. Used by the CLI; the GUI currently runs the CPU pipeline instead.
-- **Custom inference** – Full GPU implementation of the detector in WGSL (Conv2D, pooling, add, upsample, activations), matching ONNX Runtime to about 1e-05. It exists so detection works with no external runtime, **not** because it is faster: measured, the two are a tie (`docs/ENGINE_SPEED.md`).
-- **GPU context pooling** – CLI uses async GPU context pool for efficient batch operations; GUI shares wgpu context with eframe's rendering backend.
-- **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. Use `--gpu` or `--no-gpu` flags in CLI for explicit control.
+- **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking. Both front-ends call the same runtime (`fcs_utils::EnhancementRuntime`), which falls back to the identical CPU pipeline when no GPU is available.
+- **Custom inference** – Full GPU implementation of the detector in WGSL (Conv2D, pooling, add, upsample, activations), measured within about 1e-05 of ONNX Runtime on one input; the parity tests gate at 2e-3 (CPU graph) and 5e-3 (GPU). It exists so detection works with no external runtime, **not** because it is faster: measured, the two are a tie (`docs/ENGINE_SPEED.md`).
+- **GPU contexts** – The CLI opens one context for enhancement; the GUI shares eframe's. The detector opens its own, under the same settings.
+- **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. `--no-gpu` (or the GUI's GPU toggle) keeps enhancement *and* detection on the CPU.
 
 ### Batch worker threads
 

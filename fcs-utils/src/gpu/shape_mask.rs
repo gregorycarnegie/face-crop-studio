@@ -13,6 +13,9 @@ use crate::{
 
 use super::{GpuBufferPool, GpuContext, SHAPE_MASK_WGSL, pack_rgba_pixels, unpack_rgba_pixels};
 
+/// The densest outline the per-pixel shader takes. Each pixel tests every edge, four samples
+/// each; above this (Koch shapes from 9 sides at 3 iterations, or a Koch rectangle at 4) the CPU
+/// rasteriser is used instead.
 const MAX_POINTS: usize = 512;
 
 #[repr(C)]
@@ -79,9 +82,9 @@ impl GpuShapeMask {
     /// side; use 0..=1. `vignette_intensity` is the color blend amount (0..=1);
     /// alpha coverage is independent of this tint.
     ///
-    /// Returns `Ok(None)` for rectangles or outlines with fewer than three points.
-    /// Otherwise returns RGBA8, or an error on allocation/readback failure.
-    /// Only the first 512 outline points are used; use the CPU mask for denser outlines.
+    /// Returns `Ok(None)` for shapes this pass does not handle -- rectangles, outlines with
+    /// fewer than three points, and outlines over [`MAX_POINTS`] -- and the caller uses the CPU
+    /// mask. Otherwise returns RGBA8, or an error on allocation/readback failure.
     pub fn apply(
         &self,
         image: &DynamicImage,
@@ -97,17 +100,14 @@ impl GpuShapeMask {
         let height = image.height();
 
         let points = outline_points_for_rect(width as f32, height as f32, shape);
-        if points.len() < 3 {
+        // Past MAX_POINTS this used to keep the first 512 points and close the outline from the
+        // last of them straight back to the first, cutting a Koch shape in half along a
+        // diagonal. Every point is needed, and the shader tests every pixel against every
+        // edge, so a dense outline is the CPU rasteriser's job rather than a longer loop here.
+        if points.len() < 3 || points.len() > MAX_POINTS {
             return Ok(None);
         }
-        let clamped = points
-            .iter()
-            .take(MAX_POINTS)
-            .map(|(x, y)| [*x, *y])
-            .collect::<Vec<_>>();
-        if clamped.len() < 3 {
-            return Ok(None);
-        }
+        let clamped = points.iter().map(|(x, y)| [*x, *y]).collect::<Vec<_>>();
 
         let rgba = image.to_rgba8();
         let pixels_u32 = pack_rgba_pixels(rgba.as_raw());

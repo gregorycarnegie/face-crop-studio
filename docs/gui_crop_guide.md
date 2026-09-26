@@ -26,12 +26,12 @@ The desktop app bundles a full crop workflow on top of face detection so you can
 
 ## Enhancement Pipeline
 
-When **Enable enhancements** is ticked, the crop output is routed through the pure-Rust enhancement pipeline from `fcs-utils`:
+Every export — single faces and batches — goes through the same enhancement runtime as the CLI, on the GPU shaders when available and the identical CPU pipeline otherwise. Each crop is enhanced, then scored for quality, then shaped and filled, in that order. Neutral slider values leave the crop unchanged.
 
 - Presets (Natural/Vivid/Professional) reconfigure the sliders to sensible defaults. Manual adjustments are always allowed—preset selection simply provides a starting point.
 - Controls cover exposure, brightness, contrast, saturation, sharpness, skin smoothing, red-eye removal, and portrait-style background blur.
 - Press **Reset to defaults** to return to the preset/slider defaults without losing the current crop configuration.
-- Keyboard shortcut: `Space` toggles the enhancement preview, letting you compare raw vs enhanced output.
+- **Preview** in the toolbar (or `Space`) swaps the canvas for the selected face exactly as it will be exported — cropped, enhanced, shaped and filled, over a checkerboard where it is transparent — and re-renders as you move crop or enhancement sliders. It follows the lowest-numbered selected face (pick another with the face chips below the canvas). Press `Space` again to go back to the photo to move or resize a box; the preview picks up the edit when you return.
 
 ## Metadata & Export
 

@@ -245,12 +245,13 @@ fn process_batch(
 
     let summary = ctx.counters.snapshot();
     info!(
-        "Watch: {handled} of {} produced detections; totals images_processed={} faces_detected={} crops_saved={} crops_skipped_quality={}",
+        "Watch: {handled} of {} produced detections; totals images_processed={} faces_detected={} crops_saved={} crops_skipped_quality={} crops_failed={}",
         items.len(),
         summary.images_processed,
         summary.faces_detected,
         summary.crops_saved,
-        summary.crops_skipped_quality
+        summary.crops_skipped_quality,
+        summary.crops_failed
     );
 }
 

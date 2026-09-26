@@ -45,7 +45,7 @@ pub(super) fn load_png_exif_chunks(source: Option<&Path>) -> Vec<Vec<u8>> {
         }
 
         if chunk_type == b"eXIf" {
-            chunks.push(bytes[cursor..data_end + 4].to_vec());
+            chunks.push(exif_chunk_without_orientation(&bytes[data_start..data_end]));
         }
 
         cursor = data_end + 4;
@@ -54,6 +54,24 @@ pub(super) fn load_png_exif_chunks(source: Option<&Path>) -> Vec<Vec<u8>> {
         }
     }
     chunks
+}
+
+/// A whole `eXIf` chunk for `data` with its Orientation tag cleared, and the CRC recomputed.
+///
+/// `load_image` has already rotated the pixels upright, so copying the original instruction
+/// made viewers rotate the export a second time. The JPEG path has always cleared it.
+fn exif_chunk_without_orientation(data: &[u8]) -> Vec<u8> {
+    let mut data = data.to_vec();
+    let _ = Orientation::remove_from_exif_chunk(&mut data);
+    let mut hasher = Crc32::new();
+    hasher.update(b"eXIf");
+    hasher.update(&data);
+    let mut chunk = Vec::with_capacity(12 + data.len());
+    chunk.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    chunk.extend_from_slice(b"eXIf");
+    chunk.extend_from_slice(&data);
+    chunk.extend_from_slice(&hasher.finalize().to_be_bytes());
+    chunk
 }
 
 pub(super) fn load_jpeg_exif(source: Option<&Path>) -> Option<Vec<u8>> {

@@ -973,3 +973,72 @@ fn png_compression_default_keyword_parses_without_a_warning() {
         "{lines:?}"
     );
 }
+
+/// A PNG whose EXIF says "rotate 90" is loaded upright, so the export must not carry that
+/// instruction: a 2x3 source loads as 3x2 and has to come back as 3x2, not rotated again.
+#[test]
+fn preserved_png_exif_does_not_rotate_the_export_twice() {
+    let dir = tempdir().unwrap();
+    // Minimal little-endian TIFF carrying a single Orientation entry set to 6.
+    let mut tiff = b"II\x2a\x00".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+    tiff.extend_from_slice(&3u16.to_le_bytes());
+    tiff.extend_from_slice(&1u32.to_le_bytes());
+    tiff.extend_from_slice(&6u16.to_le_bytes());
+    tiff.extend_from_slice(&0u16.to_le_bytes());
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+
+    let upright = DynamicImage::ImageRgba8(RgbaImage::from_pixel(2, 3, Rgba([1, 2, 3, 255])));
+    let encoded = encode_png(&upright, PngCompression::Default).unwrap();
+    let source = dir.path().join("oriented.png");
+    fs::write(
+        &source,
+        inject_png_metadata(encoded, &[make_png_chunk(b"eXIf", &tiff)], None),
+    )
+    .unwrap();
+
+    let loaded = crate::load_image(&source).unwrap();
+    assert_eq!((loaded.width(), loaded.height()), (3, 2));
+
+    let out = dir.path().join("export.png");
+    let options = OutputOptions {
+        format: Some(ImageFormatHint::Png),
+        auto_detect: false,
+        jpeg_quality: 90,
+        png_compression: PngCompression::Default,
+        metadata: MetadataSettings::default(),
+    };
+    let ctx = MetadataContext {
+        source_path: Some(&source),
+        ..MetadataContext::default()
+    };
+    save_dynamic_image(&loaded, &out, &options, &ctx).unwrap();
+
+    let reloaded = crate::load_image(&out).unwrap();
+    assert_eq!((reloaded.width(), reloaded.height()), (3, 2));
+    // The rest of the EXIF is still copied across.
+    assert_eq!(load_png_exif_chunks(Some(&out)).len(), 1);
+}
+
+/// Two sources naming the same output get distinct files; the same source keeps its own path.
+#[test]
+fn output_claims_rename_a_clash_between_sources_only() {
+    let claims = OutputClaims::default();
+    let out = PathBuf::from("out").join("portrait_face1.png");
+    let (a, b) = (Path::new("a/portrait.jpg"), Path::new("b/Portrait.jpg"));
+
+    assert_eq!(claims.claim(out.clone(), a), out);
+    assert_eq!(claims.claim(out.clone(), a), out, "same source, same file");
+    assert_eq!(
+        claims.claim(out.clone(), b),
+        PathBuf::from("out").join("portrait_face1_2.png")
+    );
+    // Case-only differences are the same file on Windows and macOS.
+    let upper = PathBuf::from("out").join("Portrait_face1.png");
+    assert_eq!(
+        claims.claim(upper, Path::new("c/portrait.jpg")),
+        PathBuf::from("out").join("Portrait_face1_3.png")
+    );
+}

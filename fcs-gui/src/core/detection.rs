@@ -47,7 +47,9 @@ pub fn build_detector(
 
     // The detector uses WGSL kernels or the built-in CPU graph. Load weights and compile
     // shaders off the UI thread (experiment 81); neither belongs in a frame.
-    let detector_result = FaceDetector::load_from(&model_path)
+    // The same GPU policy as the enhancement context above, so switching the GPU off in
+    // settings keeps detection off it too.
+    let detector_result = FaceDetector::load_from_with_gpu(&model_path, &(&settings.gpu).into())
         .map(|detector| detector.with_settings(&settings.detection))
         .with_context(|| format!("no detector model at {model_path_display}"));
     if let Ok(detector) = &detector_result {

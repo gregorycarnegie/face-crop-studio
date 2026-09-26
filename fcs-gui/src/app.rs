@@ -169,6 +169,7 @@ impl App2 {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             show_crop_overlay: true,
+            result_preview: Default::default(),
             crop_history,
             crop_history_index: 0,
             crop_fill_hex_input,
@@ -191,6 +192,7 @@ impl App2 {
             status_line,
             last_error: None,
             is_busy: false,
+            batch_running: false,
             last_detect_ms: None,
             texture_seq: 0,
             job_counter: 0,
@@ -223,7 +225,7 @@ impl App2 {
             Some(name) => format!("Face Crop Studio — {name}"),
             None => "Face Crop Studio".to_owned(),
         };
-        if self.is_busy {
+        if self.is_busy || self.batch_running {
             desired.push_str(" ●");
         }
         if desired != self.last_window_title {
@@ -361,13 +363,17 @@ impl App for App2 {
             let redo_y = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
             let redo_shift_z = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
             let undo = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+            // Consumed here, before any widget sees it, so a focused button is not also pressed.
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
+                self.result_preview.enabled = !self.result_preview.enabled;
+            }
             if ctx.input_mut(|i| i.consume_shortcut(&redo_y) || i.consume_shortcut(&redo_shift_z)) {
                 self.redo();
             } else if ctx.input_mut(|i| i.consume_shortcut(&undo)) {
                 self.undo();
             }
         }
-        if self.is_busy || self.webcam_state.status == WebcamStatus::Active {
+        if self.is_busy || self.batch_running || self.webcam_state.status == WebcamStatus::Active {
             ctx.request_repaint();
         }
     }
@@ -720,13 +726,19 @@ impl App2 {
                 self.push_log(format!("Detection failed: {error}"), LogKind::Warn);
                 self.status_line = "Detection failed.".to_owned();
             }
-            JobMessage::BatchProgress { index, status } => {
-                if let Some(f) = self.batch_files.get_mut(index) {
+            JobMessage::BatchProgress { path, status } => {
+                // A row removed mid-batch simply gets no update.
+                if let Some(f) = self.batch_files.iter_mut().find(|f| f.path == path) {
                     f.status = status;
                 }
             }
+            JobMessage::ResultPreview {
+                generation,
+                face,
+                rendered,
+            } => crate::core::result_preview::receive(self, ctx, generation, face, rendered),
             JobMessage::BatchComplete { completed, failed } => {
-                self.is_busy = false;
+                self.batch_running = false;
                 self.push_log(
                     format!("Batch done: {completed} ok, {failed} failed"),
                     LogKind::Ok,

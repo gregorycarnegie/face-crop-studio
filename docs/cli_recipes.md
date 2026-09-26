@@ -61,7 +61,7 @@ cargo run -p fcs-cli -- \
   --crop-fill-color "hsv(210, 65%, 35%)"
 ```
 
-`--crop-fill-color` accepts `#RRGGBB`/`#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)`, or `hsv(h,s,v)` tokens. Any portion of the crop that extends beyond the source image is padded with the chosen colour (defaults to solid black).
+`--crop-fill-color` accepts `#RRGGBB`/`#RRGGBBAA`, `rgb(r,g,b)`, `rgba(r,g,b,a)`, or `hsv(h,s,v)` tokens. Any portion of the crop that extends beyond the source image, and anything outside a non-rectangular crop shape (set with `--config`), is filled with the chosen colour (defaults to solid black). Give it zero alpha (`#00000000`) to keep shaped corners transparent in PNG/WebP output.
 
 ## Level the Eyes
 

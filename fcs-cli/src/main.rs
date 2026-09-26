@@ -76,7 +76,8 @@ fn main() -> Result<()> {
 
     // Check if webcam mode is enabled
     if args.webcam {
-        let detector = build_cli_detector(&model_path, &settings.detection)?;
+        let detector =
+            build_cli_detector(&model_path, &settings.detection, &(&settings.gpu).into())?;
         let detector = Arc::new(detector);
         let settings = Arc::new(settings);
         let quality_filter = Arc::new(quality_filter);
@@ -109,7 +110,7 @@ fn main() -> Result<()> {
         anyhow::bail!("no images were queued for processing");
     }
 
-    let detector = build_cli_detector(&model_path, &settings.detection)?;
+    let detector = build_cli_detector(&model_path, &settings.detection, &(&settings.gpu).into())?;
 
     if args.mapping_waits_for_crop() {
         info!(
@@ -162,6 +163,7 @@ fn main() -> Result<()> {
         args: &args,
         counters: &counters,
         eye_refiner: &eye_refiner,
+        claims: Default::default(),
     };
 
     // ponytail: Rayon's default pool, one worker per logical processor. No pool is built here,
@@ -230,14 +232,19 @@ fn main() -> Result<()> {
 
     let summary = counters.snapshot();
     let summary_line = format!(
-        "images_processed={} faces_detected={} crops_saved={} crops_skipped_quality={}",
+        "images_processed={} faces_detected={} crops_saved={} crops_skipped_quality={} crops_failed={}",
         summary.images_processed,
         summary.faces_detected,
         summary.crops_saved,
-        summary.crops_skipped_quality
+        summary.crops_skipped_quality,
+        summary.crops_failed
     );
     info!("Summary: {summary_line}");
     println!("{summary_line}");
 
+    // The rest of the batch still ran; this only makes the exit status say it was incomplete.
+    if summary.crops_failed > 0 {
+        anyhow::bail!("{} crop(s) could not be saved", summary.crops_failed);
+    }
     Ok(())
 }

@@ -20,7 +20,7 @@ mod tests;
 
 pub use gpu::WgpuEnhancer;
 pub use pipeline::apply_enhancements;
-pub use runtime::EnhancementRuntime;
+pub use runtime::{EnhancementRuntime, FinishedCrop};
 pub use settings::EnhancementSettings;
 
 #[cfg(test)]

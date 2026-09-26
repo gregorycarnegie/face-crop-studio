@@ -15,6 +15,7 @@ pub(crate) struct ProgressCounters {
     pub faces_detected: Arc<AtomicUsize>,
     pub crops_saved: Arc<AtomicUsize>,
     pub crops_skipped_quality: Arc<AtomicUsize>,
+    pub crops_failed: Arc<AtomicUsize>,
 }
 
 impl ProgressCounters {
@@ -24,6 +25,7 @@ impl ProgressCounters {
             faces_detected: self.faces_detected.load(Ordering::Relaxed),
             crops_saved: self.crops_saved.load(Ordering::Relaxed),
             crops_skipped_quality: self.crops_skipped_quality.load(Ordering::Relaxed),
+            crops_failed: self.crops_failed.load(Ordering::Relaxed),
         }
     }
 }
@@ -34,6 +36,7 @@ pub(crate) struct ProgressSnapshot {
     pub faces_detected: usize,
     pub crops_saved: usize,
     pub crops_skipped_quality: usize,
+    pub crops_failed: usize,
 }
 
 /// A serializable representation of a single detection.

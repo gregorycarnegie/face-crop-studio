@@ -38,7 +38,7 @@ AVIF support).
 
 Install the usual Rust and Windows build tools first:
 
-- Rust toolchain. CI currently uses Rust `1.95.0`.
+- Rust toolchain. CI currently uses Rust `1.98.0`.
 - Visual Studio Build Tools with the C++ desktop workload and Windows SDK.
 - Git.
 - NASM on `PATH`; for example `C:\Program Files\NASM`. Installing it is not
