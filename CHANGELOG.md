@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A canvas drag can no longer get stuck.** Releasing the mouse where the canvas did not see
+  it -- while the result preview was showing, say -- left the drag half-alive, and the next pan
+  moved the old box instead. Any gesture now ends once no button is held. Deleting a face or
+  undoing mid-drag also ends a resize, which named its face by a position that had just moved.
 - **Dense Koch shapes are no longer cut in half.** The GPU mask kept only the first 512 outline
   points and closed the shape from there straight back to the start, slicing it along a
   diagonal: a Koch rectangle from 4 iterations, a Koch polygon from 9 sides at 3. Outlines past
@@ -44,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Canvas gestures are one state machine** (`interaction::gesture::CanvasGesture`): idle,
+  panning, resizing a box, rotating, or drawing a box, never two at once. It replaces three
+  separate fields whose exclusivity rested on scattered checks; a new gesture is a new variant.
 - **"Export crops" exports only the selected faces.** With no face selected it used to start a
   whole batch, which "Run batch" is for; it now says nothing is selected.
 - **The Python parity test checks the eye points**, not only boxes and scores, on faces scored

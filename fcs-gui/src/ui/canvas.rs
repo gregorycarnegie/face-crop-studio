@@ -2,9 +2,10 @@
 
 use crate::{
     interaction::bbox_drag::{apply_drag, hit_test_handle},
+    interaction::gesture::{CanvasGesture, FaceTarget},
     rendering::paint::{draw_confidence_badge, draw_drag_handle, draw_face_box, draw_landmark_dot},
     theme::P,
-    types::{ActiveBoxDrag, App2, DragHandle, LogKind, ManualBoxDraft, RotationDragState},
+    types::{App2, DragHandle, LogKind, ManualBoxDraft, RotationDragState},
     ui::widgets::{ctl_pill, face_chip},
 };
 use egui::{
@@ -210,6 +211,25 @@ fn rotated_bbox_screen_rect(
     egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y))
 }
 
+/// A face's box on screen, under the canvas's zoom, pan and rotation.
+fn face_screen_rect(
+    det: &crate::types::DetectionWithQuality,
+    image_px: Vec2,
+    draw_rect: egui::Rect,
+    rotation_deg: f32,
+) -> egui::Rect {
+    let bbox = det.active_bbox();
+    rotated_bbox_screen_rect(
+        bbox.x,
+        bbox.y,
+        bbox.width,
+        bbox.height,
+        image_px,
+        draw_rect,
+        rotation_deg,
+    )
+}
+
 /// Builds a textured mesh quad for `dest` (original image proportions) rotated CW by `rotation_deg`.
 /// Vertices are rotated around the rect center; UVs are always the standard 0→1 mapping.
 fn image_shape(texture_id: egui::TextureId, dest: egui::Rect, rotation_deg: f32) -> egui::Shape {
@@ -358,6 +378,12 @@ fn draw_rotation_handle(
 }
 
 fn stage(ui: &mut Ui, app: &mut App2) {
+    stage_inner(ui, app);
+    let any_down = ui.input(|i| i.pointer.any_down());
+    app.gesture.settle(any_down);
+}
+
+fn stage_inner(ui: &mut Ui, app: &mut App2) {
     let avail = ui.available_rect_before_wrap();
     let pad = 18.0;
     // Reserve space above the image for the rotation handle (line + circle + label clearance).
@@ -430,23 +456,26 @@ fn stage(ui: &mut Ui, app: &mut App2) {
 
         let center = draw_rect.center();
         if h_resp.drag_started()
+            && app.gesture.is_idle()
             && let Some(pos) = h_resp.interact_pointer_pos()
         {
-            app.rotation_drag = Some(RotationDragState {
+            app.gesture = CanvasGesture::Rotating(RotationDragState {
                 start_mouse_angle: angle_from_center(center, pos),
                 start_rotation: app.canvas_rotation,
             });
         }
         if h_resp.dragged()
-            && let (Some(drag), Some(pos)) = (app.rotation_drag, h_resp.interact_pointer_pos())
+            && let (CanvasGesture::Rotating(drag), Some(pos)) =
+                (app.gesture, h_resp.interact_pointer_pos())
         {
             let delta = angle_from_center(center, pos) - drag.start_mouse_angle;
             app.canvas_rotation = drag.start_rotation + delta;
         }
-        if h_resp.drag_stopped() {
-            app.rotation_drag = None;
+        if h_resp.drag_stopped() && matches!(app.gesture, CanvasGesture::Rotating(_)) {
+            app.gesture = CanvasGesture::Idle;
         }
-        if h_resp.hovered() || app.rotation_drag.is_some() {
+        let rotating = matches!(app.gesture, CanvasGesture::Rotating(_));
+        if h_resp.hovered() || rotating {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         Some(h_resp)
@@ -571,7 +600,7 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     }
 
     // Manual box draft overlay
-    if let Some(draft) = app.manual_box_draft {
+    if let CanvasGesture::DrawingBox(draft) = app.gesture {
         let draft_rect = egui::Rect::from_two_pos(draft.start, draft.current);
         if draft_rect.width() > 4.0 || draft_rect.height() > 4.0 {
             painter.rect_stroke(
@@ -640,126 +669,69 @@ fn stage(ui: &mut Ui, app: &mut App2) {
 
     // Allocate stage area for click (face selection/draw) and drag (pan/draw)
     let resp = ui.allocate_rect(fit_rect, Sense::click_and_drag());
+    let (iw, ih) = app
+        .preview
+        .image_size
+        .map(|(w, h)| (w as f32, h as f32))
+        .unwrap_or((1.0, 1.0));
+    let image_px = Vec2::new(iw, ih);
+    let rot = app.canvas_rotation;
+    let draw_tool = app.manual_box_tool_enabled && app.preview.image_size.is_some();
+    let selected_targets = |app: &App2| -> Vec<FaceTarget> {
+        let mut selected: Vec<usize> = app.selected_faces.iter().copied().collect();
+        selected.sort_unstable();
+        selected
+            .into_iter()
+            .filter_map(|index| {
+                let det = app.preview.detections.get(index)?;
+                Some(FaceTarget {
+                    index,
+                    screen_rect: face_screen_rect(det, image_px, draw_rect, rot),
+                    bbox: det.active_bbox(),
+                })
+            })
+            .collect()
+    };
 
-    // Draw-box tool: crosshair cursor + drag to draw
-    if app.manual_box_tool_enabled && app.preview.image_size.is_some() {
-        if resp.hovered() || app.manual_box_draft.is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    // Cursor
+    match app.gesture {
+        CanvasGesture::DrawingBox(_) => ui.ctx().set_cursor_icon(CursorIcon::Crosshair),
+        CanvasGesture::ResizingBox(drag) => ui.ctx().set_cursor_icon(handle_cursor(drag.handle)),
+        CanvasGesture::Idle if draw_tool && resp.hovered() => {
+            ui.ctx().set_cursor_icon(CursorIcon::Crosshair)
         }
-        if let Some(pos) = resp.interact_pointer_pos() {
-            if resp.drag_started() {
-                app.manual_box_draft = Some(ManualBoxDraft {
-                    start: pos,
-                    current: pos,
-                });
-            }
-            if resp.dragged()
-                && app.manual_box_draft.is_some()
-                && let Some(draft) = app.manual_box_draft.as_mut()
+        CanvasGesture::Idle if !draw_tool => {
+            if let Some(hover) = ui.ctx().input(|i| i.pointer.hover_pos())
+                && let Some(handle) = selected_targets(app)
+                    .iter()
+                    .find_map(|face| hit_test_handle(face.screen_rect, hover))
             {
-                draft.current = pos;
+                ui.ctx().set_cursor_icon(handle_cursor(handle));
             }
         }
-        if resp.drag_stopped()
-            && let Some(draft) = app.manual_box_draft.take()
-        {
-            let w = (draft.start.x - draft.current.x).abs();
-            let h = (draft.start.y - draft.current.y).abs();
-            if w > 8.0
-                && h > 8.0
-                && let Some((img_w, img_h)) = app.preview.image_size
-            {
-                let bbox = draft_to_image_bbox(
-                    draft,
-                    draw_rect,
-                    img_w as f32,
-                    img_h as f32,
-                    app.canvas_rotation,
-                );
-                if bbox.width > 1.0 && bbox.height > 1.0 {
-                    app.commit_manual_box(bbox);
-                }
-            }
-        }
-    } else {
-        // Normal mode: bbox resize on handle drag, pan otherwise, select on click.
-        let (iw, ih) = app
-            .preview
-            .image_size
-            .map(|(w, h)| (w as f32, h as f32))
-            .unwrap_or((1.0, 1.0));
-        let rot = app.canvas_rotation;
+        _ => {}
+    }
 
-        // Hover cursor: show resize/grab over handles of selected faces
-        if app.active_bbox_drag.is_none() {
-            if let Some(hover_pos) = ui.ctx().input(|i| i.pointer.hover_pos()) {
-                let mut found_handle = false;
-                for &sel_i in &app.selected_faces {
-                    if let Some(det) = app.preview.detections.get(sel_i) {
-                        let bbox = det.active_bbox();
-                        let sr = rotated_bbox_screen_rect(
-                            bbox.x,
-                            bbox.y,
-                            bbox.width,
-                            bbox.height,
-                            Vec2::new(iw, ih),
-                            draw_rect,
-                            rot,
-                        );
-                        if let Some(h) = hit_test_handle(sr, hover_pos) {
-                            ui.ctx().set_cursor_icon(handle_cursor(h));
-                            found_handle = true;
-                            break;
-                        }
-                    }
-                }
-                let _ = found_handle;
-            }
-        } else {
-            if let Some(drag) = &app.active_bbox_drag {
-                ui.ctx().set_cursor_icon(handle_cursor(drag.handle));
-            }
+    // Start: a drag on the stage decides here what it is for, once.
+    if resp.drag_started()
+        && app.gesture.is_idle()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        app.gesture = CanvasGesture::begin_stage_drag(pos, draw_tool, selected_targets(app));
+        if matches!(app.gesture, CanvasGesture::ResizingBox(_)) {
+            // ponytail: snapshots even a zero-movement drag; harmless no-op undo entry
+            app.push_undo();
         }
+    }
 
-        // Start a bbox drag when the user presses on a handle of a selected face
-        if resp.drag_started()
-            && app.rotation_drag.is_none()
-            && let Some(press_pos) = resp.interact_pointer_pos()
-        {
-            let mut started = false;
-            for &sel_i in &app.selected_faces {
-                if let Some(det) = app.preview.detections.get(sel_i) {
-                    let bbox = det.active_bbox();
-                    let sr = rotated_bbox_screen_rect(
-                        bbox.x,
-                        bbox.y,
-                        bbox.width,
-                        bbox.height,
-                        Vec2::new(iw, ih),
-                        draw_rect,
-                        rot,
-                    );
-                    if let Some(handle) = hit_test_handle(sr, press_pos) {
-                        // ponytail: snapshots even a zero-movement drag; harmless no-op undo entry
-                        app.push_undo();
-                        app.active_bbox_drag = Some(ActiveBoxDrag {
-                            index: sel_i,
-                            handle,
-                            start_bbox: bbox,
-                            drag_start_screen: press_pos,
-                        });
-                        started = true;
-                        break;
-                    }
-                }
-            }
-            let _ = started;
-        }
-
-        // Apply bbox drag or pan
-        if resp.dragged() && app.rotation_drag.is_none() {
-            if let Some(drag) = app.active_bbox_drag {
-                if let Some(cur_pos) = resp.interact_pointer_pos() {
+    // Continue
+    if resp.dragged() {
+        let pos = resp.interact_pointer_pos();
+        match &mut app.gesture {
+            CanvasGesture::Panning => app.pan += resp.drag_delta(),
+            CanvasGesture::ResizingBox(drag) => {
+                if let Some(cur_pos) = pos {
+                    let drag = *drag;
                     let screen_delta = cur_pos - drag.drag_start_screen;
                     let image_delta =
                         screen_delta_to_image_delta(screen_delta, draw_rect, iw, ih, rot);
@@ -768,74 +740,67 @@ fn stage(ui: &mut Ui, app: &mut App2) {
                         det.set_bbox(new_bbox);
                     }
                 }
-            } else {
-                app.pan += resp.drag_delta();
             }
+            CanvasGesture::DrawingBox(draft) => {
+                if let Some(cur_pos) = pos {
+                    draft.current = cur_pos;
+                }
+            }
+            CanvasGesture::Idle | CanvasGesture::Rotating(_) => {}
         }
+    }
 
-        if resp.drag_stopped() {
-            app.active_bbox_drag = None;
+    // Finish
+    if resp.drag_stopped() {
+        match std::mem::take(&mut app.gesture) {
+            CanvasGesture::DrawingBox(draft) => {
+                let w = (draft.start.x - draft.current.x).abs();
+                let h = (draft.start.y - draft.current.y).abs();
+                if w > 8.0 && h > 8.0 {
+                    let bbox = draft_to_image_bbox(draft, draw_rect, iw, ih, rot);
+                    if bbox.width > 1.0 && bbox.height > 1.0 {
+                        app.commit_manual_box(bbox);
+                    }
+                }
+            }
+            // A rotation belongs to the handle's response, not this one.
+            rotating @ CanvasGesture::Rotating(_) => app.gesture = rotating,
+            CanvasGesture::Idle | CanvasGesture::Panning | CanvasGesture::ResizingBox(_) => {}
         }
+    }
+
+    if !draw_tool && app.preview.image_size.is_some() {
+        let face_at = |app: &App2, pos: Pos2| {
+            app.preview.detections.iter().position(|det| {
+                face_screen_rect(det, image_px, draw_rect, rot)
+                    .expand(4.0)
+                    .contains(pos)
+            })
+        };
 
         // Click: select / deselect faces
         if resp.clicked()
             && let Some(pos) = resp.interact_pointer_pos()
-            && app.preview.image_size.is_some()
         {
-            let mut clicked_any = false;
-            for (i, det) in app.preview.detections.iter().enumerate() {
-                let bbox = det.active_bbox();
-                let sr = rotated_bbox_screen_rect(
-                    bbox.x,
-                    bbox.y,
-                    bbox.width,
-                    bbox.height,
-                    Vec2::new(iw, ih),
-                    draw_rect,
-                    rot,
-                );
-                if sr.expand(4.0).contains(pos) {
-                    if app.selected_faces.contains(&i) {
-                        app.selected_faces.remove(&i);
-                    } else {
-                        app.selected_faces.insert(i);
-                    }
-                    clicked_any = true;
-                    break;
+            match face_at(app, pos) {
+                Some(i) if app.selected_faces.contains(&i) => {
+                    app.selected_faces.remove(&i);
                 }
-            }
-            if !clicked_any {
-                app.selected_faces.clear();
+                Some(i) => {
+                    app.selected_faces.insert(i);
+                }
+                None => app.selected_faces.clear(),
             }
         }
 
         // Right-click on a face box to remove it
         if ui.ctx().input(|i| i.pointer.secondary_clicked())
             && let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos())
-            && app.preview.image_size.is_some()
+            && let Some(i) = face_at(app, pos)
         {
-            let mut hit_idx: Option<usize> = None;
-            for (i, det) in app.preview.detections.iter().enumerate() {
-                let bbox = det.active_bbox();
-                let sr = rotated_bbox_screen_rect(
-                    bbox.x,
-                    bbox.y,
-                    bbox.width,
-                    bbox.height,
-                    Vec2::new(iw, ih),
-                    draw_rect,
-                    rot,
-                );
-                if sr.expand(4.0).contains(pos) {
-                    hit_idx = Some(i);
-                    break;
-                }
-            }
-            if let Some(i) = hit_idx {
-                app.selected_faces.clear();
-                app.selected_faces.insert(i);
-                app.delete_selected_faces();
-            }
+            app.selected_faces.clear();
+            app.selected_faces.insert(i);
+            app.delete_selected_faces();
         }
     }
 
@@ -843,7 +808,7 @@ fn stage(ui: &mut Ui, app: &mut App2) {
     // The handle lives inside stage_outer, so the panel painter clips it correctly.
     if let Some(h_resp) = h_resp_opt {
         let handle_painter = ui.painter().with_clip_rect(stage_outer);
-        let dragging = app.rotation_drag.is_some();
+        let dragging = matches!(app.gesture, CanvasGesture::Rotating(_));
         draw_rotation_handle(
             &handle_painter,
             draw_rect,

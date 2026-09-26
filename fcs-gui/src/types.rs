@@ -219,13 +219,13 @@ impl Default for WebcamState {
 
 // ── Drag / interaction ────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ManualBoxDraft {
     pub start: egui::Pos2,
     pub current: egui::Pos2,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActiveBoxDrag {
     pub index: usize,
     pub handle: DragHandle,
@@ -242,7 +242,7 @@ pub enum DragHandle {
     SouthEast,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RotationDragState {
     pub start_mouse_angle: f32,
     pub start_rotation: f32,
@@ -608,8 +608,8 @@ pub struct App2 {
     pub mapping: MappingUiState,
 
     // Interaction
-    pub manual_box_draft: Option<ManualBoxDraft>,
-    pub active_bbox_drag: Option<ActiveBoxDrag>,
+    /// What the pointer is doing on the canvas; see `interaction::gesture`.
+    pub gesture: crate::interaction::gesture::CanvasGesture,
     pub manual_box_tool_enabled: bool,
 
     // UI state
@@ -643,7 +643,6 @@ pub struct App2 {
     pub zoom: f32,
     pub pan: egui::Vec2,
     pub canvas_rotation: f32,
-    pub rotation_drag: Option<RotationDragState>,
 
     // Dialogs
     pub show_about: bool,

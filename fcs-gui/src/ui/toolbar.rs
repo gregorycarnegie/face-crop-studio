@@ -83,7 +83,7 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                 }
                 if toggle_btn(ui, "Draw box", app.manual_box_tool_enabled) {
                     app.manual_box_tool_enabled = !app.manual_box_tool_enabled;
-                    app.manual_box_draft = None;
+                    app.gesture = Default::default();
                 }
                 // Remove selected (only enabled when something is selected)
                 if !app.selected_faces.is_empty() && ghost_btn(ui, "Remove selected") {

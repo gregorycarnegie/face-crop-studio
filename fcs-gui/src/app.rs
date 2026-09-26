@@ -179,8 +179,7 @@ impl App2 {
             batch_files: Vec::new(),
             batch_current_index: None,
             mapping: MappingUiState::new(),
-            manual_box_draft: None,
-            active_bbox_drag: None,
+            gesture: Default::default(),
             manual_box_tool_enabled: false,
             sidebar_tab: SidebarTab::Queue,
             inspector_tab: InspectorTab::Crop,
@@ -207,7 +206,6 @@ impl App2 {
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             canvas_rotation: 0.0,
-            rotation_drag: None,
             show_about: false,
             needs_detector_rebuild: false,
             needs_postprocess_update: false,
@@ -691,7 +689,7 @@ impl App2 {
                         &mut self.texture_seq,
                     );
                 }
-                self.active_bbox_drag = None;
+                self.gesture = Default::default();
                 self.manual_box_tool_enabled = false;
                 self.canvas_rotation = 0.0;
                 self.clear_edit_history();
@@ -1086,6 +1084,8 @@ impl App2 {
     fn restore_snapshot(&mut self, snap: EditSnapshot) {
         self.preview.detections = snap.detections;
         self.selected_faces = snap.selected;
+        // A resize in progress names its face by index, which the restored list may not share.
+        self.gesture = Default::default();
     }
 
     /// Capture the current face state before a mutation. Clears the redo stack.
@@ -1132,6 +1132,8 @@ impl App2 {
             keep
         });
         self.selected_faces.clear();
+        // Indices after the removed faces shift, so a resize in progress would move another box.
+        self.gesture = Default::default();
     }
 
     pub fn commit_manual_box(&mut self, bbox: fcs_core::BoundingBox) {
