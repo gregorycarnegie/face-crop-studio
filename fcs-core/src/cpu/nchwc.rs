@@ -410,8 +410,13 @@ impl OutPtr {
     }
 }
 
-/// Dense convolution, fusing an optional ReLU. Covers KxK at any stride and padding,
-/// including 1x1, reading either blocked or NCHW input (see [`Source`]).
+/// Dense convolution, fusing an optional ReLU, reading either blocked or NCHW input (see
+/// [`Source`]).
+///
+/// 1x1 or 3x3, at stride 1 or 2, which is every dense layer either network has. Kernel,
+/// stride and input block are compile-time constants inside the kernel, so the tap loops
+/// unroll and every input offset folds into an addressing mode. With them read at run time,
+/// the address arithmetic for the 3-channel stem cost as much as its FMAs.
 pub fn conv(
     arena: &mut Arena,
     input: Source<'_>,
@@ -420,7 +425,6 @@ pub fn conv(
     pad: usize,
     relu: bool,
 ) -> Result<Blocked> {
-    ensure!(stride > 0, "stride must be non-zero");
     ensure!(
         input.block == weights.block_in && input.blocks == weights.in_blocks,
         "weights expect {} blocks of {}, input has {} of {}",
@@ -429,23 +433,41 @@ pub fn conv(
         input.blocks,
         input.block
     );
-    let k = weights.kernel;
-    let out_h = output_dim(input.height, k, stride, pad);
-    let out_w = output_dim(input.width, k, stride, pad);
+    match (weights.kernel, stride, input.block) {
+        (1, 1, 1) => conv_with::<1, 1, 1>(arena, input, weights, pad, relu),
+        (1, 1, BLOCK) => conv_with::<1, 1, BLOCK>(arena, input, weights, pad, relu),
+        (1, 2, 1) => conv_with::<1, 2, 1>(arena, input, weights, pad, relu),
+        (1, 2, BLOCK) => conv_with::<1, 2, BLOCK>(arena, input, weights, pad, relu),
+        (3, 1, 1) => conv_with::<3, 1, 1>(arena, input, weights, pad, relu),
+        (3, 1, BLOCK) => conv_with::<3, 1, BLOCK>(arena, input, weights, pad, relu),
+        (3, 2, 1) => conv_with::<3, 2, 1>(arena, input, weights, pad, relu),
+        (3, 2, BLOCK) => conv_with::<3, 2, BLOCK>(arena, input, weights, pad, relu),
+        (k, s, _) => anyhow::bail!("no dense kernel for {k}x{k} at stride {s}"),
+    }
+}
+
+fn conv_with<const K: usize, const S: usize, const B: usize>(
+    arena: &mut Arena,
+    input: Source<'_>,
+    weights: &DenseWeights,
+    pad: usize,
+    relu: bool,
+) -> Result<Blocked> {
+    let out_h = output_dim(input.height, K, S, pad);
+    let out_w = output_dim(input.width, K, S, pad);
     let (batch, out_channels, full_h, full_w) = (input.batch, weights.out_channels, out_h, out_w);
     let out_blocks = out_channels.div_ceil(BLOCK);
 
     // A 1x1 stride-1 convolution has no geometry, so each plane is computed as one long row:
     // register tiles then run straight across row ends instead of stopping at every one.
     let mut input = input;
-    let (out_h, out_w) = if k == 1 && stride == 1 && pad == 0 {
+    let (out_h, out_w) = if K == 1 && S == 1 && pad == 0 {
         (input.height, input.width) = (1, input.height * input.width);
         (1, out_h * out_w)
     } else {
         (out_h, out_w)
     };
     let geometry = Geometry {
-        stride,
         pad,
         out_h,
         out_w,
@@ -478,7 +500,7 @@ pub fn conv(
                         row_job % out_h,
                     );
                     let first = group * FILTERS;
-                    let row = Row {
+                    let row = Row::<K, S, B> {
                         input: &input,
                         weights,
                         geometry: &geometry,
@@ -502,7 +524,6 @@ pub fn conv(
 }
 
 struct Geometry {
-    stride: usize,
     pad: usize,
     out_h: usize,
     out_w: usize,
@@ -510,8 +531,8 @@ struct Geometry {
     relu: bool,
 }
 
-/// Part of one output row, for `F` output blocks.
-struct Row<'a> {
+/// Part of one output row, for a `K`x`K` kernel at stride `S` over input blocks of `B`.
+struct Row<'a, const K: usize, const S: usize, const B: usize> {
     input: &'a Source<'a>,
     weights: &'a DenseWeights,
     geometry: &'a Geometry,
@@ -521,18 +542,12 @@ struct Row<'a> {
     out: OutPtr,
 }
 
-impl Row<'_> {
+impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
     /// Columns `span` in tiles of `P` where no tap can leave the input, one checked pixel at
     /// a time at the borders.
     fn run<const F: usize, const P: usize>(&self, span: Range<usize>) {
         let g = self.geometry;
-        let (lo, hi) = interior(
-            self.input.width,
-            self.weights.kernel,
-            g.stride,
-            g.pad,
-            g.out_w,
-        );
+        let (lo, hi) = interior(self.input.width, K, S, g.pad, g.out_w);
         let lo = lo.clamp(span.start, span.end);
         let hi = hi.clamp(lo, span.end);
         let mut ox = span.start;
@@ -563,44 +578,42 @@ impl Row<'_> {
     #[inline(always)]
     fn tile<const F: usize, const P: usize, const CHECK: bool>(&self, ox: usize) {
         let (input, weights, g) = (self.input, self.weights, self.geometry);
-        let (k, block, width) = (weights.kernel, input.block, input.width);
+        let width = input.width;
         let per_block = weights.per_block();
         let filters = &weights.data[self.first * per_block..(self.first + F) * per_block];
         let mut acc: [[f32x8; P]; F] = std::array::from_fn(|f| [weights.bias[self.first + f]; P]);
 
-        let (ky_lo, ky_hi) = tap_rows(self.oy, input.height, k, g.stride, g.pad);
-        let top = self.oy * g.stride + ky_lo - g.pad;
+        let (ky_lo, ky_hi) = tap_rows(self.oy, input.height, K, S, g.pad);
+        let top = self.oy * S + ky_lo - g.pad;
+        // Leftmost input column of pixel `ox`'s window; wraps below zero at the left border,
+        // where `CHECK` rejects it.
+        let left = (ox * S).wrapping_sub(g.pad);
         for ib in 0..input.blocks {
             let plane = (self.n * input.blocks + ib) * input.height;
             for ky in ky_lo..ky_hi {
                 let row = (plane + top + ky - ky_lo) * width;
-                for kx in 0..k {
-                    let mut at = [0usize; P];
-                    let mut inside = true;
-                    for (p, at) in at.iter_mut().enumerate() {
-                        let ix = ((ox + p) * g.stride + kx).wrapping_sub(g.pad);
-                        if CHECK && ix >= width {
-                            inside = false;
-                        } else {
-                            *at = (row + ix) * block;
-                        }
-                    }
-                    if !inside {
+                let taps = ((ib * K + ky) * K) * B;
+                for kx in 0..K {
+                    if CHECK && left.wrapping_add(kx) >= width {
                         continue;
                     }
-                    debug_assert!(at[P - 1] + block <= input.lanes.len());
-                    let tap = ((ib * k + ky) * k + kx) * block;
-                    for j in 0..block {
-                        // SAFETY: `at[p]` is the first lane of an in-bounds pixel -- interior
-                        // tiles by construction of `interior` and `tap_rows`, border ones by the
-                        // check above -- and `j < block`.
+                    // A run-time bound on purpose: with `B` here LLVM unrolls all eight
+                    // channels of a 4x3 tile, and the 1x1 layers fell from 117 to 73 GFLOP/s.
+                    for j in 0..input.block {
+                        // SAFETY: the pixel is inside the row -- interior tiles by construction
+                        // of `interior` and `tap_rows`, border ones by the check above -- and
+                        // `j < B`, the input's block.
                         let x: [f32x8; P] = std::array::from_fn(|p| {
-                            f32x8::splat(unsafe { *input.lanes.get_unchecked(at[p] + j) })
+                            let at = (row + left.wrapping_add(p * S + kx)) * B + j;
+                            debug_assert!(at < input.lanes.len());
+                            f32x8::splat(unsafe { *input.lanes.get_unchecked(at) })
                         });
                         for (f, acc) in acc.iter_mut().enumerate() {
-                            // SAFETY: `f < F`, and `tap + j < per_block` because `ib`, `ky`,
-                            // `kx` and `j` are each below the sizes `per_block` multiplies.
-                            let w = unsafe { *filters.get_unchecked(f * per_block + tap + j) };
+                            // SAFETY: `f < F`, and the tap offset is below `per_block` because
+                            // `ib`, `ky`, `kx` and `j` are each below the sizes it multiplies.
+                            let w = unsafe {
+                                *filters.get_unchecked(f * per_block + taps + kx * B + j)
+                            };
                             for p in 0..P {
                                 acc[p] = x[p].mul_add(w, acc[p]);
                             }
@@ -624,6 +637,11 @@ impl Row<'_> {
 }
 
 /// Depthwise convolution (`groups == channels`), fusing an optional ReLU.
+///
+/// 3x3 at stride 1 or 2, which is every depthwise layer either network has. Both are
+/// compile-time constants inside the kernel, so the taps stay in registers and neighbouring
+/// pixels' shared input loads are merged; with them read at run time the layers ran at a
+/// quarter of the FMA units' rate.
 pub fn depthwise(
     arena: &mut Arena,
     input: &Blocked,
@@ -632,19 +650,31 @@ pub fn depthwise(
     pad: usize,
     relu: bool,
 ) -> Result<Blocked> {
-    ensure!(stride > 0, "stride must be non-zero");
     ensure!(
         input.channels == weights.channels,
         "depthwise weights for {} channels, input has {}",
         weights.channels,
         input.channels
     );
-    let k = weights.kernel;
+    match (weights.kernel, stride) {
+        (3, 1) => depthwise_with::<3, 1>(arena, input, weights, pad, relu),
+        (3, 2) => depthwise_with::<3, 2>(arena, input, weights, pad, relu),
+        (k, s) => anyhow::bail!("no depthwise kernel for {k}x{k} at stride {s}"),
+    }
+}
+
+fn depthwise_with<const K: usize, const S: usize>(
+    arena: &mut Arena,
+    input: &Blocked,
+    weights: &DepthwiseWeights,
+    pad: usize,
+    relu: bool,
+) -> Result<Blocked> {
     let (h, w) = (input.height, input.width);
-    let out_h = output_dim(h, k, stride, pad);
-    let out_w = output_dim(w, k, stride, pad);
+    let out_h = output_dim(h, K, S, pad);
+    let out_w = output_dim(w, K, S, pad);
     let blocks = input.blocks();
-    let (lo, hi) = interior(w, k, stride, pad, out_w);
+    let (lo, hi) = interior(w, K, S, pad, out_w);
     let rows = input.batch * blocks * out_h;
 
     // SAFETY: one task per output row, and each writes every column of it.
@@ -655,16 +685,14 @@ pub fn depthwise(
                 .enumerate()
                 .for_each(|(r, out_row)| {
                     let (n, b, oy) = (r / (blocks * out_h), r / out_h % blocks, r % out_h);
-                    let (ky_lo, ky_hi) = tap_rows(oy, h, k, stride, pad);
-                    let first_row = oy * stride + ky_lo - pad;
+                    let (ky_lo, ky_hi) = tap_rows(oy, h, K, S, pad);
+                    let first_row = oy * S + ky_lo - pad;
                     let plane = &input.data[(n * blocks + b) * h * w..(n * blocks + b + 1) * h * w];
-                    let row = DepthwiseRow {
+                    let row = DepthwiseRow::<K, S> {
                         rows: &plane[first_row * w..(first_row + ky_hi - ky_lo) * w],
-                        taps: &weights.data[(b * k + ky_lo) * k..(b * k + ky_hi) * k],
+                        taps: &weights.data[(b * K + ky_lo) * K..(b * K + ky_hi) * K],
                         bias: weights.bias[b],
                         width: w,
-                        kernel: k,
-                        stride,
                         pad,
                         relu,
                     };
@@ -687,38 +715,41 @@ pub fn depthwise(
     Ok(output)
 }
 
-/// The input rows and taps one depthwise output row reads.
-struct DepthwiseRow<'a> {
+/// The input rows and taps one depthwise output row reads, for a `K`x`K` kernel at stride `S`.
+struct DepthwiseRow<'a, const K: usize, const S: usize> {
     /// The input rows whose taps land inside the image, top to bottom.
     rows: &'a [f32x8],
-    /// The kernel rows matching `rows`, `kernel` taps each.
+    /// The kernel rows matching `rows`, `K` taps each.
     taps: &'a [f32x8],
     bias: f32x8,
     width: usize,
-    kernel: usize,
-    stride: usize,
     pad: usize,
     relu: bool,
 }
 
-impl DepthwiseRow<'_> {
+impl<const K: usize, const S: usize> DepthwiseRow<'_, K, S> {
     /// `P` output pixels from `ox`. One pixel is a chain of nine dependent FMAs, bound by
-    /// their latency; `P` independent chains keep the FMA units busy instead.
+    /// their latency; `P` independent chains keep the FMA units busy instead. `CHECK` skips
+    /// taps outside the image, which only border pixels need.
     #[inline(always)]
     fn tile<const P: usize, const CHECK: bool>(&self, ox: usize, out: &mut [MaybeUninit<f32x8>]) {
         let mut acc = [self.bias; P];
-        for (row, taps) in self
-            .rows
-            .chunks_exact(self.width)
-            .zip(self.taps.chunks_exact(self.kernel))
-        {
+        let (taps, _) = self.taps.as_chunks::<K>();
+        for (row, taps) in self.rows.chunks_exact(self.width).zip(taps) {
+            // Leftmost input column of pixel `ox`'s window; wraps below zero at the left
+            // border, where `CHECK` rejects it.
+            let left = (ox * S).wrapping_sub(self.pad);
             for (kx, &tap) in taps.iter().enumerate() {
                 for (p, acc) in acc.iter_mut().enumerate() {
-                    let ix = ((ox + p) * self.stride + kx).wrapping_sub(self.pad);
+                    let ix = left.wrapping_add(p * S + kx);
                     if CHECK && ix >= self.width {
                         continue;
                     }
-                    *acc = row[ix].mul_add(tap, *acc);
+                    debug_assert!(ix < row.len());
+                    // SAFETY: border pixels were checked just above; interior ones lie inside
+                    // the row by construction of `interior`.
+                    let x = unsafe { *row.get_unchecked(ix) };
+                    *acc = x.mul_add(tap, *acc);
                 }
             }
         }

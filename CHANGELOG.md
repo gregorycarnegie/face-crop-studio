@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Face Crop Studio no longer ships or loads ONNX Runtime. Detection and the eye refiner run on the
 built-in engines only: the WGSL kernels on a GPU, and a rewritten CPU graph everywhere else. The
-CPU graph is now 4-5x faster, and the eye refiner runs on it as fast as it did under ONNX
-Runtime.
+CPU graph is now 5-6x faster and as fast as ONNX Runtime was on one thread, and the eye
+refiner runs on it in 0.75 ms per face.
 
 ### Changed
 
@@ -22,22 +22,25 @@ Runtime.
   keypoint heads also run as one convolution instead of three, and layer outputs are no
   longer zeroed on one thread before being written. Each layer's output buffer goes back to
   a free list once nothing reads it, and the free list is kept between detections, so a run
-  no longer page-faults on memory the previous run just released. On a Ryzen 7950X the SCRFD
-  network takes about 5.5 ms instead of 25 ms at the default thread count, and 17.7 ms
-  instead of 76 ms on one thread (ONNX Runtime took 12.7 ms). Outputs still match ONNX Runtime
-  within the existing 2e-3 tolerance. `fcs_core::cpu::nchwc` replaces `fcs_core::cpu::conv2d`
+  no longer page-faults on memory the previous run just released. Kernel size, stride and
+  input block are compile-time constants inside each kernel, so tap loops unroll and offsets
+  fold into addressing; the 1x1 layers now run near the FMA units' peak. On a Ryzen 7950X
+  the SCRFD network takes 12.1 ms on one thread instead of 76 (ONNX Runtime: 12.7), 4.2 ms on
+  four instead of about 20 (ONNX Runtime: 3.8), and about 4.8 ms at the default thread count
+  instead of 25. Outputs still match ONNX Runtime within the existing 2e-3 tolerance. `fcs_core::cpu::nchwc` replaces `fcs_core::cpu::conv2d`
   and `fcs_core::cpu::ops`, which are removed.
 - **The detector times both engines at load and keeps the faster.** It used to take the GPU
   whenever there was one. With ONNX Runtime gone, an integrated GPU would then have been slower
   than the CPU: 27 ms per detection where the CPU graph takes 8. Now, when a GPU loads, the
   WGSL engine and the CPU graph each run the network a few times. The GPU keeps the job unless
   the CPU is more than 25% faster, because in a batch the CPU's cores are also decoding and
-  cropping other images. An RTX 4090 keeps the GPU (2.7 ms against 5.0); an integrated GPU
-  switches to the CPU graph (32 ms against 5). The startup log shows both times. Loading
+  cropping other images. An RTX 4090 keeps the GPU (about 2.7 ms against 4.8); an integrated
+  GPU switches to the CPU graph (32 ms against 5). The startup log shows both times. Loading
   takes up to about 0.2 s longer on an integrated GPU. `ScrfdDetector::load_builtin` is
   removed; `load_from` does this.
-- **The eye refiner runs without ONNX Runtime**, on the same CPU kernels. It takes 0.8 ms per
-  face including the crop resample, where ONNX Runtime took 0.9 ms for the network alone. It
+- **The eye refiner runs without ONNX Runtime**, on the same CPU kernels. It takes 0.75 ms
+  per face including the crop resample, where ONNX Runtime took 0.5-0.9 ms for the network
+  alone. It
   has no GPU path; one face is too little work to be worth an upload.
 
 ### Removed
