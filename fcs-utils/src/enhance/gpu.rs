@@ -3,7 +3,7 @@
 use crate::{
     gpu::{
         GpuBackgroundBlur, GpuBilateralFilter, GpuContext, GpuGaussianBlur, GpuHistogramEqualizer,
-        GpuPixelAdjust, GpuRedEyeRemoval, GpuShapeMask, red_eye::RedEye,
+        GpuPixelAdjust, GpuShapeMask, red_eye::RedEye,
     },
     shape::CropShape,
 };
@@ -30,7 +30,6 @@ pub struct WgpuEnhancer {
     gaussian_blur: GpuGaussianBlur,
     bilateral_filter: GpuBilateralFilter,
     background_blur: GpuBackgroundBlur,
-    red_eye: GpuRedEyeRemoval,
     shape_mask: GpuShapeMask,
     histogram_equalizer: GpuHistogramEqualizer,
 }
@@ -46,8 +45,6 @@ impl WgpuEnhancer {
             .context("failed to create GPU bilateral filter pipeline")?;
         let background_blur = GpuBackgroundBlur::new(context.clone())
             .context("failed to create GPU background blur pipeline")?;
-        let red_eye = GpuRedEyeRemoval::new(context.clone())
-            .context("failed to create GPU red-eye pipeline")?;
         let shape_mask = GpuShapeMask::new(context.clone())
             .context("failed to create GPU shape mask pipeline")?;
         let histogram_equalizer = GpuHistogramEqualizer::new(context.clone())
@@ -58,7 +55,6 @@ impl WgpuEnhancer {
             gaussian_blur,
             bilateral_filter,
             background_blur,
-            red_eye,
             shape_mask,
             histogram_equalizer,
         })
@@ -83,12 +79,10 @@ impl WgpuEnhancer {
             };
         }
 
+        // CPU on purpose: it needs neighbourhoods and per-eye statistics, and only walks the
+        // eye discs. See `enhance::red_eye`.
         if settings.red_eye_removal {
-            if let Some(corrected) = self.try_gpu_red_eye(&out, settings.red_eye_threshold, eyes)? {
-                out = corrected;
-            } else {
-                out = apply_red_eye_removal(&out, settings.red_eye_threshold, eyes);
-            }
+            out = apply_red_eye_removal(&out, settings.red_eye_threshold, eyes);
         }
 
         // `needs_adjustment` covers exposure, brightness, contrast and saturation, so when it
@@ -202,24 +196,6 @@ impl WgpuEnhancer {
             Ok(result) => Ok(Some(result)),
             Err(err) => {
                 log::warn!("GPU background blur failed: {err}");
-                Ok(None)
-            }
-        }
-    }
-
-    fn try_gpu_red_eye(
-        &self,
-        image: &DynamicImage,
-        threshold: f32,
-        eyes: Option<&[RedEye]>,
-    ) -> Result<Option<DynamicImage>> {
-        if threshold <= 0.0 {
-            return Ok(None);
-        }
-        match self.red_eye.apply(image, threshold, eyes) {
-            Ok(result) => Ok(Some(result)),
-            Err(err) => {
-                log::warn!("GPU red-eye removal failed: {err}");
                 Ok(None)
             }
         }
@@ -560,10 +536,6 @@ mod tests {
         );
         assert_eq!(
             dims(enhancer.try_gpu_background_blur(&image, &s)),
-            Some((16, 16))
-        );
-        assert_eq!(
-            dims(enhancer.try_gpu_red_eye(&image, s.red_eye_threshold, None)),
             Some((16, 16))
         );
     }

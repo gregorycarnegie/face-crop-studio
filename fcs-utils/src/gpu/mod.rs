@@ -14,8 +14,6 @@ pub const GAUSSIAN_BLUR_WGSL: &str = include_str!("gaussian_blur.wgsl");
 pub const BILATERAL_FILTER_WGSL: &str = include_str!("bilateral_filter.wgsl");
 /// Background blur shader for elliptical blending.
 pub const BACKGROUND_BLUR_WGSL: &str = include_str!("background_blur.wgsl");
-/// Red-eye removal shader.
-pub const RED_EYE_WGSL: &str = include_str!("red_eye.wgsl");
 /// Shape mask shader.
 pub const SHAPE_MASK_WGSL: &str = include_str!("shape_mask.wgsl");
 /// Histogram equalization shader module.
@@ -33,9 +31,9 @@ pub use bilateral_filter::GpuBilateralFilter;
 /// Blending sharp and blurred images with a central elliptical mask.
 pub mod background_blur;
 pub use background_blur::GpuBackgroundBlur;
-/// GPU red-eye correction and optional eye regions.
+/// Eye regions for red-eye correction.
 pub mod red_eye;
-pub use red_eye::{GpuRedEyeRemoval, RedEye};
+pub use red_eye::RedEye;
 /// GPU crop-shape masking and edge vignettes.
 pub mod shape_mask;
 pub use shape_mask::GpuShapeMask;

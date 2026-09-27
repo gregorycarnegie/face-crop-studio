@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-27
+
 ### Added
 
 - **Live result preview in the GUI.** The toolbar's **Preview** toggle (or `Space`) shows the
@@ -23,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Red-eye removal no longer leaves a black dot in a red ring.** It replaced red with the
+  green/blue average, which in a red pupil is near 0, so in a low-contrast photo whose darkest
+  shade is a grey the pupil became a hole darker than anything around it. The half-red pixels
+  at its edge failed the same test and stayed red. The pupil is now kept no darker than the
+  darkest non-red pixels round the eye, and pixels within 2px of it are corrected in proportion
+  to how red they are. It needs neighbours and per-eye statistics, so the GPU red-eye pass is
+  gone and both paths run it on the CPU, over the eye discs only.
 - **A canvas drag can no longer get stuck.** Releasing the mouse where the canvas did not see
   it -- while the result preview was showing, say -- left the drag half-alive, and the next pan
   moved the old box instead. Any gesture now ends once no button is held. Deleting a face or
@@ -2434,7 +2443,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.1...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.2...v2.1.0
 [2.0.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.0.1...v2.0.2
