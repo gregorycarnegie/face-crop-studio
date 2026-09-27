@@ -9,14 +9,14 @@ use fcs_utils::{
 };
 use image::DynamicImage;
 use log::{debug, info, warn};
+use std::sync::Arc;
 
-/// The GPU work the CLI actually does: enhancement and shape masks.
-///
-/// It no longer keeps the `GpuContext` itself. The only caller that wanted one was the
-/// preprocessing benchmark, and preprocessing is the detector's own business now -- the
-/// enhancer holds the `Arc` it needs.
+/// The CLI's one GPU context, and the enhancement and shape-mask work done on it.
 pub struct CliGpuRuntime {
     status: GpuStatusIndicator,
+    /// Handed to the detector, which used to open a second device on the same adapter
+    /// (experiment 104).
+    context: Option<Arc<GpuContext>>,
     /// Shared with the GUI, so the two front-ends cannot diverge about what enhancement means.
     enhancement: EnhancementRuntime,
 }
@@ -24,6 +24,10 @@ pub struct CliGpuRuntime {
 impl CliGpuRuntime {
     pub fn log_status(&self) {
         log_gpu_status(&self.status);
+    }
+
+    pub fn context(&self) -> Option<Arc<GpuContext>> {
+        self.context.clone()
     }
 
     /// Enhance, score, then shape and fill: the order every front-end exports in.
@@ -86,7 +90,21 @@ fn log_gpu_status(status: &GpuStatusIndicator) {
     status.emit_telemetry();
 }
 
-pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
+/// Whether the job will dispatch any of the GPU enhancer's pipelines.
+///
+/// The enhancer compiles seven of them through FXC, and only enhancement and a
+/// non-rectangular shape use any. Settings are fixed for the run, so a job that uses neither
+/// skips the build and runs the same CPU fallbacks it would anyway. With the shared context
+/// this took a launch from 2.30 to 1.62 s (experiment 104).
+fn needs_gpu_enhancer(settings: &AppSettings, enhancement: Option<&EnhancementSettings>) -> bool {
+    enhancement.is_some() || !matches!(settings.crop.shape, fcs_utils::CropShape::Rectangle)
+}
+
+/// `enhancement` is the job's `--enhance` settings, `None` without it.
+pub fn init_cli_gpu_runtime(
+    settings: &AppSettings,
+    enhancement: Option<&EnhancementSettings>,
+) -> Result<CliGpuRuntime> {
     let options: GpuContextOptions = (&settings.gpu).into();
     let availability = GpuContext::init_with_fallback(&options);
 
@@ -110,13 +128,18 @@ pub fn init_cli_gpu_runtime(settings: &AppSettings) -> Result<CliGpuRuntime> {
         }
     };
 
-    let enhancement = EnhancementRuntime::new(context.clone());
+    let enhancement = EnhancementRuntime::new(
+        context
+            .clone()
+            .filter(|_| needs_gpu_enhancer(settings, enhancement)),
+    );
     if let Some(name) = enhancement.adapter_name() {
         info!("GPU enhancement pipeline ready on '{name}'");
     }
 
     let runtime = CliGpuRuntime {
         status,
+        context,
         enhancement,
     };
     runtime.log_status();
@@ -142,8 +165,27 @@ mod tests {
     fn manual_runtime(status: GpuStatusIndicator) -> CliGpuRuntime {
         CliGpuRuntime {
             status,
+            context: None,
             enhancement: EnhancementRuntime::cpu_only(),
         }
+    }
+
+    /// A rectangle without `--enhance` is the default job, and the one that must not pay for
+    /// the enhancer; either of the other two dispatches it and must still get it.
+    #[test]
+    fn the_gpu_enhancer_is_built_only_when_something_dispatches_it() {
+        let mut settings = AppSettings::default();
+        assert!(matches!(
+            settings.crop.shape,
+            fcs_utils::CropShape::Rectangle
+        ));
+        assert!(!needs_gpu_enhancer(&settings, None));
+        assert!(needs_gpu_enhancer(
+            &settings,
+            Some(&EnhancementSettings::default())
+        ));
+        settings.crop.shape = fcs_utils::CropShape::Ellipse;
+        assert!(needs_gpu_enhancer(&settings, None));
     }
 
     // --- log_gpu_status: smoke-test each GpuStatusMode variant ---
@@ -203,19 +245,19 @@ mod tests {
     /// keeps; the enhancer is the observable consequence, and the thing a caller notices.
     #[test]
     fn init_runtime_gpu_disabled_has_no_enhancer() {
-        let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
+        let runtime = init_cli_gpu_runtime(&no_gpu_settings(), None).expect("init");
         assert_eq!(runtime.enhancement.backend(), "cpu");
     }
 
     #[test]
     fn log_status_does_not_panic() {
-        let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
+        let runtime = init_cli_gpu_runtime(&no_gpu_settings(), None).expect("init");
         runtime.log_status();
     }
 
     #[test]
     fn finish_crop_falls_back_to_cpu_and_preserves_dimensions() {
-        let runtime = init_cli_gpu_runtime(&no_gpu_settings()).expect("init");
+        let runtime = init_cli_gpu_runtime(&no_gpu_settings(), None).expect("init");
         let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
             20,
             30,

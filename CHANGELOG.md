@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The CLI starts about 0.7 s sooner with a GPU.** It opened two GPU devices on the same
+  adapter, one for detection and one for enhancement, and compiled the enhancement shaders even
+  for jobs that never use them. It now opens one and builds the enhancement shaders only for
+  `--enhance` or a shaped crop. A 1239-image folder job is about 7% faster; results are
+  unchanged.
 - **Opaque PNG crops are about 8% smaller.** A crop with no transparency is now written as an RGB
   PNG instead of carrying an alpha channel that is fully opaque everywhere. The pixels are
   identical; crops with transparent corners or fill keep their alpha channel.

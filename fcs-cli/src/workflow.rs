@@ -520,7 +520,9 @@ pub(crate) mod tests {
     pub(crate) fn no_gpu_runtime() -> Arc<gpu::CliGpuRuntime> {
         let mut settings = AppSettings::default();
         settings.gpu.enabled = false;
-        Arc::new(init_cli_gpu_runtime(&settings).expect("disabled GPU runtime should initialize"))
+        Arc::new(
+            init_cli_gpu_runtime(&settings, None).expect("disabled GPU runtime should initialize"),
+        )
     }
 
     pub(crate) fn crop_settings_app() -> Arc<AppSettings> {
@@ -540,10 +542,11 @@ pub(crate) mod tests {
     pub(crate) fn build_test_detector() -> Option<Arc<fcs_core::FaceDetector>> {
         let model_path =
             fcs_utils::model_path("models/scrfd80k_500m_640.onnx").expect("resolve model")?;
+        // No GPU context: the CPU graph, and no device per test (experiment 94).
         let detector = build_cli_detector(
             &model_path,
             &fcs_utils::config::DetectionSettings::default(),
-            &Default::default(),
+            None,
         )
         .expect("the bundled model builds a detector");
         Some(Arc::new(detector))

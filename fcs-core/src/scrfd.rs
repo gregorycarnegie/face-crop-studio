@@ -102,7 +102,34 @@ impl ScrfdDetector {
         path: P,
         gpu: &fcs_utils::GpuContextOptions,
     ) -> Option<Self> {
-        let path = path.as_ref();
+        Self::load_with_context(
+            path.as_ref(),
+            || match fcs_utils::GpuContext::init_with_fallback(gpu) {
+                fcs_utils::GpuAvailability::Available(context) => Some(context),
+                other => {
+                    debug!("no GPU for SCRFD ({other:?}); using the CPU graph");
+                    None
+                }
+            },
+        )
+    }
+
+    /// [`Self::load_from_with_gpu`] on a context the caller already holds. A front-end that opens
+    /// one for its own GPU work would otherwise open a second device on the same adapter, as the
+    /// CLI did until experiment 104. `None` is the CPU graph, unprobed.
+    pub fn load_from_with_context<P: AsRef<Path>>(
+        path: P,
+        context: Option<std::sync::Arc<fcs_utils::GpuContext>>,
+    ) -> Option<Self> {
+        Self::load_with_context(path.as_ref(), || context)
+    }
+
+    /// The context is asked for only once the model has loaded, so a missing model never opens a
+    /// device.
+    fn load_with_context(
+        path: &Path,
+        context: impl FnOnce() -> Option<std::sync::Arc<fcs_utils::GpuContext>>,
+    ) -> Option<Self> {
         if !path.exists() {
             debug!("SCRFD not loaded: no model at {}", path.display());
             return None;
@@ -117,22 +144,17 @@ impl ScrfdDetector {
                 return None;
             }
         };
-        let gpu = match fcs_utils::GpuContext::init_with_fallback(gpu) {
-            fcs_utils::GpuAvailability::Available(context) => {
-                match crate::gpu::GpuInferenceOps::new(context, None)
-                    .and_then(|ops| Ok((gpu::ScrfdGpuWeights::load(&ops, path)?, ops)))
-                {
-                    Ok((weights, ops)) => Self {
-                        backend: Backend::Gpu(Box::new((ops, weights))),
-                    },
-                    Err(err) => {
-                        warn!("SCRFD on the GPU failed ({err}); using the CPU graph");
-                        return Some(cpu);
-                    }
-                }
-            }
-            other => {
-                debug!("no GPU for SCRFD ({other:?}); using the CPU graph");
+        let Some(context) = context() else {
+            return Some(cpu);
+        };
+        let gpu = match crate::gpu::GpuInferenceOps::new(context, None)
+            .and_then(|ops| Ok((gpu::ScrfdGpuWeights::load(&ops, path)?, ops)))
+        {
+            Ok((weights, ops)) => Self {
+                backend: Backend::Gpu(Box::new((ops, weights))),
+            },
+            Err(err) => {
+                warn!("SCRFD on the GPU failed ({err}); using the CPU graph");
                 return Some(cpu);
             }
         };

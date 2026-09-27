@@ -228,10 +228,9 @@ configuration the discrete GPU is worth 5% of wall time for ~1.4 GB, and nothing
 fewer: an inference is 2 ms on the 4090 against 5.5 ms on the CPU graph, inside a job that is
 mostly decode, crop and encode on the CPU.
 
-- **The CLI opens two devices on the same adapter.** `init_cli_gpu_runtime` opens one for
-  enhancement and `ScrfdDetector::load_from_with_gpu` opens its own; the log shows
-  `gpu_request_adapter` twice, ~500-800 ms each. Passing the CLI's context to the detector would
-  save one adapter request and one device. The GUI does the same but its enhancement context is
+- **The CLI opened two devices on the same adapter.** `init_cli_gpu_runtime` opened one for
+  enhancement and `ScrfdDetector::load_from_with_gpu` its own; the log showed
+  `gpu_request_adapter` twice, ~500-800 ms each. Fixed in experiment 104. The GUI does the same but its enhancement context is
   the renderer's, and sharing that with detection is the device-wide-wait case in (16), so it
   needs measuring separately.
 - **The iGPU slowdown is not the app's GPU work.** The load-time probe picks the CPU graph there
@@ -259,6 +258,46 @@ fallback and is built on first use, so production never compiles it
 `Features::PIPELINE_CACHE` -- the obvious way to persist compiled pipelines --
 is exposed on Vulkan but not D3D12 (`examples/adapter_cost.rs`), so it is not
 available on the backend the app ships on for Windows.
+
+### A GPU folder job spends its first 2.5 s on one core
+
+Experiment 103, off-CPU analysis of a `samply` profile (every thread is sampled asleep as well
+as running, so a sample's time minus its CPU is time spent waiting, on the stack it waited in).
+The 1239-image folder, `--crop`, 32 workers, RTX 4090:
+
+| | GPU (default) | `--no-gpu` |
+| --- | ---: | ---: |
+| Startup, one core busy | **2.5 s** | 0.14 s |
+| Steady state, image processing | **6.25 s** at ~18 logical cores | ~9.3 s at ~21 |
+| CPU over the job | 112 s | 192 s |
+
+Timed without the profiler, a one-image run takes 2.47-2.62 s with the GPU against 0.14-0.15
+without, so the startup is real. The GPU's steady state is ~30% faster than the CPU graph's, and
+the serial startup spends almost all of it: that is why a folder job gains only 5% (experiment
+100). Startup on the main thread:
+
+- **~0.74 s**, the CLI's enhancement runtime: its own `GpuContext` plus seven enhancement
+  pipelines, which a job without `--enhance` or a crop shape never dispatches. Inlined into
+  `main`, so attributed by elimination: it is the only GPU setup outside the detector.
+- **~0.91 s**, the detector's second `GpuContext::initialize` on the same adapter. Enumerating
+  adapters loads both GPUs' drivers, the Radeon's `amdxc64.dll` included, with signature checks.
+- **~0.27 s**, compiling the detector's kernels through FXC.
+
+This is not the 900 ms below: that measured one context and one detector, before SCRFD, the
+enhancement runtime and the second device.
+
+Experiment 104 acted on the first two: the CLI now opens one context and hands it to the
+detector (`FaceDetector::load_from_with_context`), and builds the GPU enhancer only for
+`--enhance` or a non-rectangular shape. Alternated, five rounds: a one-image launch **2.30 ->
+1.62 s**, the folder **8.21 -> 7.61 s (-7.3%)**, `--no-gpu` unchanged (8.63 / 8.67 s). JSON
+and all 1051 crops byte-identical. The remaining ~1.5 s is one adapter bring-up, which loads
+both GPUs' drivers, and the detector's kernels.
+
+In the steady state rayon is almost never idle (0.2% of worker off-CPU time). The GPU run's
+workers wait on wgpu -- `Device::poll`, the `Queue::submit` lock, the four-in-flight gate,
+buffer allocation -- for about half their off-CPU time, and file I/O is 6%. The rest is
+attributed to compute frames; with 32 workers on 16 SMT cores that is contention for execution
+units, not a wait the application can remove.
 
 ### Cold start is 900 ms, and model loading is 0.15% of it
 
@@ -1600,7 +1639,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-102)
+### Later findings (86-104)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1652,6 +1691,11 @@ and "folder" means `fcs-cli --crop` over it.
   reads no worse. JSON and all 1051 crops byte-identical. `samply` stacks name only
   `process_single_image` here -- everything below it is inlined -- so a caller has to be proven by
   removing it, not read off the profile.
+- **103. What a folder job waits on - measured.** 2.5 s of serial GPU startup (two contexts, the
+  unused enhancement pipelines, FXC), then a CPU-saturated steady state. See "A GPU folder job
+  spends its first 2.5 s on one core".
+- **104. One GPU context in the CLI, no unused enhancer - kept.** Launch 2.30 -> 1.62 s, folder
+  -7.3%, output byte-identical. See the same section.
 
 ---
 

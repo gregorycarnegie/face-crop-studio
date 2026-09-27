@@ -85,6 +85,15 @@ impl FaceDetector {
         ScrfdDetector::load_from_with_gpu(path, gpu).map(Self::new)
     }
 
+    /// [`Self::load_from`] on a GPU context the front-end already holds; see
+    /// [`ScrfdDetector::load_from_with_context`].
+    pub fn load_from_with_context<P: AsRef<Path>>(
+        path: P,
+        context: Option<std::sync::Arc<fcs_utils::GpuContext>>,
+    ) -> Option<Self> {
+        ScrfdDetector::load_from_with_context(path, context).map(Self::new)
+    }
+
     /// Wrap an already-loaded detector at the default operating point.
     pub fn new(scrfd: ScrfdDetector) -> Self {
         Self {

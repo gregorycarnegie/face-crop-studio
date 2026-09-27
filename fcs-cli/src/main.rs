@@ -72,16 +72,18 @@ fn main() -> Result<()> {
     // Build a centralized quality filter using resolved automation settings so the same
     // policy is used for cropping, batch export, and future GUI wiring.
     let quality_filter = build_quality_filter(&settings.crop.quality_rules);
-    let gpu_runtime = Arc::new(init_cli_gpu_runtime(&settings)?);
+    let enhancement_settings = build_enhancement_settings(&args).map(Arc::new);
+    let gpu_runtime = Arc::new(init_cli_gpu_runtime(
+        &settings,
+        enhancement_settings.as_deref(),
+    )?);
 
     // Check if webcam mode is enabled
     if args.webcam {
-        let detector =
-            build_cli_detector(&model_path, &settings.detection, &(&settings.gpu).into())?;
+        let detector = build_cli_detector(&model_path, &settings.detection, gpu_runtime.context())?;
         let detector = Arc::new(detector);
         let settings = Arc::new(settings);
         let quality_filter = Arc::new(quality_filter);
-        let enhancement_settings = build_enhancement_settings(&args).map(Arc::new);
 
         return webcam::run_webcam_mode(
             &args,
@@ -110,7 +112,7 @@ fn main() -> Result<()> {
         anyhow::bail!("no images were queued for processing");
     }
 
-    let detector = build_cli_detector(&model_path, &settings.detection, &(&settings.gpu).into())?;
+    let detector = build_cli_detector(&model_path, &settings.detection, gpu_runtime.context())?;
 
     if args.mapping_waits_for_crop() {
         info!(
@@ -142,7 +144,6 @@ fn main() -> Result<()> {
     let crop_output_dir = Arc::new(crop_output_dir);
     let shared_settings = Arc::new(settings);
     let quality_filter = Arc::new(quality_filter);
-    let enhancement_settings = build_enhancement_settings(&args).map(Arc::new);
 
     // Loaded only when it would be used: the refiner's single job is the eye line, and nothing
     // reads that unless crops are being levelled. `None` here is ordinary rather than an error
