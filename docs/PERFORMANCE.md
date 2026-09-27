@@ -179,27 +179,68 @@ Two defects fell out (experiments 95 and 96):
 
 ### Peak memory scales with worker count, and nothing else does
 
-GPU retention is flat: 44.1 MB across 400 sources up to 23.4 MP, largest first
-(`examples/memory_growth.rs`). The buffer pool has an idle ceiling, the conv
-caches are keyed by a graph production runs only at 640x640 and are cleared past
-512 entries, and the preprocessor's texture is
-bounded by the 1.75 MP upload gate, on every adapter since experiment 10 removed the
-integrated-GPU exemption.
+GPU retention was flat under YuNet: 44.1 MB across 400 sources up to 23.4 MP, largest first
+(`examples/memory_growth.rs`, deleted with YuNet in `e90abc5`; not re-measured on SCRFD). The
+buffer pool has an idle ceiling and the conv caches are keyed by a graph production runs only at
+640x640 and are cleared past 512 entries.
 
-Host memory is the one that moves. Peak working set over the 1239-image folder:
+Host memory is the one that moves. Re-measured on SCRFD (experiment 99): the 1239-image folder
+with `--crop`, RTX 4090, worker counts cycled round-robin three times, medians:
 
-| Workers | Wall s | Peak RSS |
-| ---: | ---: | ---: |
-| 8 | 10.61 | 1.06 GB |
-| 16 | 7.84 | 1.79 GB |
-| 32 (default here) | **7.36** | **3.18 GB** |
-| 64 | 8.02 | 5.43 GB |
+| Workers | Wall s | Peak working set | Peak commit |
+| ---: | ---: | ---: | ---: |
+| 1 (one run) | 65.3 | 0.60 GB | 0.84 GB |
+| 8 | 11.95 | 1.55 GB | 2.05 GB |
+| 16 | 9.52 | 2.04 GB | 3.10 GB |
+| 32 (default here) | **9.06** | **4.05 GB** | **5.77 GB** |
+| 64 | 10.17 | 6.52 GB | 9.94 GB |
 
-About **85 MB per worker**, while wall time flattens after 16: 16 to 32 buys 6%
-for 78% more memory. The default is one worker per logical processor, so the bill
-is set by core count. This adds the axis experiment 60 did not measure rather
-than overturning it -- 60's speed ranking still holds. No cap has been applied;
-see experiment 84 for why.
+About **90 MB of working set per worker** from 8 to 64 (140 MB of commit), while wall time
+flattens after 16: 16 to 32 buys 5% for twice the memory. The YuNet-era table read 3.18 GB at 32
+and 5.43 GB at 64: SCRFD holds ~20-27% more, on the same slope. The default is one worker per logical
+processor, so the bill is set by core count. No cap has been applied; see experiment 84 for why.
+
+Two measurement traps, both hit while taking these numbers:
+
+- **Read the peak after exit, not by sampling.** Polling `PeakWorkingSet64` from PowerShell
+  every 20-100 ms read 1.79 GB for a 32-worker job whose exact peak is 3.6-4.0 GB and returned
+  9 MB at 64 workers: a saturated machine starves the sampler. `GetProcessMemoryInfo` on the
+  process handle after `WaitForExit` returns the kernel's own peak and needs no timing.
+- **Wall time drifts ~15% between sessions.** The same `--no-gpu` 8-worker job read 10.7, 12.7
+  and 13.0 s in three sweeps an hour apart. Compare configurations only within interleaved
+  rounds; the table above is one round-robin session.
+
+### On a folder job the GPU buys 5%, and opens two devices
+
+Experiment 100: `--no-gpu` against the default, interleaved round by round on the 1239-image
+folder with `--crop`. On this 7950X:
+
+| Workers | CPU graph | RTX 4090 | Radeon iGPU (`WGPU_POWER_PREF=low`) |
+| ---: | ---: | ---: | ---: |
+| 1 (one run) | 64.6 s | 65.3 s | - |
+| 8 | 12.97 s | 13.07 s | - |
+| 16 | 9.86 s | 9.60 s | - |
+| 32 | 9.44 s | **8.93 s** (-5%) | **11.52 s** (+22%) |
+
+Peak commit at 32 workers is 3.8-4.4 GB on the CPU graph and 5.3-5.8 GB on the 4090; at one
+worker the GPU's fixed cost is ~400 MB of working set and ~580 MB of commit. So on the default
+configuration the discrete GPU is worth 5% of wall time for ~1.4 GB, and nothing at 16 workers or
+fewer: an inference is 2 ms on the 4090 against 5.5 ms on the CPU graph, inside a job that is
+mostly decode, crop and encode on the CPU.
+
+- **The CLI opens two devices on the same adapter.** `init_cli_gpu_runtime` opens one for
+  enhancement and `ScrfdDetector::load_from_with_gpu` opens its own; the log shows
+  `gpu_request_adapter` twice, ~500-800 ms each. Passing the CLI's context to the detector would
+  save one adapter request and one device. The GUI does the same but its enhancement context is
+  the renderer's, and sharing that with detection is the device-wide-wait case in (16), so it
+  needs measuring separately.
+- **The iGPU slowdown is not the app's GPU work.** The load-time probe picks the CPU graph there
+  (wgsl-gpu 32.3 ms, cpu-graph 4.4 ms), the default rectangle shape returns before the GPU mask
+  touches the device, and keeping the enhancement device closed changed nothing (medians 11.8 and
+  12.1 s). User CPU time is the same as `--no-gpu` (187-192 s) while wall time is 22% longer, so the
+  cores are waiting, not slower. `WGPU_POWER_PREF=low` with `--no-gpu` matches the CPU graph, so
+  the variable itself is not it. Unattributed. A machine with only an integrated GPU opens it by
+  default and would pay this too if it holds there; untested.
 
 ### One entry point per kernel halves shader compilation
 
@@ -1114,7 +1155,7 @@ promised saving.
   rendering (16). Device loss and model switching are untested (81).
 - **Long sessions.** Export drift is measured (85); webcam sessions, VRAM pressure,
   background GPU work, thermals and energy per image are not.
-- **Memory.** Host RSS is ~85 MB per worker and the default worker count follows
+- **Memory.** Host RSS is ~90 MB per worker (99) and the default worker count follows
   logical processors, so a many-thread CPU with little RAM is the case to check
   before any cap (84). Under the in-flight limit the GPU pool still grows with
   callers, probably from input tensors and uploads acquired before the gate (21).
@@ -1559,7 +1600,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-98)
+### Later findings (86-100)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1592,6 +1633,11 @@ and "folder" means `fcs-cli --crop` over it.
 - **96. Letterboxing - kept.** See the webcam section and "Letterboxing is free".
 - **97. Live webcam detection in the GUI - kept.** See "Live webcam detection".
 - **98. Blit the crop region - kept.** See "Where a folder job's CPU actually goes".
+- **99. Peak memory on SCRFD - no change.** ~90 MB per worker, 4.05 GB at 32. See "Peak memory
+  scales with worker count, and nothing else does".
+- **100. The GPU on a folder job - measured, nothing changed.** 4090 -5% at 32 workers for ~1.4 GB,
+  level at 16 or fewer; iGPU +22% from an unattributed wait. See "On a folder job the GPU buys 5%,
+  and opens two devices".
 
 ---
 
