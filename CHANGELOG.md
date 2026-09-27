@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Opaque PNG crops are about 8% smaller.** A crop with no transparency is now written as an RGB
+  PNG instead of carrying an alpha channel that is fully opaque everywhere. The pixels are
+  identical; crops with transparent corners or fill keep their alpha channel.
+
 ## [2.2.0] - 2026-09-27
 
 ### Added

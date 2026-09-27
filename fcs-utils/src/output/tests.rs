@@ -61,6 +61,25 @@ fn image_format_hint_from_extension_accepts_common_aliases() {
     assert_eq!(ImageFormatHint::from_extension("gif"), None);
 }
 
+/// An opaque crop is written without an alpha channel (experiment 101), but one transparent pixel
+/// anywhere has to keep it: dropping alpha there would show whatever colour sits under the mask.
+#[test]
+fn png_drops_alpha_only_when_every_pixel_is_opaque() {
+    let opaque = sample_image();
+    let decoded =
+        image::load_from_memory(&encode_png(&opaque, PngCompression::Default).unwrap()).unwrap();
+    assert_eq!(decoded.color(), image::ColorType::Rgb8);
+    assert_eq!(decoded.to_rgba8(), opaque.to_rgba8());
+
+    let mut cutout = RgbaImage::from_pixel(2, 2, Rgba([12, 34, 56, 255]));
+    cutout.put_pixel(1, 1, Rgba([12, 34, 56, 254]));
+    let cutout = DynamicImage::ImageRgba8(cutout);
+    let decoded =
+        image::load_from_memory(&encode_png(&cutout, PngCompression::Default).unwrap()).unwrap();
+    assert_eq!(decoded.color(), image::ColorType::Rgba8);
+    assert_eq!(decoded.to_rgba8(), cutout.to_rgba8());
+}
+
 #[test]
 fn png_compression_parse_maps_keywords_and_numeric_levels() {
     assert_eq!(PngCompression::parse("fast"), PngCompression::Fast);

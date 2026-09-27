@@ -4,6 +4,7 @@ use super::types::PngCompression;
 use anyhow::{Context, Result};
 use image::{
     DynamicImage, ExtendedColorType, ImageEncoder,
+    buffer::ConvertBuffer,
     codecs::{
         bmp::BmpEncoder,
         jpeg::JpegEncoder,
@@ -93,9 +94,31 @@ pub(super) fn encode_bmp(image: &DynamicImage) -> Result<Vec<u8>> {
 }
 
 pub(super) fn encode_png(image: &DynamicImage, compression: PngCompression) -> Result<Vec<u8>> {
-    encode_impl!(image, "failed to encode PNG", |cursor| {
-        PngEncoder::new_with_quality(cursor, compression.into_image(), FilterType::Adaptive)
-    })
+    // Every crop is an RGBA canvas, but with an opaque fill and a rectangle every alpha is 255.
+    // Written as RGB, the same pixels encode 25% faster and 10% smaller (experiment 101). Any
+    // transparency at all keeps the alpha channel.
+    let opaque: Option<Cow<'_, image::RgbImage>> = match image {
+        DynamicImage::ImageRgb8(rgb) => Some(Cow::Borrowed(rgb)),
+        DynamicImage::ImageRgba8(rgba) if rgba.pixels().all(|p| p[3] == u8::MAX) => {
+            Some(Cow::Owned(rgba.convert()))
+        }
+        _ => None,
+    };
+    let Some(rgb) = opaque else {
+        return encode_impl!(image, "failed to encode PNG", |cursor| {
+            PngEncoder::new_with_quality(cursor, compression.into_image(), FilterType::Adaptive)
+        });
+    };
+    let mut buffer = Vec::new();
+    PngEncoder::new_with_quality(&mut buffer, compression.into_image(), FilterType::Adaptive)
+        .write_image(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            ExtendedColorType::Rgb8,
+        )
+        .context("failed to encode PNG")?;
+    Ok(buffer)
 }
 
 pub(super) fn encode_tiff(image: &DynamicImage) -> Result<Vec<u8>> {

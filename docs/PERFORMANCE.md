@@ -951,7 +951,7 @@ cargo run --release -p fcs-core --example workload_matrix -- <dir> [more dirs...
 
 # Warm file reads at batch concurrency (68); PNG encoder settings over exported crops (72)
 cargo run --release -p fcs-core --example io_cost -- <dir> [passes]
-cargo run --release -p fcs-core --example png_bench -- <dir-of-pngs> [limit]
+cargo run --release -p fcs-core --example png_bench -- <dir-of-pngs> [limit] [--rgb]
 
 # A threshold edit: detector rebuild against a postprocessing swap (66)
 cargo run --release -p fcs-core --example threshold_edit_cost -- [image] [reps]
@@ -1600,7 +1600,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-100)
+### Later findings (86-101)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1638,6 +1638,11 @@ and "folder" means `fcs-cli --crop` over it.
 - **100. The GPU on a folder job - measured, nothing changed.** 4090 -5% at 32 workers for ~1.4 GB,
   level at 16 or fewer; iGPU +22% from an unattributed wait. See "On a folder job the GPU buys 5%,
   and opens two devices".
+- **101. Opaque crops written as RGB PNG - kept.** Every crop is an RGBA canvas, and `encode_png`
+  wrote the alpha channel even when it was 255 throughout. `png_bench --rgb` on 1051 real crops:
+  2.64 -> 1.99 s of encode (-25%), 369.6 -> 334.2 MB. A folder job: 350.7 -> 321.9 MB on disk
+  (-8.2%; 864 of 1051 crops opaque, the rest keep alpha), wall 8.66 -> 8.48 s median over five
+  alternated rounds, which is inside the band. 0 crops differ (`cropdiff`).
 
 ---
 

@@ -4,7 +4,10 @@
 //! decoded pixel: the only things that move are encode time and file size. That makes this a
 //! straight time-against-bytes trade rather than a quality question (experiment 72).
 //!
-//!   cargo run --release -p fcs-core --example png_bench -- <dir-of-pngs> [limit]
+//!   cargo run --release -p fcs-core --example png_bench -- <dir-of-pngs> [limit] [--rgb]
+//!
+//! `--rgb` drops the alpha channel first, to price what an opaque crop pays for being written
+//! as RGBA.
 
 use image::{
     ExtendedColorType, ImageEncoder,
@@ -14,8 +17,9 @@ use rayon::prelude::*;
 use std::time::Instant;
 
 fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    let dir = args.next().expect("usage: png_bench <dir> [limit]");
+    let rgb = std::env::args().any(|a| a == "--rgb");
+    let mut args = std::env::args().skip(1).filter(|a| a != "--rgb");
+    let dir = args.next().expect("usage: png_bench <dir> [limit] [--rgb]");
     let limit: usize = args
         .next()
         .map_or(usize::MAX, |v| v.parse().unwrap_or(usize::MAX));
@@ -31,9 +35,23 @@ fn main() -> anyhow::Result<()> {
     // Decoded once and held, so the loop below times encoding alone.
     let images: Vec<_> = paths
         .par_iter()
-        .map(|p| image::open(p).map(|i| i.to_rgba8()))
-        .collect::<Result<_, _>>()?;
-    let raw_bytes: u64 = images.iter().map(|i| i.as_raw().len() as u64).sum();
+        .map(|p| {
+            image::open(p).map(|i| {
+                let raw = if rgb {
+                    i.to_rgb8().into_raw()
+                } else {
+                    i.to_rgba8().into_raw()
+                };
+                (raw, i.width(), i.height())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let color = if rgb {
+        ExtendedColorType::Rgb8
+    } else {
+        ExtendedColorType::Rgba8
+    };
+    let raw_bytes: u64 = images.iter().map(|(raw, _, _)| raw.len() as u64).sum();
     println!(
         "{} images, {:.1} MB raw\n",
         images.len(),
@@ -77,15 +95,10 @@ fn main() -> anyhow::Result<()> {
             let start = Instant::now();
             let total: u64 = images
                 .par_iter()
-                .map(|img| {
+                .map(|(raw, width, height)| {
                     let mut buf = Vec::new();
                     PngEncoder::new_with_quality(&mut buf, compression, filter)
-                        .write_image(
-                            img.as_raw(),
-                            img.width(),
-                            img.height(),
-                            ExtendedColorType::Rgba8,
-                        )
+                        .write_image(raw, *width, *height, color)
                         .expect("encode");
                     buf.len() as u64
                 })
