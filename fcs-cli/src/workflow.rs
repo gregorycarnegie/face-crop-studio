@@ -303,7 +303,11 @@ fn detection_crop_rect(
 fn detection_quality(image: &DynamicImage, bbox: &BoundingBox) -> Option<(f64, String)> {
     let (image_width, image_height) = image.dimensions();
     let (left, top, width, height) = detection_crop_rect(bbox, image_width, image_height)?;
-    let sub = image::imageops::crop_imm(image, left, top, width, height).to_image();
+    // Not `imageops::crop_imm(..).to_image()`, which copied the face a pixel at a time
+    // through `DynamicImage::get_pixel`: 1.3 s of a folder job's 110 s of CPU, against ~0.9 s
+    // for this (experiment 102). The same RGBA pixels either way, which `laplacian_variance`
+    // needs to stay on its fast downscale.
+    let sub = image.crop_imm(left, top, width, height).into_rgba8();
     let dynsub = image::DynamicImage::ImageRgba8(sub);
     let (score, quality) = estimate_sharpness(&dynsub);
     Some((score, format!("{:?}", quality)))
@@ -852,6 +856,34 @@ pub(crate) mod tests {
             annotate_image_if_requested(Some(&image), &image_path, &detections, &blocked_dir),
             None
         );
+    }
+
+    /// The typed crop must hand `estimate_sharpness` the same RGBA pixels the per-pixel copy
+    /// did, or quality scores and labels in the JSON move (experiment 102). Every pixel is
+    /// distinct, and the formats cover widening (RGB, grey) and narrowing (16-bit).
+    #[test]
+    fn detection_crop_matches_the_per_pixel_copy() {
+        let rgb = image::RgbImage::from_fn(23, 17, |x, y| {
+            image::Rgb([
+                (x * 7 % 251) as u8,
+                (y * 13 % 241) as u8,
+                ((x + y) % 239) as u8,
+            ])
+        });
+        let rgb = DynamicImage::ImageRgb8(rgb);
+        for image in [
+            rgb.clone(),
+            DynamicImage::ImageRgba8(rgb.to_rgba8()),
+            DynamicImage::ImageLuma8(rgb.to_luma8()),
+            // Not multiples of 257, so narrowing to u8 has to round.
+            DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(23, 17, |x, y| {
+                image::Rgb([x as u16 * 2851, y as u16 * 3701, 40_001])
+            })),
+        ] {
+            let before = image::imageops::crop_imm(&image, 3, 2, 15, 11).to_image();
+            let after = image.crop_imm(3, 2, 15, 11).into_rgba8();
+            assert_eq!(after, before, "{:?}", image.color());
+        }
     }
 
     #[test]

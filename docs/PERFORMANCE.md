@@ -1600,7 +1600,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-101)
+### Later findings (86-102)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1643,6 +1643,15 @@ and "folder" means `fcs-cli --crop` over it.
   2.64 -> 1.99 s of encode (-25%), 369.6 -> 334.2 MB. A folder job: 350.7 -> 321.9 MB on disk
   (-8.2%; 864 of 1051 crops opaque, the rest keep alpha), wall 8.66 -> 8.48 s median over five
   alternated rounds, which is inside the band. 0 crops differ (`cropdiff`).
+- **102. Two `get_pixel` copies - one kept, one reverted.** The 1.2 s of `DynamicImage::get_pixel`
+  left in the folder profile was blamed on the eye refiner's bilinear sampler (4 reads per pixel,
+  112x112, per face). Typing that sampler left `get_pixel` at 1.26 s, so it was reverted. The real
+  caller was the CLI's `detection_quality`, copying each face through `imageops::crop_imm(..)
+  .to_image()`; the typed `crop_imm(..).into_rgba8()` removes the row, but its own copy costs
+  ~0.9 s, so the net is ~0.4 s of 110 s (0.3%), under run-to-run noise in total CPU. Kept because it
+  reads no worse. JSON and all 1051 crops byte-identical. `samply` stacks name only
+  `process_single_image` here -- everything below it is inlined -- so a caller has to be proven by
+  removing it, not read off the profile.
 
 ---
 
