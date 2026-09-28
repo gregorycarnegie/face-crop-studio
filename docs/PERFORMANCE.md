@@ -293,6 +293,50 @@ detector (`FaceDetector::load_from_with_context`), and builds the GPU enhancer o
 and all 1051 crops byte-identical. The remaining ~1.5 s is one adapter bring-up, which loads
 both GPUs' drivers, and the detector's kernels.
 
+**Experiment 105 tried to hide that 1.5 s, and it made the job 17% slower.** The detector
+started on the CPU graph at once while a background thread opened the context, compiled the
+kernels and probed the GPU, to take over when it won. The CPU graph and the GPU agree to
+0.0006 px over the folder with every crop pixel-identical, so the switch was safe for crops,
+though it would have made the JSON's last digits depend on timing. But bring-up is not
+independent of the batch it was meant to hide behind: under 32 saturated workers
+`request_adapter` took 2.2-2.8 s against 0.87 idle, the kernels ~6 s, and the GPU probe read
+20-24 ms against 2, so it chose the CPU graph just as the job ended. Folder 7.99 -> 9.31 s.
+Running the bring-up thread at `THREAD_PRIORITY_HIGHEST` changed nothing -- the time goes in
+the driver's own threads and loader, which the priority does not reach. A one-image job fell
+from 1.62 to 0.18 s, the only case that improved. Reverted.
+
+**Experiment 106 re-measured Vulkan end to end, and it wins the folder job outright.** Same
+binary, `WGPU_BACKEND=vulkan --gpu-env auto` against the D3D12 default, alternated:
+
+| | D3D12 | Vulkan |
+| --- | ---: | ---: |
+| One-image launch, RTX 4090 | 1.69 s | **0.58 s** |
+| Folder, RTX 4090 (5 rounds) | 8.00 s | **6.53 s (-18.4%)** |
+| Folder, Radeon iGPU (3 rounds) | 10.91 s | **9.80 s (-10.2%)** |
+
+`request_adapter` is 69 ms on the 4090 and 6 ms on the Radeon, against 670-870. The folder
+gains more than the launch does, so the batch itself runs faster too, although experiment 42
+measured Vulkan's GPU compute 35% slower per inference: a batch is not bound by that. On the
+Radeon the probe keeps detection on the CPU graph under both, so that 10% is the "opened an
+integrated adapter" slowdown of experiment 100 shrinking from +17% to +5%. JSON and all 1051
+crops byte-identical on the 4090.
+
+Vulkan was excluded on Windows because Intel's ICD (`igvk64.dll`) takes an access violation
+during bring-up (1.5.3), which no code of ours can catch, and the Vulkan loader loads every
+installed ICD -- an NVIDIA laptop with an Intel iGPU is exposed too. So enabling it needed a
+policy that never loads that driver.
+
+**Experiment 107 is that policy, for the CLI.** `vulkan_is_safe` lists adapters through DXGI,
+which loads no Vulkan driver, and answers yes only when none is Intel's (vendor 0x8086) -- no
+when DXGI cannot answer. `GpuContext::init_preferring_vulkan` then tries Vulkan alone and falls
+back to the D3D12 set if it finds no adapter; `WGPU_BACKEND` still overrides both. Against
+`master` on this machine (NVIDIA and AMD, no Intel), alternated: a one-image launch **1.71 ->
+0.59 s**, the folder **8.04 -> 6.36 s (-20.9%)**, JSON and all 1051 crops byte-identical, and
+51 `--enhance` crops pixel-identical between D3D12 and Vulkan. Machines with any Intel GPU keep
+D3D12 and today's numbers. Untested: whether a *disabled* Intel adapter, which DXGI does not
+list, still has its ICD loaded; and every Vulkan driver but NVIDIA's and AMD's. The GUI still
+uses D3D12 -- its backend comes from eframe, and was not measured.
+
 In the steady state rayon is almost never idle (0.2% of worker off-CPU time). The GPU run's
 workers wait on wgpu -- `Device::poll`, the `Queue::submit` lock, the four-in-flight gate,
 buffer allocation -- for about half their off-CPU time, and file I/O is 6%. The rest is
@@ -314,7 +358,8 @@ win almost nothing; it is one shader.
 Vulkan brings an adapter up in 278-312 ms against D3D12's 578-668
 (`examples/adapter_cost.rs`), but `platform_safe_backends` excludes it on Windows
 because Intel's ICD crashes during bring-up. That is a stability decision with a
-measured price, not an oversight.
+measured price, not an oversight. Since experiment 107 the CLI uses Vulkan wherever DXGI
+lists no Intel adapter.
 
 The price has both sides now (experiment 42). Measured within `cold_start`, Vulkan's
 `request_adapter` is 6-10 ms against 504-807, and after its first launch the NVIDIA
@@ -1639,7 +1684,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-104)
+### Later findings (86-107)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1696,6 +1741,13 @@ and "folder" means `fcs-cli --crop` over it.
   spends its first 2.5 s on one core".
 - **104. One GPU context in the CLI, no unused enhancer - kept.** Launch 2.30 -> 1.62 s, folder
   -7.3%, output byte-identical. See the same section.
+- **105. Open the GPU in the background, detect on the CPU meanwhile - rejected.** Folder +17%:
+  bring-up slows 3x under a saturated batch and the loaded probe picks the CPU graph. Only a
+  one-image job gained. See the same section.
+- **106. Vulkan end to end - measured, not adopted.** Folder -18% on the 4090, -10% on the iGPU,
+  launch 1.69 -> 0.58 s, output identical. Blocked by the Intel ICD crash. See the same section.
+- **107. Vulkan in the CLI where no Intel GPU is present - kept.** Folder -20.9%, launch 1.71 ->
+  0.59 s, output identical; DXGI decides before any Vulkan driver loads. See the same section.
 
 ---
 

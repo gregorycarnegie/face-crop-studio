@@ -159,6 +159,52 @@ pub fn platform_safe_backends(base: Backends) -> Backends {
     }
 }
 
+/// Whether creating a Vulkan instance here cannot load Intel's ICD.
+///
+/// The Vulkan loader loads every installed ICD, so one Intel adapter anywhere -- the iGPU
+/// beside an NVIDIA card in most laptops -- is enough to reach the crash above. DXGI lists
+/// adapters without loading any Vulkan driver, so it can answer first. `true` only when it
+/// lists no Intel adapter; `false` when it cannot answer, and off Windows, where the question
+/// never arises because [`platform_safe_backends`] keeps Vulkan anyway.
+///
+/// A disabled Intel adapter is not listed by DXGI; whether its ICD still loads is untested.
+pub fn vulkan_is_safe() -> bool {
+    #[cfg(target_os = "windows")]
+    // SAFETY: DXGI factory and adapter calls with no preconditions beyond COM, which the
+    // `windows` crate's smart pointers manage; every error ends the walk.
+    unsafe {
+        use windows::Win32::Graphics::Dxgi::{
+            CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
+        };
+        const INTEL: u32 = 0x8086;
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
+            return false;
+        };
+        for index in 0.. {
+            match factory.EnumAdapters1(index) {
+                Ok(adapter) => match adapter.GetDesc1() {
+                    Ok(desc) if desc.VendorId != INTEL => {}
+                    _ => return false,
+                },
+                Err(err) => return err.code() == DXGI_ERROR_NOT_FOUND,
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "windows"))]
+    false
+}
+
+/// Whether to try Vulkan alone before the configured backends: on Windows, when the
+/// configuration is the default D3D12 set and `vulkan_is_safe` says so. Asked last, so the
+/// DXGI walk only runs when the answer depends on it.
+fn prefers_vulkan(options: &GpuContextOptions, vulkan_is_safe: impl FnOnce() -> bool) -> bool {
+    cfg!(target_os = "windows")
+        && options.enabled
+        && options.backends.contains(Backends::DX12)
+        && vulkan_is_safe()
+}
+
 /// High-level configuration for creating a [`GpuContext`].
 #[derive(Clone, Debug)]
 pub struct GpuContextOptions {
@@ -574,6 +620,26 @@ impl GpuContext {
         })
     }
 
+    /// [`Self::init_with_fallback`], on Vulkan where [`vulkan_is_safe`] allows it.
+    ///
+    /// Vulkan brings an adapter up in 6-70 ms against D3D12's 670-870, and ran a 1239-image
+    /// folder 18% faster on an RTX 4090 and 10% on a Radeon iGPU, with identical output
+    /// (experiment 106). A Vulkan set that finds no adapter falls back to `options` as given.
+    /// `WGPU_BACKEND` still overrides both when `options` respects the environment.
+    pub fn init_preferring_vulkan(options: &GpuContextOptions) -> GpuAvailability {
+        if prefers_vulkan(options, vulkan_is_safe) {
+            let vulkan = GpuContextOptions {
+                backends: Backends::VULKAN,
+                ..options.clone()
+            };
+            match Self::initialize(&vulkan) {
+                Ok(ctx) => return GpuAvailability::Available(Arc::new(ctx)),
+                Err(err) => debug!(target: "fcs::gpu", "no Vulkan adapter ({err}); using D3D12"),
+            }
+        }
+        Self::init_with_fallback(options)
+    }
+
     /// Attempt to create a GPU context and gracefully fall back to CPU if that fails.
     pub fn init_with_fallback(options: &GpuContextOptions) -> GpuAvailability {
         // `initialize` refuses a disabled configuration first thing, and the arm below turns
@@ -752,6 +818,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn vulkan_is_tried_only_for_the_default_set_when_safe() {
+        let default = GpuContextOptions::default();
+        assert_eq!(
+            prefers_vulkan(&default, || true),
+            cfg!(target_os = "windows")
+        );
+        assert!(!prefers_vulkan(&default, || false));
+        // The DXGI walk is asked last: a configuration it cannot change must not pay for it.
+        assert!(!prefers_vulkan(&GpuContextOptions::disabled(), || {
+            panic!("asked with the GPU off")
+        }));
+        let gl_only = GpuContextOptions {
+            backends: Backends::GL,
+            ..GpuContextOptions::default()
+        };
+        assert!(!prefers_vulkan(&gl_only, || panic!(
+            "asked for a GL-only set"
+        )));
+    }
+
+    /// Only the walk itself is checked here -- what it finds depends on the machine.
+    #[test]
+    fn the_intel_check_answers_without_panicking() {
+        let _ = vulkan_is_safe();
+    }
+
+    #[test]
     fn disabled_options_skip_gpu_setup() {
         let options = GpuContextOptions::disabled();
         match GpuContext::init_with_fallback(&options) {
@@ -785,7 +878,9 @@ mod tests {
         // Regression guard for the Store certification crash: Intel's Vulkan ICD
         // faults during adapter bring-up, so Windows builds must not enumerate
         // Vulkan at all. Everything else in the base set has to survive, or the
-        // filter would be silently disabling working backends.
+        // filter would be silently disabling working backends. The one way back in is
+        // `GpuContext::init_preferring_vulkan`, and only after `vulkan_is_safe` finds no
+        // Intel adapter.
         let filtered = platform_safe_backends(Backends::all());
 
         if cfg!(target_os = "windows") {

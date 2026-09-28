@@ -92,7 +92,7 @@ fn log_gpu_status(status: &GpuStatusIndicator) {
 
 /// Whether the job will dispatch any of the GPU enhancer's pipelines.
 ///
-/// The enhancer compiles seven of them through FXC, and only enhancement and a
+/// The enhancer compiles seven of them, and only enhancement and a
 /// non-rectangular shape use any. Settings are fixed for the run, so a job that uses neither
 /// skips the build and runs the same CPU fallbacks it would anyway. With the shared context
 /// this took a launch from 2.30 to 1.62 s (experiment 104).
@@ -106,7 +106,7 @@ pub fn init_cli_gpu_runtime(
     enhancement: Option<&EnhancementSettings>,
 ) -> Result<CliGpuRuntime> {
     let options: GpuContextOptions = (&settings.gpu).into();
-    let availability = GpuContext::init_with_fallback(&options);
+    let availability = GpuContext::init_preferring_vulkan(&options);
 
     let (context, status) = match &availability {
         GpuAvailability::Available(context) => {
