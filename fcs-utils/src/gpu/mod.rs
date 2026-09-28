@@ -195,6 +195,28 @@ pub fn vulkan_is_safe() -> bool {
     false
 }
 
+/// Whether a renderer should be given Vulkan: [`vulkan_is_safe`], and a Vulkan instance finds a
+/// hardware adapter.
+///
+/// For a front-end that cannot fall back once it has chosen, as eframe cannot -- its event loop
+/// exists once per process, so a renderer that fails to come up ends the app. A VM or Remote
+/// Desktop session lists only Microsoft's software adapter, passes the Intel check and has no
+/// Vulkan device; asking first keeps it on D3D12. The throwaway instance costs one Vulkan
+/// enumeration, tens of milliseconds, against D3D12's 670-870 ms adapter bring-up (experiment
+/// 108).
+pub fn vulkan_renderer_available() -> bool {
+    if !cfg!(target_os = "windows") || !vulkan_is_safe() {
+        return false;
+    }
+    let instance = Instance::new(InstanceDescriptor {
+        backends: Backends::VULKAN,
+        ..InstanceDescriptor::new_without_display_handle()
+    });
+    block_on(instance.enumerate_adapters(Backends::VULKAN))
+        .iter()
+        .any(|adapter| adapter.get_info().device_type != wgpu::DeviceType::Cpu)
+}
+
 /// Whether to try Vulkan alone before the configured backends: on Windows, when the
 /// configuration is the default D3D12 set and `vulkan_is_safe` says so. Asked last, so the
 /// DXGI walk only runs when the answer depends on it.
@@ -842,6 +864,14 @@ mod tests {
     #[test]
     fn the_intel_check_answers_without_panicking() {
         let _ = vulkan_is_safe();
+    }
+
+    /// Machine-dependent too. On the Windows CI runner, which has only Microsoft's software
+    /// adapter, this is the VM case the renderer check exists for: the Intel check passes and
+    /// the Vulkan enumeration has to come back empty-handed rather than fail.
+    #[test]
+    fn the_renderer_check_answers_without_panicking() {
+        let _ = vulkan_renderer_available();
     }
 
     #[test]

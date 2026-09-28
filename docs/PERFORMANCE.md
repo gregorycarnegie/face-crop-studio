@@ -334,8 +334,20 @@ back to the D3D12 set if it finds no adapter; `WGPU_BACKEND` still overrides bot
 0.59 s**, the folder **8.04 -> 6.36 s (-20.9%)**, JSON and all 1051 crops byte-identical, and
 51 `--enhance` crops pixel-identical between D3D12 and Vulkan. Machines with any Intel GPU keep
 D3D12 and today's numbers. Untested: whether a *disabled* Intel adapter, which DXGI does not
-list, still has its ICD loaded; and every Vulkan driver but NVIDIA's and AMD's. The GUI still
-uses D3D12 -- its backend comes from eframe, and was not measured.
+list, still has its ICD loaded; and every Vulkan driver but NVIDIA's and AMD's.
+
+**Experiment 108 brought the GUI along.** It has two devices: the detector's own, which
+`ScrfdDetector::load_from_with_gpu` now opens through `init_preferring_vulkan`, and eframe's
+renderer, which the enhancement pipelines share. The renderer cannot fall back -- winit's event
+loop exists once per process, so a renderer that fails ends the app, and a VM or Remote Desktop
+session with only Microsoft's software adapter passes the Intel check with no Vulkan device.
+`vulkan_renderer_available` therefore also asks a throwaway Vulkan instance for a hardware
+adapter before eframe starts; only then does eframe get `VULKAN | GL`. Five alternated launches
+on the 4090, medians: first frame **877 -> 607 ms**, detector ready **1936 -> 797 ms**
+(`build_detector` 1057 -> 195). A pasted 2384x4240 photo rendered, uploaded and detected on
+Vulkan. The GUI batch was not timed: it runs the same detector, so the CLI's folder gain is the
+expectation, not a measurement. One D3D12 launch in five lost its load-time probe and detected
+on the CPU graph; Vulkan won it every time.
 
 In the steady state rayon is almost never idle (0.2% of worker off-CPU time). The GPU run's
 workers wait on wgpu -- `Device::poll`, the `Queue::submit` lock, the four-in-flight gate,
@@ -1684,7 +1696,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-107)
+### Later findings (86-108)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1748,6 +1760,9 @@ and "folder" means `fcs-cli --crop` over it.
   launch 1.69 -> 0.58 s, output identical. Blocked by the Intel ICD crash. See the same section.
 - **107. Vulkan in the CLI where no Intel GPU is present - kept.** Folder -20.9%, launch 1.71 ->
   0.59 s, output identical; DXGI decides before any Vulkan driver loads. See the same section.
+- **108. Vulkan in the GUI, renderer and detector - kept.** First frame 877 -> 607 ms, detector
+  ready 1936 -> 797 ms. The renderer also needs a Vulkan hardware adapter, since it cannot fall
+  back. See the same section.
 
 ---
 

@@ -35,9 +35,16 @@ fn main() -> eframe::Result<()> {
     // startup and takes the process with it before a window ever appears — see
     // `platform_safe_backends`. Everything the renderer needs is available on
     // DX12, and GL stays as the fallback eframe already relied on.
+    //
+    // Where no Intel driver can load and Vulkan has a device, the renderer gets Vulkan
+    // instead: its adapter comes up in tens of milliseconds against D3D12's 670-870
+    // (experiment 108). Asked before eframe starts, because nothing can fall back after.
     if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
-        setup.instance_descriptor.backends =
-            platform_safe_backends(setup.instance_descriptor.backends);
+        setup.instance_descriptor.backends = if fcs_utils::gpu::vulkan_renderer_available() {
+            eframe::wgpu::Backends::VULKAN | eframe::wgpu::Backends::GL
+        } else {
+            platform_safe_backends(setup.instance_descriptor.backends)
+        };
     }
 
     eframe::run_native(

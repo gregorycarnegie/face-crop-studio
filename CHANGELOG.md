@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The CLI uses Vulkan on Windows machines without an Intel GPU.** A 1239-image folder job is
+- **Vulkan on Windows machines without an Intel GPU.** In the CLI a 1239-image folder job is
   about 21% faster on an RTX 4090 and 10% on a Radeon integrated GPU, and a GPU launch takes
-  0.6 s instead of 1.7. Results are identical. Machines with any Intel GPU, including laptops
-  with an Intel GPU beside an NVIDIA one, stay on DirectX 12: Intel's Vulkan driver crashes
-  during start-up (see 1.5.3), and the check happens before any Vulkan driver is loaded.
-  `WGPU_BACKEND` still overrides the choice with `--gpu-env auto`.
+  0.6 s instead of 1.7. The GUI's window appears in about 0.6 s instead of 0.9, and face
+  detection is ready in 0.8 s instead of 1.9. Results are identical. Machines with any Intel GPU,
+  including laptops with an Intel GPU beside an NVIDIA one, stay on DirectX 12: Intel's Vulkan
+  driver crashes during start-up (see 1.5.3), and the check happens before any Vulkan driver is
+  loaded. The GUI also stays on DirectX 12 where Vulkan has no graphics card to use, as in
+  virtual machines. `WGPU_BACKEND` still overrides the choice in the CLI with `--gpu-env auto`.
 - **The CLI starts about 0.7 s sooner with a GPU.** It opened two GPU devices on the same
   adapter, one for detection and one for enhancement, and compiled the enhancement shaders even
   for jobs that never use them. It now opens one and builds the enhancement shaders only for

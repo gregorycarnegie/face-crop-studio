@@ -238,7 +238,11 @@ impl App2 {
 /// renderer instead of spinning up a second adapter.
 fn share_gpu_from_eframe(cc: &CreationContext<'_>) -> Option<Arc<GpuContext>> {
     cc.wgpu_render_state.as_ref().map(|rs| {
-        info!("Sharing GPU context from eframe renderer");
+        let adapter = rs.adapter.get_info();
+        info!(
+            "Sharing GPU context from eframe renderer: '{}' ({:?})",
+            adapter.name, adapter.backend
+        );
         Arc::new(GpuContext::from_existing(
             None,
             None,

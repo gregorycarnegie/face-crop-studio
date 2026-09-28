@@ -102,16 +102,16 @@ impl ScrfdDetector {
         path: P,
         gpu: &fcs_utils::GpuContextOptions,
     ) -> Option<Self> {
-        Self::load_with_context(
-            path.as_ref(),
-            || match fcs_utils::GpuContext::init_with_fallback(gpu) {
+        // Vulkan where no Intel driver could load, as in the CLI (experiment 107).
+        Self::load_with_context(path.as_ref(), || {
+            match fcs_utils::GpuContext::init_preferring_vulkan(gpu) {
                 fcs_utils::GpuAvailability::Available(context) => Some(context),
                 other => {
                     debug!("no GPU for SCRFD ({other:?}); using the CPU graph");
                     None
                 }
-            },
-        )
+            }
+        })
     }
 
     /// [`Self::load_from_with_gpu`] on a context the caller already holds. A front-end that opens
