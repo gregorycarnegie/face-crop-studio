@@ -321,8 +321,10 @@ jobs:
 
       # Clippy runs everywhere: the cfg(target_os) blocks in fcs-utils and
       # fcs-gui are only linted on the platform that compiles them.
+      # --all-targets so tests, benches and examples are linted too, matching
+      # the command in CONTRIBUTING.md.
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Check application dependencies exclude ONNX Runtime
         shell: bash
