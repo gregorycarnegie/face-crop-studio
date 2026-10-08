@@ -176,10 +176,12 @@ pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
 
     let lightness = (max + min) * 0.5;
 
+    // `min`: when the two terms are equal in exact arithmetic (255, 1, 1 for one), f32
+    // rounding can leave the quotient a hair above 1.
     let saturation = if delta == 0.0 {
         0.0
     } else {
-        delta / (1.0 - (lightness.mul_add(2.0, -1.0)).abs())
+        (delta / (1.0 - (lightness.mul_add(2.0, -1.0)).abs())).min(1.0)
     };
 
     (hue, saturation, lightness)
@@ -231,6 +233,8 @@ pub fn cmyk_to_rgb(c: f32, m: f32, y: f32, k: f32) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use rstest::rstest;
 
     macro_rules! small_diff {
         ($expected:ident, $got:ident) => {
@@ -512,47 +516,26 @@ mod tests {
         assert_eq!(restored.alpha, 255);
     }
 
-    #[test]
-    fn test_parse_hex_color_3_char() {
-        let c = parse_hex_color("#F80").unwrap();
-        assert_eq!(c.red, 0xFF);
-        assert_eq!(c.green, 0x88);
-        assert_eq!(c.blue, 0x00);
-        assert_eq!(c.alpha, 255);
-    }
-
-    #[test]
-    fn test_parse_hex_color_4_char_rgba() {
-        let c = parse_hex_color("#F80A").unwrap();
-        assert_eq!(c.red, 0xFF);
-        assert_eq!(c.green, 0x88);
-        assert_eq!(c.blue, 0x00);
-        assert_eq!(c.alpha, 0xAA);
-    }
-
-    #[test]
-    fn test_parse_hex_color_8_char_with_alpha() {
-        let c = parse_hex_color("FF8800CC").unwrap();
-        assert_eq!(c.red, 0xFF);
-        assert_eq!(c.green, 0x88);
-        assert_eq!(c.blue, 0x00);
-        assert_eq!(c.alpha, 0xCC);
-    }
-
-    #[test]
-    fn test_parse_hex_color_0x_prefix() {
-        let c = parse_hex_color("0xFF8800").unwrap();
-        assert_eq!(c.red, 0xFF);
-        assert_eq!(c.green, 0x88);
-        assert_eq!(c.blue, 0x00);
-        assert_eq!(c.alpha, 255);
-    }
-
-    #[test]
-    fn test_parse_hex_color_invalid() {
-        assert!(parse_hex_color("").is_none());
-        assert!(parse_hex_color("#ZZZZZ").is_none());
-        assert!(parse_hex_color("#12345").is_none()); // 5 digits → no match
+    #[rstest]
+    #[case::short("#F80", Some((0xFF, 0x88, 0x00, 0xFF)))]
+    #[case::short_with_alpha("#F80A", Some((0xFF, 0x88, 0x00, 0xAA)))]
+    #[case::long_with_alpha_unprefixed("FF8800CC", Some((0xFF, 0x88, 0x00, 0xCC)))]
+    #[case::zero_x_prefix("0xFF8800", Some((0xFF, 0x88, 0x00, 0xFF)))]
+    #[case::separators_and_whitespace(" ff_88_00_80 ", Some((0xFF, 0x88, 0x00, 0x80)))]
+    #[case::empty("", None)]
+    #[case::non_hex_digits("#ZZZZZ", None)]
+    #[case::five_digits("#12345", None)]
+    #[case::bare_prefix("#", None)]
+    // A multi-byte character must be rejected, not sliced through.
+    #[case::multibyte_digit("#é0", None)]
+    fn parse_hex_color_cases(#[case] input: &str, #[case] expected: Option<(u8, u8, u8, u8)>) {
+        let expected = expected.map(|(red, green, blue, alpha)| RgbaColor {
+            red,
+            green,
+            blue,
+            alpha,
+        });
+        assert_eq!(parse_hex_color(input), expected);
     }
 
     #[test]
@@ -638,6 +621,90 @@ mod tests {
                     "{name} hue for ({r},{g},{b}): got {hue}, expected {expected}"
                 );
             }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Properties over the whole RGB cube. The tables above pin chosen colours;
+    // these check every conversion against its inverse for arbitrary input,
+    // which reaches the off-centre lightness and mid-range key the
+    // primary-colour round trips never did.
+    // ------------------------------------------------------------------
+
+    /// Each channel survives a round trip to within one step: the inverses
+    /// truncate with `as u8` rather than round, so 254.9999 comes back as 254.
+    fn assert_within_one_step(
+        before: (u8, u8, u8),
+        after: (u8, u8, u8),
+    ) -> Result<(), TestCaseError> {
+        let channels = [
+            (before.0, after.0),
+            (before.1, after.1),
+            (before.2, after.2),
+        ];
+        for (want, got) in channels {
+            prop_assert!(want.abs_diff(got) <= 1, "{before:?} came back as {after:?}");
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn hsv_round_trips_every_colour(r: u8, g: u8, b: u8) {
+            let (h, s, v) = rgb_to_hsv(r, g, b);
+            prop_assert!((0.0..360.0).contains(&h), "hue {h} for ({r},{g},{b})");
+            prop_assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&v));
+            assert_within_one_step((r, g, b), hsv_to_rgb(h, s, v))?;
+        }
+
+        #[test]
+        fn hsl_round_trips_every_colour(r: u8, g: u8, b: u8) {
+            let (h, s, l) = rgb_to_hsl(r, g, b);
+            prop_assert!((0.0..360.0).contains(&h), "hue {h} for ({r},{g},{b})");
+            prop_assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&l));
+            assert_within_one_step((r, g, b), hsl_to_rgb(h, s, l))?;
+        }
+
+        #[test]
+        fn cmyk_round_trips_every_colour(r: u8, g: u8, b: u8) {
+            let (c, m, y, k) = rgb_to_cmyk(r, g, b);
+            for ink in [c, m, y, k] {
+                prop_assert!((0.0..=1.0).contains(&ink), "ink {ink} for ({r},{g},{b})");
+            }
+            assert_within_one_step((r, g, b), cmyk_to_rgb(c, m, y, k))?;
+        }
+
+        /// Whatever the hue, including values far outside one turn, `hsv_to_rgb` lands on the same colour as the hue wrapped into `[0, 360)`.
+        #[test]
+        fn hsv_to_rgb_wraps_any_hue(h in -1.0e4f32..1.0e4, s in 0.0f32..=1.0, v in 0.0f32..=1.0) {
+            prop_assert_eq!(hsv_to_rgb(h, s, v), hsv_to_rgb(h.rem_euclid(360.0), s, v));
+        }
+
+        #[test]
+        fn hex_formatting_parses_back(red: u8, green: u8, blue: u8, alpha: u8) {
+            let color = RgbaColor { red, green, blue, alpha };
+            prop_assert_eq!(
+                parse_hex_color(&format!("#{red:02x}{green:02x}{blue:02x}{alpha:02x}")),
+                Some(color)
+            );
+            prop_assert_eq!(
+                parse_hex_color(&format!("0x{red:02X}{green:02X}{blue:02X}")),
+                Some(RgbaColor::opaque(red, green, blue))
+            );
+        }
+
+        /// The short form repeats each digit, so `#abc` and `#aabbcc` are the same colour.
+        #[test]
+        fn short_hex_matches_its_doubled_long_form(digits in "[0-9a-fA-F]{3,4}") {
+            let doubled: String = digits.chars().flat_map(|c| [c, c]).collect();
+            prop_assert_eq!(parse_hex_color(&digits), parse_hex_color(&doubled));
+            prop_assert!(parse_hex_color(&digits).is_some());
+        }
+
+        /// Arbitrary text, multi-byte characters included, is rejected rather than panicking.
+        #[test]
+        fn parse_hex_color_never_panics(input in any::<String>()) {
+            let _ = parse_hex_color(&input);
         }
     }
 }

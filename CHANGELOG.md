@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--crop-fill-color` no longer crashes on a hue ending in multi-byte characters.** Checking
+  for a `deg` suffix sliced the string three bytes from the end, which can fall inside a
+  character: `hsv(°°, 1, 1)` panicked instead of reporting an invalid hue.
+- **`--face-height-pct NaN` (and the offset and vignette settings) fall back to the default.**
+  Clamping lets NaN through, so the value reached the cropper unchanged.
+- **HSL saturation stays within 0–1.** For colours such as `(255, 1, 1)`, f32 rounding put it
+  a hair above 1.
+
 ### Changed
 
 - **Vulkan on Windows machines without an Intel GPU.** In the CLI a 1239-image folder job is
@@ -25,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Opaque PNG crops are about 8% smaller.** A crop with no transparency is now written as an RGB
   PNG instead of carrying an alpha channel that is fully opaque everywhere. The pixels are
   identical; crops with transparent corners or fill keep their alpha channel.
+
+- Table-driven tests use `rstest`, which reports each row as its own test. Property tests
+  cover the colour conversions, colour parsing and settings sanitising.
 
 ## [2.2.0] - 2026-09-27
 

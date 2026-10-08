@@ -143,6 +143,18 @@ cargo run -p fcs-gui
 
 For high-risk changes, prefer smaller pull requests that isolate behavior changes from refactors.
 
+### Choosing a test style
+
+- **A table of known inputs and outputs** → `rstest` with `#[case]` (or `#[values]` for a
+  matrix). Each row becomes its own named test, so a failing row is reported by name and the
+  rows after it still run. A hand-written `for case in [...]` loop stops at the first failure.
+- **A rule that should hold for every input** (round trips, "stays in range", "never
+  panics", "matches the naive reference") → `proptest`. Parsers of user input such as CLI
+  flags and settings files should have a never-panics property over `any::<String>()`.
+  Run with `PROPTEST_CASES=100000` for a deeper search before you change one of them.
+- **A specific golden value** → a plain `#[test]`. Property tests check rules, so they do
+  not replace asserting the actual number for a chosen input.
+
 ## Dependency Guidance
 
 - Prefer workspace dependencies in the root `Cargo.toml`.
