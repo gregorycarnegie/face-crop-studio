@@ -29,6 +29,7 @@ walkdir.workspace = true
 assert_cmd.workspace = true
 fcs-utils = { workspace = true, features = ["fixtures"] }
 proptest.workspace = true
+rstest.workspace = true
 tempfile.workspace = true
 
 # Only the cfg(windows) branch of build.rs touches this, so it should not be

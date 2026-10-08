@@ -52,6 +52,8 @@ raw = ["dep:imagepipe"]
 heic = ["dep:libheif-rs"]
 
 [dev-dependencies]
+proptest.workspace = true
+rstest.workspace = true
 tempfile.workspace = true
 naga.workspace = true
 criterion.workspace = true

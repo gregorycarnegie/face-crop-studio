@@ -137,14 +137,25 @@ pub struct CropSettings {
 }
 
 impl CropSettings {
-    /// Clamp values to sensible ranges.
+    /// Clamp values to sensible ranges, replacing NaN with the default.
     pub fn sanitize(&mut self) {
         self.shape = self.shape.sanitized();
-        self.vignette_softness = self.vignette_softness.clamp(0.0, 1.0);
-        self.vignette_intensity = self.vignette_intensity.clamp(0.0, 1.0);
-        self.face_height_pct = self.face_height_pct.clamp(1.0, 100.0);
-        self.vertical_offset = self.vertical_offset.clamp(-1.0, 1.0);
-        self.horizontal_offset = self.horizontal_offset.clamp(-1.0, 1.0);
+        let d = Self::default();
+        for (value, min, max, default) in [
+            (&mut self.vignette_softness, 0.0, 1.0, d.vignette_softness),
+            (&mut self.vignette_intensity, 0.0, 1.0, d.vignette_intensity),
+            (&mut self.face_height_pct, 1.0, 100.0, d.face_height_pct),
+            (&mut self.vertical_offset, -1.0, 1.0, d.vertical_offset),
+            (&mut self.horizontal_offset, -1.0, 1.0, d.horizontal_offset),
+        ] {
+            // `f32::clamp` passes NaN straight through, and the CLI parses
+            // `--face-height-pct NaN` without complaint.
+            *value = if value.is_nan() {
+                default
+            } else {
+                value.clamp(min, max)
+            };
+        }
         if self.output_width == 0 {
             self.output_width = 512;
         }
@@ -504,6 +515,8 @@ impl From<&GpuSettings> for GpuContextOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use rstest::rstest;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -586,20 +599,16 @@ mod tests {
         assert_eq!(c.vignette_intensity, 0.0);
     }
 
+    #[rstest]
+    #[case("preserve", MetadataMode::Preserve)]
+    #[case("strip", MetadataMode::Strip)]
+    #[case("custom", MetadataMode::Custom)]
+    fn metadata_mode_from_str_all_variants(#[case] text: &str, #[case] expected: MetadataMode) {
+        assert_eq!(text.parse::<MetadataMode>().unwrap(), expected);
+    }
+
     #[test]
-    fn metadata_mode_from_str_all_variants() {
-        assert_eq!(
-            "preserve".parse::<MetadataMode>().unwrap(),
-            MetadataMode::Preserve
-        );
-        assert_eq!(
-            "strip".parse::<MetadataMode>().unwrap(),
-            MetadataMode::Strip
-        );
-        assert_eq!(
-            "custom".parse::<MetadataMode>().unwrap(),
-            MetadataMode::Custom
-        );
+    fn metadata_mode_from_str_rejects_unknown() {
         assert!("unknown".parse::<MetadataMode>().is_err());
     }
 
@@ -647,49 +656,56 @@ mod tests {
     // survivors because nothing asserted the specific values.
     // ------------------------------------------------------------------
 
-    #[test]
-    fn level_filter_maps_every_accepted_spelling() {
-        // Every arm is deleted individually by mutation, so each needs its own
-        // assertion — and the fallback is Debug, not Off, which means a deleted
-        // arm silently turns into "debug" rather than failing loudly.
-        let cases = [
-            ("off", LevelFilter::Off),
-            ("error", LevelFilter::Error),
-            ("warn", LevelFilter::Warn),
-            ("warning", LevelFilter::Warn),
-            ("info", LevelFilter::Info),
-            ("trace", LevelFilter::Trace),
-            ("debug", LevelFilter::Debug),
-        ];
-        for (text, expected) in cases {
-            let settings = TelemetrySettings {
-                level: text.to_string(),
-                ..Default::default()
-            };
-            assert_eq!(settings.level_filter(), expected, "level {text:?}");
-        }
+    // Every arm is deleted individually by mutation, so each needs its own case — and the
+    // fallback is Debug, not Off, which means a deleted arm silently turns into "debug" rather
+    // than failing loudly.
+    #[rstest]
+    #[case("off", LevelFilter::Off)]
+    #[case("error", LevelFilter::Error)]
+    #[case("warn", LevelFilter::Warn)]
+    #[case("warning", LevelFilter::Warn)]
+    #[case("info", LevelFilter::Info)]
+    #[case("trace", LevelFilter::Trace)]
+    #[case("debug", LevelFilter::Debug)]
+    // Case and surrounding whitespace are normalised.
+    #[case("  OFF  ", LevelFilter::Off)]
+    #[case("Off", LevelFilter::Off)]
+    #[case("oFF", LevelFilter::Off)]
+    // Anything unrecognised falls back to Debug.
+    #[case("", LevelFilter::Debug)]
+    #[case("verbose", LevelFilter::Debug)]
+    #[case("nonsense", LevelFilter::Debug)]
+    fn level_filter_maps_every_accepted_spelling(
+        #[case] text: &str,
+        #[case] expected: LevelFilter,
+    ) {
+        let settings = TelemetrySettings {
+            level: text.to_string(),
+            ..Default::default()
+        };
+        assert_eq!(settings.level_filter(), expected);
+    }
 
-        // Case and surrounding whitespace are normalised.
-        for text in ["  OFF  ", "Off", "oFF"] {
-            let settings = TelemetrySettings {
-                level: text.to_string(),
-                ..Default::default()
-            };
-            assert_eq!(settings.level_filter(), LevelFilter::Off, "level {text:?}");
-        }
-
-        // Anything unrecognised falls back to Debug.
-        for text in ["", "verbose", "nonsense"] {
-            let settings = TelemetrySettings {
-                level: text.to_string(),
-                ..Default::default()
-            };
-            assert_eq!(
-                settings.level_filter(),
-                LevelFilter::Debug,
-                "level {text:?}"
-            );
-        }
+    #[rstest]
+    fn set_level_round_trips_through_level_filter(
+        #[values(
+            LevelFilter::Off,
+            LevelFilter::Error,
+            LevelFilter::Warn,
+            LevelFilter::Info,
+            LevelFilter::Debug,
+            LevelFilter::Trace
+        )]
+        level: LevelFilter,
+    ) {
+        let mut settings = TelemetrySettings::default();
+        settings.set_level(level);
+        assert_eq!(
+            settings.level_filter(),
+            level,
+            "stored as {:?}",
+            settings.level
+        );
     }
 
     #[test]
@@ -784,23 +800,21 @@ mod tests {
         assert_eq!(settings.vignette_intensity, 0.0);
     }
 
-    #[test]
-    fn gpu_settings_convert_both_flags_into_context_options() {
-        // Both fields are copied through; a dropped field would silently fall
-        // back to the default and either disable the GPU or start honouring
-        // WGPU_* env vars against the user's choice.
-        for (enabled, respect_env) in [(true, true), (true, false), (false, true), (false, false)] {
-            let settings = GpuSettings {
-                enabled,
-                respect_env,
-            };
-            let options: crate::gpu::GpuContextOptions = (&settings).into();
-            assert_eq!(options.enabled, enabled, "enabled {enabled}");
-            assert_eq!(
-                options.respect_env, respect_env,
-                "respect_env {respect_env}"
-            );
-        }
+    /// Both fields are copied through; a dropped field would silently fall
+    /// back to the default and either disable the GPU or start honouring
+    /// WGPU_* env vars against the user's choice.
+    #[rstest]
+    fn gpu_settings_convert_both_flags_into_context_options(
+        #[values(true, false)] enabled: bool,
+        #[values(true, false)] respect_env: bool,
+    ) {
+        let settings = GpuSettings {
+            enabled,
+            respect_env,
+        };
+        let options: crate::gpu::GpuContextOptions = (&settings).into();
+        assert_eq!(options.enabled, enabled);
+        assert_eq!(options.respect_env, respect_env);
     }
 
     #[test]
@@ -833,5 +847,65 @@ mod tests {
             "should be absolute unless the cwd was unavailable, got {}",
             path.display()
         );
+    }
+
+    /// Any `f32` at all, weighted towards the values `clamp` mishandles.
+    fn any_f32() -> impl Strategy<Value = f32> {
+        prop_oneof![
+            Just(f32::NAN),
+            Just(f32::INFINITY),
+            Just(f32::NEG_INFINITY),
+            any::<f32>(),
+        ]
+    }
+
+    proptest! {
+        /// Whatever a settings file or the CLI hands over, `sanitize` leaves every
+        /// field in its documented range, and running it again changes nothing.
+        #[test]
+        fn crop_sanitize_lands_in_range_and_is_idempotent(
+            face_height_pct in any_f32(),
+            vertical_offset in any_f32(),
+            horizontal_offset in any_f32(),
+            vignette_softness in any_f32(),
+            vignette_intensity in any_f32(),
+            output_width: u32,
+            output_height: u32,
+        ) {
+            let mut settings = CropSettings {
+                face_height_pct,
+                vertical_offset,
+                horizontal_offset,
+                vignette_softness,
+                vignette_intensity,
+                output_width,
+                output_height,
+                ..Default::default()
+            };
+            settings.sanitize();
+
+            prop_assert!((1.0..=100.0).contains(&settings.face_height_pct), "{settings:?}");
+            prop_assert!((-1.0..=1.0).contains(&settings.vertical_offset), "{settings:?}");
+            prop_assert!((-1.0..=1.0).contains(&settings.horizontal_offset), "{settings:?}");
+            prop_assert!((0.0..=1.0).contains(&settings.vignette_softness), "{settings:?}");
+            prop_assert!((0.0..=1.0).contains(&settings.vignette_intensity), "{settings:?}");
+            prop_assert!(settings.output_width > 0 && settings.output_height > 0);
+
+            let once = settings.clone();
+            settings.sanitize();
+            prop_assert_eq!(settings, once);
+        }
+
+        #[test]
+        fn detection_sanitize_lands_in_range(confidence in any_f32(), nms_threshold in any_f32()) {
+            let mut settings = DetectionSettings {
+                confidence,
+                nms_threshold,
+                top_k: DEFAULT_TOP_K,
+            };
+            settings.sanitize();
+            prop_assert!((0.0..=1.0).contains(&settings.confidence), "{settings:?}");
+            prop_assert!((0.0..=1.0).contains(&settings.nms_threshold), "{settings:?}");
+        }
     }
 }

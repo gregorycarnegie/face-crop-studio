@@ -172,6 +172,9 @@ walkdir = "2.5.0"
 assert_cmd = "2.2.2"
 criterion = "0.8.2"
 proptest = "1.11.0"
+# Table-driven tests: one named test per `#[case]`, so a failing row is reported on its own and
+# the rows after it still run. Default features only add async timeouts, which no test uses.
+rstest = { version = "0.27.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.

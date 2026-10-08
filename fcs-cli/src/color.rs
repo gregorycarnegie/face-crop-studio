@@ -117,14 +117,17 @@ fn parse_alpha_value(token: &str) -> Result<u8, String> {
 }
 
 fn parse_hue_value(token: &str) -> Result<f32, String> {
-    let mut raw = token.trim().to_string();
-    if raw.len() >= 3 && raw[raw.len() - 3..].eq_ignore_ascii_case("deg") {
-        raw.truncate(raw.len() - 3);
-        raw = raw.trim_end().to_string();
+    let mut raw = token.trim();
+    // `get`, not indexing: `len - 3` can fall inside a multi-byte character, as in "°°".
+    if let Some(unit_start) = raw.len().checked_sub(3)
+        && raw
+            .get(unit_start..)
+            .is_some_and(|unit| unit.eq_ignore_ascii_case("deg"))
+    {
+        raw = raw[..unit_start].trim_end();
     }
-    if raw.ends_with('°') {
-        raw.pop();
-        raw = raw.trim_end().to_string();
+    if let Some(stripped) = raw.strip_suffix('°') {
+        raw = stripped.trim_end();
     }
     let value: f32 = raw
         .parse()
@@ -154,6 +157,8 @@ fn parse_percentage_value(token: &str) -> Result<f32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use rstest::rstest;
 
     #[test]
     fn parse_fill_color_spec_accepts_hex_and_comma_separated_rgb() {
@@ -307,31 +312,35 @@ mod tests {
         assert!(parse_alpha_value("nonsense").is_err());
     }
 
-    #[test]
-    fn parse_hue_value_strips_units_and_wraps_into_zero_to_360() {
-        for (input, expected) in [
-            ("90", 90.0f32),
-            ("90deg", 90.0),
-            ("90DEG", 90.0),
-            ("90 deg", 90.0),
-            ("90°", 90.0),
-            ("90 °", 90.0),
-        ] {
-            let got = parse_hue_value(input).unwrap();
-            assert!(
-                (got - expected).abs() < 1e-3,
-                "hue {input}: got {got}, expected {expected}"
-            );
-        }
+    #[rstest]
+    #[case::plain("90", 90.0)]
+    #[case::deg("90deg", 90.0)]
+    #[case::deg_uppercase("90DEG", 90.0)]
+    #[case::deg_spaced("90 deg", 90.0)]
+    #[case::degree_sign("90°", 90.0)]
+    #[case::degree_sign_spaced("90 °", 90.0)]
+    // rem_euclid, so negatives wrap up and multiples of 360 collapse to 0.
+    #[case::negative_wraps_up("-90", 270.0)]
+    #[case::full_turn_is_zero("360", 0.0)]
+    #[case::over_a_turn_wraps_down("450", 90.0)]
+    fn parse_hue_value_strips_units_and_wraps_into_zero_to_360(
+        #[case] input: &str,
+        #[case] expected: f32,
+    ) {
+        let got = parse_hue_value(input).unwrap();
+        assert!((got - expected).abs() < 1e-3, "got {got}");
+    }
 
-        // rem_euclid, so negatives wrap up and multiples of 360 collapse to 0.
-        assert!((parse_hue_value("-90").unwrap() - 270.0).abs() < 1e-3);
-        assert!(parse_hue_value("360").unwrap().abs() < 1e-3);
-        assert!((parse_hue_value("450").unwrap() - 90.0).abs() < 1e-3);
-
-        // "deg" stripping is length-guarded: a bare unit is not a number.
-        assert!(parse_hue_value("deg").is_err());
-        assert!(parse_hue_value("").is_err());
+    #[rstest]
+    // "deg" stripping is length-guarded: a bare unit is not a number.
+    #[case::bare_unit("deg")]
+    #[case::empty("")]
+    // Two multi-byte characters put `len - 3` inside the first one; the "deg" check must not
+    // slice there.
+    #[case::multibyte_tail("°°")]
+    #[case::multibyte_before_ascii("é9")]
+    fn parse_hue_value_rejects_non_numbers(#[case] input: &str) {
+        assert!(parse_hue_value(input).is_err());
     }
 
     #[test]
@@ -360,5 +369,67 @@ mod tests {
 
         assert!(parse_percentage_value("x%").is_err());
         assert!(parse_percentage_value("x").is_err());
+    }
+
+    /// A component token: mostly numbers in and around the accepted ranges, with
+    /// units, signs and arbitrary text mixed in.
+    fn component() -> impl Strategy<Value = String> {
+        prop_oneof![
+            (-400.0f32..400.0).prop_map(|v| v.to_string()),
+            (-400.0f32..400.0).prop_map(|v| format!("{v}%")),
+            (-400.0f32..400.0).prop_map(|v| format!("{v}deg")),
+            (-400.0f32..400.0).prop_map(|v| format!("{v}°")),
+            any::<String>(),
+        ]
+    }
+
+    proptest! {
+        /// `--crop-fill-color` is user input: anything at all is an `Err`, never a panic.
+        #[test]
+        fn parse_fill_color_spec_never_panics(input in any::<String>()) {
+            let _ = parse_fill_color_spec(&input);
+        }
+
+        /// The same, for input that gets past the function-name check, so the
+        /// component parsers see the arbitrary text rather than the hex parser.
+        #[test]
+        fn function_forms_never_panic(
+            name in prop_oneof![Just("rgb"), Just("RGB"), Just("hsv"), Just("HSV")],
+            args in prop::collection::vec(component(), 0..5),
+        ) {
+            let _ = parse_fill_color_spec(&format!("{name}({})", args.join(",")));
+        }
+
+        /// Every in-range `rgb()` and comma-separated colour parses to exactly its components.
+        #[test]
+        fn rgb_forms_round_trip(red: u8, green: u8, blue: u8, alpha: u8) {
+            prop_assert_eq!(
+                parse_fill_color_spec(&format!("rgb({red}, {green}, {blue}, {alpha})")),
+                // 0 and 1 are read as fractions, so only bytes above 1 are 0-255 alpha.
+                Ok(RgbaColor { red, green, blue, alpha: if alpha == 1 { 255 } else { alpha } })
+            );
+            prop_assert_eq!(
+                parse_fill_color_spec(&format!("{red},{green},{blue}")),
+                Ok(RgbaColor::opaque(red, green, blue))
+            );
+        }
+
+        /// Whatever hue is given, `hsv()` agrees with the shared conversion on the wrapped
+        /// hue, to within one step: `hsv_to_rgb` truncates, and the parser's `20 * 0.01` lands
+        /// a hair under `20 / 100`, so a 20% grey can come out as 50 rather than 51.
+        #[test]
+        fn hsv_form_matches_hsv_to_rgb(hue in -720.0f32..720.0, sat in 0u8..=100, val in 0u8..=100) {
+            let (r, g, b) = hsv_to_rgb(
+                hue.rem_euclid(360.0),
+                f32::from(sat) / 100.0,
+                f32::from(val) / 100.0,
+            );
+            let parsed = parse_fill_color_spec(&format!("hsv({hue}deg, {sat}%, {val}%)"))
+                .map_err(TestCaseError::fail)?;
+            prop_assert_eq!(parsed.alpha, 255);
+            for (got, want) in [(parsed.red, r), (parsed.green, g), (parsed.blue, b)] {
+                prop_assert!(got.abs_diff(want) <= 1, "{parsed:?} vs ({r}, {g}, {b})");
+            }
+        }
     }
 }
