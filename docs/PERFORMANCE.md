@@ -200,6 +200,26 @@ flattens after 16: 16 to 32 buys 5% for twice the memory. The YuNet-era table re
 and 5.43 GB at 64: SCRFD holds ~20-27% more, on the same slope. The default is one worker per logical
 processor, so the bill is set by core count. No cap has been applied; see experiment 84 for why.
 
+**Where it goes (experiment 110).** `dhat` as the global allocator, the folder at 32 workers on
+Vulkan, live heap at its peak, then time and peak memory against allocator settings with the
+normal build. One worker's peak on the largest source (~23 MP) is 98 MB live: the decoded source
+71%, the crop's full-resolution RGBA canvas 17%, `fast_image_resize`'s scratch buffer 9%. At
+32 workers the live peak is **1.45-1.62 GB** over four runs (a fifth read 2.03): decoded sources
+76%, scratch buffers 16%, the detector's input tensors 3%, crop canvases 1%. Against a process
+peak of ~3.3-3.5 GB working set and ~5 GB commit, the rest is not live data:
+
+| Where | Size at 32 workers | Removable without losing speed? |
+| --- | ---: | --- |
+| Decoded sources in flight | ~1.2-1.5 GB | No: every crop is cut from them at full resolution (86, 90) |
+| Allocator retention (mimalloc) | ~1.5 GB | No: `MIMALLOC_PURGE_DELAY=0` saves ~1.1 GB of working set and costs 25-35% |
+| Vulkan driver and mappings | ~1 GB | Not ours |
+| Per-thread `Resizer` scratch | ~0.3 GB, all run long | No: it exists because re-zeroing it cost 4.1% of CPU |
+
+Freeing the source before its crops are compressed -- JSON quality first, then generation, then
+a `drop`, then encoding -- moved nothing: live peak 1.58 / 1.62 GB against 1.57 / 1.45, process
+peak and time inside the noise. Reverted. What bounds memory is the number of sources in flight,
+which is the worker count; see experiment 109 for its price in time.
+
 Two measurement traps, both hit while taking these numbers:
 
 - **Read the peak after exit, not by sampling.** Polling `PeakWorkingSet64` from PowerShell
@@ -345,9 +365,31 @@ session with only Microsoft's software adapter passes the Intel check with no Vu
 adapter before eframe starts; only then does eframe get `VULKAN | GL`. Five alternated launches
 on the 4090, medians: first frame **877 -> 607 ms**, detector ready **1936 -> 797 ms**
 (`build_detector` 1057 -> 195). A pasted 2384x4240 photo rendered, uploaded and detected on
-Vulkan. The GUI batch was not timed: it runs the same detector, so the CLI's folder gain is the
-expectation, not a measurement. One D3D12 launch in five lost its load-time probe and detected
-on the CPU graph; Vulkan won it every time.
+Vulkan. One D3D12 launch in five lost its load-time probe and detected on the CPU graph; Vulkan
+won it every time.
+
+**Experiment 109 timed the GUI batch itself.** A temporary, uncommitted hook let the real GUI --
+window, eframe renderer, shared enhancement device, the repo's `config/gui_settings.json` --
+queue the 1239-image folder once its detector was ready and call the same `run_batch_export`
+the Export button reaches, logging the time at `BatchComplete`. Built from `5774259` (D3D12)
+and `7d8fd59` (Vulkan), alternated five rounds: **16.69 -> 15.41 s (-7.7%)**, ranges 16.63-17.13
+and 15.19-15.64, all 1051 crops byte-identical between the two.
+
+The larger lever is the worker count. The GUI batch runs `min(4, cpus / 2)` workers --
+`auto_batch_parallelism`, chosen for peak memory -- where the CLI runs one per logical
+processor. Swept through `batch_parallelism` on the Vulkan build, two rounds each (peak working
+set / commit read after exit):
+
+| Workers | Batch | Peak working set | Peak commit |
+| ---: | ---: | ---: | ---: |
+| 4 (default here) | 14.53-14.64 s | 0.9 GB | 1.7 GB |
+| 8 | 8.79-9.09 s | 1.5 GB | 2.3 GB |
+| 16 | 6.88-7.08 s | 2.2-2.4 GB | 3.0-3.4 GB |
+| 32 | 6.11-6.44 s | 4.2-4.6 GB | 6.6-6.9 GB |
+
+8 workers take 40% off for 0.6 GB; 16 bring the batch within 10% of 32 for half its memory. Not
+changed: the cap is a memory policy, and the machine it protects -- many threads, little RAM --
+is not this one.
 
 In the steady state rayon is almost never idle (0.2% of worker off-CPU time). The GPU run's
 workers wait on wgpu -- `Device::poll`, the `Queue::submit` lock, the four-in-flight gate,
@@ -1696,7 +1738,7 @@ and "folder" means `fcs-cli --crop` over it.
   consecutive folder jobs: 1129 faces and 959 crops every run, wall slope -39 ms per run (cache
   warming, not throttling).
 
-### Later findings (86-108)
+### Later findings (86-110)
 
 - **86. Detect from a reduced-scale decode - measured in 90.** 82% of the folder needs the full
   decode for its crop regardless.
@@ -1763,6 +1805,13 @@ and "folder" means `fcs-cli --crop` over it.
 - **108. Vulkan in the GUI, renderer and detector - kept.** First frame 877 -> 607 ms, detector
   ready 1936 -> 797 ms. The renderer also needs a Vulkan hardware adapter, since it cannot fall
   back. See the same section.
+- **109. The GUI batch, timed - measured.** Vulkan 16.69 -> 15.41 s. Its default of 4 workers
+  costs more than any backend: 8 workers 8.8-9.1 s, 16 6.9-7.1 s, 32 6.1-6.4 s at 4.2-4.6 GB.
+  See the same section.
+- **110. Where the memory goes - measured.** Live peak 1.45-1.62 GB at 32 workers, three quarters
+  of it decoded sources; the rest of ~5 GB commit is allocator retention (purging it costs 25-35%)
+  and the Vulkan driver. Dropping the source before encoding moved nothing. See "Peak memory
+  scales with worker count, and nothing else does".
 
 ---
 
