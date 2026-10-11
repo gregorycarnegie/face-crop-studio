@@ -28,7 +28,7 @@ edition = "2024"
 # Matches the toolchain pinned in ci.yml and release.yml. With resolver 3 this
 # also makes dependency resolution MSRV-aware, so `cargo update` will not pull
 # in a version that needs a newer rustc than the workflows install.
-rust-version = "1.98"
+rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 version = "2.2.0"
 description = "Face Crop Studio — pure Rust face detection and cropping."
@@ -153,7 +153,7 @@ parquet = { version = "60.0.0", default-features = false, features = [
 # enforces while it compiles the statement, rather than a keyword denylist of ours.
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.151"
+serde_json = "1.0.152"
 
 # Concurrency and utilities
 # Global allocator for the shipped binaries. The ~third it cut off single-image detection was
@@ -171,11 +171,11 @@ walkdir = "2.5.0"
 # Testing and benchmarking
 assert_cmd = "2.2.2"
 criterion = "0.8.2"
-proptest = "1.11.0"
+proptest = "1.12.0"
 # Table-driven tests: one named test per `#[case]`, so a failing row is reported on its own and
 # the rows after it still run. Default features only add async timeouts, which no test uses.
 rstest = { version = "0.27.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "8.6.0", default-features = false }
+zip = { version = "9.0.1", default-features = false }
