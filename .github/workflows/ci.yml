@@ -24,7 +24,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: "1.98.0"
+  RUST_TOOLCHAIN: "1.99.0"
   # Test oracle only; application packages contain no ONNX Runtime.
   ORT_VERSION: "1.24.4"
   # Keep these checksums and URLs in sync with release.yml.
@@ -116,10 +116,9 @@ jobs:
             # Must match release.yml or CI validates different codegen than
             # the shipped binaries.
             rustflags: -C target-feature=+crt-static -C target-cpu=x86-64-v3
-          # No Windows ARM64 leg: tract-linalg cannot build for
-          # aarch64-pc-windows-msvc (its GNU-syntax .S kernels are handed to
-          # cl.exe, which ignores them). release.yml carries the full
-          # explanation. Linux ARM64 below is unaffected and builds natively.
+          # Windows ARM64 is not validated or shipped yet. The former
+          # tract-linalg blocker is gone; restore this leg with release coverage
+          # once the current dependencies and installers have been validated.
           - name: macOS
             os: macos-latest
             ort-platform: osx-arm64

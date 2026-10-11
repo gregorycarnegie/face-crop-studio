@@ -26,22 +26,20 @@
         <mxCell id="pre" value="&lt;b&gt;scrfd::preprocess&lt;/b&gt; (CPU)&lt;br&gt;longest side → 640 · resize_image (triangle)&lt;br&gt;top-left on a 640×640 canvas, not centred&lt;br&gt;RGB CHW · (x − 127.5) / 128, padding included" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
           <mxGeometry x="520" y="50" width="480" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="models" value="&lt;b&gt;models/scrfd80k_500m_640.onnx&lt;/b&gt;&lt;br&gt;ONNX Runtime runs the exported graph;&lt;br&gt;the built-in engines compile the topology in&lt;br&gt;(scrfd/topology.rs) and read weights by name (onnx/)" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="det">
+        <mxCell id="models" value="&lt;b&gt;models/scrfd80k_500m_640.onnx&lt;/b&gt;&lt;br&gt;built-in engines compile the topology in&lt;br&gt;scrfd/topology.rs and read weights by name (onnx/)&lt;br&gt;no ONNX Runtime library needed" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="det">
           <mxGeometry x="1060" y="50" width="420" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="decide" value="engine, picked once&lt;br&gt;at load" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="det">
+        <mxCell id="decide" value="time both at load&lt;br&gt;GPU keeps close ties" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="det">
           <mxGeometry x="600" y="220" width="320" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="ort" value="&lt;b&gt;fcs_ort::Session::run&lt;/b&gt;&lt;br&gt;ONNX Runtime · fastest, bundled in releases&lt;br&gt;9 tensors, sigmoid + reshape inside the graph" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
-          <mxGeometry x="60" y="400" width="440" height="120" as="geometry" />
-        </mxCell>
+
         <mxCell id="gpurun" value="&lt;b&gt;scrfd::gpu::run&lt;/b&gt;&lt;br&gt;WGSL kernels · 66 steps in one submission&lt;br&gt;read back the 9 raw head maps" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
           <mxGeometry x="540" y="400" width="440" height="120" as="geometry" />
         </mxCell>
         <mxCell id="cpurun" value="&lt;b&gt;scrfd::plan::run&lt;/b&gt;&lt;br&gt;built-in CPU graph (cpu::conv2d) · the floor&lt;br&gt;same 66 steps, the 9 raw head maps" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
           <mxGeometry x="1020" y="400" width="440" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="decode" value="&lt;b&gt;decode / decode_maps → decode_level&lt;/b&gt;&lt;br&gt;strides 8 · 16 · 32, 2 anchors per cell · score ≥ threshold · distance2bbox&lt;br&gt;eyes only: nose and mouth were never trained, so reported absent · ÷ letterbox scale → source pixels" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
+        <mxCell id="decode" value="&lt;b&gt;decode_maps ? decode_level&lt;/b&gt;&lt;br&gt;strides 8 ? 16 ? 32, 2 anchors per cell ? score ? threshold ? distance2bbox&lt;br&gt;eyes only: nose and mouth absent ? ? letterbox scale ? source pixels" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
           <mxGeometry x="300" y="580" width="920" height="90" as="geometry" />
         </mxCell>
         <mxCell id="nms" value="&lt;b&gt;sort by score · apply_nms_in_place&lt;/b&gt;&lt;br&gt;IoU threshold · spatial grid from 200 boxes, naive below · then top_k" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="det">
@@ -50,30 +48,18 @@
         <mxCell id="d0" value="RGB CHW tensor + letterbox scale" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="pre" target="decide">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="d1" value="ONNX Runtime found" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=12;fontStyle=1;labelBackgroundColor=#ffffff;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="decide" target="ort">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="280" y="275" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="d2" value="else a GPU" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=12;fontStyle=1;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="decide" target="gpurun">
+
+        <mxCell id="d2" value="GPU available and preferred" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=12;fontStyle=1;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="decide" target="gpurun">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="d3" value="else" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=12;fontStyle=1;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="decide" target="cpurun">
+        <mxCell id="d3" value="otherwise / GPU disabled" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=12;fontStyle=1;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="decide" target="cpurun">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="1240" y="275" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="d4" value="9 tensors" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="det" source="ort" target="decode">
-          <mxGeometry x="-0.4" relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="280" y="625" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
+
         <mxCell id="d5" value="9 maps" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="det" source="gpurun" target="decode">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
@@ -91,7 +77,7 @@
         <mxCell id="detout" value="&lt;b&gt;DetectionOutput&lt;/b&gt;&lt;br&gt;per face: bbox · 2 eye landmarks · score" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="620" y="1180" width="360" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="refine" value="&lt;b&gt;EyeRefiner::refine&lt;/b&gt; (optional, fcs-core)&lt;br&gt;only when eye-line alignment is on · ONNX Runtime only&lt;br&gt;a 112×112 crop per face → better eye points" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1">
+        <mxCell id="refine" value="&lt;b&gt;EyeRefiner::refine&lt;/b&gt; (optional, fcs-core)&lt;br&gt;only when eye-line alignment is on ? built-in Rust CPU graph&lt;br&gt;a 112?112 crop per face ? better eye points" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="560" y="1290" width="480" height="90" as="geometry" />
         </mxCell>
 
@@ -113,7 +99,7 @@
         <mxCell id="qdec" value="quality filter&lt;br&gt;skip low quality ·&lt;br&gt;auto-select best face" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="pf">
           <mxGeometry x="1100" y="250" width="380" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="save" value="&lt;b&gt;save_dynamic_image&lt;/b&gt; (fcs-utils)&lt;br&gt;PNG · JPEG · WebP · TIFF · BMP · AVIF&lt;br&gt;preserved EXIF / XMP metadata" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="pf">
+        <mxCell id="save" value="&lt;b&gt;save_dynamic_image&lt;/b&gt; (fcs-utils)&lt;br&gt;PNG ? JPEG ? WebP ? TIFF ? BMP ? AVIF&lt;br&gt;EXIF / custom metadata for PNG and JPEG ? atomic write" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="pf">
           <mxGeometry x="560" y="260" width="400" height="110" as="geometry" />
         </mxCell>
         <mxCell id="out" value="&lt;b&gt;Crop file&lt;/b&gt;&lt;br&gt;named by pattern or mapping table" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="pf">

@@ -38,7 +38,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.98.0
+          toolchain: 1.99.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -85,18 +85,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      # A matrix of one, kept deliberately: Windows arm64 is blocked upstream,
-      # not abandoned, and re-adding it is a matter of restoring the entry below
-      # rather than re-parameterising the whole job.
-      #
-      # tract-linalg (0.23.4, latest as of 2026-08) does not support
-      # aarch64-pc-windows-msvc. Its build script special-cases x86_64+Windows
-      # to assemble with ml64.exe, but the aarch64 branch calls cc::Build
-      # unconditionally, which resolves to cl.exe — and cl.exe silently ignores
-      # the GNU-syntax .S kernels (warning D9024/D9027), so lib.exe then fails
-      # with LNK1181 on the .o files that were never produced. There is no
-      # feature or env var to skip the assembly. Windows-on-Arm runs the x86_64
-      # build under emulation until this is fixed upstream.
+      # A matrix of one until native Windows arm64 builds, dependencies and
+      # installers are validated. The former tract-linalg blocker is gone.
+      # Windows-on-Arm currently uses the x86_64 build under emulation.
       #
       #   - arch: arm64
       #     runner: windows-11-arm
@@ -138,7 +129,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.98.0
+          toolchain: 1.99.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -546,7 +537,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.98.0
+          toolchain: 1.99.0
           targets: aarch64-apple-darwin
 
       - name: Rust Cache
@@ -660,7 +651,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.98.0
+          toolchain: 1.99.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2

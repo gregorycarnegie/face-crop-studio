@@ -1,8 +1,9 @@
 # Contributing to Face Crop Studio
 
-Thanks for helping improve Face Crop Studio. This repository is a Rust workspace with four main crates:
+Thanks for helping improve Face Crop Studio. This repository is a Rust workspace with five application crates and one development-only inference oracle:
 
-- `fcs-core`: face detection, the three inference engines, crop math, and GPU pieces.
+- `fcs-core`: face detection, the built-in CPU and WGSL inference engines, crop math, and GPU pieces.
+- `fcs-ort`: development-only ONNX Runtime bindings for parity tests and benchmarks.
 - `fcs-utils`: shared configuration, image enhancement, export helpers, and webcam support.
 - `fcs-mapping`: CSV/Excel/Parquet/SQLite ingestion for the batch mapping workflow.
 - `fcs-cli`: command-line workflows for batch processing and automation.
@@ -38,7 +39,7 @@ AVIF support).
 
 Install the usual Rust and Windows build tools first:
 
-- Rust toolchain. CI currently uses Rust `1.98.0`.
+- Rust `1.99.0`, matching the workspace minimum and CI/release toolchain.
 - Visual Studio Build Tools with the C++ desktop workload and Windows SDK.
 - Git.
 - NASM on `PATH`; for example `C:\Program Files\NASM`. Installing it is not
@@ -61,7 +62,7 @@ if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
   & C:\vcpkg\bootstrap-vcpkg.bat
 }
 
-& C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static libheif:x64-windows-static
+& C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static "libheif[core]:x64-windows-static"
 ```
 
 Set the environment variables for your current terminal:
@@ -104,7 +105,7 @@ cargo test --workspace --all-features
 ```
 
 `FCS_STRICT_TESTS=1` turns "prerequisite missing, skipping" into a failure, which
-is what CI runs. The ONNX Runtime comparison in `backend_parity` needs the
+is what CI runs. The ONNX Runtime comparison in `scrfd_parity` needs the
 library on hand for that, so point `ORT_DYLIB_PATH` at it:
 
 ```powershell
@@ -162,8 +163,6 @@ For high-risk changes, prefer smaller pull requests that isolate behavior change
 - Avoid local `[patch.crates-io]` overrides unless there is no practical alternative.
 - If an upstream compatible release is broken, prefer an exact version pin with a short explanation in the pull request.
 - Keep dependency upgrades separate from feature work when practical.
-
-The workspace currently pins `nokhwa` exactly because `0.10.11` does not compile with the resolved Windows backend/core combination.
 
 ## Code Style
 

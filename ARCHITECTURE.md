@@ -43,7 +43,7 @@ graph TD
 | `fcs-mapping` | — | Tabular ingestion: reads CSV, Excel, Parquet, and SQLite tables into source/output path pairs. Depends on nothing else in the workspace. |
 | `fcs-core` | `fcs-utils` | Detection and geometry: WGSL and built-in CPU inference, decoding, `calculate_crop_region`. |
 | `fcs-ort` | — | Development-only ONNX Runtime bindings for parity tests and benchmarks. |
-| `fcs-cli` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Synchronous batch front-end with GPU auto-detection and context pooling. |
+| `fcs-cli` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Synchronous batch front-end with GPU auto-detection and a shared enhancement/shape-mask context. |
 | `fcs-gui` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Desktop front-end; pushes detection/enhancement onto background Rayon tasks and shares wgpu context with eframe. |
 
 This document focuses on the crop calculation pipeline introduced in Phase 4 and extended through Phase 9.
@@ -51,17 +51,17 @@ This document focuses on the crop calculation pipeline introduced in Phase 4 and
 ## Data Flow
 
 1. **Detection** – `FaceDetector` (in `fcs-core`) runs SCRFD on whichever engine is available, returning a `DetectionOutput` holding bounding boxes, landmarks, and confidence scores in the source image's own pixels.
-2. **Crop Derivation** – `calculate_crop_region` in `fcs-core/src/cropper.rs` transforms a detection into a bounded `CropRegion`. The algorithm:
+2. **Crop Derivation** – `calculate_crop_region` in `fcs-core/src/cropper.rs` transforms a detection into a `CropRegion` that can extend beyond the source image. The algorithm:
    - clamps the configured face-height percentage to `[1, 100]`,
    - derives a source height that will yield the requested face coverage once resized,
    - mirrors the output aspect ratio to compute the source width,
    - applies positioning logic (center, rule of thirds, custom offsets),
-   - and clamps the resulting rectangle to the original image dimensions.
-3. **Crop Extraction** – `crop_face_from_image` uses `image::imageops::crop_imm` followed by a Lanczos3 resize to obtain the final output dimensions. This abstraction is reused by both the CLI and GUI.
+   - and records padding where the rectangle extends beyond the original image.
+3. **Crop Extraction** – `crop_face_from_image` copies source pixels onto a padded canvas, optionally rotates to level the eyes, then resizes with the Lanczos3 kernel to the final output dimensions. This abstraction is reused by both the CLI and GUI.
 4. **Enhancement & Quality** – `fcs-utils` kicks in next:
    - `apply_enhancements` runs the optional enhancement pipeline (auto color, exposure, contrast, saturation, unsharp mask, skin smoothing, red-eye removal, and background blur).
    - `estimate_sharpness` computes Laplacian variance to classify the crop as Low/Medium/High quality. These scores inform automation like `QualityFilter::select_best_index` and filename suffixing.
-5. **Export** – `save_dynamic_image` encodes the image (PNG/JPEG/WebP), optionally injects metadata (original EXIF, crop configuration, quality metrics), and writes to disk.
+5. **Export** – `save_dynamic_image` encodes the image (PNG/JPEG/WebP/TIFF/BMP/AVIF), optionally injects metadata (original EXIF, crop configuration, quality metrics), and writes to disk.
 
 The CLI stitches these steps together in synchronous code paths. The GUI pushes detection and enhancement workloads onto background Rayon tasks to keep the egui frame loop responsive, caching results in `DetectionCacheEntry`s keyed by model configuration.
 
@@ -108,36 +108,22 @@ The GUI maintains a circular history buffer (max 100 entries) of `CropSettings` 
 
 ```mermaid
 graph TD
-    HostImage[Host Image (RAM)] -->|Upload Texture| GPU[GPU Memory]
-    
-    subgraph "Preprocessing (WGSL)"
-        GPU -->|Texture| PreprocShader[Preprocess Shader]
-        PreprocShader -->|Resize + RGB->BGR| PreprocOutput[Tensor (CHW)]
-    end
-    
-    subgraph "Inference (Custom WGSL)"
-        PreprocOutput -->|Input| Conv2D[Conv2D Layer]
-        Conv2D -->|Feature Map| BatchNorm[BatchNorm]
-        BatchNorm -->|Activation| ReLU[ReLU/Sigmoid]
-        ReLU -->|Next Layer| Conv2D
-        ReLU -->|Final| OutputTensors[Output Tensors]
-    end
-    
-    subgraph "Postprocessing"
-        OutputTensors -->|Download| CPU_Post[CPU Postprocess]
-        CPU_Post -->|NMS & Decode| Detections[Detections list]
-    end
-    
-    subgraph "Enhancement (WGSL)"
-        Detections -->|Crop Region| EnhanceShader[Enhancement Shaders]
-        EnhanceShader -->|Apply Filters| EnhancedTex[Enhanced Texture]
-    end
-    
-    EnhancedTex -->|Display| GUI[GUI Preview]
-    EnhancedTex -->|Download| Disk[Export to Disk]
+    HostImage[Host Image in RAM] --> Preprocess[CPU resize and top-left letterbox to 640x640]
+    Preprocess --> Tensor[Normalised RGB CHW tensor]
+    Tensor --> Upload[Upload input tensor]
+    Upload --> GPU[WGSL graph: convolution, activation, add, pool, upsample]
+    GPU --> Readback[Read back nine raw head maps]
+    Readback --> Decode[CPU decode and non-max suppression]
+    Decode --> Refine[Optional eye refinement on built-in CPU graph]
+    HostImage --> Crop[CPU padded crop, eye-line rotation, Lanczos3 resize]
+    Refine --> Crop
+    Crop --> Enhance[Enhancement and shape mask: GPU with CPU fallback]
+    Enhance --> Result[Finished crop in RAM]
+    Result --> GUI[GUI Preview]
+    Result --> Disk[Encode and atomically write export]
 ```
 
-### GPU vs CPU Performance
+### Historical GPU vs CPU Performance
 
 | Operation                      | CPU (Ryzen 5950X) | GPU (GTX 1080 Ti) | Speedup |
 |--------------------------------|-------------------|-------------------|---------|
@@ -148,8 +134,8 @@ graph TD
 *Note: GPU preprocessing was removed in 1.9.0. The transfer grows with the source image while
 the saving does not, so it only won below about 2 MP (experiment 10) — and since the detector
 started letterboxing internally, nothing called it at all. `docs/ENGINE_SPEED.md` has the
-current figures: preprocessing is 42% of a detection on a 36 MP RAW, and it is already the SIMD
-CPU path.*
+later 1.9.0 measurements: preprocessing was 42% of an ONNX Runtime detection on a 36 MP RAW.
+The current preprocessing path runs on the CPU; these timings are not current-release benchmarks.*
 
 ### GPU Inference Determinism
 

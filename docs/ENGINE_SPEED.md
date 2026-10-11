@@ -1,5 +1,11 @@
 # What a detection costs, and on which engine
 
+> **Historical (1.9.0).** These measurements include the former ONNX Runtime application
+> backend. Current releases use only the built-in CPU and WGSL engines; ONNX Runtime is
+> a development-only oracle. The batch timings and backend rankings below have not been
+> re-measured for the current application. See [ARCHITECTURE.md](../ARCHITECTURE.md#engine-selection)
+> for current engine selection.
+
 Measured 2026-09-21 on the 1.9.0 tree, RTX 4090 / DX12 / Ryzen 7950X, Windows 11, release
 build. Reproduce with `cargo run --release -p fcs-core --example engine_speed -- <image>`
 (add `--features fcs-utils/raw` for a camera RAW, or it silently decodes the embedded

@@ -5,7 +5,7 @@ This runbook covers the release flow used by `.github/workflows/release.yml`.
 ## 1) Prepare default branch
 
 1. Ensure CI is green on `master` (or your repo default branch).
-2. Confirm release notes are updated in `docs/releases/v1.0.0.md`.
+2. Confirm `CHANGELOG.md` and the notes for the version being released are updated.
 3. Confirm `README.md` installation section is current.
 
 ## 2) Cut a release candidate
@@ -46,7 +46,7 @@ Confirm executables launch:
 - `fcs-cli.exe --help`
 - `fcs-gui.exe`
 
-## 4) Publish final v1.0.0
+## 4) Publish final release
 
 If RC artefacts are good:
 
@@ -55,7 +55,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-Then publish/edit release notes using `docs/releases/v1.0.0.md`.
+The tags above are examples; use the version being released and its notes in `CHANGELOG.md`.
 
 ## 5) Post-release
 
@@ -66,8 +66,8 @@ Then publish/edit release notes using `docs/releases/v1.0.0.md`.
 
 The `msix-package` job bundles every architecture the `windows-release` matrix
 produced into a `.msixbundle` and wraps it as a `.msixupload`, the format
-`msstore publish` accepts. Today that is x86_64 only — Windows arm64 is blocked
-upstream in `tract-linalg`, see the matrix comment in `release.yml`. The job
+`msstore publish` accepts. Today that is x86_64 only — native Windows arm64
+builds and installers still need validation; see the matrix comment in `release.yml`. The job
 picks up architectures by artifact pattern rather than by name, so restoring the
 arm64 leg needs no change here. It is
 uploaded as a *workflow artifact only*, never a GitHub release asset: the bundle

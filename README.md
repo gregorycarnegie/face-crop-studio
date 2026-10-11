@@ -13,7 +13,7 @@ GPU accelerated face detection and cropping software built in Rust.
 [![CI](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml)
 [![Release](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml/badge.svg)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml)
 
-Face Crop Studio is a Rust workspace that wraps a face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Both CPU and GPU acceleration paths are supported via wgpu/WGSL compute shaders for preprocessing, enhancement, and inference.
+Face Crop Studio is a Rust workspace that wraps a face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Preprocessing runs on the CPU; inference and enhancement support both built-in CPU paths and GPU acceleration via wgpu/WGSL compute shaders.
 
 The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open Images photographs, so the shipped weights carry no non-commercial restriction. It runs on WGSL compute shaders, falling back to a built-in Rust CPU graph. Neither detection nor eye refinement loads an ONNX Runtime library.
 
@@ -23,7 +23,7 @@ The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open 
 - **`fcs-ort`** – Development-only ONNX Runtime oracle for parity tests and benchmarks; excluded from application dependencies and release packages.
 - **`fcs-utils`** – Shared helpers: configuration structs, Laplacian-variance quality scoring, enhancement pipeline (CPU and GPU paths with 7 WGSL compute shaders), and output encoders with metadata support.
 - **`fcs-mapping`** – Tabular ingestion for the batch mapping workflow: reads CSV, Excel, Parquet, and SQLite tables into source-image/output-name pairs. Standalone — it depends on no other workspace crate.
-- **`fcs-cli`** – Command-line frontend aimed at batch processing and automation with optional GPU acceleration (auto-detected, with fallback to CPU). Features GPU context pooling for efficient batch operations. Example invocations are documented in `docs/cli_recipes.md`.
+- **`fcs-cli`** – Command-line frontend aimed at batch processing and automation with optional GPU acceleration (auto-detected, with fallback to CPU). Shares one GPU context across enhancement and shape-mask work in a batch. Example invocations are documented in `docs/cli_recipes.md`.
 - **`fcs-gui`** – eframe/egui desktop experience with live preview, crop adjustments, enhancements, history/undo, and batch export. Shares GPU context with eframe's wgpu backend for efficient rendering and compute. A user guide lives in `docs/gui_crop_guide.md`.
 
 ## Architecture Diagrams
@@ -32,12 +32,12 @@ High-level views of how the workspace fits together. Each image links to its edi
 [`.drawio`](docs/diagrams/) source for editing in [draw.io](https://www.drawio.com/).
 
 <p align="center">
-  <a href="docs/diagrams/workspace-architecture.drawio"><img src="docs/diagrams/workspace-architecture.drawio.svg" alt="Workspace architecture: CLI and GUI entry points, shared detection, mapping, ONNX Runtime, and image-processing crates, and external dependencies" width="900"/></a><br/>
+  <a href="docs/diagrams/workspace-architecture.drawio"><img src="docs/diagrams/workspace-architecture.drawio.svg" alt="Workspace architecture: CLI and GUI entry points, shared detection, mapping and image-processing crates, development-only ONNX Runtime oracle, and external dependencies" width="900"/></a><br/>
   <sub><strong>Workspace architecture</strong> - crate dependency layers and the key modules in each crate.</sub>
 </p>
 
 <p align="center">
-  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, letterbox it, run SCRFD on ONNX Runtime, the WGSL kernels or the CPU graph, decode and suppress detections, optionally refine the eyes, and crop faces" width="900"/></a><br/>
+  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, letterbox it, run SCRFD on WGSL or the built-in CPU graph, decode and suppress detections, optionally refine the eyes on the CPU, and crop faces" width="900"/></a><br/>
   <sub><strong>Detection pipeline</strong> - per-image flow from image load through preprocessing, inference, postprocessing, and per-face cropping.</sub>
 </p>
 
@@ -65,6 +65,10 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 - **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. `--no-gpu` (or the GUI's GPU toggle) keeps enhancement *and* detection on the CPU.
 
 ### Batch worker threads
+
+The timings below are historical measurements. The SCRFD sweep used the ONNX Runtime
+application backend in 1.9.0, before it became a development-only oracle; it does not
+measure the current built-in CPU and WGSL batch paths.
 
 Batch detection runs through Rayon, which defaults to one worker per *logical*
 processor. On the GPU path that overshoots: only the GPU dispatches serialise,
@@ -137,14 +141,15 @@ Official release binaries are built for:
 
 Every architecture is built natively — there is no cross-compilation in the release pipeline.
 
-**Windows on Arm** runs the x86_64 build under emulation; there is no native Windows arm64 binary yet. The blocker is upstream: `tract-linalg`, the inference kernel library, has no `aarch64-pc-windows-msvc` support — its ARM64 kernels are GNU-syntax assembly handed to MSVC's `cl.exe`, which ignores them. Linux arm64 is unaffected and is built natively.
+**Windows on Arm** uses the x86_64 build under emulation; there is no native Windows arm64 binary yet. The former `tract-linalg` build blocker was removed with that dependency, but native Windows arm64 builds, dependencies, and installers still need validation. Linux arm64 is built natively.
 
 All x86_64 binaries are compiled for the `x86-64-v3` microarchitecture level (AVX2/FMA — Intel Haswell 2013+ or AMD Excavator 2015+). Older CPUs need a local build with `-C target-cpu=x86-64` (edit `.cargo/config.toml`). arm64 binaries use the base AArch64 target, which already includes NEON and FMA. Intel Macs (x86_64) are not shipped as binaries but build from source.
 
-Windows arm64 gets no NSIS `-setup.exe`: NSIS only produces an x86 installer stub, which would run under emulation, so the native arm64 MSI and the Store package cover that platform instead.
+The Windows MSI, NSIS installer, and Store package currently ship x86_64 binaries only.
 
 ## Prerequisites
 
+- **Rust 1.99.0**: Matches the workspace minimum Rust version and the CI/release toolchain.
 - **NASM**: You must have [NASM](https://www.nasm.us/) installed and added to your system `PATH` to build the project.
 
 ## Installation (Windows)
@@ -296,14 +301,14 @@ The extra runners are optional for day-to-day work but match what CI does:
 - `cargo nextest run --workspace --all-features` – The suite as CI runs it. Add `--profile ci` for no fail-fast, one retry on flaky GPU adapter acquisition, and a five-minute hang timeout.
 - `cargo nextest-fast` (or `cargo test-fast`) – The same suite without compiling fcs-core's examples, roughly halving the build after an fcs-core change. Aliases in `.cargo/config.toml`; CI still builds the examples, and doctests need `cargo test --workspace --doc`.
 - `FCS_STRICT_TESTS=1 cargo nextest run --workspace --all-features` – Turn "model/fixture missing, skipping" into a hard failure. CI sets this so a broken asset path cannot masquerade as a green run; leave it unset on a fresh clone, where skipping is the correct behaviour.
-- `cargo llvm-cov nextest --workspace --all-features --summary-only` – Line and region coverage. CI fails below 60% line coverage; pass `--fail-under-lines 60` to check the gate locally. Note that the nextest profile must travel via `NEXTEST_PROFILE`, because `--profile` on the command line belongs to `cargo-llvm-cov`.
+- `cargo llvm-cov nextest --workspace --all-features --summary-only` – Line and region coverage. CI fails below 65% line coverage; pass `--fail-under-lines 65` to check the gate locally. Note that the nextest profile must travel via `NEXTEST_PROFILE`, because `--profile` on the command line belongs to `cargo-llvm-cov`.
 - `cargo mutants -p fcs-core --test-tool nextest -j 4 --file fcs-core/src/postprocess.rs --file fcs-core/src/cropper.rs` – Mutation testing: mutates the source and reports which changes no test caught, which is a sharper signal than coverage about where tests are missing. Results land in `mutants.out/missed.txt` (the gaps), `caught.txt`, and `unviable.txt` (mutants that did not compile — ignore those).
 
 Mutation testing is deliberately not in CI: every mutant is a fresh incremental rebuild, so the two files above take one to two hours and the whole of `fcs-core` (831 mutants) takes closer to ten. Run it locally against a couple of files at a time, on an otherwise idle machine — drop to `-j 2` if it becomes unusable, since the per-job source-tree copies are I/O heavy. Skip `fcs-core/src/gpu/*`: those mutants mostly land in adapter plumbing that only executes with hardware present, so they report as missed without telling you anything.
 
 ## Configuration
 
-- Settings persist to `config/gui_settings.json`. The GUI saves changes automatically, and the CLI now reads the same file by default when `--config` is omitted, keeping thresholds and input dimensions in sync across surfaces.
+- Settings persist to `config/gui_settings.json`. The GUI saves changes automatically, and the CLI now reads the same file by default when `--config` is omitted, keeping detection, crop, and enhancement settings in sync across surfaces.
 
 ## Diagnostics
 
@@ -312,7 +317,7 @@ Mutation testing is deliberately not in CI: every mutant is a fresh incremental 
 
 ## Documentation
 
-- [Architecture overview](ARCHITECTURE.md) – how the four crates collaborate, including the GPU inference graph.
+- [Architecture overview](ARCHITECTURE.md) – how the six workspace crates collaborate, including the GPU inference graph and development-only oracle.
 - [Architecture diagrams](docs/diagrams/) – editable `.drawio` sources and SVG exports for the workspace and detection-pipeline diagrams shown above.
 - [Contributing guide](CONTRIBUTING.md) – workspace layout and how to get from clone to a working build.
 - [Changelog](CHANGELOG.md) – release history and notable changes.

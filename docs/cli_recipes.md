@@ -77,7 +77,7 @@ cargo run -p fcs-cli -- \
 
 `--eye-line-align` rotates each crop so the subject's eyes sit horizontal, which is what makes a set of portraits look consistent rather than subtly tilted. There is no negative form: the setting is off unless asked for.
 
-The rotation is only as good as the eye points behind it, so the crop uses `models/eye_refiner.onnx` in preference to the detector's own landmarks — 1.18° median eye-line error against 4.05°, measured on 1,382 hand-clicked faces (`tools/dataset/CURVE_RESULTS.md`). The refiner needs ONNX Runtime, which every packaged release bundles. A build without it logs one line and falls back to the detector's landmarks, so crops are still levelled, just less precisely.
+The rotation is only as good as the eye points behind it, so the crop uses `models/eye_refiner.onnx` in preference to the detector's own landmarks — 1.18° median eye-line error against YuNet's 4.05°, measured on 1,382 hand-clicked faces (`tools/dataset/CURVE_RESULTS.md`). The refiner runs on the built-in Rust CPU graph; no ONNX Runtime library is required or bundled. A missing or incompatible refiner model logs the reason and leaves the detector's landmarks in place.
 
 ## Batch Pipeline with Metadata
 
