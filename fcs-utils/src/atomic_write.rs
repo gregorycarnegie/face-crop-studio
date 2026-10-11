@@ -53,6 +53,14 @@ impl Drop for TempFile {
     }
 }
 
+/// Where the temporary file for `path` goes: beside it, so the rename cannot cross a filesystem.
+/// A destination with no parent is a bare filename, which lands in the working directory.
+fn temp_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 /// Write `bytes` to `path`, leaving an existing file intact unless the write fully succeeds.
 ///
 /// Two failures this exists to avoid, both of which were live in shipped builds:
@@ -75,11 +83,7 @@ impl Drop for TempFile {
 /// Parent directories are not created here; the caller decides whether a missing directory is
 /// an error or something to create.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    // A destination with no parent is a bare filename, which lands in the working directory.
-    let parent = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let parent = temp_dir(path);
     let temp = TempFile::new(parent);
 
     {
@@ -111,6 +115,12 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn the_temporary_file_goes_beside_the_destination() {
+        assert_eq!(temp_dir(Path::new("crops/a/out.png")), Path::new("crops/a"));
+        assert_eq!(temp_dir(Path::new("out.png")), Path::new("."));
+    }
 
     #[test]
     fn writes_a_new_file() {

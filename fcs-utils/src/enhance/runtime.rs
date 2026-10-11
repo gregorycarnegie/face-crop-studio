@@ -218,6 +218,40 @@ fn fill_transparent(image: DynamicImage, fill: RgbaColor) -> DynamicImage {
 mod tests {
     use super::*;
 
+    /// "Over" with both alphas strictly between 0 and 1, worked by hand: out alpha
+    /// 0.4 + 0.6 * 0.6 = 0.76, and red (200 * 0.4 + 10 * 0.36) / 0.76 = 110.
+    #[test]
+    fn a_translucent_pixel_composites_over_a_translucent_fill() {
+        let fill = RgbaColor {
+            red: 10,
+            green: 220,
+            blue: 60,
+            alpha: 153,
+        };
+        let image = image::RgbaImage::from_fn(4, 1, |x, _| match x {
+            0 => image::Rgba([200, 40, 120, 102]),
+            1 => image::Rgba([200, 40, 120, 255]),
+            _ => image::Rgba([200, 40, 120, 0]),
+        });
+        let out = fill_transparent(DynamicImage::ImageRgba8(image), fill).into_rgba8();
+        assert_eq!(out.get_pixel(0, 0).0, [110, 125, 92, 194], "translucent");
+        assert_eq!(
+            out.get_pixel(1, 0).0,
+            [200, 40, 120, 255],
+            "opaque is untouched"
+        );
+        assert_eq!(
+            out.get_pixel(2, 0).0,
+            [10, 220, 60, 153],
+            "clear shows the fill"
+        );
+
+        let clear = RgbaColor { alpha: 0, ..fill };
+        let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([200, 40, 120, 0]));
+        let out = fill_transparent(DynamicImage::ImageRgba8(image), clear).into_rgba8();
+        assert_eq!(out.get_pixel(0, 0).0, [0, 0, 0, 0], "nothing over nothing");
+    }
+
     /// The CPU path must produce exactly what calling the pipeline directly produces, because
     /// that is what both front-ends used to do by hand.
     #[test]

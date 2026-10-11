@@ -44,11 +44,6 @@ impl Arena {
         self.free.push(tensor.data);
     }
 
-    /// Whether it holds no buffers.
-    pub fn is_empty(&self) -> bool {
-        self.free.is_empty()
-    }
-
     /// Room for `len` elements: the smallest free buffer that fits, or a new one.
     fn take(&mut self, len: usize) -> Vec<MaybeUninit<f32x8>> {
         let fit = self
@@ -394,6 +389,21 @@ fn min_len(jobs: usize) -> usize {
     (jobs / (rayon::current_num_threads() * 4)).max(1)
 }
 
+/// `jobs` grouped into tasks of [`min_len`] each.
+fn balanced<I: IndexedParallelIterator>(jobs: I) -> rayon::iter::MinLen<I> {
+    let min = min_len(jobs.len());
+    jobs.with_min_len(min)
+}
+
+/// Columns per task for `rows` output rows `out_w` wide. Rows are split until every thread has
+/// several tasks, but never into more pieces than one per 48 columns.
+fn column_chunk(out_w: usize, rows: usize) -> usize {
+    let wanted = (rayon::current_num_threads() * 4).div_ceil(rows.max(1));
+    out_w
+        .div_ceil(wanted.clamp(1, out_w.div_ceil(48).max(1)))
+        .max(1)
+}
+
 /// Output pointer shared by rayon tasks that each write their own elements.
 #[derive(Clone, Copy)]
 struct OutPtr(*mut MaybeUninit<f32x8>);
@@ -477,10 +487,7 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
     let groups = out_blocks.div_ceil(FILTERS);
     let rows = input.batch * groups * out_h;
     // Long rows are split so every thread gets work; a 1x1 layer is one row per plane.
-    let wanted = (rayon::current_num_threads() * 4).div_ceil(rows.max(1));
-    let chunk = out_w
-        .div_ceil(wanted.clamp(1, out_w.div_ceil(48).max(1)))
-        .max(1);
+    let chunk = column_chunk(out_w, rows);
     let chunks = out_w.div_ceil(chunk);
     let jobs = rows * chunks;
 
@@ -489,35 +496,32 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
     let output = unsafe {
         Blocked::written(arena, batch, out_channels, full_h, full_w, |data| {
             let out = OutPtr(data.as_mut_ptr());
-            (0..jobs)
-                .into_par_iter()
-                .with_min_len(min_len(jobs))
-                .for_each(|job| {
-                    let (row_job, c) = (job / chunks, job % chunks);
-                    let (n, group, oy) = (
-                        row_job / (groups * out_h),
-                        row_job / out_h % groups,
-                        row_job % out_h,
-                    );
-                    let first = group * FILTERS;
-                    let row = Row::<K, S, B> {
-                        input: &input,
-                        weights,
-                        geometry: &geometry,
-                        n,
-                        first,
-                        oy,
-                        out,
-                    };
-                    let span = c * chunk..((c + 1) * chunk).min(out_w);
-                    // Accumulators F x P, plus P broadcasts and one weight, within sixteen registers.
-                    match FILTERS.min(geometry.out_blocks - first) {
-                        1 => row.run::<1, 8>(span),
-                        2 => row.run::<2, 5>(span),
-                        3 => row.run::<3, 4>(span),
-                        _ => row.run::<4, 3>(span),
-                    }
-                });
+            balanced((0..jobs).into_par_iter()).for_each(|job| {
+                let (row_job, c) = (job / chunks, job % chunks);
+                let (n, group, oy) = (
+                    row_job / (groups * out_h),
+                    row_job / out_h % groups,
+                    row_job % out_h,
+                );
+                let first = group * FILTERS;
+                let row = Row::<K, S, B> {
+                    input: &input,
+                    weights,
+                    geometry: &geometry,
+                    n,
+                    first,
+                    oy,
+                    out,
+                };
+                let span = c * chunk..((c + 1) * chunk).min(out_w);
+                // Accumulators F x P, plus P broadcasts and one weight, within sixteen registers.
+                match FILTERS.min(geometry.out_blocks - first) {
+                    1 => row.run::<1, 8>(span),
+                    2 => row.run::<2, 5>(span),
+                    3 => row.run::<3, 4>(span),
+                    _ => row.run::<4, 3>(span),
+                }
+            });
         })
     };
     Ok(output)
@@ -675,13 +679,11 @@ fn depthwise_with<const K: usize, const S: usize>(
     let out_w = output_dim(w, K, S, pad);
     let blocks = input.blocks();
     let (lo, hi) = interior(w, K, S, pad, out_w);
-    let rows = input.batch * blocks * out_h;
 
     // SAFETY: one task per output row, and each writes every column of it.
     let output = unsafe {
         Blocked::written(arena, input.batch, input.channels, out_h, out_w, |data| {
-            data.par_chunks_mut(out_w.max(1))
-                .with_min_len(min_len(rows))
+            balanced(data.par_chunks_mut(out_w.max(1)))
                 .enumerate()
                 .for_each(|(r, out_row)| {
                     let (n, b, oy) = (r / (blocks * out_h), r / out_h % blocks, r % out_h);
@@ -791,12 +793,10 @@ pub fn add(arena: &mut Arena, lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
 /// Nearest-neighbour 2x upsample.
 pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
     let (h, w) = (input.height, input.width);
-    let rows = input.batch * input.blocks() * h * 2;
     // SAFETY: one task per output row, and each writes every column of it.
     let output = unsafe {
         Blocked::written(arena, input.batch, input.channels, h * 2, w * 2, |data| {
-            data.par_chunks_mut((w * 2).max(1))
-                .with_min_len(min_len(rows))
+            balanced(data.par_chunks_mut((w * 2).max(1)))
                 .enumerate()
                 .for_each(|(r, out_row)| {
                     // Output row r of plane r / (2h) comes from input row r / 2 of the same plane.
@@ -897,13 +897,21 @@ mod tests {
     /// Channel counts straddle block boundaries (5, 13) and fill them (8, 16); output blocks
     /// of 1, 2, 3 and 4 + 1 reach every register tile shape; widths are narrow enough that
     /// border pixels outnumber interior ones and wide enough for full tiles, and a 9x16 1x1
-    /// layer is split across tasks mid-plane; batch 2 moves every offset.
+    /// layer is split across tasks mid-plane; a padded 1x1 must stay off the flattened path
+    /// that an unpadded one takes; batch 2 moves every offset.
     #[test]
     fn dense_matches_the_definition() {
         for (c_in, c_out) in [(3, 16), (8, 5), (16, 13), (8, 24), (13, 40)] {
             for (h, w) in [(1, 1), (5, 7), (9, 16)] {
                 let input = Tensor::new(2, c_in, h, w, ramp(2 * c_in * h * w, c_in)).unwrap();
-                for (k, stride, pad) in [(1, 1, 0), (3, 1, 1), (3, 2, 1), (3, 1, 0), (1, 2, 0)] {
+                for (k, stride, pad) in [
+                    (1, 1, 0),
+                    (1, 1, 1),
+                    (3, 1, 1),
+                    (3, 2, 1),
+                    (3, 1, 0),
+                    (1, 2, 0),
+                ] {
                     let wts = ramp(c_out * c_in * k * k, c_out);
                     let bias = ramp(c_out, 3);
                     let reference = reference(&input, &wts, &bias, c_out, k, stride, pad, 1, true);
@@ -1025,6 +1033,52 @@ mod tests {
             &reference(&input, &wts, &bias, 13, 3, 1, 1, 1, false),
             "conv into a recycled buffer",
         );
+    }
+
+    /// `interior` is exactly the output columns whose every tap lands inside the input, for
+    /// every geometry the kernels take. A range too small only sends columns down the checked
+    /// path, which hides it from every output comparison; this is what notices.
+    #[test]
+    fn the_interior_is_every_column_that_needs_no_checks() {
+        for (kernel, stride, pad) in [(1, 1, 0), (1, 2, 0), (3, 1, 1), (3, 2, 1), (3, 2, 0)] {
+            for width in 1..14 {
+                let out_w = output_dim(width, kernel, stride, pad);
+                let inside: Vec<usize> = (0..out_w)
+                    .filter(|&ox| ox * stride >= pad && ox * stride - pad + kernel <= width)
+                    .collect();
+                let (lo, hi) = interior(width, kernel, stride, pad, out_w);
+                assert!(
+                    lo <= hi,
+                    "{kernel}x{kernel}/{stride} pad {pad}, width {width}"
+                );
+                assert_eq!(
+                    (lo..hi).collect::<Vec<_>>(),
+                    inside,
+                    "{kernel}x{kernel}/{stride} pad {pad}, width {width}"
+                );
+            }
+        }
+    }
+
+    /// One row per thread is split four ways, so each thread gets four tasks; four rows per
+    /// thread are not split; and a row is never cut into more pieces than it has 48 columns.
+    #[test]
+    fn long_rows_are_split_until_every_thread_has_four_tasks() {
+        let threads = rayon::current_num_threads();
+        assert_eq!(column_chunk(480, threads), 120);
+        assert_eq!(column_chunk(480, threads * 4), 480);
+        assert_eq!(column_chunk(96, 1), 48);
+        assert_eq!(column_chunk(30, 1), 30);
+        assert_eq!(column_chunk(0, 1), 1);
+    }
+
+    #[test]
+    fn each_task_gets_a_quarter_of_a_threads_share_and_at_least_one_job() {
+        let tasks = rayon::current_num_threads() * 4;
+        assert_eq!(min_len(tasks * 7), 7);
+        assert_eq!(min_len(tasks * 7 + tasks - 1), 7);
+        assert_eq!(min_len(tasks - 1), 1);
+        assert_eq!(min_len(0), 1);
     }
 
     #[test]

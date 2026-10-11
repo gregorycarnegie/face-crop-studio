@@ -374,6 +374,36 @@ mod tests {
         assert_eq!(out.to_rgba8().get_pixel(0, 0)[3], 0, "corner masked out");
     }
 
+    /// The other end of the range: exactly MAX_POINTS is still the GPU's. A Bezier polygon has
+    /// sixteen points per side, so 32 sides is 512.
+    #[test]
+    fn an_outline_of_exactly_max_points_is_still_masked() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping shape_mask MAX_POINTS test: no GPU");
+            return;
+        };
+        let shape = CropShape::Polygon {
+            sides: 32,
+            rotation_deg: 0.0,
+            corner_style: crate::shape::PolygonCornerStyle::Bezier { tension: 0.5 },
+        };
+        assert_eq!(
+            outline_points_for_rect(32.0, 32.0, &shape).len(),
+            MAX_POINTS
+        );
+        let mask = GpuShapeMask::new(ctx).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+            32,
+            32,
+            image::Rgba([180, 90, 40, 255]),
+        ));
+        let out = mask
+            .apply(&image, &shape, 0.0, 0.0, RgbaColor::opaque(0, 0, 0))
+            .expect("apply should not error")
+            .expect("512 points is within the shader's limit");
+        assert_eq!(out.to_rgba8().get_pixel(0, 0)[3], 0, "corner masked out");
+    }
+
     #[test]
     fn clear_cache_releases_the_pooled_buffers() {
         let Some(ctx) = test_context() else {

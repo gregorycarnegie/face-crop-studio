@@ -179,3 +179,18 @@ fn test_batch_processing_summary_output() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     eprintln!("Batch processing output:\n{}", stdout);
 }
+
+#[test]
+fn a_crop_that_cannot_be_saved_fails_the_run() {
+    let (model, fixture, _temp_dir, input_dir, output_dir) = cli_test_setup!(load_to_dir);
+
+    copy_fixture_to(&fixture, &input_dir.join("test.jpg")).expect("copy fixture");
+    // A directory where the first crop's file should go makes its final rename fail.
+    fs::create_dir(output_dir.join("test_face1.png")).expect("blocking directory");
+
+    let output = run_cli!(input_dir, model, output_dir, ["--crop"]);
+
+    assert!(!output.status.success(), "a lost crop must fail the run");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("could not be saved"), "stderr: {stderr}");
+}

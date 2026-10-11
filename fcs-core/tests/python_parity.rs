@@ -25,7 +25,10 @@
 //! `FCS_PARITY_REFERENCE=<path/to/detections.json>` points it at a bigger corpus instead — the
 //! 1,239-image reference folder, say — which is how this began life as an example.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use fcs_core::{Detection, ScrfdDetector};
 
@@ -121,6 +124,18 @@ fn strict() -> bool {
 
 #[test]
 fn the_rust_path_agrees_with_the_python_reference() {
+    agrees_with_the_python_reference(|model| ScrfdDetector::load_from(model));
+}
+
+/// The CPU graph by name: where a GPU wins the probe at load, the test above never runs it.
+#[test]
+fn the_cpu_graph_agrees_with_the_python_reference() {
+    agrees_with_the_python_reference(|model| {
+        ScrfdDetector::load_from_with_gpu(model, &fcs_utils::GpuContextOptions::disabled())
+    });
+}
+
+fn agrees_with_the_python_reference(load: impl FnOnce(&Path) -> Option<ScrfdDetector>) {
     let reference = std::env::var("FCS_PARITY_REFERENCE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| repo_root().join("fixtures/oracle/torch_epoch100.json"));
@@ -131,7 +146,7 @@ fn the_rust_path_agrees_with_the_python_reference() {
     // An explicit path, not `ScrfdDetector::load()`: that resolves relative to the working
     // directory, which for a test is the crate root rather than the workspace root.
     let model = repo_root().join("models/scrfd80k_500m_640.onnx");
-    let Some(detector) = ScrfdDetector::load_from(&model) else {
+    let Some(detector) = load(&model) else {
         // The model is supplied by CI, so its absence is a
         // misconfiguration rather than a fact about the machine.
         if strict() {

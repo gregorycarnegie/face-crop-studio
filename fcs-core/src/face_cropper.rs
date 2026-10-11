@@ -169,6 +169,31 @@ fn padded_canvas(img: &DynamicImage, region: &CropRegion, fill: Rgba<u8>) -> Rgb
     canvas
 }
 
+/// `region` grown on every side by enough that turning it by `angle` about its centre leaves no
+/// corner outside it -- half the growth of its bounding box, plus one so bilinear sampling at the
+/// rim still reads a real neighbour -- and that margin `(mx, my)`.
+fn grown_for_rotation(
+    region: &CropRegion,
+    angle: f32,
+    img_w: u32,
+    img_h: u32,
+) -> (CropRegion, (u32, u32)) {
+    let (width, height) = (region.width.max(1), region.height.max(1));
+    let (w, h) = (width as f32, height as f32);
+    let (sin, cos) = (angle.sin().abs(), angle.cos().abs());
+    let mx = ((w * cos + h * sin - w) / 2.0).ceil() as u32 + 1;
+    let my = ((w * sin + h * cos - h) / 2.0).ceil() as u32 + 1;
+    let grown = CropRegion::new(
+        region.x - mx as i32,
+        region.y - my as i32,
+        width + 2 * mx,
+        height + 2 * my,
+        img_w,
+        img_h,
+    );
+    (grown, (mx, my))
+}
+
 /// Crop a face from `img` according to `detection` and `settings`.
 ///
 /// The returned image is resized to `settings.output_width` x `settings.output_height`.
@@ -201,19 +226,8 @@ pub fn crop_face_from_image(
             // filled even where the photo had pixels (issue #5). So crop a margin wide enough
             // to cover the turned rectangle, rotate about the same centre, and keep the middle.
             // The fill colour is left only where the rotated crop really runs off the photo.
+            let (grown, (mx, my)) = grown_for_rotation(&region, angle, img_w, img_h);
             let (w, h) = (canvas_width as f32, canvas_height as f32);
-            let (sin, cos) = (angle.sin().abs(), angle.cos().abs());
-            // +1 so bilinear sampling at the rim still reads a real neighbour.
-            let mx = ((w * cos + h * sin - w) / 2.0).ceil() as u32 + 1;
-            let my = ((w * sin + h * cos - h) / 2.0).ceil() as u32 + 1;
-            let grown = CropRegion::new(
-                region.x - mx as i32,
-                region.y - my as i32,
-                canvas_width + 2 * mx,
-                canvas_height + 2 * my,
-                img_w,
-                img_h,
-            );
             let source = padded_canvas(img, &grown, fill);
             let (cx, cy) = (w / 2.0, h / 2.0);
             // rotate_about_center rotates counter-clockwise, so -angle levels the eyes. The
@@ -260,6 +274,27 @@ pub fn crop_face_from_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 120x80 crop turned by 0.3 rad has a 138.3 x 111.9 bounding box, so it grows by
+    /// ceil(18.3 / 2) = 10 and ceil(31.9 / 2) = 16 a side, plus the bilinear pixel. A non-square
+    /// crop, so swapping the axes shows; any larger margin would leave the pixels unchanged,
+    /// which is why the numbers are pinned here rather than through an image.
+    #[test]
+    fn the_rotation_margin_covers_the_turned_crop() {
+        let region = CropRegion::new(30, 40, 120, 80, 500, 400);
+        for angle in [0.3, -0.3] {
+            let (grown, margin) = grown_for_rotation(&region, angle, 500, 400);
+            assert_eq!(margin, (11, 17), "angle {angle}");
+            assert_eq!(
+                grown,
+                CropRegion::new(19, 23, 142, 114, 500, 400),
+                "angle {angle}"
+            );
+        }
+        let (level, margin) = grown_for_rotation(&region, 0.0, 500, 400);
+        assert_eq!(margin, (1, 1));
+        assert_eq!(level, CropRegion::new(29, 39, 122, 82, 500, 400));
+    }
 
     /// Clipped to zero width but not zero height: without the early return the row loop would
     /// slice far past the end of the canvas.

@@ -80,6 +80,17 @@ fn png_drops_alpha_only_when_every_pixel_is_opaque() {
     assert_eq!(decoded.to_rgba8(), cutout.to_rgba8());
 }
 
+/// An RGB image is already alpha-free, so it takes the RGB path without a scan, and never
+/// grows an alpha channel on the way.
+#[test]
+fn png_keeps_an_rgb_image_rgb() {
+    let rgb = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(3, 2, image::Rgb([9, 99, 199])));
+    let decoded =
+        image::load_from_memory(&encode_png(&rgb, PngCompression::Default).unwrap()).unwrap();
+    assert_eq!(decoded.color(), image::ColorType::Rgb8);
+    assert_eq!(decoded.to_rgb8(), rgb.to_rgb8());
+}
+
 #[test]
 fn png_compression_parse_maps_keywords_and_numeric_levels() {
     assert_eq!(PngCompression::parse("fast"), PngCompression::Fast);

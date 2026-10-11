@@ -169,30 +169,37 @@ pub fn platform_safe_backends(base: Backends) -> Backends {
 ///
 /// A disabled Intel adapter is not listed by DXGI; whether its ICD still loads is untested.
 pub fn vulkan_is_safe() -> bool {
-    #[cfg(target_os = "windows")]
+    lists_no_intel(dxgi_adapter_vendors())
+}
+
+/// `true` when the adapter walk finished and found no Intel vendor ID.
+fn lists_no_intel(vendors: Option<Vec<u32>>) -> bool {
+    const INTEL: u32 = 0x8086;
+    vendors.is_some_and(|vendors| !vendors.contains(&INTEL))
+}
+
+/// The PCI vendor ID of every adapter DXGI lists, or `None` when any step of the walk fails.
+#[cfg(target_os = "windows")]
+fn dxgi_adapter_vendors() -> Option<Vec<u32>> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, IDXGIFactory1};
     // SAFETY: DXGI factory and adapter calls with no preconditions beyond COM, which the
     // `windows` crate's smart pointers manage; every error ends the walk.
     unsafe {
-        use windows::Win32::Graphics::Dxgi::{
-            CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
-        };
-        const INTEL: u32 = 0x8086;
-        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
-            return false;
-        };
+        let factory = CreateDXGIFactory1::<IDXGIFactory1>().ok()?;
+        let mut vendors = Vec::new();
         for index in 0.. {
             match factory.EnumAdapters1(index) {
-                Ok(adapter) => match adapter.GetDesc1() {
-                    Ok(desc) if desc.VendorId != INTEL => {}
-                    _ => return false,
-                },
-                Err(err) => return err.code() == DXGI_ERROR_NOT_FOUND,
+                Ok(adapter) => vendors.push(adapter.GetDesc1().ok()?.VendorId),
+                Err(err) => return (err.code() == DXGI_ERROR_NOT_FOUND).then_some(vendors),
             }
         }
-        false
+        None
     }
-    #[cfg(not(target_os = "windows"))]
-    false
+}
+
+#[cfg(not(target_os = "windows"))]
+fn dxgi_adapter_vendors() -> Option<Vec<u32>> {
+    None
 }
 
 /// Whether a renderer should be given Vulkan: [`vulkan_is_safe`], and a Vulkan instance finds a
@@ -205,14 +212,17 @@ pub fn vulkan_is_safe() -> bool {
 /// enumeration, tens of milliseconds, against D3D12's 670-870 ms adapter bring-up (experiment
 /// 108).
 pub fn vulkan_renderer_available() -> bool {
-    if !cfg!(target_os = "windows") || !vulkan_is_safe() {
-        return false;
-    }
+    cfg!(target_os = "windows") && vulkan_is_safe() && hardware_vulkan_adapter()
+}
+
+/// Whether a Vulkan-only instance finds an adapter that is not a software rasterizer.
+fn hardware_vulkan_adapter() -> bool {
     let instance = Instance::new(InstanceDescriptor {
         backends: Backends::VULKAN,
         ..InstanceDescriptor::new_without_display_handle()
     });
-    block_on(instance.enumerate_adapters(Backends::VULKAN))
+    // The instance alone restricts the walk to Vulkan.
+    block_on(instance.enumerate_adapters(Backends::all()))
         .iter()
         .any(|adapter| adapter.get_info().device_type != wgpu::DeviceType::Cpu)
 }
@@ -225,6 +235,14 @@ fn prefers_vulkan(options: &GpuContextOptions, vulkan_is_safe: impl FnOnce() -> 
         && options.enabled
         && options.backends.contains(Backends::DX12)
         && vulkan_is_safe()
+}
+
+/// `options` with Vulkan as the only backend.
+fn vulkan_only(options: &GpuContextOptions) -> GpuContextOptions {
+    GpuContextOptions {
+        backends: Backends::VULKAN,
+        ..options.clone()
+    }
 }
 
 /// High-level configuration for creating a [`GpuContext`].
@@ -650,11 +668,7 @@ impl GpuContext {
     /// `WGPU_BACKEND` still overrides both when `options` respects the environment.
     pub fn init_preferring_vulkan(options: &GpuContextOptions) -> GpuAvailability {
         if prefers_vulkan(options, vulkan_is_safe) {
-            let vulkan = GpuContextOptions {
-                backends: Backends::VULKAN,
-                ..options.clone()
-            };
-            match Self::initialize(&vulkan) {
+            match Self::initialize(&vulkan_only(options)) {
                 Ok(ctx) => return GpuAvailability::Available(Arc::new(ctx)),
                 Err(err) => debug!(target: "fcs::gpu", "no Vulkan adapter ({err}); using D3D12"),
             }
@@ -860,18 +874,37 @@ mod tests {
         )));
     }
 
-    /// Only the walk itself is checked here -- what it finds depends on the machine.
     #[test]
-    fn the_intel_check_answers_without_panicking() {
-        let _ = vulkan_is_safe();
+    fn one_intel_adapter_anywhere_rules_vulkan_out() {
+        assert!(lists_no_intel(Some(vec![0x10DE, 0x1002, 0x1414])));
+        assert!(!lists_no_intel(Some(vec![0x10DE, 0x8086, 0x1414])));
+        assert!(!lists_no_intel(Some(vec![0x8086])));
+        // A walk that failed part-way may have stopped short of the Intel adapter.
+        assert!(!lists_no_intel(None));
     }
 
-    /// Machine-dependent too. On the Windows CI runner, which has only Microsoft's software
-    /// adapter, this is the VM case the renderer check exists for: the Intel check passes and
-    /// the Vulkan enumeration has to come back empty-handed rather than fail.
+    /// What else the walk finds depends on the machine, but DXGI lists its own software
+    /// rasterizer, WARP, on every Windows 8+ system, the hosted CI runner included.
     #[test]
-    fn the_renderer_check_answers_without_panicking() {
-        let _ = vulkan_renderer_available();
+    #[cfg(target_os = "windows")]
+    fn the_dxgi_walk_reaches_the_software_adapter() {
+        const MICROSOFT: u32 = 0x1414;
+        let vendors = dxgi_adapter_vendors().expect("DXGI lists adapters on Windows");
+        assert!(vendors.contains(&MICROSOFT), "no WARP in {vendors:x?}");
+        assert_eq!(vulkan_is_safe(), lists_no_intel(Some(vendors)));
+    }
+
+    #[test]
+    fn the_vulkan_attempt_keeps_every_option_but_the_backends() {
+        let options = GpuContextOptions {
+            profiling: true,
+            label: Some("probe".to_string()),
+            ..GpuContextOptions::default()
+        };
+        let vulkan = vulkan_only(&options);
+        assert_eq!(vulkan.backends, Backends::VULKAN);
+        assert!(vulkan.profiling);
+        assert_eq!(vulkan.label.as_deref(), Some("probe"));
     }
 
     #[test]
@@ -1219,9 +1252,16 @@ mod tests {
     /// landed, so the poll returns `Ok` and the branch is exercised by
     /// [`a_missed_deadline_is_named_as_one`] instead. What this pins is that whatever
     /// the short wait returned, the data still arrives on the next one.
+    ///
+    /// On a device of its own, not the shared test context. When a wait misses its deadline
+    /// while another thread's poll retires the submission it was waiting for, wgpu-core 30
+    /// asserts the fence it read is "at least the wait submission index" and panics; on the
+    /// shared device any other test's poll can be that thread.
     #[test]
     fn a_short_wait_leaves_the_device_usable() {
-        let Some(ctx) = test_support::test_context() else {
+        let GpuAvailability::Available(ctx) =
+            GpuContext::init_with_fallback(&GpuContextOptions::default())
+        else {
             return;
         };
         let (device, queue) = (ctx.device(), ctx.queue());

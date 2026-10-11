@@ -371,11 +371,8 @@ pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
         }
     }
     merged.into_iter().for_each(|tensor| arena.recycle(tensor));
-    let mut kept = lock(&weights.arena);
-    // Keep one run's worth: if a concurrent run already put its buffers back, these go.
-    if kept.is_empty() {
-        *kept = arena;
-    }
+    // Keep one run's worth: if a concurrent run already put its buffers back, they go instead.
+    *lock(&weights.arena) = arena;
     Ok(outputs)
 }
 

@@ -104,28 +104,46 @@ impl Weights {
                 arena.recycle(done);
             }
         }
-        let mut v = x
+        let pooled = x
             .context("eye refiner has no convolutions")?
             .global_average();
-        for (layer, (weights, bias, out)) in self.head.iter().enumerate() {
-            let relu = layer + 1 < self.head.len();
-            v = (0..*out)
-                .map(|o| {
-                    let row = &weights[o * v.len()..(o + 1) * v.len()];
-                    let sum = bias[o] + row.iter().zip(&v).map(|(w, x)| w * x).sum::<f32>();
-                    if relu { sum.max(0.0) } else { sum }
-                })
-                .collect();
-        }
-        v.try_into()
+        head(&self.head, pooled)
+            .try_into()
             .ok()
             .context("eye refiner must return four coordinates")
     }
 }
 
+/// The Gemm layers after pooling, with a ReLU after every one but the last.
+fn head(layers: &[(Vec<f32>, Vec<f32>, usize)], mut v: Vec<f32>) -> Vec<f32> {
+    for (layer, (weights, bias, out)) in layers.iter().enumerate() {
+        let relu = layer + 1 < layers.len();
+        v = (0..*out)
+            .map(|o| {
+                let row = &weights[o * v.len()..(o + 1) * v.len()];
+                let sum = bias[o] + row.iter().zip(&v).map(|(w, x)| w * x).sum::<f32>();
+                if relu { sum.max(0.0) } else { sum }
+            })
+            .collect();
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hidden layer's negative unit is clipped and the output's is not. The shipped model's
+    /// outputs are positive on every real crop, so the parity test cannot tell.
+    #[test]
+    fn only_the_hidden_head_layer_has_a_relu() {
+        let layers = [
+            (vec![1.0, 0.0, 0.0, -1.0], vec![0.5, 0.0], 2),
+            (vec![-1.0, 3.0], vec![0.25], 1),
+        ];
+        // Hidden: [1.5, -2] clips to [1.5, 0]; output: -1.5 + 0 + 0.25.
+        assert_eq!(head(&layers, vec![1.0, 2.0]), [-1.25]);
+    }
 
     #[test]
     fn rejects_weights_from_an_incompatible_export() {

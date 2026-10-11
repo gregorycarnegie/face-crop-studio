@@ -89,7 +89,7 @@ exclude_globs = [
 minimum_test_timeout = 120
 
 # ---------------------------------------------------------------------------
-# Known survivors, verified 2026-09-24. A full run should miss exactly these;
+# Known survivors, verified 2026-09-24 and 2026-10-10. A full run should miss exactly these;
 # anything else in missed.txt is new and needs a look. Listed rather than put in
 # `exclude_re`, because a name-based exclusion cannot tell two same-shaped
 # mutants in one function apart (apply_enhancements has four `> -> >=`: two
@@ -121,9 +121,25 @@ minimum_test_timeout = 120
 #     range, and any EXIF segment there would overrun and break.
 #   TempFile::keep -> (): after the rename the temp path is gone, so Drop's
 #     remove_file fails with NotFound and is ignored.
+#   median_ms `RUNS / 2 -> RUNS % 2`: both are 1 while RUNS is 3.
+#   nchwc scheduling, where every choice computes the same pixels:
+#     conv_with `c * chunk -> c / chunk` makes column chunks overlap and write
+#     identical values twice; Row::run `ox < lo -> <=` and `ox < hi -> >`, and
+#     depthwise_with `ox < lo -> <=`, hand interior columns to the checked
+#     path, which is correct anywhere. The `+= -> *=` in the same loops hang.
+#   ScrfdWeights::load `groups > 1 -> >=` and plan `run`'s `Slot::Data` output
+#     arm, for the shipped topology: no convolution has one output channel, and
+#     all nine outputs are merged class/box/keypoint heads, so always `Part`.
+#   OutputClaims::claim `candidate != path -> ==`: only decides whether the
+#     rename is logged.
 #
 # Not measurable on this host, which is not the same as equivalent:
 #
 #   get_vram_macos (x3): macOS only; neither Windows nor WSL can run it.
 #   encode_path (x2 per platform): each variant only compiles on its own OS.
 #     The Windows one is caught here; the unix one is caught in WSL.
+#   dxgi_adapter_vendors, the non-Windows stub (x3), and vulkan_is_safe -> true
+#     (right here, where no adapter is Intel's): both caught in WSL by
+#     `off_windows_vulkan_is_never_called_safe`. In WSL, run only that binary
+#     (`-- --test vulkan_preference`): the lib tests there crash inside the
+#     Vulkan loader when concurrent pipeline creation sets debug object names.

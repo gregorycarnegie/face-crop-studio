@@ -199,8 +199,7 @@ fn the_builtin_cpu_graph_matches_onnx_runtime() {
             mine.data().len(),
             theirs.data.len()
         );
-        let dims = [mine.batch(), mine.channels(), mine.height(), mine.width()];
-        worst = worst.max(worst_against_ort(mine.data(), dims, theirs));
+        worst = worst.max(worst_against_ort(mine.data(), mine.dims(), theirs));
     }
 
     assert!(

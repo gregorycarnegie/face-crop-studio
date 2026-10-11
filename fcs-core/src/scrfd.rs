@@ -159,7 +159,9 @@ impl ScrfdDetector {
             }
         };
 
-        let chosen = match (gpu.probe_ms(), cpu.probe_ms()) {
+        let input = vec![0.0f32; 3 * (INPUT_SIZE as usize).pow(2)];
+        let probe = |detector: &Self| median_ms(|| detector.infer(input.clone()).map(drop));
+        let chosen = match (probe(&gpu), probe(&cpu)) {
             (Ok(gpu_ms), Ok(cpu_ms)) => {
                 let use_gpu = prefer_gpu(gpu_ms, cpu_ms);
                 info!(
@@ -180,28 +182,6 @@ impl ScrfdDetector {
         };
         info!("SCRFD on {} from {}", chosen.engine(), path.display());
         Some(chosen)
-    }
-
-    /// Median time of the network alone, in milliseconds, after untimed runs that absorb
-    /// first-use costs (buffer allocation, the GPU's lazy pipeline state). One warm-up was not
-    /// enough: an RTX 4090 still read 4.1 ms against its steady 2.
-    fn probe_ms(&self) -> Result<f64> {
-        const WARMUP: usize = 3;
-        const RUNS: usize = 3;
-        let side = INPUT_SIZE as usize;
-        let input = vec![0.0f32; 3 * side * side];
-        for _ in 0..WARMUP {
-            self.infer(input.clone())?;
-        }
-        let mut times = (0..RUNS)
-            .map(|_| {
-                let started = std::time::Instant::now();
-                self.infer(input.clone())?;
-                Ok(started.elapsed().as_secs_f64() * 1e3)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        times.sort_by(f64::total_cmp);
-        Ok(times[RUNS / 2])
     }
 
     /// Run the network on a preprocessed input and read back the nine head maps.
@@ -225,7 +205,7 @@ impl ScrfdDetector {
                 Ok(plan::run(tensor, weights)?
                     .into_iter()
                     .map(|t| {
-                        let dims = [t.batch(), t.channels(), t.height(), t.width()];
+                        let dims = t.dims();
                         (t.into_data(), dims)
                     })
                     .collect())
@@ -259,6 +239,26 @@ impl ScrfdDetector {
         apply_nms_in_place(&mut detections, nms_threshold);
         Ok(detections)
     }
+}
+
+/// Median time of `run` in milliseconds, after untimed runs that absorb first-use costs (buffer
+/// allocation, the GPU's lazy pipeline state). One warm-up was not enough: an RTX 4090 still
+/// read 4.1 ms against its steady 2.
+fn median_ms(mut run: impl FnMut() -> Result<()>) -> Result<f64> {
+    const WARMUP: usize = 3;
+    const RUNS: usize = 3;
+    for _ in 0..WARMUP {
+        run()?;
+    }
+    let mut times = (0..RUNS)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            run()?;
+            Ok(started.elapsed().as_secs_f64() * 1e3)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    times.sort_by(f64::total_cmp);
+    Ok(times[RUNS / 2])
 }
 
 /// Whether the GPU should run the network, given each engine's time at load.
@@ -747,6 +747,21 @@ mod tests {
         assert!(prefer_gpu(10.0, 9.0), "a near tie goes to the GPU");
         assert!(prefer_gpu(10.0, 8.0), "exactly 25% faster is still a tie");
         assert!(!prefer_gpu(10.0, 7.9), "past 25% the CPU takes it");
+    }
+
+    /// Three untimed warm-ups, then the middle of three timed runs, in milliseconds. The timed
+    /// runs arrive out of order, so the answer is only the median if they were sorted.
+    #[test]
+    fn the_probe_reports_the_median_timed_run_in_milliseconds() {
+        let mut sleeps = [90, 90, 90, 80, 5, 30].into_iter();
+        let ms = median_ms(|| {
+            let ms = sleeps.next().expect("six runs");
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            Ok(())
+        })
+        .expect("nothing fails");
+        assert!((30.0..80.0).contains(&ms), "median {ms} ms");
+        assert_eq!(sleeps.next(), None, "exactly six runs");
     }
 
     /// A square image takes either branch of the aspect-ratio test and must come out the same.

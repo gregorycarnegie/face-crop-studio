@@ -125,9 +125,8 @@ fn correct_region(
         } else {
             fringe_weight(px.0, threshold)
         };
-        if weight > 0.0 {
-            px.0 = corrected(px.0, black, weight);
-        }
+        // At weight 0 this returns the pixel unchanged.
+        px.0 = corrected(px.0, black, weight);
     }
 }
 
@@ -157,11 +156,11 @@ fn black_level(pixels: impl Iterator<Item = [u8; 4]>) -> [f32; 3] {
         return [0.0; 3];
     }
     let k = (pixels.len() / 20).max(1);
-    pixels.select_nth_unstable_by_key(k - 1, |p| {
+    let (darker, kth, _) = pixels.select_nth_unstable_by_key(k - 1, |p| {
         299 * p[0] as u32 + 587 * p[1] as u32 + 114 * p[2] as u32
     });
     let mut sum = [0.0f32; 3];
-    for p in &pixels[..k] {
+    for p in darker.iter().chain([&*kth]) {
         for c in 0..3 {
             sum[c] += p[c] as f32;
         }
@@ -290,6 +289,21 @@ mod tests {
         assert_eq!(black_level(px.into_iter()), [20.0, 30.0, 40.0]);
     }
 
+    /// Darkest by luma (0.299 R + 0.587 G + 0.114 B), which none of red, green or blue alone
+    /// decides: the second darkest here has the most blue and more red than the brightest.
+    #[test]
+    fn black_level_ranks_pixels_by_luma() {
+        let mut px = vec![[250u8, 250, 250, 255]; 36];
+        // Lumas 91200, 106565, 85150 and 28750.
+        px.extend([
+            [90, 60, 255, 255],
+            [255, 40, 60, 255],
+            [130, 40, 200, 255],
+            [10, 40, 20, 255],
+        ]);
+        assert_eq!(black_level(px.into_iter()), [70.0, 40.0, 110.0]);
+    }
+
     /// A low-contrast photo: nothing round the eye is darker than 70, and the
     /// pupil is red with a half-red fringe.
     fn washed_out_eye() -> RgbaImage {
@@ -333,6 +347,20 @@ mod tests {
             [130, 100, 100, 255],
             "the same colour away from any red core is left alone"
         );
+    }
+
+    /// The fringe reaches FRINGE_RADIUS past the core and no further, on every side.
+    #[test]
+    fn the_fringe_stops_two_pixels_past_the_core() {
+        let mut img = washed_out_eye();
+        // Core 9..=11; these are three past its right and bottom edges.
+        img.put_pixel(14, 10, image::Rgba([130, 100, 100, 255]));
+        img.put_pixel(10, 14, image::Rgba([130, 100, 100, 255]));
+        img.put_pixel(13, 10, image::Rgba([130, 100, 100, 255]));
+        correct_red_eye_region(&mut img, 1.5, &eye(10.0, 10.0, 9.0));
+        assert_eq!(img.get_pixel(13, 10).0, [112, 100, 100, 255], "two past");
+        assert_eq!(img.get_pixel(14, 10).0, [130, 100, 100, 255], "three right");
+        assert_eq!(img.get_pixel(10, 14).0, [130, 100, 100, 255], "three below");
     }
 
     #[test]
@@ -421,6 +449,12 @@ mod tests {
 
         correct_red_eye_region(&mut img, 1.5, &eye(-20.0, 2.0, 1.0));
         assert_eq!(img, before, "an eye past the left edge does nothing");
+
+        // Off one axis only: the box is empty on that axis and must not be walked.
+        correct_red_eye_region(&mut img, 1.5, &eye(100.0, 2.0, 1.0));
+        assert_eq!(img, before, "an eye past the right edge only does nothing");
+        correct_red_eye_region(&mut img, 1.5, &eye(2.0, 100.0, 1.0));
+        assert_eq!(img, before, "an eye past the bottom edge only does nothing");
     }
 
     #[test]

@@ -181,6 +181,25 @@ mod tests {
         detector
     }
 
+    /// The CLI and GUI load through these two rather than `load_from`, so each has to reach the
+    /// model. With the GPU off both are the CPU graph, which makes the answer the same on every
+    /// machine.
+    #[test]
+    fn the_front_end_loaders_reach_the_model() {
+        if detector().is_none() {
+            return;
+        }
+        let model = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("fcs-core sits in the workspace root")
+            .join(crate::scrfd::DEFAULT_MODEL);
+        let off = fcs_utils::GpuContextOptions::disabled();
+        let under_policy = FaceDetector::load_from_with_gpu(&model, &off).expect("loads");
+        assert_eq!(under_policy.inference_backend(), "cpu-graph");
+        let on_context = FaceDetector::load_from_with_context(&model, None).expect("loads");
+        assert_eq!(on_context.inference_backend(), "cpu-graph");
+    }
+
     #[test]
     fn settings_change_shares_the_loaded_model() {
         let Some(detector) = detector() else {
