@@ -160,7 +160,12 @@ impl ScrfdDetector {
         };
 
         let input = vec![0.0f32; 3 * (INPUT_SIZE as usize).pow(2)];
-        let probe = |detector: &Self| median_ms(|| detector.infer(input.clone()).map(drop));
+        let probe = |detector: &Self| {
+            median_ms(
+                || detector.infer(input.clone()).map(drop),
+                std::time::Instant::now,
+            )
+        };
         let chosen = match (probe(&gpu), probe(&cpu)) {
             (Ok(gpu_ms), Ok(cpu_ms)) => {
                 let use_gpu = prefer_gpu(gpu_ms, cpu_ms);
@@ -244,7 +249,10 @@ impl ScrfdDetector {
 /// Median time of `run` in milliseconds, after untimed runs that absorb first-use costs (buffer
 /// allocation, the GPU's lazy pipeline state). One warm-up was not enough: an RTX 4090 still
 /// read 4.1 ms against its steady 2.
-fn median_ms(mut run: impl FnMut() -> Result<()>) -> Result<f64> {
+fn median_ms(
+    mut run: impl FnMut() -> Result<()>,
+    mut now: impl FnMut() -> std::time::Instant,
+) -> Result<f64> {
     const WARMUP: usize = 3;
     const RUNS: usize = 3;
     for _ in 0..WARMUP {
@@ -252,9 +260,9 @@ fn median_ms(mut run: impl FnMut() -> Result<()>) -> Result<f64> {
     }
     let mut times = (0..RUNS)
         .map(|_| {
-            let started = std::time::Instant::now();
+            let started = now();
             run()?;
-            Ok(started.elapsed().as_secs_f64() * 1e3)
+            Ok(now().duration_since(started).as_secs_f64() * 1e3)
         })
         .collect::<Result<Vec<_>>>()?;
     times.sort_by(f64::total_cmp);
@@ -751,17 +759,23 @@ mod tests {
 
     /// Three untimed warm-ups, then the middle of three timed runs, in milliseconds. The timed
     /// runs arrive out of order, so the answer is only the median if they were sorted.
+    /// A synthetic clock avoids depending on how long a loaded CI runner takes to wake up.
     #[test]
     fn the_probe_reports_the_median_timed_run_in_milliseconds() {
-        let mut sleeps = [90, 90, 90, 80, 5, 30].into_iter();
-        let ms = median_ms(|| {
-            let ms = sleeps.next().expect("six runs");
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-            Ok(())
-        })
+        let started = std::time::Instant::now();
+        let mut times = [0, 80, 80, 85, 85, 115].into_iter();
+        let mut runs = 0;
+        let ms = median_ms(
+            || {
+                runs += 1;
+                Ok(())
+            },
+            || started + std::time::Duration::from_millis(times.next().expect("three timed runs")),
+        )
         .expect("nothing fails");
-        assert!((30.0..80.0).contains(&ms), "median {ms} ms");
-        assert_eq!(sleeps.next(), None, "exactly six runs");
+        assert_eq!(ms, 30.0);
+        assert_eq!(runs, 6, "three warm-ups and three timed runs");
+        assert_eq!(times.next(), None, "only timed runs read the clock");
     }
 
     /// A square image takes either branch of the aspect-ratio test and must come out the same.
