@@ -17,6 +17,37 @@ Face Crop Studio is a Rust workspace that wraps a face detector with determinist
 
 The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open Images photographs, so the shipped weights carry no non-commercial restriction. It runs on WGSL compute shaders, falling back to a built-in Rust CPU graph. Neither detection nor eye refinement loads an ONNX Runtime library.
 
+## Model comparison
+
+A small detector, with a separate eye refiner for precise alignment. On **1,859 held-out
+Open Images photographs** containing **4,597 annotated face boxes**, SCRFD-80k was
+competitive with the RetinaFace ResNet-34 weights found in FaceCropJet, at a fraction
+of the model size and CPU inference cost.
+
+![Detection recall across annotation-mismatch budgets, and paired eye-line error for SCRFD-80k, public SCRFD-500M and RetinaFace R34](docs/benchmarks/model-comparison.png)
+
+At an equal budget of 0.1 annotation-unmatched detections per image:
+
+| Detector | Annotated face recall | Median CPU time / image | Detector weights |
+|---|---:|---:|---:|
+| **Face Crop Studio SCRFD-80k** | **76.9%** | **12.2 ms** | **2.55 MB** |
+| RetinaFace R34 (FaceCropJet weights) | 73.9% | 115.6 ms | 88.50 MB |
+| Public SCRFD-500M | 68.8% | 11.2 ms | 2.52 MB |
+
+On the **same 1,318 faces** found by all three detectors, SCRFD-80k plus the eye refiner
+achieved **1.18° median eye-line error**, versus **1.81°** for RetinaFace and **2.02°** for
+public SCRFD-500M. **94.1%** of refined eye lines were within 5° of the hand-clicked
+labels. Refinement added a median **1.49 ms per face** in this benchmark.
+
+> **Scope:** These are model benchmarks using ONNX Runtime on the same CPU at 640 × 640,
+> not timings of either finished application or the built-in Rust/WGSL engines.
+> Unmatched detections include real faces missing from the annotations, so the detection
+> ranking is provisional. The held-out images share the Open Images domain used for
+> SCRFD-80k training. At more permissive mismatch budgets, SCRFD-80k and RetinaFace
+> were essentially tied.
+
+[Full results, hardware, methodology and model hashes](docs/MODEL_COMPARISON.md).
+
 ## Crates
 
 - **`fcs-core`** – Loads the detector, decodes its outputs, and implements the crop calculation logic. Holds the WGSL and pure-Rust CPU inference engines (see `ARCHITECTURE.md` for details).
@@ -47,7 +78,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 - **Face height targeting** – Configure how large the face should appear in the final crop (10–100%). The cropper preserves the requested aspect ratio and records any padding needed so crops can extend beyond the source image without distortion.
 - **Padding colour control** – Empty pixels introduced by out-of-bounds crops, and the area outside a crop shape, are filled with a configurable colour (zero alpha keeps them transparent) (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
-- **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner runs on the built-in Rust CPU engine, cutting median eye-line error from 4.05° to 1.18° against hand-clicked ground truth (93.3% of faces within 5° against 57.6%). No ONNX Runtime library is needed; if the model is missing or incompatible, the detector's own points are used.
+- **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner runs on the built-in Rust CPU engine. In the [paired model comparison](docs/MODEL_COMPARISON.md#eye-alignment), SCRFD-80k plus the refiner achieved 1.18° median eye-line error, with 94.1% of faces within 5° of hand-clicked ground truth. No ONNX Runtime library is needed; if the model is missing or incompatible, the detector's own points are used.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
 - **Enhancement pipeline** – Optional post-crop adjustments (auto colour, exposure, brightness, contrast, saturation, sharpening, skin smoothing, red-eye removal, and portrait background blur) with both CPU (pure Rust) and GPU (WGSL compute shaders) implementations.
 - **Camera RAW input** – DNG, CR2, CR3, NEF, ARW, RW2, ORF, RAF, SRW, and PEF decode via a pure-Rust pipeline in both CLI and GUI, alongside the standard formats (PNG, JPEG, WebP, TIFF, BMP, AVIF, HEIC). Unsupported DNG variants are skipped rather than crashing a batch.
@@ -325,6 +356,7 @@ Mutation testing is deliberately not in CI: every mutant is a fresh incremental 
 - [GUI crop guide](docs/gui_crop_guide.md) – walkthrough of the desktop crop workflow and keyboard shortcuts.
 - [GPU research notes](docs/gpu_research.md) – design and implementation of the custom WGPU inference graph.
 - [ONNX runtime options](docs/ONNX_RUNTIME_OPTIONS.md) – inference backend trade-offs and the chosen approach.
+- [Model comparison](docs/MODEL_COMPARISON.md) – SCRFD-80k and the eye refiner against public SCRFD-500M and the RetinaFace R34 weights found in FaceCropJet.
 - [Performance guide](docs/PERFORMANCE.md) – performance profile and optimization notes.
 - [OpenCV parity snapshot](docs/parity_report.md) – detection/crop parity against the OpenCV reference.
 - [Release runbook](docs/release_runbook.md) – the Windows-first release process.
