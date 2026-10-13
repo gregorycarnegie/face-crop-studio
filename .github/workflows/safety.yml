@@ -61,10 +61,12 @@ jobs:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
+      # The prebuilt cargo-fuzz is a musl binary and defaults to its own target, where
+      # ASan cannot link, so name the runner's gnu target explicitly.
       - name: Fuzz with AddressSanitizer
         run: |
           mkdir -p fuzz/corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=512
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=512
       - name: Save crash inputs
         if: failure()
         uses: actions/upload-artifact@v4
