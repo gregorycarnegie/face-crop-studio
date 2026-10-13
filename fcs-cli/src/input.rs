@@ -253,6 +253,10 @@ fn sanitize_override_path(p: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use clap::Parser;
+    use googletest::{
+        assert_that,
+        matchers::{contains_substring, eq, matches_pattern, some},
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -315,7 +319,10 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("input path is neither file nor directory"));
+        assert_that!(
+            err,
+            contains_substring("input path is neither file nor directory")
+        );
     }
 
     #[test]
@@ -337,7 +344,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("no images found"));
+        assert_that!(err, contains_substring("no images found"));
     }
 
     /// Field by field, so dropping any one flag from the options is visible. The collect tests
@@ -391,7 +398,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("--mapping-source-col is required"));
+        assert_that!(err, contains_substring("--mapping-source-col is required"));
     }
 
     #[test]
@@ -412,7 +419,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("--mapping-output-col is required"));
+        assert_that!(err, contains_substring("--mapping-output-col is required"));
     }
 
     #[test]
@@ -443,14 +450,23 @@ mod tests {
 
         assert_eq!(items.len(), 2);
         assert_same_existing_path(&items[0].source, &image_a);
-        assert_eq!(
-            items[0].output_override,
-            Some(PathBuf::from("nested/out-a"))
+        assert_that!(
+            items[0],
+            matches_pattern!(ProcessingItem {
+                output_override: some(eq(&PathBuf::from("nested/out-a"))),
+                mapping_row: some(eq(&1)),
+                ..
+            })
         );
-        assert_eq!(items[0].mapping_row, Some(1));
         assert_same_existing_path(&items[1].source, &image_b);
-        assert_eq!(items[1].output_override, Some(PathBuf::from("out-b")));
-        assert_eq!(items[1].mapping_row, Some(2));
+        assert_that!(
+            items[1],
+            matches_pattern!(ProcessingItem {
+                output_override: some(eq(&PathBuf::from("out-b"))),
+                mapping_row: some(eq(&2)),
+                ..
+            })
+        );
     }
 
     #[test]
@@ -572,7 +588,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("no usable rows found"));
+        assert_that!(err, contains_substring("no usable rows found"));
     }
 
     #[test]
@@ -596,7 +612,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(err.contains("did not produce any usable rows"));
+        assert_that!(err, contains_substring("did not produce any usable rows"));
     }
 
     #[test]

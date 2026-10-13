@@ -520,6 +520,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
+    fn default_settings_json_matches_contract() {
+        insta::assert_json_snapshot!("default_settings", AppSettings::default());
+    }
+
+    #[test]
     fn default_settings_round_trip() {
         let file = NamedTempFile::new().expect("tempfile");
         let settings = AppSettings::default();

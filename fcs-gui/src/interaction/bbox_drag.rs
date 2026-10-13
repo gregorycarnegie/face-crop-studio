@@ -86,6 +86,10 @@ fn extend_bottom_edge(bbox: &mut BoundingBox, delta_y: f32, img_h: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use googletest::{
+        assert_that,
+        matchers::{eq, ge, matches_pattern},
+    };
     use rstest::rstest;
 
     const IMG_W: f32 = 200.0;
@@ -172,19 +176,40 @@ mod tests {
     #[test]
     fn move_translates_without_resizing() {
         let moved = dragged(DragHandle::Move, 10.0, -5.0);
-        assert_eq!((moved.x, moved.y), (60.0, 25.0));
-        assert_eq!((moved.width, moved.height), (40.0, 20.0));
+        assert_that!(
+            moved,
+            matches_pattern!(BoundingBox {
+                x: eq(60.0),
+                y: eq(25.0),
+                width: eq(40.0),
+                height: eq(20.0),
+            })
+        );
     }
 
     #[test]
     fn move_clamps_to_the_image_and_keeps_the_box_size() {
         let far = dragged(DragHandle::Move, 1000.0, 1000.0);
-        assert_eq!((far.x, far.y), (IMG_W - 40.0, IMG_H - 20.0));
-        assert_eq!((far.width, far.height), (40.0, 20.0));
+        assert_that!(
+            far,
+            matches_pattern!(BoundingBox {
+                x: eq(IMG_W - 40.0),
+                y: eq(IMG_H - 20.0),
+                width: eq(40.0),
+                height: eq(20.0),
+            })
+        );
 
         let near = dragged(DragHandle::Move, -1000.0, -1000.0);
-        assert_eq!((near.x, near.y), (0.0, 0.0));
-        assert_eq!((near.width, near.height), (40.0, 20.0));
+        assert_that!(
+            near,
+            matches_pattern!(BoundingBox {
+                x: eq(0.0),
+                y: eq(0.0),
+                width: eq(40.0),
+                height: eq(20.0),
+            })
+        );
     }
 
     #[test]
@@ -230,9 +255,16 @@ mod tests {
             IMG_W,
             IMG_H,
         );
-        assert_eq!(out.width, MIN_BBOX_EXTENT, "{handle:?} width collapsed");
-        assert_eq!(out.height, MIN_BBOX_EXTENT, "{handle:?} height collapsed");
-        assert!(out.x >= 0.0 && out.y >= 0.0, "{handle:?} left the image");
+        assert_that!(
+            out,
+            matches_pattern!(BoundingBox {
+                x: ge(0.0),
+                y: ge(0.0),
+                width: eq(MIN_BBOX_EXTENT),
+                height: eq(MIN_BBOX_EXTENT),
+            }),
+            "{handle:?}"
+        );
     }
 
     #[test]

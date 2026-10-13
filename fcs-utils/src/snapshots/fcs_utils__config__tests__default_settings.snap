@@ -1,0 +1,76 @@
+---
+source: fcs-utils/src/config.rs
+expression: "super::AppSettings::default()"
+---
+{
+  "model_path": "models/scrfd80k_500m_640.onnx",
+  "detection": {
+    "confidence": 0.5,
+    "nms_threshold": 0.3,
+    "top_k": 5000
+  },
+  "crop": {
+    "preset": "linkedin",
+    "output_width": 400,
+    "output_height": 400,
+    "face_height_pct": 70.0,
+    "positioning_mode": "center",
+    "vertical_offset": 0.0,
+    "horizontal_offset": 0.0,
+    "fill_color": {
+      "red": 0,
+      "green": 0,
+      "blue": 0,
+      "alpha": 255
+    },
+    "output_format": "png",
+    "jpeg_quality": 90,
+    "png_compression": "default",
+    "auto_detect_format": true,
+    "metadata": {
+      "mode": "preserve",
+      "include_crop_settings": true,
+      "include_quality_metrics": true,
+      "custom_tags": {}
+    },
+    "quality_rules": {
+      "auto_select_best_face": false,
+      "min_quality": null,
+      "auto_skip_no_high_quality": false,
+      "quality_suffix": false
+    },
+    "shape": {
+      "kind": "rectangle"
+    },
+    "vignette_softness": 0.0,
+    "vignette_intensity": 1.0,
+    "vignette_color": {
+      "red": 0,
+      "green": 0,
+      "blue": 0,
+      "alpha": 255
+    },
+    "eye_line_align": false,
+    "auto_orient_exif": true
+  },
+  "enhance": {
+    "auto_color": false,
+    "exposure_stops": 0.0,
+    "brightness": 0,
+    "contrast": 1.0,
+    "saturation": 1.0,
+    "sharpness": 0.0,
+    "skin_smooth": 0.0,
+    "red_eye_removal": false,
+    "background_blur": false
+  },
+  "telemetry": {
+    "enabled": false,
+    "level": "debug"
+  },
+  "batch_parallelism": null,
+  "gpu": {
+    "enabled": true,
+    "respect_env": true
+  }
+}

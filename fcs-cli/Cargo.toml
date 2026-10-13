@@ -26,6 +26,8 @@ serde_json.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
+googletest.workspace = true
 assert_cmd.workspace = true
 fcs-utils = { workspace = true, features = ["fixtures"] }
 proptest.workspace = true

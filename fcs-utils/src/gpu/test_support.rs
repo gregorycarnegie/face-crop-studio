@@ -17,6 +17,10 @@
 //! at all.
 
 use super::{GpuAvailability, GpuContext, GpuContextOptions};
+use googletest::{
+    assert_that,
+    matchers::{contains, eq, len, ne},
+};
 use image::{DynamicImage, GenericImageView, RgbaImage};
 use std::sync::{Arc, OnceLock};
 
@@ -104,14 +108,15 @@ pub(crate) fn assert_plausible_output(result: &DynamicImage, input: &DynamicImag
 
     let pixels = result.to_rgba8();
     let expected_len = (input.width() * input.height() * 4) as usize;
-    assert_eq!(
-        pixels.as_raw().len(),
-        expected_len,
+    assert_that!(
+        pixels.as_raw(),
+        len(eq(expected_len)),
         "{op} returned a buffer of the wrong length"
     );
 
-    assert!(
-        pixels.as_raw().iter().any(|&b| b != 0),
+    assert_that!(
+        pixels.as_raw(),
+        contains(ne(&0)),
         "{op} returned an all-zero image, so nothing was written"
     );
 }

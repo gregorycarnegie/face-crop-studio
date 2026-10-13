@@ -172,6 +172,7 @@ fn danger_btn(ui: &mut Ui, label: &str, action: impl FnOnce()) -> bool {
 mod tests {
     use super::*;
     use crate::ui::test_support::{click_at, harness};
+    use googletest::{expect_that, gtest, matchers::eq};
     use rstest::rstest;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -194,25 +195,28 @@ mod tests {
     /// Well past the 34px row, so it belongs to whatever is laid out next.
     const BELOW: egui::Vec2 = egui::vec2(14.0, 60.0);
 
-    #[test]
+    #[gtest]
     fn gpu_label_names_a_gpu_only_when_detection_uses_one() {
         let available = GpuStatusIndicator::available("RTX 4090", "Dx12", None, None, None);
-        assert_eq!(gpu_label(&available, Some("cpu-graph")), "GPU · RTX 4090");
-        assert_eq!(gpu_label(&available, None), "GPU · RTX 4090");
+        expect_that!(
+            gpu_label(&available, Some("cpu-graph")),
+            eq("GPU · RTX 4090")
+        );
+        expect_that!(gpu_label(&available, None), eq("GPU · RTX 4090"));
 
         // GPU off (or preprocessing off): no adapter, and nothing should say GPU...
         let disabled = GpuStatusIndicator::disabled("GPU preprocessing disabled");
-        assert_eq!(gpu_label(&disabled, Some("cpu-graph")), "CPU");
+        expect_that!(gpu_label(&disabled, Some("cpu-graph")), eq("CPU"));
         // ...unless inference is still on the GPU.
-        assert_eq!(
+        expect_that!(
             gpu_label(&disabled, Some("wgsl-gpu")),
-            "GPU · inference only"
+            eq("GPU · inference only")
         );
 
         // The preprocessor failed: its adapter only counts if inference uses it.
         let fallback = GpuStatusIndicator::fallback("boom", Some("RTX 4090".into()), None);
-        assert_eq!(gpu_label(&fallback, Some("cpu-graph")), "CPU");
-        assert_eq!(gpu_label(&fallback, Some("wgsl-gpu")), "GPU · RTX 4090");
+        expect_that!(gpu_label(&fallback, Some("cpu-graph")), eq("CPU"));
+        expect_that!(gpu_label(&fallback, Some("wgsl-gpu")), eq("GPU · RTX 4090"));
     }
 
     #[test]

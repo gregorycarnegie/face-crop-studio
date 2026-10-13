@@ -1,0 +1,21 @@
+---
+source: fcs-utils/src/output/tests.rs
+expression: snapshot
+---
+{
+  "crop_settings": {
+    "face_height_pct": 72.5,
+    "horizontal_offset": 0.25,
+    "output_height": 500,
+    "output_width": 400,
+    "positioning_mode": "custom",
+    "preset": "linkedin",
+    "vertical_offset": -0.10000000149011612
+  },
+  "face_confidence": 0.9100000262260436,
+  "generator": "face-crop-studio",
+  "generator_version": "[version]",
+  "job_id": "1234",
+  "quality": "high",
+  "quality_score": 1234.5
+}

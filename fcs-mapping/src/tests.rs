@@ -1,6 +1,12 @@
 use super::{
     encode_bytes, format_excel_cell, format_excel_header, format_parquet_field, quote_identifier, *,
 };
+use googletest::{
+    assert_that,
+    matchers::{
+        all, contains_substring, elements_are, eq, matches_pattern, not, some, starts_with,
+    },
+};
 use rstest::rstest;
 use rusqlite::Connection;
 use std::{
@@ -67,9 +73,10 @@ fn the_authorizer_refuses_every_action_but_reading(#[case] query: &str, #[case] 
         .err()
         .unwrap_or_else(|| panic!("{query} must not compile"));
     let reported = denied.lock().unwrap().clone();
-    assert!(
-        reported.as_deref().is_some_and(|r| r.starts_with(action)),
-        "{query} should have been refused as {action}, got {reported:?}"
+    assert_that!(
+        reported.as_deref(),
+        some(starts_with(action)),
+        "{query} should have been refused as {action}"
     );
 }
 
@@ -108,13 +115,17 @@ fn a_syntax_error_is_not_reported_as_the_previous_refusal() {
     let refused = sqlite::prepare_guarded(&conn, &denied, "DELETE FROM t")
         .expect_err("a write is refused")
         .to_string();
-    assert!(refused.contains("SQLite refused Delete"), "got: {refused}");
+    assert_that!(refused, contains_substring("SQLite refused Delete"));
 
     let syntax = sqlite::prepare_guarded(&conn, &denied, "SELECT a FROM t DROP")
         .expect_err("not valid SQL")
         .to_string();
-    assert!(
-        syntax.contains("failed to prepare") && !syntax.contains("SQLite refused"),
+    assert_that!(
+        syntax,
+        all!(
+            contains_substring("failed to prepare"),
+            not(contains_substring("SQLite refused"))
+        ),
         "the earlier refusal leaked into an unrelated failure: {syntax}"
     );
 }
@@ -192,13 +203,19 @@ fn csv_preview_truncates_rows_and_keeps_headers() {
 
     let preview = load_mapping_preview(&path, &options).unwrap();
 
-    assert_eq!(preview.format, MappingFormat::Csv);
-    assert_eq!(preview.columns, vec!["source", "output", "label"]);
-    assert_eq!(preview.total_rows, 3);
-    assert!(preview.truncated);
-    assert_eq!(preview.rows.len(), 2);
-    assert_eq!(preview.rows[0], vec!["a.jpg", "out-a", "one"]);
-    assert_eq!(preview.rows[1], vec!["b.jpg", "out-b", "two"]);
+    assert_that!(
+        preview,
+        matches_pattern!(MappingPreview {
+            format: eq(&MappingFormat::Csv),
+            columns: elements_are![eq("source"), eq("output"), eq("label")],
+            total_rows: eq(&3),
+            truncated: eq(&true),
+            rows: elements_are![
+                elements_are![eq("a.jpg"), eq("out-a"), eq("one")],
+                elements_are![eq("b.jpg"), eq("out-b"), eq("two")],
+            ],
+        })
+    );
 }
 
 #[test]
@@ -217,11 +234,19 @@ fn csv_preview_without_headers_generates_default_column_names() {
 
     let preview = load_mapping_preview(&path, &options).unwrap();
 
-    assert_eq!(preview.columns, vec!["Column 1", "Column 2"]);
-    assert_eq!(preview.total_rows, 2);
-    assert!(!preview.truncated);
-    assert_eq!(preview.rows[0], vec!["a.jpg", "out-a"]);
-    assert_eq!(preview.rows[1], vec!["b.jpg", "out-b"]);
+    assert_that!(
+        preview,
+        matches_pattern!(MappingPreview {
+            columns: elements_are![eq("Column 1"), eq("Column 2")],
+            total_rows: eq(&2),
+            truncated: eq(&false),
+            rows: elements_are![
+                elements_are![eq("a.jpg"), eq("out-a")],
+                elements_are![eq("b.jpg"), eq("out-b")],
+            ],
+            ..
+        })
+    );
 }
 
 #[test]
@@ -476,7 +501,7 @@ fn load_mapping_entries_errors_on_out_of_range_index() {
     .unwrap_err()
     .to_string();
 
-    assert!(err.contains("out of range"), "unexpected error: {err}");
+    assert_that!(err, contains_substring("out of range"));
 }
 
 #[test]
@@ -493,8 +518,13 @@ fn load_mapping_entries_errors_on_unknown_column_name() {
     .unwrap_err()
     .to_string();
 
-    assert!(err.contains("nonexistent"), "unexpected error: {err}");
-    assert!(err.contains("not found"), "unexpected error: {err}");
+    assert_that!(
+        err,
+        all!(
+            contains_substring("nonexistent"),
+            contains_substring("not found")
+        )
+    );
 }
 
 #[rstest]

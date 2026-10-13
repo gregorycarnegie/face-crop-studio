@@ -2,3 +2,6 @@
 *.sh text eol=lf
 *.plist text eol=lf
 *.plist.in text eol=lf
+
+# Fuzz seeds are exact bytes, including malformed signatures and encodings.
+/fuzz/seeds/** -text

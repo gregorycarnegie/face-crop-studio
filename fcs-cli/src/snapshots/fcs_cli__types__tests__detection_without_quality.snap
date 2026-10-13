@@ -1,0 +1,33 @@
+---
+source: fcs-cli/src/types.rs
+expression: "vec![report]"
+---
+[
+  {
+    "image": "portrait.jpg",
+    "detections": [
+      {
+        "score": 0.875,
+        "bbox": [
+          10.5,
+          20.25,
+          30.0,
+          40.0
+        ],
+        "landmarks": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            25.5,
+            30.0
+          ],
+          null,
+          null,
+          null
+        ]
+      }
+    ]
+  }
+]

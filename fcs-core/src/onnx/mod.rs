@@ -29,7 +29,16 @@ impl OnnxInitializerMap {
     pub fn load<P: AsRef<Path>>(model_path: P, names: &[&str]) -> Result<Self> {
         let bytes = fs::read(model_path.as_ref())
             .with_context(|| format!("failed to read {}", model_path.as_ref().display()))?;
-        let proto = pb::ModelProto::decode(&*bytes).context("failed to decode ONNX protobuf")?;
+        Self::from_bytes(&bytes, names).with_context(|| {
+            format!(
+                "failed to load initializers from {}",
+                model_path.as_ref().display()
+            )
+        })
+    }
+
+    pub(crate) fn from_bytes(bytes: &[u8], names: &[&str]) -> Result<Self> {
+        let proto = pb::ModelProto::decode(bytes).context("failed to decode ONNX protobuf")?;
         let graph = proto.graph.context("ONNX model missing GraphProto")?;
 
         let wanted: HashSet<&str> = names.iter().copied().collect();
@@ -43,11 +52,7 @@ impl OnnxInitializerMap {
         }
 
         for name in wanted {
-            anyhow::ensure!(
-                tensors.contains_key(name),
-                "initializer '{name}' not found in model {}",
-                model_path.as_ref().display()
-            );
+            anyhow::ensure!(tensors.contains_key(name), "initializer '{name}' not found");
         }
 
         Ok(Self { tensors })
@@ -241,16 +246,16 @@ mod tests {
         let err = OnnxInitializerMap::load(&path, &["w", "absent"])
             .expect_err("a missing initializer must fail the load");
         assert!(
-            err.to_string().contains("absent"),
-            "error should name the missing initializer: {err}"
+            format!("{err:#}").contains("absent"),
+            "error should name the missing initializer: {err:#}"
         );
 
         let short = write_synthetic_model(&dir, &[("w", vec![2, 2], vec![1.0, 2.0])]);
         let err = OnnxInitializerMap::load(&short, &["w"])
             .expect_err("a data/shape mismatch must fail the load");
         assert!(
-            err.to_string().contains("does not match shape"),
-            "error should report the shape mismatch: {err}"
+            format!("{err:#}").contains("does not match shape"),
+            "error should report the shape mismatch: {err:#}"
         );
     }
 }
