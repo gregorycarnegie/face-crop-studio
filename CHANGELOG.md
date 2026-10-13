@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Source EXIF is kept for JPEGs that pad their markers.** The JPEG spec allows extra
+  `0xFF` fill bytes before a marker; the metadata reader stopped at the first one, so
+  the default Preserve metadata mode silently dropped the EXIF from those files.
 - **`--crop-fill-color` no longer crashes on a hue ending in multi-byte characters.** Checking
   for a `deg` suffix sliced the string three bytes from the end, which can fall inside a
   character: `hsv(°°, 1, 1)` panicked instead of reporting an invalid hue.

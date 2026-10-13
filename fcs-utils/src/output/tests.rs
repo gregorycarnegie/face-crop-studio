@@ -354,6 +354,19 @@ fn load_jpeg_exif_extracts_embedded_exif_segment() {
 }
 
 #[test]
+fn load_jpeg_exif_skips_fill_bytes_before_a_marker() {
+    // T.81 allows any number of 0xFF fill bytes before a marker.
+    let exif_segment = make_exif_segment(b"minimal-exif");
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xFF, 0xFF];
+    jpeg.extend_from_slice(&exif_segment[1..]);
+    jpeg.extend_from_slice(&[0xFF, 0xD9]);
+    let dir = tempdir().unwrap();
+    let path = write_bytes(&dir, "fill.jpg", &jpeg);
+
+    assert_eq!(load_jpeg_exif(Some(&path)), Some(exif_segment));
+}
+
+#[test]
 fn inject_png_metadata_inserts_chunks_after_ihdr() {
     let encoded = encode_png(&sample_image(), PngCompression::Default).unwrap();
     let exif_chunk = make_png_chunk(b"eXIf", b"payload");
@@ -474,6 +487,14 @@ fn build_custom_metadata_payload_includes_crop_quality_and_custom_tags() {
     let face_confidence = parsed["face_confidence"].as_f64().unwrap();
     assert!((face_confidence - 0.91).abs() < 1e-6);
     assert_eq!(parsed["quality_score"].as_f64(), Some(1234.5));
+    let mut snapshot = parsed;
+    // Releases change this value; the assertion above checks the actual version.
+    snapshot["generator_version"] = Value::String("[version]".into());
+    // Sorted so the snapshot doesn't depend on whether serde_json's
+    // `preserve_order` feature gets unified in by some other crate.
+    insta::with_settings!({ sort_maps => true }, {
+        insta::assert_json_snapshot!("custom_export_metadata", snapshot);
+    });
 }
 
 // ---------------------------------------------------------------------------

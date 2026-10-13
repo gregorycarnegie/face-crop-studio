@@ -23,6 +23,7 @@ wgpu.workspace = true
 wide.workspace = true
 
 [dev-dependencies]
+googletest.workspace = true
 # Independent inference oracle for parity tests and benchmarks only.
 fcs-ort.workspace = true
 criterion.workspace = true

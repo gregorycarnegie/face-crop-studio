@@ -81,3 +81,44 @@ impl From<&Detection> for DetectionRecord {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fcs_core::BoundingBox;
+    use fcs_utils::point::Point;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::without_quality("detection_without_quality", false)]
+    #[case::with_quality("detection_with_quality", true)]
+    fn detection_json_matches_contract(#[case] snapshot: &str, #[case] with_quality: bool) {
+        let detection = Detection {
+            bbox: BoundingBox {
+                x: 10.5,
+                y: 20.25,
+                width: 30.0,
+                height: 40.0,
+            },
+            landmarks: [
+                Some(Point::new(0.0, 0.0)),
+                Some(Point::new(25.5, 30.0)),
+                None,
+                None,
+                None,
+            ],
+            score: 0.875,
+        };
+        let mut record = DetectionRecord::from(&detection);
+        if with_quality {
+            record.quality_score = Some(42.5);
+            record.quality = Some("high".into());
+        }
+        let report = ImageDetections {
+            image: "portrait.jpg".into(),
+            detections: vec![record],
+            annotated: with_quality.then(|| "annotated/portrait.jpg".into()),
+        };
+        insta::assert_json_snapshot!(snapshot, vec![report]);
+    }
+}

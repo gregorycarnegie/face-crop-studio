@@ -4,6 +4,7 @@
 //! preservation so that both the CLI and GUI can share a single implementation.
 
 mod encoders;
+mod exif;
 mod metadata;
 #[cfg(test)]
 mod tests;

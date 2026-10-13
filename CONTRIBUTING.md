@@ -156,6 +156,63 @@ For high-risk changes, prefer smaller pull requests that isolate behavior change
 - **A specific golden value** → a plain `#[test]`. Property tests check rules, so they do
   not replace asserting the actual number for a chosen input.
 
+## Safety, fuzzing, and JSON snapshots
+
+`CPU Safety and Parser Fuzzing` runs focused Miri scenarios and four bounded
+AddressSanitizer fuzz targets on pull requests. These isolated Cargo workspaces
+compile the production sources directly, without models, GPU setup, or native
+image codecs. Their lockfiles keep the harness dependencies reproducible.
+
+Run the CPU buffer checks (PowerShell):
+
+```powershell
+rustup toolchain install nightly-2026-08-24 --component miri
+$env:MIRIFLAGS = "-Zmiri-tree-borrows -Zmiri-ignore-leaks"
+cargo +nightly-2026-08-24 miri test --locked --manifest-path tools/safety/Cargo.toml --release miri_cpu_buffers -- --test-threads=1
+```
+
+Use `--release`: debug builds initialize output buffers with NaN, which would hide
+missing writes from Miri. Tree Borrows handles Crossbeam's aliasing pattern;
+leak reporting is disabled for its deferred global cleanup. Memory validity and
+race checks stay enabled. Crossbeam uses exposed pointer provenance, so this
+check does not establish strict-provenance correctness.
+
+Run a bounded fuzz target on Linux (CI uses the same commands):
+
+```bash
+rustup toolchain install nightly-2026-08-24
+cargo install cargo-fuzz --version 0.13.2 --locked
+mkdir -p fuzz/corpus/metadata
+cargo +nightly-2026-08-24 fuzz run metadata fuzz/corpus/metadata fuzz/seeds/metadata -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=512
+```
+
+Replace `metadata` with `metadata_roundtrip`, `onnx_initializers` or `color` to
+exercise the other parsers. `metadata` only checks the EXIF walkers never panic;
+`metadata_roundtrip` builds valid JPEG and PNG files around a fuzzed EXIF payload
+and checks the walkers return it exactly. Synthetic seeds cover float payloads,
+malformed shapes, EXIF orientation, and color syntax. CI restores each target's
+corpus from earlier passing runs. New inputs go into the ignored first corpus directory; tracked
+seeds stay unchanged. Crashes go into `fuzz/artifacts/` and CI uploads them on
+failure. Turn reproducible crashes into ordinary regression tests before fixing
+the parser. Windows additionally needs a compatible AddressSanitizer runtime.
+
+Insta snapshots pin default settings, custom export metadata, and CLI detection
+JSON (including omitted optional fields and null landmarks). They run with the
+normal test suite. Review intentional changes with targeted updates:
+
+```powershell
+$env:INSTA_UPDATE = "always"
+cargo test -p fcs-utils --lib default_settings_json_matches_contract
+cargo test -p fcs-utils --lib build_custom_metadata_payload_includes_crop_quality_and_custom_tags
+cargo test -p fcs-cli --bin fcs-cli detection_json_matches_contract
+Remove-Item Env:INSTA_UPDATE
+git diff -- '*.snap'
+```
+
+Review the snapshot diff before committing it. Export metadata normalizes only
+the generator version, which has a separate exact assertion. Image/crop goldens
+and live inference results retain their existing tolerance-based comparisons.
+
 ## Dependency Guidance
 
 - Prefer workspace dependencies in the root `Cargo.toml`.

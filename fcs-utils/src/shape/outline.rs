@@ -491,12 +491,12 @@ fn push_point(points: &mut Vec<Point>, angle: f32, cx: f32, cy: f32, radius: f32
 #[cfg(test)]
 mod tests {
     use super::*;
-
     /// Every probe below is placed on an exact geometric landmark, but the
     /// trig involved means `cos(PI/2)` lands a few ULPs off zero. The
     /// tolerance is far below any error an operator swap could produce.
     #[track_caller]
     fn approx_point(actual: Point, x: f32, y: f32) {
+        // Plain `assert!` so `#[track_caller]` reports the failing probe's line.
         assert!(
             (actual.x - x).abs() < 1e-3 && (actual.y - y).abs() < 1e-3,
             "expected ({x}, {y}), got ({}, {})",

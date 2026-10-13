@@ -9,6 +9,10 @@
 
 use super::*;
 use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
+use googletest::{
+    assert_that, expect_that, gtest,
+    matchers::{anything, contains_substring, err, near, ok, points_to, pointwise},
+};
 use rstest::rstest;
 use std::sync::Arc;
 
@@ -35,11 +39,9 @@ fn activation_matches_cpu() {
         .activation(&tensor, ActivationKind::Sigmoid)
         .expect("sigmoid activation should run on GPU");
     let sigmoid_cpu: Vec<f32> = tensor.iter().map(|v| 1.0 / (1.0 + (-v).exp())).collect();
-    assert!(
-        sigmoid_gpu
-            .iter()
-            .zip(sigmoid_cpu.iter())
-            .all(|(a, b)| (a - b).abs() < 1e-4),
+    assert_that!(
+        sigmoid_gpu,
+        pointwise!(|expected: f32| points_to(near(expected, 1e-4)), sigmoid_cpu),
         "sigmoid mismatch"
     );
 }
@@ -75,10 +77,9 @@ fn conv2d_matches_cpu_groups() {
         .conv2d(&input, &weights, &bias, &config)
         .expect("grouped conv2d should run on GPU");
     let cpu = conv2d_cpu(&input, &weights, &bias, &config);
-    assert!(
-        gpu.iter()
-            .zip(cpu.iter())
-            .all(|(a, b)| (a - b).abs() < 1e-3),
+    assert_that!(
+        gpu,
+        pointwise!(|expected: f32| points_to(near(expected, 1e-3)), cpu),
         "conv2d mismatch"
     );
 }
@@ -116,12 +117,12 @@ fn ops_reject_a_tensor_from_a_different_gpu_context() {
     let err = ops
         .upload_to_tensor(&foreign, &[3.5, 4.5])
         .expect_err("a foreign tensor must be refused");
-    assert!(format!("{err}").contains("different GPU context"), "{err}");
+    assert_that!(err.to_string(), contains_substring("different GPU context"));
 }
 
 /// Grouped on purpose: two groups halve the weights per output, so a count that ignored groups
 /// would differ.
-#[test]
+#[gtest]
 fn conv2d_config_validate_checks_every_buffer_length() {
     let config = Conv2dConfig::new(
         1,
@@ -134,10 +135,10 @@ fn conv2d_config_validate_checks_every_buffer_length() {
     )
     .expect("valid grouped config");
     // input 1*4*4*4 = 64, weights 4 * (4/2) * 3*3 = 72, bias 4.
-    assert!(config.validate(64, 72, 4).is_ok());
-    assert!(config.validate(63, 72, 4).is_err(), "input length");
-    assert!(config.validate(64, 71, 4).is_err(), "weight length");
-    assert!(config.validate(64, 72, 3).is_err(), "bias length");
+    expect_that!(config.validate(64, 72, 4), ok(anything()));
+    expect_that!(config.validate(63, 72, 4), err(anything()), "input length");
+    expect_that!(config.validate(64, 71, 4), err(anything()), "weight length");
+    expect_that!(config.validate(64, 72, 3), err(anything()), "bias length");
 }
 
 #[rstest]
@@ -310,11 +311,9 @@ fn gpu_tensor_chain_remains_on_device() {
     let cpu_conv = conv2d_cpu(&input, &weights, &bias, &config);
     let relu_cpu: Vec<f32> = cpu_conv.into_iter().map(|v| v.max(0.0)).collect();
 
-    assert!(
-        gpu_output
-            .iter()
-            .zip(relu_cpu.iter())
-            .all(|(a, b)| (a - b).abs() < 1e-3),
+    assert_that!(
+        gpu_output,
+        pointwise!(|expected: f32| points_to(near(expected, 1e-3)), relu_cpu),
         "GPU tensor chain diverged from CPU reference"
     );
 }

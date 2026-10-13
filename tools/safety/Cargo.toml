@@ -1,0 +1,23 @@
+[package]
+name = "fcs-safety"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Interpret the real CPU kernels without compiling GPU or native codec dependencies.
+[workspace]
+
+[dependencies]
+# Not workspace-inherited (see above); keep in step with the root [workspace.dependencies].
+anyhow = "1.0.104"
+bytemuck = "1.25.2"
+rayon = "1.12.0"
+wide = "1.7.1"
+
+[dev-dependencies]
+googletest = "0.14.3"
+rstest = { version = "0.27.0", default-features = false }
+
+[profile.release]
+debug-assertions = false
+overflow-checks = true

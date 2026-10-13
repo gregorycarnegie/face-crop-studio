@@ -814,6 +814,10 @@ pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use googletest::{
+        assert_that,
+        matchers::{near, points_to, pointwise},
+    };
     use rstest::rstest;
 
     /// A convolution written straight from the definition, with no special cases, for the
@@ -887,12 +891,14 @@ mod tests {
 
     fn assert_close(got: &Tensor, want: &Tensor, what: &str) {
         assert_eq!(got.dims(), want.dims(), "{what}: shape");
-        for (i, (x, y)) in got.data().iter().zip(want.data()).enumerate() {
-            assert!(
-                (x - y).abs() <= 1e-4 * y.abs().max(1.0),
-                "{what}: element {i} is {x}, the definition says {y}"
-            );
-        }
+        assert_that!(
+            got.data(),
+            pointwise!(
+                |y: f32| points_to(near(y, 1e-4 * y.abs().max(1.0))),
+                want.data().iter().copied()
+            ),
+            "{what}"
+        );
     }
 
     /// Channel counts straddle block boundaries (5, 13) and fill them (8, 16); output blocks

@@ -461,6 +461,10 @@ pub(crate) mod tests {
     use clap::Parser;
     use fcs_core::{FillColor, Landmark};
     use fcs_utils::QualityFilter;
+    use googletest::{
+        assert_that,
+        matchers::{all, anything, each, eq, field, len, some},
+    };
     use image::{Rgba, RgbaImage};
     use rstest::rstest;
     use std::{fs, sync::Arc};
@@ -911,8 +915,13 @@ pub(crate) mod tests {
         ];
 
         let records = build_detection_records(&detections, Some(&image));
-        assert_eq!(records.len(), 2);
-        assert!(records.iter().all(|record| record.quality.is_some()));
+        assert_that!(
+            records,
+            all!(
+                len(eq(2)),
+                each(field!(DetectionRecord.quality, some(anything())))
+            )
+        );
     }
 
     #[test]

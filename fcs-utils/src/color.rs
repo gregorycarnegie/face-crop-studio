@@ -233,6 +233,7 @@ pub fn cmyk_to_rgb(c: f32, m: f32, y: f32, k: f32) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use googletest::{assert_that, matchers::near};
     use proptest::prelude::*;
     use rstest::rstest;
 
@@ -257,8 +258,9 @@ mod tests {
         colspace_name: &str,
         tolerance: f32,
     ) {
-        assert!(
-            (colspace_val - exp_colspace_val).abs() < tolerance,
+        assert_that!(
+            colspace_val,
+            near(exp_colspace_val, tolerance),
             "{} mismatch for ({}, {}, {}): got {}, expected {}",
             colspace_name,
             r,

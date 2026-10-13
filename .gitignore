@@ -36,6 +36,12 @@ mutants.out*/
 # cargo-llvm-cov summary captured for the CI job summary
 coverage.txt
 
+# Generated fuzz inputs/crashes and unreviewed snapshot changes.
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
+*.snap.new
+
 # Misc / Local
 # Anchored to the repo root so crate-level `tests/` directories (e.g.
 # fcs-core/tests/) stay tracked; only a root-level scratch dir is ignored.

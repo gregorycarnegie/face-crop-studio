@@ -1,0 +1,48 @@
+[package]
+name = "fcs-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Compile the actual parser sources without the application/GPU/native codec graph.
+[workspace]
+
+[dependencies]
+# Not workspace-inherited (see above); keep in step with the root [workspace.dependencies].
+anyhow = "1.0.104"
+crc32fast = "1.5.2"
+image = { version = "0.25.10", default-features = false }
+libfuzzer-sys = "0.4.13"
+prost = "0.14.4"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[[bin]]
+name = "onnx_initializers"
+path = "fuzz_targets/onnx_initializers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata"
+path = "fuzz_targets/metadata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "color"
+path = "fuzz_targets/color.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata_roundtrip"
+path = "fuzz_targets/metadata_roundtrip.rs"
+test = false
+doc = false
+bench = false
