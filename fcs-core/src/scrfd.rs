@@ -305,13 +305,25 @@ pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
     let plane = (size * size) as usize;
     // The padding value, not 0.0: see the note above.
     let mut tensor = vec![(0.0 - 127.5) / 128.0; 3 * plane];
-    for y in 0..new_height.min(size) {
-        for x in 0..new_width.min(size) {
-            let pixel = resized.get_pixel(x, y);
-            let index = (y * size + x) as usize;
-            for channel in 0..3 {
-                tensor[channel * plane + index] = (pixel[channel] as f32 - 127.5) / 128.0;
-            }
+    let (r, gb) = tensor.split_at_mut(plane);
+    let (g, b) = gb.split_at_mut(plane);
+    let width = new_width.min(size) as usize;
+    let stride = new_width as usize * 3;
+    for y in 0..new_height.min(size) as usize {
+        let start = y * size as usize;
+        let end = start + width;
+        let rgb = &resized.as_raw()[y * stride..y * stride + width * 3];
+        for (((pixel, r), g), b) in rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(&mut r[start..end])
+            .zip(&mut g[start..end])
+            .zip(&mut b[start..end])
+        {
+            *r = (pixel[0] as f32 - 127.5) / 128.0;
+            *g = (pixel[1] as f32 - 127.5) / 128.0;
+            *b = (pixel[2] as f32 - 127.5) / 128.0;
         }
     }
     (tensor, Letterbox { scale })
@@ -519,6 +531,7 @@ fn find<'a>(
 mod tests {
     use super::*;
     use image::{Rgb, RgbImage};
+    use rstest::rstest;
 
     fn tensor(shape: Vec<usize>, data: Vec<f32>) -> fcs_ort::OutputTensor {
         fcs_ort::OutputTensor { shape, data }
@@ -549,6 +562,43 @@ mod tests {
         let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(500, 1000, Rgb([10, 20, 30])));
         let (_, fit) = preprocess(&image, 640);
         assert!((fit.scale - 0.64).abs() < 1e-6, "scale was {}", fit.scale);
+    }
+
+    #[rstest]
+    #[case::single_pixel(1, 1, 1)]
+    #[case::short_odd_square(7, 7, 7)]
+    #[case::wide(8, 4, 8)]
+    #[case::tall(4, 8, 8)]
+    #[case::odd_square(17, 17, 17)]
+    #[case::odd_wide(33, 11, 33)]
+    #[case::odd_tall(11, 33, 33)]
+    fn preprocessing_preserves_rgb_planes_and_letterbox_pixels(
+        #[case] width: u32,
+        #[case] height: u32,
+        #[case] size: u32,
+    ) {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_fn(width, height, |x, y| {
+            Rgb(std::array::from_fn(|c| (x + y * 17 + c as u32 * 83) as u8))
+        }));
+        let (input, fit) = preprocess(&image, size);
+        assert_eq!(fit.scale, 1.0);
+        let plane = (size * size) as usize;
+        assert_eq!(input.len(), 3 * plane);
+        for (index, value) in input.iter().enumerate() {
+            let c = index / plane;
+            let y = (index % plane) as u32 / size;
+            let x = (index % plane) as u32 % size;
+            let byte = if x < width && y < height {
+                (x + y * 17 + c as u32 * 83) as u8
+            } else {
+                0
+            };
+            assert_eq!(
+                value.to_bits(),
+                ((byte as f32 - 127.5) / 128.0).to_bits(),
+                "{width}x{height}/{size}, channel {c}, pixel {x},{y}"
+            );
+        }
     }
 
     /// Non-degenerate raw head maps in the engines' own `(1, A*C, H, W)` layout.

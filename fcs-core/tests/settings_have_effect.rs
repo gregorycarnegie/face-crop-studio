@@ -25,12 +25,7 @@ use fcs_utils::{
     save_dynamic_image,
 };
 use image::{DynamicImage, RgbaImage};
-
-/// One field, and how to move it away from its default.
-struct Case {
-    field: &'static str,
-    mutate: fn(&mut AppSettings),
-}
+use rstest::rstest;
 
 /// A source image with structure, so a geometry change actually shows up in the pixels.
 fn source() -> DynamicImage {
@@ -125,186 +120,106 @@ fn encode(settings: &AppSettings) -> Vec<u8> {
     std::fs::read(&path).expect("read back")
 }
 
-fn assert_each_changes(cases: &[Case], observe: fn(&AppSettings) -> Vec<u8>, what: &str) {
-    let base = baseline();
-    let reference = observe(&base);
-    let mut inert = Vec::new();
-    for case in cases {
-        let mut mutated = baseline();
-        (case.mutate)(&mut mutated);
-        if observe(&mutated) == reference {
-            inert.push(case.field);
-        }
-    }
+fn assert_changes(
+    field: &str,
+    mutate: fn(&mut AppSettings),
+    observe: fn(&AppSettings) -> Vec<u8>,
+    what: &str,
+) {
+    let reference = observe(&baseline());
+    let mut mutated = baseline();
+    mutate(&mut mutated);
     assert!(
-        inert.is_empty(),
-        "these settings changed nothing in {what}, so they are wired to nothing: {inert:?}"
+        observe(&mutated) != reference,
+        "{field} changed nothing in {what}, so it is wired to nothing"
     );
 }
 
-#[test]
-fn crop_geometry_settings_change_the_crop() {
-    // `preset` is excluded deliberately: it selects width/height/face-height, which are
-    // asserted here directly, and "custom" is what the baseline already uses.
-    let cases = [
-        Case {
-            field: "crop.output_width",
-            mutate: |s| s.crop.output_width = 96,
-        },
-        Case {
-            field: "crop.output_height",
-            mutate: |s| s.crop.output_height = 96,
-        },
-        Case {
-            field: "crop.face_height_pct",
-            mutate: |s| s.crop.face_height_pct = 80.0,
-        },
-        Case {
-            field: "crop.positioning_mode",
-            mutate: |s| s.crop.positioning_mode = PositioningMode::RuleOfThirds,
-        },
-        Case {
-            field: "crop.vertical_offset",
-            mutate: |s| {
-                s.crop.positioning_mode = PositioningMode::Custom;
-                s.crop.vertical_offset = 0.25;
-            },
-        },
-        Case {
-            field: "crop.horizontal_offset",
-            mutate: |s| {
-                s.crop.positioning_mode = PositioningMode::Custom;
-                s.crop.horizontal_offset = 0.25;
-            },
-        },
-        Case {
-            field: "crop.fill_color",
-            mutate: |s| {
-                // The crop has to reach past the source edge for the fill to show.
-                s.crop.face_height_pct = 5.0;
-                s.crop.fill_color = fcs_utils::color::RgbaColor {
-                    red: 255,
-                    green: 0,
-                    blue: 255,
-                    alpha: 255,
-                };
-            },
-        },
-        Case {
-            field: "crop.eye_line_align",
-            mutate: |s| s.crop.eye_line_align = true,
-        },
-        Case {
-            field: "crop.shape",
-            mutate: |s| s.crop.shape = CropShape::Rectangle,
-        },
-        Case {
-            field: "crop.vignette_softness",
-            mutate: |s| s.crop.vignette_softness = 0.9,
-        },
-        Case {
-            field: "crop.vignette_intensity",
-            mutate: |s| s.crop.vignette_intensity = 1.0,
-        },
-        Case {
-            field: "crop.vignette_color",
-            mutate: |s| {
-                s.crop.vignette_color = fcs_utils::color::RgbaColor {
-                    red: 255,
-                    green: 0,
-                    blue: 255,
-                    alpha: 255,
-                }
-            },
-        },
-    ];
-    assert_each_changes(&cases, render, "the rendered crop");
+// `preset` selects width, height and face height, which are asserted directly here.
+#[rstest]
+#[case::crop_output_width("crop.output_width", |s: &mut AppSettings| s.crop.output_width = 96)]
+#[case::crop_output_height("crop.output_height", |s: &mut AppSettings| s.crop.output_height = 96)]
+#[case::crop_face_height_pct("crop.face_height_pct", |s: &mut AppSettings| s.crop.face_height_pct = 80.0)]
+#[case::crop_positioning_mode("crop.positioning_mode", |s: &mut AppSettings| s.crop.positioning_mode = PositioningMode::RuleOfThirds)]
+#[case::crop_vertical_offset("crop.vertical_offset", |s: &mut AppSettings| {
+    s.crop.positioning_mode = PositioningMode::Custom;
+    s.crop.vertical_offset = 0.25;
+})]
+#[case::crop_horizontal_offset("crop.horizontal_offset", |s: &mut AppSettings| {
+    s.crop.positioning_mode = PositioningMode::Custom;
+    s.crop.horizontal_offset = 0.25;
+})]
+// The crop has to reach past the source edge for the fill to show.
+#[case::crop_fill_color("crop.fill_color", |s: &mut AppSettings| {
+    s.crop.face_height_pct = 5.0;
+    s.crop.fill_color = fcs_utils::color::RgbaColor {
+        red: 255,
+        green: 0,
+        blue: 255,
+        alpha: 255,
+    };
+})]
+#[case::crop_eye_line_align("crop.eye_line_align", |s: &mut AppSettings| s.crop.eye_line_align = true)]
+#[case::crop_shape("crop.shape", |s: &mut AppSettings| s.crop.shape = CropShape::Rectangle)]
+#[case::crop_vignette_softness("crop.vignette_softness", |s: &mut AppSettings| s.crop.vignette_softness = 0.9)]
+#[case::crop_vignette_intensity("crop.vignette_intensity", |s: &mut AppSettings| s.crop.vignette_intensity = 1.0)]
+#[case::crop_vignette_color("crop.vignette_color", |s: &mut AppSettings| {
+    s.crop.vignette_color = fcs_utils::color::RgbaColor {
+        red: 255,
+        green: 0,
+        blue: 255,
+        alpha: 255,
+    }
+})]
+fn crop_geometry_settings_change_the_crop(
+    #[case] field: &str,
+    #[case] mutate: fn(&mut AppSettings),
+) {
+    assert_changes(field, mutate, render, "the rendered crop");
 }
 
-#[test]
-fn enhancement_settings_change_the_crop() {
-    let cases = [
-        Case {
-            field: "enhance.auto_color",
-            mutate: |s| s.enhance.auto_color = true,
-        },
-        Case {
-            field: "enhance.exposure_stops",
-            mutate: |s| s.enhance.exposure_stops = 1.5,
-        },
-        Case {
-            field: "enhance.brightness",
-            mutate: |s| s.enhance.brightness = 40,
-        },
-        Case {
-            field: "enhance.contrast",
-            mutate: |s| s.enhance.contrast = 1.6,
-        },
-        Case {
-            field: "enhance.saturation",
-            mutate: |s| s.enhance.saturation = 0.2,
-        },
-        Case {
-            field: "enhance.sharpness",
-            mutate: |s| s.enhance.sharpness = 0.9,
-        },
-        Case {
-            field: "enhance.skin_smooth",
-            mutate: |s| s.enhance.skin_smooth = 0.9,
-        },
-        Case {
-            field: "enhance.background_blur",
-            mutate: |s| s.enhance.background_blur = true,
-        },
-    ];
-    assert_each_changes(&cases, render, "the enhanced crop");
+#[rstest]
+#[case::enhance_auto_color("enhance.auto_color", |s: &mut AppSettings| s.enhance.auto_color = true)]
+#[case::enhance_exposure_stops("enhance.exposure_stops", |s: &mut AppSettings| s.enhance.exposure_stops = 1.5)]
+#[case::enhance_brightness("enhance.brightness", |s: &mut AppSettings| s.enhance.brightness = 40)]
+#[case::enhance_contrast("enhance.contrast", |s: &mut AppSettings| s.enhance.contrast = 1.6)]
+#[case::enhance_saturation("enhance.saturation", |s: &mut AppSettings| s.enhance.saturation = 0.2)]
+#[case::enhance_sharpness("enhance.sharpness", |s: &mut AppSettings| s.enhance.sharpness = 0.9)]
+#[case::enhance_skin_smooth("enhance.skin_smooth", |s: &mut AppSettings| s.enhance.skin_smooth = 0.9)]
+#[case::enhance_background_blur("enhance.background_blur", |s: &mut AppSettings| s.enhance.background_blur = true)]
+fn enhancement_settings_change_the_crop(#[case] field: &str, #[case] mutate: fn(&mut AppSettings)) {
+    assert_changes(field, mutate, render, "the enhanced crop");
 }
 
-#[test]
-fn output_and_metadata_settings_change_the_written_file() {
-    let cases = [
-        Case {
-            field: "crop.output_format",
-            mutate: |s| s.crop.output_format = ImageFormatHint::Jpeg,
-        },
-        // `webp_quality` is absent from this list because the field is gone: it never reached
-        // the encoder, which `image` only offers losslessly. This test found `enhance.enabled`
-        // the same way on its first run -- the GUI enhanced unconditionally and the CLI gated
-        // on its own `--enhance` flag, so the settings field was read by nobody.
-        Case {
-            field: "crop.jpeg_quality",
-            mutate: |s| {
-                s.crop.output_format = ImageFormatHint::Jpeg;
-                s.crop.jpeg_quality = 30;
-            },
-        },
-        Case {
-            field: "crop.png_compression",
-            mutate: |s| s.crop.png_compression = PngCompression::Best,
-        },
-        Case {
-            field: "crop.metadata.mode",
-            mutate: |s| s.crop.metadata.mode = MetadataMode::Strip,
-        },
-        Case {
-            field: "crop.metadata.include_crop_settings",
-            mutate: |s| s.crop.metadata.include_crop_settings = false,
-        },
-        Case {
-            field: "crop.metadata.include_quality_metrics",
-            mutate: |s| s.crop.metadata.include_quality_metrics = false,
-        },
-        Case {
-            field: "crop.metadata.custom_tags",
-            mutate: |s| {
-                s.crop
-                    .metadata
-                    .custom_tags
-                    .insert("owner".into(), "someone".into());
-            },
-        },
-    ];
-    assert_each_changes(&cases, encode, "the written file");
+#[rstest]
+#[case::crop_output_format("crop.output_format", |s: &mut AppSettings| s.crop.output_format = ImageFormatHint::Jpeg)]
+// `webp_quality` is absent from this list because the field is gone: it never reached
+// the encoder, which `image` only offers losslessly. This test found `enhance.enabled`
+// the same way on its first run -- the GUI enhanced unconditionally and the CLI gated
+// on its own `--enhance` flag, so the settings field was read by nobody.
+#[case::crop_jpeg_quality("crop.jpeg_quality", |s: &mut AppSettings| {
+    s.crop.output_format = ImageFormatHint::Jpeg;
+    s.crop.jpeg_quality = 30;
+})]
+#[case::crop_png_compression("crop.png_compression", |s: &mut AppSettings| s.crop.png_compression = PngCompression::Best)]
+#[case::crop_metadata_mode("crop.metadata.mode", |s: &mut AppSettings| s.crop.metadata.mode = MetadataMode::Strip)]
+#[case::crop_metadata_include_crop_settings("crop.metadata.include_crop_settings", |s: &mut AppSettings| {
+    s.crop.metadata.include_crop_settings = false;
+})]
+#[case::crop_metadata_include_quality_metrics("crop.metadata.include_quality_metrics", |s: &mut AppSettings| {
+    s.crop.metadata.include_quality_metrics = false;
+})]
+#[case::crop_metadata_custom_tags("crop.metadata.custom_tags", |s: &mut AppSettings| {
+    s.crop
+        .metadata
+        .custom_tags
+        .insert("owner".into(), "someone".into());
+})]
+fn output_and_metadata_settings_change_the_written_file(
+    #[case] field: &str,
+    #[case] mutate: fn(&mut AppSettings),
+) {
+    assert_changes(field, mutate, encode, "the written file");
 }
 
 /// The fields that produce no pixels. Each is checked through the accessor that consumes it,
@@ -362,8 +277,10 @@ fn non_image_settings_reach_their_consumers() {
 
 /// `auto_detect_format` decides whether the extension or the setting picks the encoder, so its
 /// effect only shows when the two disagree.
-#[test]
-fn auto_detect_format_lets_the_extension_win() {
+#[rstest]
+#[case::extension_wins(true, true)]
+#[case::configured_format_wins(false, false)]
+fn auto_detect_format_lets_the_extension_win(#[case] auto_detect: bool, #[case] expect_jpeg: bool) {
     let dir = tempfile::tempdir().expect("tempdir");
     let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
         16,
@@ -382,18 +299,16 @@ fn auto_detect_format_lets_the_extension_win() {
     let mut settings = baseline();
     settings.crop.output_format = ImageFormatHint::Png;
 
-    for (auto_detect, expect_jpeg) in [(true, true), (false, false)] {
-        settings.crop.auto_detect_format = auto_detect;
-        let path = dir.path().join(format!("out-{auto_detect}.jpg"));
-        let options = OutputOptions::from_crop_settings(&settings.crop);
-        save_dynamic_image(&image, &path, &options, &context).expect("save");
-        let bytes = std::fs::read(&path).expect("read");
-        let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
-        assert_eq!(
-            is_jpeg,
-            expect_jpeg,
-            "auto_detect_format = {auto_detect} should {} the .jpg extension decide",
-            if expect_jpeg { "let" } else { "not let" }
-        );
-    }
+    settings.crop.auto_detect_format = auto_detect;
+    let path = dir.path().join(format!("out-{auto_detect}.jpg"));
+    let options = OutputOptions::from_crop_settings(&settings.crop);
+    save_dynamic_image(&image, &path, &options, &context).expect("save");
+    let bytes = std::fs::read(&path).expect("read");
+    let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
+    assert_eq!(
+        is_jpeg,
+        expect_jpeg,
+        "auto_detect_format = {auto_detect} should {} the .jpg extension decide",
+        if expect_jpeg { "let" } else { "not let" }
+    );
 }

@@ -1,5 +1,6 @@
 use super::*;
 use image::{GenericImageView, RgbaImage};
+use rstest::rstest;
 use std::sync::Arc;
 
 fn solid(color: [u8; 4]) -> DynamicImage {
@@ -825,22 +826,23 @@ fn tone_lut_is_absent_for_neutral_settings_and_present_from_epsilon() {
     );
 }
 
-#[test]
-fn unsharp_mask_needs_both_an_amount_and_a_radius() {
+#[rstest]
+#[case::zero_amount(0.0, 2.0)]
+#[case::zero_radius(1.0, 0.0)]
+#[case::both_zero(0.0, 0.0)]
+fn unsharp_mask_needs_both_an_amount_and_a_radius(#[case] amount: f32, #[case] radius: f32) {
     let img = colourful_rgb();
-    for (amount, radius) in [(0.0, 2.0), (1.0, 0.0), (0.0, 0.0)] {
-        assert!(
-            matches!(
-                apply_unsharp_mask(&img, amount, radius),
-                DynamicImage::ImageRgb8(_)
-            ),
-            "amount {amount} with radius {radius} must be a passthrough"
-        );
-    }
+    assert!(
+        matches!(
+            apply_unsharp_mask(&img, amount, radius),
+            DynamicImage::ImageRgb8(_)
+        ),
+        "amount {amount} with radius {radius} must be a passthrough"
+    );
 }
 
-#[test]
-fn pipeline_saturation_is_measured_as_a_distance_from_one() {
+#[rstest]
+fn pipeline_saturation_is_measured_as_a_distance_from_one(#[values(0.0, -1.0)] saturation: f32) {
     // The stage runs whenever saturation differs from 1.0 in either direction,
     // and the multiplier is clamped at zero, so both of these go grey.
     let img = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
@@ -854,24 +856,22 @@ fn pipeline_saturation_is_measured_as_a_distance_from_one() {
         ..Default::default()
     };
 
-    for saturation in [0.0f32, -1.0] {
-        let out = apply_enhancements(
-            &img,
-            &EnhancementSettings {
-                saturation,
-                ..base.clone()
-            },
-            None,
-        )
-        .to_rgba8();
-        let px = out.get_pixel(1, 1).0;
-        assert_eq!(
-            [px[0], px[1]],
-            [px[1], px[2]],
-            "saturation {saturation} should desaturate, got {px:?}"
-        );
-        assert_ne!(px[0], 200, "the pixel should not still be its own red");
-    }
+    let out = apply_enhancements(
+        &img,
+        &EnhancementSettings {
+            saturation,
+            ..base.clone()
+        },
+        None,
+    )
+    .to_rgba8();
+    let px = out.get_pixel(1, 1).0;
+    assert_eq!(
+        [px[0], px[1]],
+        [px[1], px[2]],
+        "saturation {saturation} should desaturate, got {px:?}"
+    );
+    assert_ne!(px[0], 200, "the pixel should not still be its own red");
 
     let unchanged = apply_enhancements(&img, &base, None).to_rgba8();
     assert_eq!(

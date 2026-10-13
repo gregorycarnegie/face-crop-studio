@@ -118,6 +118,7 @@ mod tests {
     use super::*;
     use fcs_core::{BoundingBox, Landmark};
     use image::{DynamicImage, RgbaImage};
+    use rstest::rstest;
     use tempfile::tempdir;
 
     // --- clamp_to_i32 ---
@@ -263,21 +264,22 @@ mod tests {
         assert!(out_dir.join("empty.png").exists());
     }
 
-    #[test]
-    fn annotate_rejects_an_image_with_either_dimension_zero() {
+    #[rstest]
+    #[case::zero_width(0u32, 4u32)]
+    #[case::zero_height(4, 0)]
+    #[case::both_zero(0, 0)]
+    fn annotate_rejects_an_image_with_either_dimension_zero(#[case] w: u32, #[case] h: u32) {
         // Both dimensions have to be non-zero, not just one: drawing into a
         // zero-width buffer has nowhere to put the boxes.
         let dir = tempdir().expect("temp directory");
-        for (w, h) in [(0u32, 4u32), (4, 0), (0, 0)] {
-            let image = DynamicImage::ImageRgba8(RgbaImage::new(w, h));
-            // Which error matters: past the guard, saving a zero-sized PNG fails too.
-            let err = annotate_image(&image, Path::new("input.png"), &[], dir.path())
-                .expect_err(&format!("{w}x{h} should be refused"));
-            assert!(
-                format!("{err}").contains("zero dimensions"),
-                "{w}x{h}: {err}"
-            );
-        }
+        let image = DynamicImage::ImageRgba8(RgbaImage::new(w, h));
+        // Which error matters: past the guard, saving a zero-sized PNG fails too.
+        let err = annotate_image(&image, Path::new("input.png"), &[], dir.path())
+            .expect_err(&format!("{w}x{h} should be refused"));
+        assert!(
+            format!("{err}").contains("zero dimensions"),
+            "{w}x{h}: {err}"
+        );
     }
 
     /// The bug the existing tests missed by only ever using `.png`.

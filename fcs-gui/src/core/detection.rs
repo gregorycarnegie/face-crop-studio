@@ -484,35 +484,29 @@ pub fn spawn_detection_job(
 mod tests {
     use super::*;
     use image::{DynamicImage, RgbImage};
+    use rstest::rstest;
 
-    #[test]
-    fn clamp_keeps_alpha_when_the_source_has_it() {
+    #[rstest]
+    #[case::rgba(DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        9000, 600, image::Rgba([10, 20, 30, 40]),
+    )))]
+    #[case::grey_alpha(DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_pixel(
+        9000, 600, image::LumaA([90, 40]),
+    )))]
+    fn clamp_keeps_alpha_when_the_source_has_it(#[case] src: DynamicImage) {
         // The fast path returns RGB8 for anything without alpha, so an alpha-carrying source
         // has to be routed the other way or the preview is silently flattened. LumaA8 is the
         // awkward case: it has alpha but is not RGBA8 (experiment 91).
-        for src in [
-            DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-                9000,
-                600,
-                image::Rgba([10, 20, 30, 40]),
-            )),
-            DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_pixel(
-                9000,
-                600,
-                image::LumaA([90, 40]),
-            )),
-        ] {
-            let out = clamp_to_texture_limit(&src);
-            assert!(
-                out.color().has_alpha(),
-                "alpha dropped for {:?}",
-                src.color()
-            );
-            assert!(out.width() <= MAX_PREVIEW_TEXTURE_SIDE);
-            // A uniform source stays uniform through a downscale, so the value is checkable.
-            let px = out.to_rgba8();
-            assert_eq!(px.get_pixel(0, 0)[3], 40, "alpha value changed");
-        }
+        let out = clamp_to_texture_limit(&src);
+        assert!(
+            out.color().has_alpha(),
+            "alpha dropped for {:?}",
+            src.color()
+        );
+        assert!(out.width() <= MAX_PREVIEW_TEXTURE_SIDE);
+        // A uniform source stays uniform through a downscale, so the value is checkable.
+        let px = out.to_rgba8();
+        assert_eq!(px.get_pixel(0, 0)[3], 40, "alpha value changed");
     }
 
     #[test]

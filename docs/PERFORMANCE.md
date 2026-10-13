@@ -1812,6 +1812,16 @@ and "folder" means `fcs-cli --crop` over it.
   of it decoded sources; the rest of ~5 GB commit is allocator retention (purging it costs 25-35%)
   and the Vulkan driver. Dropping the source before encoding moved nothing. See "Peak memory
   scales with worker count, and nothing else does".
+- **111. Inline assembly for SCRFD preprocessing - experiment only.** AVX2 assembly cuts the
+  extracted RGB-to-CHW conversion's time by about 6-12%, but safe Rust row slices match it.
+  Full preprocessing gains about 2%; no repeatable preprocessing-plus-CPU-graph gain.
+  Exact tensor/head parity passed on all eight oracle photos; assembly remains experimental.
+  See [method, results and reproduction](INLINE_ASM_EXPERIMENT.md).
+- **112. Safe Rust row slices in SCRFD preprocessing - kept.** Split the RGB tensor planes
+  once and convert through disjoint row slices. The integrated release path measured 1.026x
+  full-preprocessing speedup (median of eight per-photo paired ratios); no whole-inference
+  speedup is claimed. Exact old/new tensors and CPU heads, SCRFD unit tests and both
+  eight-photo Python parity tests passed.
 
 ---
 

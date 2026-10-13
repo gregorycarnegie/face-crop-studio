@@ -117,6 +117,7 @@ pub(crate) fn save_processed_crop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use tempfile::tempdir;
 
     fn spec<'a>(
@@ -181,11 +182,15 @@ mod tests {
         assert_eq!(name, "portrait_1.webp");
     }
 
-    #[test]
-    fn normalized_output_extension_maps_known_formats() {
-        assert_eq!(normalized_output_extension(ImageFormatHint::Png), "png");
-        assert_eq!(normalized_output_extension(ImageFormatHint::Jpeg), "jpg");
-        assert_eq!(normalized_output_extension(ImageFormatHint::Webp), "webp");
+    #[rstest]
+    #[case::png(ImageFormatHint::Png, "png")]
+    #[case::jpeg(ImageFormatHint::Jpeg, "jpg")]
+    #[case::webp(ImageFormatHint::Webp, "webp")]
+    fn normalized_output_extension_maps_known_formats(
+        #[case] format: ImageFormatHint,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(normalized_output_extension(format), expected);
     }
 
     #[test]

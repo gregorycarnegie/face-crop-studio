@@ -9,6 +9,7 @@
 
 use super::*;
 use fcs_utils::gpu::{GpuAvailability, GpuContext, GpuContextOptions};
+use rstest::rstest;
 use std::sync::Arc;
 
 use crate::gpu::conv2d::{Conv2dChannels, Conv2dOptions, SpatialDims};
@@ -139,68 +140,68 @@ fn conv2d_config_validate_checks_every_buffer_length() {
     assert!(config.validate(64, 72, 3).is_err(), "bias length");
 }
 
-#[test]
-fn specialized_convolutions_match_cpu_for_tails_activations_and_fallbacks() {
+#[rstest]
+#[case::pointwise_one(1, 1, 0, 1, 1)]
+#[case::pointwise_three(3, 1, 0, 1, 1)]
+#[case::pointwise_four(4, 1, 0, 1, 1)]
+#[case::pointwise_tail(5, 1, 0, 1, 1)]
+#[case::pointwise_wide(37, 1, 0, 1, 1)]
+#[case::strided_pointwise(17, 2, 0, 1, 1)]
+#[case::padded_pointwise(17, 1, 1, 1, 1)]
+#[case::grouped(17, 1, 0, 2, 1)]
+#[case::depthwise_one(1, 1, 1, 6, 3)]
+#[case::depthwise_three(3, 1, 1, 6, 3)]
+#[case::depthwise_wide(37, 1, 1, 6, 3)]
+#[case::strided_depthwise(17, 2, 1, 6, 3)]
+#[case::valid_depthwise(17, 1, 0, 6, 3)]
+fn specialized_convolutions_match_cpu_for_tails_activations_and_fallbacks(
+    #[case] width: u32,
+    #[case] stride: u32,
+    #[case] pad: u32,
+    #[case] groups: u32,
+    #[case] kernel: u32,
+    #[values(None, Some(ActivationKind::Relu), Some(ActivationKind::Sigmoid))] activation: Option<
+        ActivationKind,
+    >,
+) {
     let Some(ops) = gpu_ops() else {
         eprintln!("Skipping specialized convolution test (no adapter)");
         return;
     };
-    for (width, stride, pad, groups, kernel) in [
-        (1, 1, 0, 1, 1),
-        (3, 1, 0, 1, 1),
-        (4, 1, 0, 1, 1),
-        (5, 1, 0, 1, 1),
-        (37, 1, 0, 1, 1),
-        (17, 2, 0, 1, 1),
-        (17, 1, 1, 1, 1),
-        (17, 1, 0, 2, 1),
-        (1, 1, 1, 6, 3),
-        (3, 1, 1, 6, 3),
-        (37, 1, 1, 6, 3),
-        (17, 2, 1, 6, 3),
-        (17, 1, 0, 6, 3),
-    ] {
-        for activation in [
-            None,
-            Some(ActivationKind::Relu),
-            Some(ActivationKind::Sigmoid),
-        ] {
-            let output_channels = if groups == 6 { 6 } else { 10 };
-            let cfg = Conv2dConfig::new(
-                1,
-                Conv2dChannels::new(6, output_channels),
-                SpatialDims::new(width, 5),
-                SpatialDims::new(kernel, kernel),
-                SpatialDims::new(stride, stride),
-                SpatialDims::new(pad, pad),
-                Conv2dOptions::new(groups, activation),
-            )
-            .expect("convolution config");
-            let data = |n| {
-                (0..n)
-                    .map(|i| ((i * 17 % 101) as f32 - 50.0) / 100.0)
-                    .collect::<Vec<_>>()
-            };
-            let input = data(cfg.input_shape_dims().iter().product());
-            let weights = data(cfg.weight_shape_dims().iter().product());
-            let bias = data(output_channels as usize);
-            let expected = conv2d_cpu(&input, &weights, &bias, &cfg);
-            let actual = ops
-                .conv2d(&input, &weights, &bias, &cfg)
-                .expect("convolution dispatch");
-            assert_eq!(actual.len(), expected.len());
-            for (actual, raw) in actual.iter().zip(expected) {
-                let expected = match activation {
-                    None => raw,
-                    Some(ActivationKind::Relu) => raw.max(0.0),
-                    Some(ActivationKind::Sigmoid) => 1.0 / (1.0 + (-raw).exp()),
-                };
-                assert!(
-                    (actual - expected).abs() < 1e-4,
-                    "width={width} stride={stride} pad={pad} groups={groups} activation={activation:?}: {actual} vs {expected}"
-                );
-            }
-        }
+    let output_channels = if groups == 6 { 6 } else { 10 };
+    let cfg = Conv2dConfig::new(
+        1,
+        Conv2dChannels::new(6, output_channels),
+        SpatialDims::new(width, 5),
+        SpatialDims::new(kernel, kernel),
+        SpatialDims::new(stride, stride),
+        SpatialDims::new(pad, pad),
+        Conv2dOptions::new(groups, activation),
+    )
+    .expect("convolution config");
+    let data = |n| {
+        (0..n)
+            .map(|i| ((i * 17 % 101) as f32 - 50.0) / 100.0)
+            .collect::<Vec<_>>()
+    };
+    let input = data(cfg.input_shape_dims().iter().product());
+    let weights = data(cfg.weight_shape_dims().iter().product());
+    let bias = data(output_channels as usize);
+    let expected = conv2d_cpu(&input, &weights, &bias, &cfg);
+    let actual = ops
+        .conv2d(&input, &weights, &bias, &cfg)
+        .expect("convolution dispatch");
+    assert_eq!(actual.len(), expected.len());
+    for (actual, raw) in actual.iter().zip(expected) {
+        let expected = match activation {
+            None => raw,
+            Some(ActivationKind::Relu) => raw.max(0.0),
+            Some(ActivationKind::Sigmoid) => 1.0 / (1.0 + (-raw).exp()),
+        };
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "width={width} stride={stride} pad={pad} groups={groups} activation={activation:?}: {actual} vs {expected}"
+        );
     }
 }
 
@@ -408,104 +409,108 @@ fn conv2d_vec4_matches_standard() {
     );
 }
 
-#[test]
-#[ignore] // Run with: cargo test -p fcs-core benchmark_conv2d_performance -- --ignored --nocapture
-fn benchmark_conv2d_performance() {
+#[rstest]
+#[case::stage0_conv("stage0_conv", (3, 16), (640, 640), (3, 2, 1), 1)]
+#[case::stage1_depth("stage1_depth", (32, 32), (160, 160), (3, 1, 1), 32)]
+#[case::stage2_point("stage2_point", (32, 64), (160, 160), (1, 1, 0), 1)]
+#[case::head_depth("head_depth", (64, 64), (40, 40), (3, 1, 1), 64)]
+// Run serially so benchmark cases do not compete for the GPU:
+// cargo test -p fcs-core --lib benchmark_conv2d_performance -- --ignored --nocapture --test-threads=1
+#[ignore]
+fn benchmark_conv2d_performance(
+    #[case] name: &str,
+    #[case] (in_ch, out_ch): (u32, u32),
+    #[case] (width, height): (u32, u32),
+    #[case] (kernel, stride, pad): (u32, u32, u32),
+    #[case] groups: u32,
+) {
     use std::time::Instant;
 
     let Some(ops) = gpu_ops() else {
         eprintln!("Skipping benchmark (no GPU adapter)");
         return;
     };
-
-    let configs = [
-        ("stage0_conv", 1, 3, 16, 640, 640, 3, 2, 1, 1),
-        ("stage1_depth", 1, 32, 32, 160, 160, 3, 1, 1, 32),
-        ("stage2_point", 1, 32, 64, 160, 160, 1, 1, 0, 1),
-        ("head_depth", 1, 64, 64, 40, 40, 3, 1, 1, 64),
-    ];
+    let batch = 1;
 
     println!("\n========== Conv2D Performance: Standard vs Vec4 ==========");
 
-    for (name, batch, in_ch, out_ch, width, height, kernel, stride, pad, groups) in configs {
-        let input_len = (batch * in_ch * width * height) as usize;
-        let input: Vec<f32> = (0..input_len).map(|i| (i % 100) as f32 / 100.0).collect();
+    let input_len = (batch * in_ch * width * height) as usize;
+    let input: Vec<f32> = (0..input_len).map(|i| (i % 100) as f32 / 100.0).collect();
 
-        let weight_len = if groups == 1 {
-            (out_ch * in_ch * kernel * kernel) as usize
-        } else {
-            (out_ch * kernel * kernel) as usize
-        };
-        let weights: Vec<f32> = (0..weight_len).map(|i| (i % 100) as f32 / 100.0).collect();
-        let bias: Vec<f32> = (0..out_ch).map(|i| (i % 100) as f32 / 100.0).collect();
+    let weight_len = if groups == 1 {
+        (out_ch * in_ch * kernel * kernel) as usize
+    } else {
+        (out_ch * kernel * kernel) as usize
+    };
+    let weights: Vec<f32> = (0..weight_len).map(|i| (i % 100) as f32 / 100.0).collect();
+    let bias: Vec<f32> = (0..out_ch).map(|i| (i % 100) as f32 / 100.0).collect();
 
-        let config = Conv2dConfig::new(
-            batch,
-            Conv2dChannels::new(in_ch, out_ch),
-            SpatialDims::new(width, height),
-            SpatialDims::new(kernel, kernel),
-            SpatialDims::new(stride, stride),
-            SpatialDims::new(pad, pad),
-            Conv2dOptions::new(groups, Some(ActivationKind::Relu)),
-        )
-        .expect("benchmark conv2d config should be valid");
+    let config = Conv2dConfig::new(
+        batch,
+        Conv2dChannels::new(in_ch, out_ch),
+        SpatialDims::new(width, height),
+        SpatialDims::new(kernel, kernel),
+        SpatialDims::new(stride, stride),
+        SpatialDims::new(pad, pad),
+        Conv2dOptions::new(groups, Some(ActivationKind::Relu)),
+    )
+    .expect("benchmark conv2d config should be valid");
 
-        let input_gpu = ops
-            .upload_tensor(config.input_shape_dims(), &input, None)
-            .expect("benchmark input tensor should upload");
-        let weight_gpu = ops
-            .upload_tensor(config.weight_shape_dims(), &weights, None)
-            .expect("benchmark weight tensor should upload");
-        let bias_gpu = ops
-            .upload_tensor(config.bias_shape_dims(), &bias, None)
-            .expect("benchmark bias tensor should upload");
+    let input_gpu = ops
+        .upload_tensor(config.input_shape_dims(), &input, None)
+        .expect("benchmark input tensor should upload");
+    let weight_gpu = ops
+        .upload_tensor(config.weight_shape_dims(), &weights, None)
+        .expect("benchmark weight tensor should upload");
+    let bias_gpu = ops
+        .upload_tensor(config.bias_shape_dims(), &bias, None)
+        .expect("benchmark bias tensor should upload");
 
-        // Warmup
-        for _ in 0..5 {
-            let _ = ops
-                .conv2d_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
-                .expect("standard conv2d warmup should run on GPU");
-        }
-
-        // Benchmark standard
-        let iterations = 50;
-        let start = Instant::now();
-        for _ in 0..iterations {
-            let output = ops
-                .conv2d_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
-                .expect("standard conv2d benchmark should run on GPU");
-            let _ = output
-                .to_vec()
-                .expect("standard conv2d benchmark output should download");
-        }
-        let standard_avg = start.elapsed().as_micros() as f64 / iterations as f64;
-
-        // Warmup vec4
-        for _ in 0..5 {
-            let _ = ops
-                .conv2d_vec4_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
-                .expect("vec4 conv2d warmup should run on GPU");
-        }
-
-        // Benchmark vec4
-        let start = Instant::now();
-        for _ in 0..iterations {
-            let output = ops
-                .conv2d_vec4_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
-                .expect("vec4 conv2d benchmark should run on GPU");
-            let _ = output
-                .to_vec()
-                .expect("vec4 conv2d benchmark output should download");
-        }
-        let vec4_avg = start.elapsed().as_micros() as f64 / iterations as f64;
-
-        let speedup_pct = (standard_avg / vec4_avg - 1.0) * 100.0;
-
-        println!(
-            "{:<15} Standard: {:>7.1}μs | Vec4: {:>7.1}μs | Speedup: {:>+5.1}%",
-            name, standard_avg, vec4_avg, speedup_pct
-        );
+    // Warmup
+    for _ in 0..5 {
+        let _ = ops
+            .conv2d_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
+            .expect("standard conv2d warmup should run on GPU");
     }
+
+    // Benchmark standard
+    let iterations = 50;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let output = ops
+            .conv2d_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
+            .expect("standard conv2d benchmark should run on GPU");
+        let _ = output
+            .to_vec()
+            .expect("standard conv2d benchmark output should download");
+    }
+    let standard_avg = start.elapsed().as_micros() as f64 / iterations as f64;
+
+    // Warmup vec4
+    for _ in 0..5 {
+        let _ = ops
+            .conv2d_vec4_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
+            .expect("vec4 conv2d warmup should run on GPU");
+    }
+
+    // Benchmark vec4
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let output = ops
+            .conv2d_vec4_tensor(&input_gpu, &weight_gpu, &bias_gpu, &config)
+            .expect("vec4 conv2d benchmark should run on GPU");
+        let _ = output
+            .to_vec()
+            .expect("vec4 conv2d benchmark output should download");
+    }
+    let vec4_avg = start.elapsed().as_micros() as f64 / iterations as f64;
+
+    let speedup_pct = (standard_avg / vec4_avg - 1.0) * 100.0;
+
+    println!(
+        "{:<15} Standard: {:>7.1}μs | Vec4: {:>7.1}μs | Speedup: {:>+5.1}%",
+        name, standard_avg, vec4_avg, speedup_pct
+    );
 
     println!("==========================================================\n");
 }
@@ -523,18 +528,19 @@ fn tensor_shape_converts_into_its_dimensions() {
     assert_eq!(dims, vec![2, 3, 4]);
 }
 
-#[test]
-fn div_ceil_uniform_rounds_up_and_keeps_zero_at_zero() {
+#[rstest]
+#[case::empty(0, 8, 0)]
+#[case::one(1, 8, 1)]
+#[case::round_up(9, 8, 2)]
+#[case::exact(16, 8, 2)]
+fn div_ceil_uniform_rounds_up_and_keeps_zero_at_zero(
+    #[case] value: u32,
+    #[case] divisor: u32,
+    #[case] expected: u32,
+) {
     use super::utils::div_ceil_uniform;
 
-    assert_eq!(
-        div_ceil_uniform(0, 8),
-        0,
-        "an empty dispatch needs no groups"
-    );
-    assert_eq!(div_ceil_uniform(1, 8), 1);
-    assert_eq!(div_ceil_uniform(9, 8), 2);
-    assert_eq!(div_ceil_uniform(16, 8), 2);
+    assert_eq!(div_ceil_uniform(value, divisor), expected);
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use super::{
     encode_bytes, format_excel_cell, format_excel_header, format_parquet_field, quote_identifier, *,
 };
+use rstest::rstest;
 use rusqlite::Connection;
 use std::{
     fs,
@@ -31,8 +32,24 @@ fn write_sqlite(dir: &Path, name: &str, setup_sql: &str) -> PathBuf {
 /// `validate_sql_query` would reject every one of these on the SELECT prefix before SQLite
 /// saw them, so going through the front door would prove only that the prefix check works.
 /// The point of the authorizer is that it still refuses them if nothing else does.
-#[test]
-fn the_authorizer_refuses_every_action_but_reading() {
+#[rstest]
+#[case::insert("INSERT INTO t VALUES ('z')", "Insert")]
+#[case::delete("DELETE FROM t", "Delete")]
+#[case::update("UPDATE t SET a = 'z'", "Update")]
+// DROP TABLE reaches the authorizer as a delete from sqlite_master.
+#[case::drop_table("DROP TABLE t", "Delete")]
+#[case::create_table("CREATE TABLE u (b TEXT)", "Insert")]
+#[case::alter_table("ALTER TABLE t RENAME TO u", "AlterTable")]
+#[case::create_view("CREATE VIEW v AS SELECT a FROM t", "Insert")]
+#[case::create_trigger(
+    "CREATE TRIGGER g AFTER UPDATE ON t BEGIN SELECT 1; END",
+    "CreateTrigger"
+)]
+#[case::attach("ATTACH 'other.db' AS o", "Attach")]
+#[case::detach("DETACH o", "Detach")]
+#[case::pragma("PRAGMA journal_mode = wal", "Pragma")]
+#[case::reindex("REINDEX", "Reindex")]
+fn the_authorizer_refuses_every_action_but_reading(#[case] query: &str, #[case] action: &str) {
     let dir = tempdir().unwrap();
     let path = write_sqlite(
         dir.path(),
@@ -43,52 +60,39 @@ fn the_authorizer_refuses_every_action_but_reading() {
     );
     let (conn, denied) = sqlite::open_guarded(&path).expect("open guarded");
 
-    // One case per action the authorizer reports, with the action it must name. `DROP TABLE`
-    // reaches SQLite as a delete from `sqlite_master`, which is why a denylist of statement
-    // keywords and an allowlist of actions are not the same shape of guard.
-    for (query, action) in [
-        ("INSERT INTO t VALUES ('z')", "Insert"),
-        ("DELETE FROM t", "Delete"),
-        ("UPDATE t SET a = 'z'", "Update"),
-        ("DROP TABLE t", "Delete"),
-        ("CREATE TABLE u (b TEXT)", "Insert"),
-        ("ALTER TABLE t RENAME TO u", "AlterTable"),
-        ("CREATE VIEW v AS SELECT a FROM t", "Insert"),
-        (
-            "CREATE TRIGGER g AFTER UPDATE ON t BEGIN SELECT 1; END",
-            "CreateTrigger",
-        ),
-        ("ATTACH 'other.db' AS o", "Attach"),
-        ("DETACH o", "Detach"),
-        ("PRAGMA journal_mode = wal", "Pragma"),
-        ("REINDEX", "Reindex"),
-    ] {
-        if let Ok(mut slot) = denied.lock() {
-            *slot = None;
-        }
-        conn.prepare(query)
-            .err()
-            .unwrap_or_else(|| panic!("{query} must not compile"));
-        let reported = denied.lock().unwrap().clone();
-        assert!(
-            reported.as_deref().is_some_and(|r| r.starts_with(action)),
-            "{query} should have been refused as {action}, got {reported:?}"
-        );
+    if let Ok(mut slot) = denied.lock() {
+        *slot = None;
     }
+    conn.prepare(query)
+        .err()
+        .unwrap_or_else(|| panic!("{query} must not compile"));
+    let reported = denied.lock().unwrap().clone();
+    assert!(
+        reported.as_deref().is_some_and(|r| r.starts_with(action)),
+        "{query} should have been refused as {action}, got {reported:?}"
+    );
+}
 
-    // And everything an honest read needs still compiles: the columns, the built-in
-    // functions, a recursive CTE, the schema table and the table-valued pragma functions
-    // the GUI uses to describe a database.
-    for query in [
-        "SELECT a FROM t",
-        "SELECT count(*), lower(a) FROM t",
-        "WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 3) SELECT i FROM c",
-        "SELECT name FROM sqlite_master",
-        "SELECT * FROM pragma_table_info('t')",
-    ] {
-        conn.prepare(query)
-            .unwrap_or_else(|e| panic!("{query} is a read and must compile: {e}"));
-    }
+/// Columns, functions, recursive CTEs, schema reads and table-valued pragmas remain allowed.
+#[rstest]
+#[case::columns("SELECT a FROM t")]
+#[case::functions("SELECT count(*), lower(a) FROM t")]
+#[case::recursive_cte(
+    "WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 3) SELECT i FROM c"
+)]
+#[case::schema("SELECT name FROM sqlite_master")]
+#[case::pragma_function("SELECT * FROM pragma_table_info('t')")]
+fn the_authorizer_allows_reads(#[case] query: &str) {
+    let dir = tempdir().unwrap();
+    let path = write_sqlite(
+        dir.path(),
+        "guard.db",
+        "CREATE TABLE t (a TEXT); CREATE INDEX i ON t(a); INSERT INTO t VALUES ('v');",
+    );
+    let (conn, _denied) = sqlite::open_guarded(&path).expect("open guarded");
+
+    conn.prepare(query)
+        .unwrap_or_else(|e| panic!("{query} is a read and must compile: {e}"));
 }
 
 /// A refusal is remembered on the connection so the error can name it, which means the
@@ -150,38 +154,26 @@ fn the_reader_opens_sqlite_read_only() {
     );
 }
 
-#[test]
-fn column_selector_parse_token_accepts_indices_and_names() {
-    assert_eq!(
-        ColumnSelector::parse_token("#3").unwrap(),
-        ColumnSelector::Index(3)
-    );
-    assert_eq!(
-        ColumnSelector::parse_token("7").unwrap(),
-        ColumnSelector::Index(7)
-    );
-    assert_eq!(
-        ColumnSelector::parse_token(" output_name ").unwrap(),
-        ColumnSelector::Name("output_name".to_string())
-    );
+#[rstest]
+#[case::hash_index("#3", ColumnSelector::Index(3))]
+#[case::bare_index("7", ColumnSelector::Index(7))]
+#[case::trimmed_name(" output_name ", ColumnSelector::Name("output_name".to_string()))]
+fn column_selector_parse_token_accepts_indices_and_names(
+    #[case] input: &str,
+    #[case] expected: ColumnSelector,
+) {
+    assert_eq!(ColumnSelector::parse_token(input).unwrap(), expected);
+
     assert!(ColumnSelector::parse_token("   ").is_err());
 }
 
-#[test]
-fn detect_format_uses_common_file_extensions() {
-    assert_eq!(detect_format(Path::new("mapping.csv")), MappingFormat::Csv);
-    assert_eq!(
-        detect_format(Path::new("mapping.xlsx")),
-        MappingFormat::Excel
-    );
-    assert_eq!(
-        detect_format(Path::new("mapping.PQ")),
-        MappingFormat::Parquet
-    );
-    assert_eq!(
-        detect_format(Path::new("mapping.sqlite3")),
-        MappingFormat::Sqlite
-    );
+#[rstest]
+#[case::csv("mapping.csv", MappingFormat::Csv)]
+#[case::excel("mapping.xlsx", MappingFormat::Excel)]
+#[case::uppercase_parquet("mapping.PQ", MappingFormat::Parquet)]
+#[case::sqlite("mapping.sqlite3", MappingFormat::Sqlite)]
+fn detect_format_uses_common_file_extensions(#[case] path: &str, #[case] expected: MappingFormat) {
+    assert_eq!(detect_format(Path::new(path)), expected);
 }
 
 #[test]
@@ -404,23 +396,20 @@ fn column_selector_describe_formats_index_and_name() {
     );
 }
 
-#[test]
-fn detect_format_covers_all_extensions() {
-    for ext in &["xlsx", "xls", "xlsm", "ods"] {
-        let path = PathBuf::from(format!("data.{ext}"));
-        assert_eq!(detect_format(&path), MappingFormat::Excel, "ext={ext}");
-    }
-    for ext in &["parquet", "pq"] {
-        let path = PathBuf::from(format!("data.{ext}"));
-        assert_eq!(detect_format(&path), MappingFormat::Parquet, "ext={ext}");
-    }
-    for ext in &["db", "sqlite", "sqlite3"] {
-        let path = PathBuf::from(format!("data.{ext}"));
-        assert_eq!(detect_format(&path), MappingFormat::Sqlite, "ext={ext}");
-    }
-    // Unknown extension falls back to CSV
-    assert_eq!(detect_format(Path::new("data.txt")), MappingFormat::Csv);
-    assert_eq!(detect_format(Path::new("no_extension")), MappingFormat::Csv);
+#[rstest]
+#[case::xlsx("data.xlsx", MappingFormat::Excel)]
+#[case::xls("data.xls", MappingFormat::Excel)]
+#[case::xlsm("data.xlsm", MappingFormat::Excel)]
+#[case::ods("data.ods", MappingFormat::Excel)]
+#[case::parquet("data.parquet", MappingFormat::Parquet)]
+#[case::pq("data.pq", MappingFormat::Parquet)]
+#[case::db("data.db", MappingFormat::Sqlite)]
+#[case::sqlite("data.sqlite", MappingFormat::Sqlite)]
+#[case::sqlite3("data.sqlite3", MappingFormat::Sqlite)]
+#[case::unknown("data.txt", MappingFormat::Csv)]
+#[case::no_extension("no_extension", MappingFormat::Csv)]
+fn detect_format_covers_all_extensions(#[case] path: &str, #[case] expected: MappingFormat) {
+    assert_eq!(detect_format(Path::new(path)), expected);
 }
 
 #[test]
@@ -508,29 +497,29 @@ fn load_mapping_entries_errors_on_unknown_column_name() {
     assert!(err.contains("not found"), "unexpected error: {err}");
 }
 
-#[test]
-fn inspect_mapping_sources_returns_empty_catalog_for_csv_and_parquet() {
+#[rstest]
+fn inspect_mapping_sources_returns_empty_catalog_for_csv_and_parquet(
+    #[values(MappingFormat::Csv, MappingFormat::Parquet)] format: MappingFormat,
+) {
     let dir = tempdir().unwrap();
     let csv_path = write_csv(dir.path(), "mapping.csv", "source,output\n");
 
-    for format in [MappingFormat::Csv, MappingFormat::Parquet] {
-        let catalog = inspect_mapping_sources(
-            &csv_path,
-            &MappingReadOptions {
-                format: Some(format),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(
-            catalog.sheets.is_empty(),
-            "sheets should be empty for {format:?}"
-        );
-        assert!(
-            catalog.sql_tables.is_empty(),
-            "sql_tables should be empty for {format:?}"
-        );
-    }
+    let catalog = inspect_mapping_sources(
+        &csv_path,
+        &MappingReadOptions {
+            format: Some(format),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        catalog.sheets.is_empty(),
+        "sheets should be empty for {format:?}"
+    );
+    assert!(
+        catalog.sql_tables.is_empty(),
+        "sql_tables should be empty for {format:?}"
+    );
 }
 
 #[test]
@@ -1113,50 +1102,33 @@ fn encode_bytes_nonempty_roundtrips_as_base64() {
     assert_eq!(decoded, payload);
 }
 
-#[test]
-fn format_excel_cell_handles_scalar_variants() {
-    use calamine::Data as ExcelData;
-    assert_eq!(format_excel_cell(&ExcelData::Empty), "");
-    assert_eq!(
-        format_excel_cell(&ExcelData::String("  hello  ".to_string())),
-        "hello"
-    );
-    assert_eq!(format_excel_cell(&ExcelData::Float(2.5_f64)), "2.5");
-    assert_eq!(format_excel_cell(&ExcelData::Float(5.0_f64)), "5");
-    assert_eq!(format_excel_cell(&ExcelData::Int(42)), "42");
-    assert_eq!(format_excel_cell(&ExcelData::Bool(true)), "true");
-    assert_eq!(format_excel_cell(&ExcelData::Bool(false)), "false");
-    assert_eq!(
-        format_excel_cell(&ExcelData::DateTimeIso("2024-01-15".to_string())),
-        "2024-01-15"
-    );
-    assert_eq!(
-        format_excel_cell(&ExcelData::DurationIso("PT1H".to_string())),
-        "PT1H"
-    );
-    // Error variants always produce an empty string
-    assert_eq!(
-        format_excel_cell(&ExcelData::Error(calamine::CellErrorType::Div0)),
-        ""
-    );
-    assert_eq!(
-        format_excel_cell(&ExcelData::Error(calamine::CellErrorType::NA)),
-        ""
-    );
+#[rstest]
+#[case::empty(calamine::Data::Empty, "")]
+#[case::trimmed_string(calamine::Data::String("  hello  ".to_string()), "hello")]
+#[case::fraction(calamine::Data::Float(2.5_f64), "2.5")]
+#[case::integral_float(calamine::Data::Float(5.0_f64), "5")]
+#[case::integer(calamine::Data::Int(42), "42")]
+#[case::true_value(calamine::Data::Bool(true), "true")]
+#[case::false_value(calamine::Data::Bool(false), "false")]
+#[case::iso_datetime(calamine::Data::DateTimeIso("2024-01-15".to_string()), "2024-01-15")]
+#[case::iso_duration(calamine::Data::DurationIso("PT1H".to_string()), "PT1H")]
+// Error variants always produce an empty string
+#[case::division_error(calamine::Data::Error(calamine::CellErrorType::Div0), "")]
+#[case::na_error(calamine::Data::Error(calamine::CellErrorType::NA), "")]
+fn format_excel_cell_handles_scalar_variants(#[case] cell: calamine::Data, #[case] expected: &str) {
+    assert_eq!(format_excel_cell(&cell), expected);
 }
 
-#[test]
-fn format_excel_header_uses_column_n_for_blank() {
-    use calamine::Data as ExcelData;
-    assert_eq!(format_excel_header(&ExcelData::Empty, 0), "Column 1");
-    assert_eq!(
-        format_excel_header(&ExcelData::String("  ".to_string()), 2),
-        "Column 3"
-    );
-    assert_eq!(
-        format_excel_header(&ExcelData::String("source".to_string()), 0),
-        "source"
-    );
+#[rstest]
+#[case::empty_first(calamine::Data::Empty, 0, "Column 1")]
+#[case::blank_third(calamine::Data::String("  ".to_string()), 2, "Column 3")]
+#[case::named(calamine::Data::String("source".to_string()), 0, "source")]
+fn format_excel_header_uses_column_n_for_blank(
+    #[case] cell: calamine::Data,
+    #[case] column: usize,
+    #[case] expected: &str,
+) {
+    assert_eq!(format_excel_header(&cell, column), expected);
 }
 
 #[test]

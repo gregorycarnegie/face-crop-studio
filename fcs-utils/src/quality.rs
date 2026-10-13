@@ -252,6 +252,7 @@ pub fn estimate_sharpness(img: &DynamicImage) -> (f64, Quality) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// A tall image and its wide twin both exceed the analysis size along one axis, so both are
     /// downscaled, and a pattern symmetric under transposition scores alike either way. `h ==`
@@ -273,42 +274,40 @@ mod tests {
         );
     }
 
-    #[test]
-    fn quality_downscale_matches_image_crate_dimensions() {
+    #[rstest]
+    #[case::landscape(4000u32, 3000u32)]
+    #[case::portrait(3000, 4000)]
+    #[case::just_over_cap(513, 513)]
+    #[case::wide_odd(1000, 513)]
+    #[case::very_wide(5000, 517)]
+    #[case::very_tall(517, 5000)]
+    #[case::square(4096, 4096)]
+    #[case::odd_dimensions(1023, 767)]
+    fn quality_downscale_matches_image_crate_dimensions(#[case] w: u32, #[case] h: u32) {
         // `laplacian_variance` now resizes to explicit dimensions instead of asking
         // `DynamicImage::resize` to fit the box. One pixel of disagreement changes the
         // variance and so the quality label, and `auto_select_best_face` ranks by that
         // score, so this has to agree exactly rather than nearly (experiment 89).
-        for (w, h) in [
-            (4000u32, 3000u32),
-            (3000, 4000),
-            (513, 513),
-            (1000, 513),
-            (5000, 517),
-            (517, 5000),
-            (4096, 4096),
-            (1023, 767),
-        ] {
-            let src = DynamicImage::ImageRgba8(image::RgbaImage::new(w, h));
-            let want = src
-                .resize(
-                    QUALITY_MAX_DIM,
-                    QUALITY_MAX_DIM,
-                    image::imageops::FilterType::Triangle,
-                )
-                .dimensions();
-            assert_eq!(quality_fit(w, h), want, "fit disagrees for {w}x{h}");
-        }
+        let src = DynamicImage::ImageRgba8(image::RgbaImage::new(w, h));
+        let want = src
+            .resize(
+                QUALITY_MAX_DIM,
+                QUALITY_MAX_DIM,
+                image::imageops::FilterType::Triangle,
+            )
+            .dimensions();
+        assert_eq!(quality_fit(w, h), want, "fit disagrees for {w}x{h}");
     }
     use image::RgbaImage;
 
-    #[test]
-    fn quality_from_variance_thresholds() {
-        assert_eq!(Quality::from_variance(50.0), Quality::Low);
-        assert_eq!(Quality::from_variance(300.0), Quality::Low);
-        assert_eq!(Quality::from_variance(300.1), Quality::Medium);
-        assert_eq!(Quality::from_variance(1000.0), Quality::Medium);
-        assert_eq!(Quality::from_variance(1500.0), Quality::High);
+    #[rstest]
+    #[case::low(50.0, Quality::Low)]
+    #[case::low_boundary(300.0, Quality::Low)]
+    #[case::above_low_boundary(300.1, Quality::Medium)]
+    #[case::medium_boundary(1000.0, Quality::Medium)]
+    #[case::high(1500.0, Quality::High)]
+    fn quality_from_variance_thresholds(#[case] variance: f64, #[case] expected: Quality) {
+        assert_eq!(Quality::from_variance(variance), expected);
     }
 
     #[test]

@@ -814,6 +814,7 @@ pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// A convolution written straight from the definition, with no special cases, for the
     /// kernels to be checked against: the interior/border split and the register tiles are
@@ -899,80 +900,83 @@ mod tests {
     /// border pixels outnumber interior ones and wide enough for full tiles, and a 9x16 1x1
     /// layer is split across tasks mid-plane; a padded 1x1 must stay off the flattened path
     /// that an unpadded one takes; batch 2 moves every offset.
-    #[test]
-    fn dense_matches_the_definition() {
-        for (c_in, c_out) in [(3, 16), (8, 5), (16, 13), (8, 24), (13, 40)] {
-            for (h, w) in [(1, 1), (5, 7), (9, 16)] {
-                let input = Tensor::new(2, c_in, h, w, ramp(2 * c_in * h * w, c_in)).unwrap();
-                for (k, stride, pad) in [
-                    (1, 1, 0),
-                    (1, 1, 1),
-                    (3, 1, 1),
-                    (3, 2, 1),
-                    (3, 1, 0),
-                    (1, 2, 0),
-                ] {
-                    let wts = ramp(c_out * c_in * k * k, c_out);
-                    let bias = ramp(c_out, 3);
-                    let reference = reference(&input, &wts, &bias, c_out, k, stride, pad, 1, true);
-                    let what = format!("{c_in}->{c_out} {h}x{w} k{k} s{stride} p{pad}");
-                    // NCHW input as blocks of one, and blocked input.
-                    let from_nchw = DenseWeights::new(c_out, c_in, k, 1, &wts, &bias).unwrap();
-                    let got = conv(
-                        &mut Arena::default(),
-                        (&input).into(),
-                        &from_nchw,
-                        stride,
-                        pad,
-                        true,
-                    )
-                    .unwrap();
-                    assert_close(&got.to_nchw(0, c_out).unwrap(), &reference, &what);
-                    let packed = blocked(&input);
-                    let from_blocked =
-                        DenseWeights::new(c_out, c_in, k, BLOCK, &wts, &bias).unwrap();
-                    let got = conv(
-                        &mut Arena::default(),
-                        (&packed).into(),
-                        &from_blocked,
-                        stride,
-                        pad,
-                        true,
-                    )
-                    .unwrap();
-                    assert_close(&got.to_nchw(0, c_out).unwrap(), &reference, &what);
-                }
-            }
-        }
+    #[rstest]
+    #[case::pointwise(1, 1, 0)]
+    #[case::padded_pointwise(1, 1, 1)]
+    #[case::same(3, 1, 1)]
+    #[case::strided_same(3, 2, 1)]
+    #[case::valid(3, 1, 0)]
+    #[case::strided_pointwise(1, 2, 0)]
+    fn dense_matches_the_definition(
+        #[values((3, 16), (8, 5), (16, 13), (8, 24), (13, 40))] channels: (usize, usize),
+        #[values((1, 1), (5, 7), (9, 16))] spatial: (usize, usize),
+        #[case] k: usize,
+        #[case] stride: usize,
+        #[case] pad: usize,
+    ) {
+        let (c_in, c_out) = channels;
+        let (h, w) = spatial;
+        let input = Tensor::new(2, c_in, h, w, ramp(2 * c_in * h * w, c_in)).unwrap();
+        let wts = ramp(c_out * c_in * k * k, c_out);
+        let bias = ramp(c_out, 3);
+        let reference = reference(&input, &wts, &bias, c_out, k, stride, pad, 1, true);
+        let what = format!("{c_in}->{c_out} {h}x{w} k{k} s{stride} p{pad}");
+        // NCHW input as blocks of one, and blocked input.
+        let from_nchw = DenseWeights::new(c_out, c_in, k, 1, &wts, &bias).unwrap();
+        let got = conv(
+            &mut Arena::default(),
+            (&input).into(),
+            &from_nchw,
+            stride,
+            pad,
+            true,
+        )
+        .unwrap();
+        assert_close(&got.to_nchw(0, c_out).unwrap(), &reference, &what);
+        let packed = blocked(&input);
+        let from_blocked = DenseWeights::new(c_out, c_in, k, BLOCK, &wts, &bias).unwrap();
+        let got = conv(
+            &mut Arena::default(),
+            (&packed).into(),
+            &from_blocked,
+            stride,
+            pad,
+            true,
+        )
+        .unwrap();
+        assert_close(&got.to_nchw(0, c_out).unwrap(), &reference, &what);
     }
 
-    #[test]
-    fn depthwise_matches_the_definition() {
-        for c in [5, 16, 40] {
-            for (h, w) in [(1, 1), (5, 7), (10, 11)] {
-                let input = Tensor::new(2, c, h, w, ramp(2 * c * h * w, c)).unwrap();
-                for (stride, pad) in [(1, 1), (2, 1), (1, 0)] {
-                    let wts = ramp(c * 9, 4);
-                    let bias = ramp(c, 5);
-                    let reference = reference(&input, &wts, &bias, c, 3, stride, pad, c, false);
-                    let weights = DepthwiseWeights::new(c, 3, &wts, &bias).unwrap();
-                    let got = depthwise(
-                        &mut Arena::default(),
-                        &blocked(&input),
-                        &weights,
-                        stride,
-                        pad,
-                        false,
-                    )
-                    .unwrap();
-                    assert_close(
-                        &got.to_nchw(0, c).unwrap(),
-                        &reference,
-                        &format!("depthwise c{c} {h}x{w} s{stride} p{pad}"),
-                    );
-                }
-            }
-        }
+    #[rstest]
+    #[case::same(1, 1)]
+    #[case::strided_same(2, 1)]
+    #[case::valid(1, 0)]
+    fn depthwise_matches_the_definition(
+        #[values(5, 16, 40)] c: usize,
+        #[values((1, 1), (5, 7), (10, 11))] spatial: (usize, usize),
+        #[case] stride: usize,
+        #[case] pad: usize,
+    ) {
+        let (h, w) = spatial;
+        let input = Tensor::new(2, c, h, w, ramp(2 * c * h * w, c)).unwrap();
+        let wts = ramp(c * 9, 4);
+        let bias = ramp(c, 5);
+        let reference = reference(&input, &wts, &bias, c, 3, stride, pad, c, false);
+        let weights = DepthwiseWeights::new(c, 3, &wts, &bias).unwrap();
+        let got = depthwise(
+            &mut Arena::default(),
+            &blocked(&input),
+            &weights,
+            stride,
+            pad,
+            false,
+        )
+        .unwrap();
+        assert_close(
+            &got.to_nchw(0, c).unwrap(),
+            &reference,
+            &format!("depthwise c{c} {h}x{w} s{stride} p{pad}"),
+        );
     }
 
     #[test]
@@ -1038,25 +1042,32 @@ mod tests {
     /// `interior` is exactly the output columns whose every tap lands inside the input, for
     /// every geometry the kernels take. A range too small only sends columns down the checked
     /// path, which hides it from every output comparison; this is what notices.
-    #[test]
-    fn the_interior_is_every_column_that_needs_no_checks() {
-        for (kernel, stride, pad) in [(1, 1, 0), (1, 2, 0), (3, 1, 1), (3, 2, 1), (3, 2, 0)] {
-            for width in 1..14 {
-                let out_w = output_dim(width, kernel, stride, pad);
-                let inside: Vec<usize> = (0..out_w)
-                    .filter(|&ox| ox * stride >= pad && ox * stride - pad + kernel <= width)
-                    .collect();
-                let (lo, hi) = interior(width, kernel, stride, pad, out_w);
-                assert!(
-                    lo <= hi,
-                    "{kernel}x{kernel}/{stride} pad {pad}, width {width}"
-                );
-                assert_eq!(
-                    (lo..hi).collect::<Vec<_>>(),
-                    inside,
-                    "{kernel}x{kernel}/{stride} pad {pad}, width {width}"
-                );
-            }
+    #[rstest]
+    #[case::pointwise(1, 1, 0)]
+    #[case::strided_pointwise(1, 2, 0)]
+    #[case::same(3, 1, 1)]
+    #[case::strided_same(3, 2, 1)]
+    #[case::strided_valid(3, 2, 0)]
+    fn the_interior_is_every_column_that_needs_no_checks(
+        #[case] kernel: usize,
+        #[case] stride: usize,
+        #[case] pad: usize,
+    ) {
+        for width in 1..14 {
+            let out_w = output_dim(width, kernel, stride, pad);
+            let inside: Vec<usize> = (0..out_w)
+                .filter(|&ox| ox * stride >= pad && ox * stride - pad + kernel <= width)
+                .collect();
+            let (lo, hi) = interior(width, kernel, stride, pad, out_w);
+            assert!(
+                lo <= hi,
+                "{kernel}x{kernel}/{stride} pad {pad}, width {width}"
+            );
+            assert_eq!(
+                (lo..hi).collect::<Vec<_>>(),
+                inside,
+                "{kernel}x{kernel}/{stride} pad {pad}, width {width}"
+            );
         }
     }
 

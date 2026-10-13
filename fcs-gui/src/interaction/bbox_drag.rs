@@ -86,6 +86,7 @@ fn extend_bottom_edge(bbox: &mut BoundingBox, delta_y: f32, img_h: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     const IMG_W: f32 = 200.0;
     const IMG_H: f32 = 100.0;
@@ -120,17 +121,14 @@ mod tests {
 
     // ── hit_test_handle ──────────────────────────────────────────────────
 
-    #[test]
-    fn each_corner_hits_its_own_handle() {
+    #[rstest]
+    #[case::north_west(rect().min, DragHandle::NorthWest)]
+    #[case::north_east(Pos2::new(rect().max.x, rect().min.y), DragHandle::NorthEast)]
+    #[case::south_west(Pos2::new(rect().min.x, rect().max.y), DragHandle::SouthWest)]
+    #[case::south_east(rect().max, DragHandle::SouthEast)]
+    fn each_corner_hits_its_own_handle(#[case] pos: Pos2, #[case] expected: DragHandle) {
         let r = rect();
-        for (pos, expected) in [
-            (r.min, DragHandle::NorthWest),
-            (Pos2::new(r.max.x, r.min.y), DragHandle::NorthEast),
-            (Pos2::new(r.min.x, r.max.y), DragHandle::SouthWest),
-            (r.max, DragHandle::SouthEast),
-        ] {
-            assert_eq!(hit_test_handle(r, pos), Some(expected), "at {pos:?}");
-        }
+        assert_eq!(hit_test_handle(r, pos), Some(expected), "at {pos:?}");
     }
 
     #[test]
@@ -209,31 +207,32 @@ mod tests {
         assert_eq!((sw.width, sw.height), (50.0, 25.0));
     }
 
-    #[test]
-    fn corners_cannot_be_dragged_past_the_opposite_edge() {
-        // Every corner collapses to MIN_BBOX_EXTENT rather than inverting.
-        for handle in [
+    #[rstest]
+    fn corners_cannot_be_dragged_past_the_opposite_edge(
+        #[values(
             DragHandle::NorthWest,
             DragHandle::NorthEast,
             DragHandle::SouthWest,
-            DragHandle::SouthEast,
-        ] {
-            let sign = match handle {
-                DragHandle::NorthWest => (1.0, 1.0),
-                DragHandle::NorthEast => (-1.0, 1.0),
-                DragHandle::SouthWest => (1.0, -1.0),
-                _ => (-1.0, -1.0),
-            };
-            let out = apply_drag(
-                &drag(handle),
-                egui::vec2(sign.0 * 1000.0, sign.1 * 1000.0),
-                IMG_W,
-                IMG_H,
-            );
-            assert_eq!(out.width, MIN_BBOX_EXTENT, "{handle:?} width collapsed");
-            assert_eq!(out.height, MIN_BBOX_EXTENT, "{handle:?} height collapsed");
-            assert!(out.x >= 0.0 && out.y >= 0.0, "{handle:?} left the image");
-        }
+            DragHandle::SouthEast
+        )]
+        handle: DragHandle,
+    ) {
+        // Every corner collapses to MIN_BBOX_EXTENT rather than inverting.
+        let sign = match handle {
+            DragHandle::NorthWest => (1.0, 1.0),
+            DragHandle::NorthEast => (-1.0, 1.0),
+            DragHandle::SouthWest => (1.0, -1.0),
+            _ => (-1.0, -1.0),
+        };
+        let out = apply_drag(
+            &drag(handle),
+            egui::vec2(sign.0 * 1000.0, sign.1 * 1000.0),
+            IMG_W,
+            IMG_H,
+        );
+        assert_eq!(out.width, MIN_BBOX_EXTENT, "{handle:?} width collapsed");
+        assert_eq!(out.height, MIN_BBOX_EXTENT, "{handle:?} height collapsed");
+        assert!(out.x >= 0.0 && out.y >= 0.0, "{handle:?} left the image");
     }
 
     #[test]

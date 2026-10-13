@@ -333,25 +333,37 @@ mod tests {
         close(l, 232.0 / 510.0);
     }
 
-    #[test]
-    fn hsv_to_rgb_covers_every_sextant() {
+    #[rstest]
+    #[case::second(90.0, 1.0, 1.0, (127, 255, 0))]
+    #[case::third(150.0, 1.0, 1.0, (0, 255, 127))]
+    #[case::fifth(270.0, 1.0, 1.0, (127, 0, 255))]
+    fn hsv_to_rgb_covers_every_sextant(
+        #[case] hue: f32,
+        #[case] saturation: f32,
+        #[case] level: f32,
+        #[case] expected: (u8, u8, u8),
+    ) {
         // The probes above land on 30, 210 and 330, which leaves three match
         // guards never decided in the affirmative. A hue inside each
         // remaining sextant pins which arm runs.
-        assert_eq!(hsv_to_rgb(90.0, 1.0, 1.0), (127, 255, 0), "second sextant");
-        assert_eq!(hsv_to_rgb(150.0, 1.0, 1.0), (0, 255, 127), "third sextant");
-        assert_eq!(hsv_to_rgb(270.0, 1.0, 1.0), (127, 0, 255), "fifth sextant");
+        assert_eq!(hsv_to_rgb(hue, saturation, level), expected);
     }
 
-    #[test]
-    fn hsl_to_rgb_covers_every_sextant() {
+    #[rstest]
+    #[case::second(90.0, 1.0, 0.5, (127, 255, 0))]
+    #[case::third(150.0, 1.0, 0.5, (0, 255, 127))]
+    #[case::fifth(270.0, 1.0, 0.5, (127, 0, 255))]
+    // Past 300 the final arm swaps which channel takes the partial value.
+    #[case::sixth(330.0, 1.0, 0.5, (255, 0, 127))]
+    fn hsl_to_rgb_covers_every_sextant(
+        #[case] hue: f32,
+        #[case] saturation: f32,
+        #[case] level: f32,
+        #[case] expected: (u8, u8, u8),
+    ) {
         // At L = 0.5 and S = 1 the chroma is 1 and m is 0, so each sextant
         // maps to a clean primary/partial pair.
-        assert_eq!(hsl_to_rgb(90.0, 1.0, 0.5), (127, 255, 0), "second sextant");
-        assert_eq!(hsl_to_rgb(150.0, 1.0, 0.5), (0, 255, 127), "third sextant");
-        assert_eq!(hsl_to_rgb(270.0, 1.0, 0.5), (127, 0, 255), "fifth sextant");
-        // Past 300 the final arm swaps which channel takes the partial value.
-        assert_eq!(hsl_to_rgb(330.0, 1.0, 0.5), (255, 0, 127), "sixth sextant");
+        assert_eq!(hsl_to_rgb(hue, saturation, level), expected);
     }
 
     #[test]
@@ -374,26 +386,38 @@ mod tests {
         close(v, 0.5019608);
     }
 
-    #[test]
-    fn hsv_to_rgb_partial_sextant_values() {
+    #[rstest]
+    #[case::first(30.0, 1.0, 1.0, (255, 127, 0))]
+    // Fourth sextant with partial saturation and value: c = 0.4, x = 0.2,
+    // m = 0.4 gives (0.4, 0.6, 0.8) -> #6699CC.
+    #[case::fourth_partial(210.0, 0.5, 0.8, (102, 153, 204))]
+    // Sixth sextant, reached by wrapping a negative hue.
+    #[case::negative_sixth(-30.0, 1.0, 1.0, (255, 0, 127))]
+    // A full turn is the same as none.
+    #[case::full_turn(360.0, 1.0, 1.0, (255, 0, 0))]
+    fn hsv_to_rgb_partial_sextant_values(
+        #[case] hue: f32,
+        #[case] saturation: f32,
+        #[case] level: f32,
+        #[case] expected: (u8, u8, u8),
+    ) {
         // Halfway through the first sextant: x = c/2, so the green channel is
         // half of red. With a primary hue x is 0 or c and this term vanishes.
-        assert_eq!(hsv_to_rgb(30.0, 1.0, 1.0), (255, 127, 0));
-        // Fourth sextant with partial saturation and value: c = 0.4, x = 0.2,
-        // m = 0.4 gives (0.4, 0.6, 0.8) -> #6699CC.
-        assert_eq!(hsv_to_rgb(210.0, 0.5, 0.8), (102, 153, 204));
-        // Sixth sextant, reached by wrapping a negative hue.
-        assert_eq!(hsv_to_rgb(-30.0, 1.0, 1.0), (255, 0, 127));
-        // A full turn is the same as none.
-        assert_eq!(hsv_to_rgb(360.0, 1.0, 1.0), (255, 0, 0));
+        assert_eq!(hsv_to_rgb(hue, saturation, level), expected);
     }
 
-    #[test]
-    fn hsv_to_rgb_degenerate_inputs() {
-        // Zero saturation short-circuits to grey without touching the sextants.
-        assert_eq!(hsv_to_rgb(123.0, 0.0, 0.5), (127, 127, 127));
-        // NaN hue is treated as zero rather than propagating.
-        assert_eq!(hsv_to_rgb(f32::NAN, 1.0, 1.0), (255, 0, 0));
+    #[rstest]
+    // Zero saturation short-circuits to grey without touching the sextants.
+    #[case::achromatic(123.0, 0.0, 0.5, (127, 127, 127))]
+    // NaN hue is treated as zero rather than propagating.
+    #[case::nan_hue(f32::NAN, 1.0, 1.0, (255, 0, 0))]
+    fn hsv_to_rgb_degenerate_inputs(
+        #[case] hue: f32,
+        #[case] saturation: f32,
+        #[case] level: f32,
+        #[case] expected: (u8, u8, u8),
+    ) {
+        assert_eq!(hsv_to_rgb(hue, saturation, level), expected);
     }
 
     #[test]
@@ -447,36 +471,34 @@ mod tests {
         assert_eq!((c.red, c.green, c.blue), (0xAA, 0xBB, 0xCC));
     }
 
-    #[test]
-    fn test_rgb_to_hsl_and_back() {
-        let cases = [
-            ((0xFF, 0x00, 0x00), (0.0, 1.0, 0.5)),   // Red
-            ((0x00, 0xFF, 0x00), (120.0, 1.0, 0.5)), // Green
-            ((0x00, 0x00, 0xFF), (240.0, 1.0, 0.5)), // Blue
-            ((0x00, 0xFF, 0xFF), (180.0, 1.0, 0.5)), // Cyan
-            ((0xFF, 0x00, 0xFF), (300.0, 1.0, 0.5)), // Magenta
-            ((0xFF, 0xFF, 0x00), (60.0, 1.0, 0.5)),  // Yellow
-            ((0x00, 0x00, 0x00), (0.0, 0.0, 0.0)),   // Black
-            ((0xFF, 0xFF, 0xFF), (0.0, 0.0, 1.0)),   // White
-            ((0x80, 0x80, 0x80), (0.0, 0.0, 0.5)),   // Gray
-        ];
+    #[rstest]
+    #[case::red((0xFF, 0x00, 0x00), (0.0, 1.0, 0.5))]
+    #[case::green((0x00, 0xFF, 0x00), (120.0, 1.0, 0.5))]
+    #[case::blue((0x00, 0x00, 0xFF), (240.0, 1.0, 0.5))]
+    #[case::cyan((0x00, 0xFF, 0xFF), (180.0, 1.0, 0.5))]
+    #[case::magenta((0xFF, 0x00, 0xFF), (300.0, 1.0, 0.5))]
+    #[case::yellow((0xFF, 0xFF, 0x00), (60.0, 1.0, 0.5))]
+    #[case::black((0x00, 0x00, 0x00), (0.0, 0.0, 0.0))]
+    #[case::white((0xFF, 0xFF, 0xFF), (0.0, 0.0, 1.0))]
+    #[case::grey((0x80, 0x80, 0x80), (0.0, 0.0, 0.5))]
+    fn test_rgb_to_hsl_and_back(
+        #[case] (r, g, b): (u8, u8, u8),
+        #[case] (exp_h, exp_s, exp_l): (f32, f32, f32),
+    ) {
+        let (h, s, l) = rgb_to_hsl(r, g, b);
 
-        for ((r, g, b), (exp_h, exp_s, exp_l)) in cases {
-            let (h, s, l) = rgb_to_hsl(r, g, b);
-
-            // Hue is undefined for grayscale (often 0), checking close enough or exact 0 if expected
-            if s > 0.001 {
-                colspace_assertion(r, g, b, h, exp_h, "Hue", 0.1);
-            }
-            colspace_assertion(r, g, b, s, exp_s, "Saturation", 0.01);
-            colspace_assertion(r, g, b, l, exp_l, "Lightness", 0.01);
-
-            let (r2, g2, b2) = hsl_to_rgb(h, s, l);
-            // Allow small rounding diffs
-            small_diff!(r, r2);
-            small_diff!(g, g2);
-            small_diff!(b, b2);
+        // Hue is undefined for grayscale (often 0), checking close enough or exact 0 if expected
+        if s > 0.001 {
+            colspace_assertion(r, g, b, h, exp_h, "Hue", 0.1);
         }
+        colspace_assertion(r, g, b, s, exp_s, "Saturation", 0.01);
+        colspace_assertion(r, g, b, l, exp_l, "Lightness", 0.01);
+
+        let (r2, g2, b2) = hsl_to_rgb(h, s, l);
+        // Allow small rounding diffs
+        small_diff!(r, r2);
+        small_diff!(g, g2);
+        small_diff!(b, b2);
     }
 
     #[test]
@@ -538,32 +560,30 @@ mod tests {
         assert_eq!(parse_hex_color(input), expected);
     }
 
-    #[test]
-    fn test_rgb_to_cmyk_and_back() {
-        let cases = [
-            ((0xFF, 0x00, 0x00), (0.0, 1.0, 1.0, 0.0)), // Red
-            ((0x00, 0xFF, 0x00), (1.0, 0.0, 1.0, 0.0)), // Green
-            ((0x00, 0x00, 0xFF), (1.0, 1.0, 0.0, 0.0)), // Blue
-            ((0x00, 0xFF, 0xFF), (1.0, 0.0, 0.0, 0.0)), // Cyan
-            ((0xFF, 0x00, 0xFF), (0.0, 1.0, 0.0, 0.0)), // Magenta
-            ((0xFF, 0xFF, 0x00), (0.0, 0.0, 1.0, 0.0)), // Yellow
-            ((0x00, 0x00, 0x00), (0.0, 0.0, 0.0, 1.0)), // Black
-            ((0xFF, 0xFF, 0xFF), (0.0, 0.0, 0.0, 0.0)), // White
-        ];
+    #[rstest]
+    #[case::red((0xFF, 0x00, 0x00), (0.0, 1.0, 1.0, 0.0))]
+    #[case::green((0x00, 0xFF, 0x00), (1.0, 0.0, 1.0, 0.0))]
+    #[case::blue((0x00, 0x00, 0xFF), (1.0, 1.0, 0.0, 0.0))]
+    #[case::cyan((0x00, 0xFF, 0xFF), (1.0, 0.0, 0.0, 0.0))]
+    #[case::magenta((0xFF, 0x00, 0xFF), (0.0, 1.0, 0.0, 0.0))]
+    #[case::yellow((0xFF, 0xFF, 0x00), (0.0, 0.0, 1.0, 0.0))]
+    #[case::black((0x00, 0x00, 0x00), (0.0, 0.0, 0.0, 1.0))]
+    #[case::white((0xFF, 0xFF, 0xFF), (0.0, 0.0, 0.0, 0.0))]
+    fn test_rgb_to_cmyk_and_back(
+        #[case] (r, g, b): (u8, u8, u8),
+        #[case] (exp_c, exp_m, exp_y, exp_k): (f32, f32, f32, f32),
+    ) {
+        let (c, m, y, k) = rgb_to_cmyk(r, g, b);
+        colspace_assertion(r, g, b, c, exp_c, "Cyan", 0.01);
+        colspace_assertion(r, g, b, m, exp_m, "Magenta", 0.01);
+        colspace_assertion(r, g, b, y, exp_y, "Yellow", 0.01);
+        colspace_assertion(r, g, b, k, exp_k, "Key", 0.01);
 
-        for ((r, g, b), (exp_c, exp_m, exp_y, exp_k)) in cases {
-            let (c, m, y, k) = rgb_to_cmyk(r, g, b);
-            colspace_assertion(r, g, b, c, exp_c, "Cyan", 0.01);
-            colspace_assertion(r, g, b, m, exp_m, "Magenta", 0.01);
-            colspace_assertion(r, g, b, y, exp_y, "Yellow", 0.01);
-            colspace_assertion(r, g, b, k, exp_k, "Key", 0.01);
-
-            let (r2, g2, b2) = cmyk_to_rgb(c, m, y, k);
-            // Allow small rounding diffs
-            small_diff!(r, r2);
-            small_diff!(g, g2);
-            small_diff!(b, b2);
-        }
+        let (r2, g2, b2) = cmyk_to_rgb(c, m, y, k);
+        // Allow small rounding diffs
+        small_diff!(r, r2);
+        small_diff!(g, g2);
+        small_diff!(b, b2);
     }
 
     /// A grey pixel has `delta == 0`, which is the only thing standing between
@@ -574,53 +594,52 @@ mod tests {
     /// Asserting "hue is 0" is not enough on its own — `assert_eq!(hue, 0.0)`
     /// fails for NaN, but so would a merely wrong number, so check finiteness
     /// explicitly to say what actually went wrong.
-    #[test]
-    fn achromatic_input_has_zero_hue_and_never_divides_by_delta() {
-        for grey in [0u8, 1, 64, 128, 200, 254, 255] {
-            let (hue, sat, _) = rgb_to_hsl(grey, grey, grey);
-            assert!(
-                hue.is_finite(),
-                "hue for grey {grey} must be finite, got {hue}"
-            );
-            assert_eq!(hue, 0.0, "grey {grey} must have hue 0");
-            assert!(
-                sat.is_finite() && sat == 0.0,
-                "grey {grey} must have zero saturation, got {sat}"
-            );
+    #[rstest]
+    fn achromatic_input_has_zero_hue_and_never_divides_by_delta(
+        #[values(0, 1, 64, 128, 200, 254, 255)] grey: u8,
+    ) {
+        let (hue, sat, _) = rgb_to_hsl(grey, grey, grey);
+        assert!(
+            hue.is_finite(),
+            "hue for grey {grey} must be finite, got {hue}"
+        );
+        assert_eq!(hue, 0.0, "grey {grey} must have hue 0");
+        assert!(
+            sat.is_finite() && sat == 0.0,
+            "grey {grey} must have zero saturation, got {sat}"
+        );
 
-            let (hue_v, sat_v, _) = rgb_to_hsv(grey, grey, grey);
-            assert!(hue_v.is_finite() && hue_v == 0.0);
-            assert!(sat_v.is_finite() && sat_v == 0.0);
-        }
+        let (hue_v, sat_v, _) = rgb_to_hsv(grey, grey, grey);
+        assert!(hue_v.is_finite() && hue_v == 0.0);
+        assert!(sat_v.is_finite() && sat_v == 0.0);
     }
 
     /// The red-max hue branch divides the green/blue spread by `delta`. A
     /// `delta` of exactly 1.0 makes multiplication and division agree, so the
     /// fixtures below deliberately avoid saturated colours: every case has
     /// `0 < delta < 1` and `g != b`, which is what makes the operator visible.
-    #[test]
-    fn red_max_hue_divides_by_delta_rather_than_scaling() {
+    #[rstest]
+    // delta = (200-100)/255 = 0.392, (g-b)/delta = 0.5 -> 30 degrees
+    #[case::half_delta((200u8, 150u8, 100u8), 30.0f32)]
+    // delta = (180-60)/255 = 0.471, (g-b)/delta = 0.25 -> 15 degrees
+    #[case::quarter_delta((180, 90, 60), 15.0)]
+    // g < b puts the hue near the top of the circle: (g-b)/delta = -0.5
+    // -> -30, wrapped to 330.
+    #[case::negative_wrap((200, 100, 150), 330.0)]
+    fn red_max_hue_divides_by_delta_rather_than_scaling(
+        #[case] (r, g, b): (u8, u8, u8),
+        #[case] expected: f32,
+    ) {
         // (r, g, b) -> expected hue. Hand-computed: 60 * ((g - b) / delta).
-        let cases = [
-            // delta = (200-100)/255 = 0.392, (g-b)/delta = 0.5 -> 30 degrees
-            ((200u8, 150u8, 100u8), 30.0f32),
-            // delta = (180-60)/255 = 0.471, (g-b)/delta = 0.25 -> 15 degrees
-            ((180, 90, 60), 15.0),
-            // g < b puts the hue near the top of the circle: (g-b)/delta = -0.5
-            // -> -30, wrapped to 330.
-            ((200, 100, 150), 330.0),
-        ];
 
-        for ((r, g, b), expected) in cases {
-            for (name, hue) in [
-                ("hsl", rgb_to_hsl(r, g, b).0),
-                ("hsv", rgb_to_hsv(r, g, b).0),
-            ] {
-                assert!(
-                    (hue - expected).abs() < 0.5,
-                    "{name} hue for ({r},{g},{b}): got {hue}, expected {expected}"
-                );
-            }
+        for (name, hue) in [
+            ("hsl", rgb_to_hsl(r, g, b).0),
+            ("hsv", rgb_to_hsv(r, g, b).0),
+        ] {
+            assert!(
+                (hue - expected).abs() < 0.5,
+                "{name} hue for ({r},{g},{b}): got {hue}, expected {expected}"
+            );
         }
     }
 

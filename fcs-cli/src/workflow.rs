@@ -462,6 +462,7 @@ pub(crate) mod tests {
     use fcs_core::{FillColor, Landmark};
     use fcs_utils::QualityFilter;
     use image::{Rgba, RgbaImage};
+    use rstest::rstest;
     use std::{fs, sync::Arc};
     use tempfile::tempdir;
 
@@ -678,38 +679,38 @@ pub(crate) mod tests {
 
     /// A crop left by an earlier run is replaced by default and kept under `--keep-existing`,
     /// where the new one is saved beside it as `(2)`.
-    #[test]
-    fn keep_existing_saves_beside_an_earlier_runs_crop() {
+    #[rstest]
+    #[case::overwrite(&["--input", "x.jpg"][..], 1)]
+    #[case::keep_existing(&["--input", "x.jpg", "--keep-existing"][..], 2)]
+    fn keep_existing_saves_beside_an_earlier_runs_crop(
+        #[case] flags: &[&str],
+        #[case] expected: usize,
+    ) {
         let settings = crop_settings_app();
         let runtime = no_gpu_runtime();
         let filter = Arc::new(QualityFilter::new(None));
         let detections = vec![sample_detection(2.0, 2.0, 8.0, 8.0, 0.9)];
         let enhancement = None;
-        for (flags, expected) in [
-            (&["--input", "x.jpg"][..], 1),
-            (&["--input", "x.jpg", "--keep-existing"][..], 2),
-        ] {
-            let dir = tempdir().expect("temp directory should be created");
-            fs::write(dir.path().join("portrait_face1.png"), b"earlier run").unwrap();
-            let args = parse_args(flags);
-            let counters = ProgressCounters::default();
-            let mut ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
-            ctx.claims = fcs_utils::OutputClaims::new(args.overwrite_policy());
-            process_crops(
-                &ctx,
-                &sample_image(24, 24),
-                Path::new("portrait.jpg"),
-                &detections,
-                dir.path(),
-                None,
-            );
-            assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 1);
-            assert_eq!(
-                fs::read_dir(dir.path()).expect("output dir").count(),
-                expected,
-                "{flags:?}"
-            );
-        }
+        let dir = tempdir().expect("temp directory should be created");
+        fs::write(dir.path().join("portrait_face1.png"), b"earlier run").unwrap();
+        let args = parse_args(flags);
+        let counters = ProgressCounters::default();
+        let mut ctx = batch_ctx(&settings, &filter, &enhancement, &runtime, &args, &counters);
+        ctx.claims = fcs_utils::OutputClaims::new(args.overwrite_policy());
+        process_crops(
+            &ctx,
+            &sample_image(24, 24),
+            Path::new("portrait.jpg"),
+            &detections,
+            dir.path(),
+            None,
+        );
+        assert_eq!(counters.crops_saved.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            fs::read_dir(dir.path()).expect("output dir").count(),
+            expected,
+            "{flags:?}"
+        );
     }
 
     /// A crop that cannot be written is counted, which is what makes `main` exit non-zero.
@@ -861,32 +862,31 @@ pub(crate) mod tests {
         );
     }
 
-    /// The typed crop must hand `estimate_sharpness` the same RGBA pixels the per-pixel copy
-    /// did, or quality scores and labels in the JSON move (experiment 102). Every pixel is
-    /// distinct, and the formats cover widening (RGB, grey) and narrowing (16-bit).
-    #[test]
-    fn detection_crop_matches_the_per_pixel_copy() {
-        let rgb = image::RgbImage::from_fn(23, 17, |x, y| {
+    fn crop_test_rgb() -> DynamicImage {
+        DynamicImage::ImageRgb8(image::RgbImage::from_fn(23, 17, |x, y| {
             image::Rgb([
                 (x * 7 % 251) as u8,
                 (y * 13 % 241) as u8,
                 ((x + y) % 239) as u8,
             ])
-        });
-        let rgb = DynamicImage::ImageRgb8(rgb);
-        for image in [
-            rgb.clone(),
-            DynamicImage::ImageRgba8(rgb.to_rgba8()),
-            DynamicImage::ImageLuma8(rgb.to_luma8()),
-            // Not multiples of 257, so narrowing to u8 has to round.
-            DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(23, 17, |x, y| {
-                image::Rgb([x as u16 * 2851, y as u16 * 3701, 40_001])
-            })),
-        ] {
-            let before = image::imageops::crop_imm(&image, 3, 2, 15, 11).to_image();
-            let after = image.crop_imm(3, 2, 15, 11).into_rgba8();
-            assert_eq!(after, before, "{:?}", image.color());
-        }
+        }))
+    }
+
+    /// The typed crop must hand `estimate_sharpness` the same RGBA pixels the per-pixel copy
+    /// did, or quality scores and labels in the JSON move (experiment 102). Every pixel is
+    /// distinct, and the formats cover widening (RGB, grey) and narrowing (16-bit).
+    #[rstest]
+    #[case::rgb(crop_test_rgb())]
+    #[case::rgba(DynamicImage::ImageRgba8(crop_test_rgb().to_rgba8()))]
+    #[case::grey(DynamicImage::ImageLuma8(crop_test_rgb().to_luma8()))]
+    // Not multiples of 257, so narrowing to u8 has to round.
+    #[case::rgb16(DynamicImage::ImageRgb16(image::ImageBuffer::from_fn(
+        23, 17, |x, y| image::Rgb([x as u16 * 2851, y as u16 * 3701, 40_001]),
+    )))]
+    fn detection_crop_matches_the_per_pixel_copy(#[case] image: DynamicImage) {
+        let before = image::imageops::crop_imm(&image, 3, 2, 15, 11).to_image();
+        let after = image.crop_imm(3, 2, 15, 11).into_rgba8();
+        assert_eq!(after, before, "{:?}", image.color());
     }
 
     #[test]

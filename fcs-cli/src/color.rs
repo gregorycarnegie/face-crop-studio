@@ -160,72 +160,37 @@ mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
 
-    #[test]
-    fn parse_fill_color_spec_accepts_hex_and_comma_separated_rgb() {
-        assert_eq!(
-            parse_fill_color_spec("#112233").expect("valid hex color"),
-            RgbaColor::opaque(0x11, 0x22, 0x33)
-        );
-        assert_eq!(
-            parse_fill_color_spec("0x44556677").expect("valid 0x hex color with alpha"),
-            RgbaColor {
-                red: 0x44,
-                green: 0x55,
-                blue: 0x66,
-                alpha: 0x77,
-            }
-        );
-        assert_eq!(
-            parse_fill_color_spec(" 1, 2, 3 ").expect("valid comma-separated RGB"),
-            RgbaColor::opaque(1, 2, 3)
-        );
+    #[rstest]
+    #[case::hex("#112233", RgbaColor::opaque(0x11, 0x22, 0x33))]
+    #[case::hex_with_alpha("0x44556677", RgbaColor { red: 0x44, green: 0x55, blue: 0x66, alpha: 0x77, })]
+    #[case::comma_separated(" 1, 2, 3 ", RgbaColor::opaque(1, 2, 3))]
+    fn parse_fill_color_spec_accepts_hex_and_comma_separated_rgb(
+        #[case] input: &str,
+        #[case] expected: RgbaColor,
+    ) {
+        assert_eq!(parse_fill_color_spec(input).expect("valid color"), expected);
     }
 
-    #[test]
-    fn parse_fill_color_spec_accepts_rgb_function_with_multiple_alpha_formats() {
-        assert_eq!(
-            parse_fill_color_spec("rgb(10, 20, 30)").expect("valid rgb() without alpha"),
-            RgbaColor::opaque(10, 20, 30)
-        );
-        assert_eq!(
-            parse_fill_color_spec("RGB(10, 20, 30, 0.5)").expect("valid RGB() with float alpha"),
-            RgbaColor {
-                red: 10,
-                green: 20,
-                blue: 30,
-                alpha: 128,
-            }
-        );
-        assert_eq!(
-            parse_fill_color_spec("rgb(10, 20, 30, 50%)").expect("valid rgb() with percent alpha"),
-            RgbaColor {
-                red: 10,
-                green: 20,
-                blue: 30,
-                alpha: 128,
-            }
-        );
-        assert_eq!(
-            parse_fill_color_spec("rgb(10, 20, 30, 128)").expect("valid rgb() with integer alpha"),
-            RgbaColor {
-                red: 10,
-                green: 20,
-                blue: 30,
-                alpha: 128,
-            }
-        );
+    #[rstest]
+    #[case::opaque("rgb(10, 20, 30)", RgbaColor::opaque(10, 20, 30))]
+    #[case::fractional_alpha("RGB(10, 20, 30, 0.5)", RgbaColor { red: 10, green: 20, blue: 30, alpha: 128, })]
+    #[case::percent_alpha("rgb(10, 20, 30, 50%)", RgbaColor { red: 10, green: 20, blue: 30, alpha: 128, })]
+    #[case::byte_alpha("rgb(10, 20, 30, 128)", RgbaColor { red: 10, green: 20, blue: 30, alpha: 128, })]
+    fn parse_fill_color_spec_accepts_rgb_function_with_multiple_alpha_formats(
+        #[case] input: &str,
+        #[case] expected: RgbaColor,
+    ) {
+        assert_eq!(parse_fill_color_spec(input).expect("valid color"), expected);
     }
 
-    #[test]
-    fn parse_fill_color_spec_accepts_hsv_function() {
-        assert_eq!(
-            parse_fill_color_spec("hsv(0deg, 100%, 100%)").expect("valid hsv() with deg suffix"),
-            RgbaColor::opaque(255, 0, 0)
-        );
-        assert_eq!(
-            parse_fill_color_spec("HSV(240°, 100, 100)").expect("valid HSV() with degree symbol"),
-            RgbaColor::opaque(0, 0, 255)
-        );
+    #[rstest]
+    #[case::degrees_suffix("hsv(0deg, 100%, 100%)", RgbaColor::opaque(255, 0, 0))]
+    #[case::degree_symbol("HSV(240°, 100, 100)", RgbaColor::opaque(0, 0, 255))]
+    fn parse_fill_color_spec_accepts_hsv_function(
+        #[case] input: &str,
+        #[case] expected: RgbaColor,
+    ) {
+        assert_eq!(parse_fill_color_spec(input).expect("valid color"), expected);
     }
 
     #[test]
@@ -282,32 +247,39 @@ mod tests {
     // between "fraction" and "0-255 / percentage" were untested.
     // ------------------------------------------------------------------
 
-    #[test]
-    fn parse_alpha_value_treats_above_one_as_0_255_and_at_most_one_as_a_fraction() {
+    #[rstest]
+    #[case::one_integer("1", 255)]
+    #[case::one_float("1.0", 255)]
+    #[case::zero("0", 0)]
+    #[case::half("0.5", 128)]
+    #[case::max_byte("255", 255)]
+    #[case::mid_byte("128", 128)]
+    #[case::small_byte("2", 2)]
+    #[case::above_max("999", 255)]
+    #[case::below_min("-5", 0)]
+    fn parse_alpha_value_treats_above_one_as_0_255_and_at_most_one_as_a_fraction(
+        #[case] input: &str,
+        #[case] expected: u8,
+    ) {
         // The branch pivots on `value > 1.0`, so 1.0 itself must stay a fraction:
         // as a 0-255 value it would collapse to 1/255 -> 0.
-        assert_eq!(parse_alpha_value("1").unwrap(), 255);
-        assert_eq!(parse_alpha_value("1.0").unwrap(), 255);
-        assert_eq!(parse_alpha_value("0").unwrap(), 0);
-        assert_eq!(parse_alpha_value("0.5").unwrap(), 128);
-
         // Above 1.0 is a 0-255 byte value, divided by 255.
-        assert_eq!(parse_alpha_value("255").unwrap(), 255);
-        assert_eq!(parse_alpha_value("128").unwrap(), 128);
-        assert_eq!(parse_alpha_value("2").unwrap(), 2);
-
         // Out of range clamps rather than wrapping.
-        assert_eq!(parse_alpha_value("999").unwrap(), 255);
-        assert_eq!(parse_alpha_value("-5").unwrap(), 0);
+        assert_eq!(parse_alpha_value(input).unwrap(), expected);
     }
 
-    #[test]
-    fn parse_alpha_value_scales_percentages_by_one_hundredth() {
-        assert_eq!(parse_alpha_value("100%").unwrap(), 255);
-        assert_eq!(parse_alpha_value("50%").unwrap(), 128);
-        assert_eq!(parse_alpha_value("0%").unwrap(), 0);
+    #[rstest]
+    #[case::full("100%", 255)]
+    #[case::half("50%", 128)]
+    #[case::zero("0%", 0)]
+    #[case::whitespace(" 25 % ", 64)]
+    fn parse_alpha_value_scales_percentages_by_one_hundredth(
+        #[case] input: &str,
+        #[case] expected: u8,
+    ) {
         // Whitespace inside the percentage form is tolerated.
-        assert_eq!(parse_alpha_value(" 25 % ").unwrap(), 64);
+        assert_eq!(parse_alpha_value(input).unwrap(), expected);
+
         assert!(parse_alpha_value("abc%").is_err());
         assert!(parse_alpha_value("nonsense").is_err());
     }
@@ -343,30 +315,25 @@ mod tests {
         assert!(parse_hue_value(input).is_err());
     }
 
-    #[test]
-    fn parse_percentage_value_distinguishes_fractions_from_percentages() {
-        // Explicit percent sign: scaled by 0.01.
-        for (input, expected) in [("100%", 1.0f32), ("50%", 0.5), ("0%", 0.0)] {
-            let got = parse_percentage_value(input).unwrap();
-            assert!(
-                (got - expected).abs() < 1e-4,
-                "{input}: got {got}, expected {expected}"
-            );
-        }
-
-        // No percent sign and <= 1.0: already a fraction, used as-is. 1.0 sits on
-        // the boundary and must not be rescaled to 0.01.
-        assert!((parse_percentage_value("1").unwrap() - 1.0).abs() < 1e-4);
-        assert!((parse_percentage_value("0.25").unwrap() - 0.25).abs() < 1e-4);
-
-        // No percent sign and > 1.0: read as a percentage, so 50 -> 0.5.
-        assert!((parse_percentage_value("50").unwrap() - 0.5).abs() < 1e-4);
-        assert!((parse_percentage_value("100").unwrap() - 1.0).abs() < 1e-4);
-
-        // Clamped at both ends.
-        assert!((parse_percentage_value("500").unwrap() - 1.0).abs() < 1e-4);
-        assert!(parse_percentage_value("-1").unwrap().abs() < 1e-4);
-
+    #[rstest]
+    #[case::full_percent("100%", 1.0)]
+    #[case::half_percent("50%", 0.5)]
+    #[case::zero_percent("0%", 0.0)]
+    #[case::one_fraction("1", 1.0)]
+    #[case::quarter_fraction("0.25", 0.25)]
+    #[case::half_plain_percent("50", 0.5)]
+    #[case::full_plain_percent("100", 1.0)]
+    #[case::above_max("500", 1.0)]
+    #[case::below_min("-1", 0.0)]
+    fn parse_percentage_value_distinguishes_fractions_from_percentages(
+        #[case] input: &str,
+        #[case] expected: f32,
+    ) {
+        let got = parse_percentage_value(input).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-4,
+            "{input}: got {got}, expected {expected}"
+        );
         assert!(parse_percentage_value("x%").is_err());
         assert!(parse_percentage_value("x").is_err());
     }

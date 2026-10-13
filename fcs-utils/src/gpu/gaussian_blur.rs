@@ -269,6 +269,7 @@ fn gaussian(distance: f32, sigma: f32) -> f32 {
 mod tests {
     use super::*;
     use image::RgbaImage;
+    use rstest::rstest;
 
     use crate::gpu::test_support::test_context;
 
@@ -345,17 +346,15 @@ mod tests {
         assert_eq!(w[1], 0.0);
     }
 
-    #[test]
-    fn build_kernel_sums_to_one() {
-        for radius in [1u32, 3, 5, 12] {
-            let weights = build_kernel(radius);
-            let kernel_size = (radius * 2 + 1) as usize;
-            let sum: f32 = weights[..kernel_size].iter().sum();
-            assert!(
-                (sum - 1.0).abs() < 1e-5,
-                "kernel radius {radius} sum = {sum}, expected ~1.0"
-            );
-        }
+    #[rstest]
+    fn build_kernel_sums_to_one(#[values(1, 3, 5, 12)] radius: u32) {
+        let weights = build_kernel(radius);
+        let kernel_size = (radius * 2 + 1) as usize;
+        let sum: f32 = weights[..kernel_size].iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-5,
+            "kernel radius {radius} sum = {sum}, expected ~1.0"
+        );
     }
 
     #[test]

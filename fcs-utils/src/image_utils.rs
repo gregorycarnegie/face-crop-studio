@@ -818,6 +818,7 @@ pub fn fit_input(original: (u32, u32), target: (u32, u32)) -> Result<InputFit> {
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
+    use rstest::rstest;
 
     /// A four-component JPEG must not take the process down.
     ///
@@ -939,27 +940,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn is_supported_image_path_rejects_other_extensions_and_bare_names() {
-        // The function had only positive cases, so replacing it with `true`
-        // wholesale went unnoticed — which would make the app try to decode
-        // every file in a directory.
-        for name in [
+    #[rstest]
+    fn is_supported_image_path_rejects_other_extensions_and_bare_names(
+        #[values(
             "notes.txt",
             "video.mp4",
             "archive.zip",
             "model.onnx",
             "settings.json",
-        ] {
-            assert!(
-                !is_supported_image_path(Path::new(name)),
-                "{name} must not be treated as an image"
-            );
-        }
-
-        // No extension at all, and a dotfile whose name is not an extension.
-        assert!(!is_supported_image_path(Path::new("README")));
-        assert!(!is_supported_image_path(Path::new("archive.tar.gz")));
+            "README",
+            "archive.tar.gz"
+        )]
+        name: &str,
+    ) {
+        // The function had only positive cases, so replacing it with `true`
+        // wholesale went unnoticed — which would make the app try to decode
+        // every file in a directory.
+        assert!(
+            !is_supported_image_path(Path::new(name)),
+            "{name} must not be treated as an image"
+        );
 
         // A representative positive case, so the test fails if the list breaks
         // rather than passing because everything returns false.
@@ -1077,8 +1077,11 @@ mod tests {
         assert!(worst <= 2, "max channel difference {worst} is not rounding");
     }
 
-    #[test]
-    fn threaded_and_single_threaded_resize_agree() {
+    #[rstest]
+    fn threaded_and_single_threaded_resize_agree(
+        #[values(FilterType::Triangle, FilterType::Lanczos3, FilterType::Nearest)]
+        filter: FilterType,
+    ) {
         // Over RESIZE_THREADING_MIN_PIXELS, so the default path threads it.
         let (w, h) = (2400u32, 1800u32);
         assert!(
@@ -1095,19 +1098,13 @@ mod tests {
             .build()
             .expect("single-thread pool");
 
-        for filter in [
-            FilterType::Triangle,
-            FilterType::Lanczos3,
-            FilterType::Nearest,
-        ] {
-            let threaded = resize_image(&dynamic, 640, 640, filter);
-            let serial = single.install(|| resize_image(&dynamic, 640, 640, filter));
-            assert_eq!(
-                threaded.as_raw(),
-                serial.as_raw(),
-                "{filter:?} resize differs between one thread and many"
-            );
-        }
+        let threaded = resize_image(&dynamic, 640, 640, filter);
+        let serial = single.install(|| resize_image(&dynamic, 640, 640, filter));
+        assert_eq!(
+            threaded.as_raw(),
+            serial.as_raw(),
+            "{filter:?} resize differs between one thread and many"
+        );
     }
 
     #[test]
@@ -1126,32 +1123,32 @@ mod tests {
         assert_eq!(fit.origin, (200, 0)); // `%` would give 0, and 640 / 240 / 2 would give 1
     }
 
-    #[test]
-    fn a_source_matching_the_target_aspect_gets_no_bars() {
-        for source in [(640, 640), (1280, 1280), (320, 320)] {
-            let fit = fit_input(source, (640, 640)).unwrap();
-            assert_eq!(fit.drawn, (640, 640), "{source:?}");
-            assert_eq!(fit.origin, (0, 0), "{source:?}");
-        }
+    #[rstest]
+    fn a_source_matching_the_target_aspect_gets_no_bars(
+        #[values((640, 640), (1280, 1280), (320, 320))] source: (u32, u32),
+    ) {
+        let fit = fit_input(source, (640, 640)).unwrap();
+        assert_eq!(fit.drawn, (640, 640), "{source:?}");
+        assert_eq!(fit.origin, (0, 0), "{source:?}");
     }
 
-    #[test]
-    fn the_fit_maps_a_model_coordinate_back_to_the_source() {
-        for source in [(1920u32, 1080u32), (1080, 1920), (4000, 3000), (640, 640)] {
-            let fit = fit_input(source, (640, 640)).unwrap();
-            let (ox, oy) = fit.source_offset();
-            for corner in [(0.0f32, 0.0f32), (source.0 as f32, source.1 as f32)] {
-                // Source -> model, the way every preprocessor lays the image down.
-                let model_x = corner.0 / fit.scale + fit.origin.0 as f32;
-                let model_y = corner.1 / fit.scale + fit.origin.1 as f32;
-                // Model -> source, the way postprocessing reads it back.
-                let back_x = model_x * fit.scale - ox;
-                let back_y = model_y * fit.scale - oy;
-                assert!(
-                    (back_x - corner.0).abs() < 0.01 && (back_y - corner.1).abs() < 0.01,
-                    "{source:?}: {corner:?} came back as ({back_x}, {back_y})"
-                );
-            }
+    #[rstest]
+    fn the_fit_maps_a_model_coordinate_back_to_the_source(
+        #[values((1920, 1080), (1080, 1920), (4000, 3000), (640, 640))] source: (u32, u32),
+    ) {
+        let fit = fit_input(source, (640, 640)).unwrap();
+        let (ox, oy) = fit.source_offset();
+        for corner in [(0.0f32, 0.0f32), (source.0 as f32, source.1 as f32)] {
+            // Source -> model, the way every preprocessor lays the image down.
+            let model_x = corner.0 / fit.scale + fit.origin.0 as f32;
+            let model_y = corner.1 / fit.scale + fit.origin.1 as f32;
+            // Model -> source, the way postprocessing reads it back.
+            let back_x = model_x * fit.scale - ox;
+            let back_y = model_y * fit.scale - oy;
+            assert!(
+                (back_x - corner.0).abs() < 0.01 && (back_y - corner.1).abs() < 0.01,
+                "{source:?}: {corner:?} came back as ({back_x}, {back_y})"
+            );
         }
     }
 

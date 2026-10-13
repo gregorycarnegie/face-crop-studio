@@ -238,6 +238,7 @@ impl WgpuEnhancer {
 mod tests {
     use super::*;
     use crate::gpu::test_support::{gradient_image, test_context};
+    use rstest::rstest;
 
     /// `apply` is a chain of `if setting is active { run stage }` guards, and it
     /// had no tests at all. Every guard was therefore free to invert: a mutated
@@ -277,8 +278,20 @@ mod tests {
     /// blur-based effects off. The CPU pipeline needs its own radius guard because it calls
     /// `fast_blur`, which still changes pixels at radius 0; here `try_gpu_blur` and the CPU
     /// fallbacks carry that guard, and this pins that they do.
-    #[test]
-    fn a_zero_radius_switches_the_blur_based_effects_off() {
+    #[rstest]
+    #[case::sharpening("sharpening", EnhancementSettings { sharpness: 0.8, unsharp_radius: 0.0, ..neutral() })]
+    #[case::background_blur(
+        "background blur",
+        EnhancementSettings {
+            background_blur: true,
+            background_blur_radius: 0.0,
+            ..neutral()
+        },
+    )]
+    fn a_zero_radius_switches_the_blur_based_effects_off(
+        #[case] name: &str,
+        #[case] settings: EnhancementSettings,
+    ) {
         let Some(ctx) = test_context() else {
             return;
         };
@@ -288,30 +301,11 @@ mod tests {
             .apply(&image, &neutral(), None)
             .expect("apply")
             .to_rgba8();
-        for (name, settings) in [
-            (
-                "sharpening",
-                EnhancementSettings {
-                    sharpness: 0.8,
-                    unsharp_radius: 0.0,
-                    ..neutral()
-                },
-            ),
-            (
-                "background blur",
-                EnhancementSettings {
-                    background_blur: true,
-                    background_blur_radius: 0.0,
-                    ..neutral()
-                },
-            ),
-        ] {
-            let out = enhancer
-                .apply(&image, &settings, None)
-                .expect("apply")
-                .to_rgba8();
-            assert_eq!(out, untouched, "{name} at radius 0 changed the image");
-        }
+        let out = enhancer
+            .apply(&image, &settings, None)
+            .expect("apply")
+            .to_rgba8();
+        assert_eq!(out, untouched, "{name} at radius 0 changed the image");
     }
 
     #[test]
@@ -332,8 +326,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn each_enhancement_changes_the_image_when_its_setting_is_active() {
+    #[rstest]
+    #[case::auto_color("auto_color", EnhancementSettings { auto_color: true, ..neutral() })]
+    #[case::exposure("exposure_stops", EnhancementSettings { exposure_stops: 1.0, ..neutral() })]
+    #[case::brightness("brightness", EnhancementSettings { brightness: 30, ..neutral() })]
+    #[case::contrast("contrast", EnhancementSettings { contrast: 1.6, ..neutral() })]
+    #[case::saturation("saturation", EnhancementSettings { saturation: 1.8, ..neutral() })]
+    #[case::skin_smoothing("skin_smooth_amount", EnhancementSettings { skin_smooth_amount: 0.8, ..neutral() })]
+    #[case::unsharp("unsharp_amount", EnhancementSettings { unsharp_amount: 1.2, unsharp_radius: 2.0, ..neutral() })]
+    #[case::sharpness("sharpness", EnhancementSettings { sharpness: 1.0, unsharp_radius: 2.0, ..neutral() })]
+    #[case::background_blur("background_blur", EnhancementSettings { background_blur: true, ..neutral() })]
+    fn each_enhancement_changes_the_image_when_its_setting_is_active(
+        #[case] name: &str,
+        #[case] settings: EnhancementSettings,
+    ) {
         let Some(ctx) = test_context() else {
             eprintln!("Skipping WgpuEnhancer test: no adapter");
             return;
@@ -344,89 +350,19 @@ mod tests {
 
         // One stage at a time, each starting from the neutral baseline, so a
         // failure names the stage whose guard broke rather than "something".
-        let cases: Vec<(&str, EnhancementSettings)> = vec![
-            (
-                "auto_color",
-                EnhancementSettings {
-                    auto_color: true,
-                    ..neutral()
-                },
-            ),
-            (
-                "exposure_stops",
-                EnhancementSettings {
-                    exposure_stops: 1.0,
-                    ..neutral()
-                },
-            ),
-            (
-                "brightness",
-                EnhancementSettings {
-                    brightness: 30,
-                    ..neutral()
-                },
-            ),
-            (
-                "contrast",
-                EnhancementSettings {
-                    contrast: 1.6,
-                    ..neutral()
-                },
-            ),
-            (
-                "saturation",
-                EnhancementSettings {
-                    saturation: 1.8,
-                    ..neutral()
-                },
-            ),
-            (
-                "skin_smooth_amount",
-                EnhancementSettings {
-                    skin_smooth_amount: 0.8,
-                    ..neutral()
-                },
-            ),
-            (
-                "unsharp_amount",
-                EnhancementSettings {
-                    unsharp_amount: 1.2,
-                    unsharp_radius: 2.0,
-                    ..neutral()
-                },
-            ),
-            (
-                "sharpness",
-                EnhancementSettings {
-                    sharpness: 1.0,
-                    unsharp_radius: 2.0,
-                    ..neutral()
-                },
-            ),
-            (
-                "background_blur",
-                EnhancementSettings {
-                    background_blur: true,
-                    ..neutral()
-                },
-            ),
-        ];
-
-        for (name, settings) in cases {
-            let out = enhancer
-                .apply(&image, &settings, None)
-                .unwrap_or_else(|e| panic!("apply failed for {name}: {e}"));
-            assert_eq!(
-                (out.width(), out.height()),
-                (image.width(), image.height()),
-                "{name} must preserve dimensions"
-            );
-            assert_ne!(
-                out.to_rgba8().as_raw(),
-                &baseline,
-                "{name} is active but changed nothing, so its guard did not fire"
-            );
-        }
+        let out = enhancer
+            .apply(&image, &settings, None)
+            .unwrap_or_else(|e| panic!("apply failed for {name}: {e}"));
+        assert_eq!(
+            (out.width(), out.height()),
+            (image.width(), image.height()),
+            "{name} must preserve dimensions"
+        );
+        assert_ne!(
+            out.to_rgba8().as_raw(),
+            &baseline,
+            "{name} is active but changed nothing, so its guard did not fire"
+        );
     }
 
     #[test]
@@ -448,8 +384,10 @@ mod tests {
         assert_ne!(out.to_rgba8().as_raw(), image.to_rgba8().as_raw());
     }
 
-    #[test]
-    fn unsharp_needs_both_an_amount_and_a_radius() {
+    #[rstest]
+    #[case::zero_radius(1.0f32, 0.0f32)]
+    #[case::zero_amount(0.0, 2.0)]
+    fn unsharp_needs_both_an_amount_and_a_radius(#[case] amount: f32, #[case] radius: f32) {
         let Some(ctx) = test_context() else {
             eprintln!("Skipping WgpuEnhancer test: no adapter");
             return;
@@ -460,19 +398,17 @@ mod tests {
         // The stage is gated on `combined > 0.0 && radius > 0.0`; with either
         // half missing it must not run. An `||` there would sharpen with a zero
         // radius, and a zero amount would sharpen by nothing.
-        for (amount, radius) in [(1.0f32, 0.0f32), (0.0, 2.0)] {
-            let settings = EnhancementSettings {
-                unsharp_amount: amount,
-                unsharp_radius: radius,
-                ..neutral()
-            };
-            let out = enhancer.apply(&image, &settings, None).expect("apply");
-            assert_eq!(
-                out.to_rgba8().as_raw(),
-                image.to_rgba8().as_raw(),
-                "unsharp with amount={amount} radius={radius} must be inert"
-            );
-        }
+        let settings = EnhancementSettings {
+            unsharp_amount: amount,
+            unsharp_radius: radius,
+            ..neutral()
+        };
+        let out = enhancer.apply(&image, &settings, None).expect("apply");
+        assert_eq!(
+            out.to_rgba8().as_raw(),
+            image.to_rgba8().as_raw(),
+            "unsharp with amount={amount} radius={radius} must be inert"
+        );
     }
 
     #[test]

@@ -219,6 +219,7 @@ pub(crate) mod log_capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Reset global telemetry state between tests so they don't interfere.
     fn reset() {
@@ -254,19 +255,13 @@ mod tests {
         reset();
     }
 
-    #[test]
-    fn telemetry_allows_all_levels_at_trace() {
+    #[rstest]
+    fn telemetry_allows_all_levels_at_trace(
+        #[values(Level::Error, Level::Warn, Level::Info, Level::Debug, Level::Trace)] level: Level,
+    ) {
         let _state = lock_state();
         configure(true, LevelFilter::Trace);
-        for level in [
-            Level::Error,
-            Level::Warn,
-            Level::Info,
-            Level::Debug,
-            Level::Trace,
-        ] {
-            assert!(telemetry_allows(level), "expected {level:?} to be allowed");
-        }
+        assert!(telemetry_allows(level), "expected {level:?} to be allowed");
         reset();
     }
 
@@ -414,21 +409,17 @@ mod tests {
         reset();
     }
 
-    #[test]
-    fn filter_and_index_round_trip_for_every_level() {
+    #[rstest]
+    #[case::error(1u8, LevelFilter::Error)]
+    #[case::warn(2, LevelFilter::Warn)]
+    #[case::info(3, LevelFilter::Info)]
+    #[case::debug(4, LevelFilter::Debug)]
+    #[case::trace(5, LevelFilter::Trace)]
+    fn filter_and_index_round_trip_for_every_level(#[case] index: u8, #[case] filter: LevelFilter) {
         // Each arm is deleted individually by mutation, so assert each mapping
         // rather than only the endpoints.
-        let pairs = [
-            (1u8, LevelFilter::Error),
-            (2, LevelFilter::Warn),
-            (3, LevelFilter::Info),
-            (4, LevelFilter::Debug),
-            (5, LevelFilter::Trace),
-        ];
-        for (index, filter) in pairs {
-            assert_eq!(filter_from_index(index), filter, "index {index}");
-            assert_eq!(filter_index(filter), index, "filter {filter:?}");
-        }
+        assert_eq!(filter_from_index(index), filter, "index {index}");
+        assert_eq!(filter_index(filter), index, "filter {filter:?}");
 
         // Everything outside 1..=5 is Off, including 0 and the far end of u8.
         for index in [0u8, 6, 7, 100, u8::MAX] {

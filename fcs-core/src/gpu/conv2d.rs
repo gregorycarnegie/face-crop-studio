@@ -650,6 +650,7 @@ fn workgroups(config: &Conv2dConfig, kernel: Kernel, pixels_per_thread: u32) -> 
 mod kernel_selection_tests {
     use super::*;
     use crate::gpu::conv2d::{Conv2dChannels, Conv2dOptions, SpatialDims};
+    use rstest::rstest;
 
     /// A config with every field distinct from every other, so one field standing in for
     /// another cannot go unnoticed.
@@ -688,50 +689,41 @@ mod kernel_selection_tests {
     ///
     /// This is what kills the `==` mutants. With them inline, flipping any one comparison sent
     /// the convolution to `General`, which is still correct, so nothing failed.
-    #[test]
-    fn every_pointwise_condition_is_load_bearing() {
+    #[rstest]
+    #[case::kernel_width("kernel width", config((2, 1), (1, 1), (0, 0), 1, (8, 16)))]
+    #[case::kernel_height("kernel height", config((1, 2), (1, 1), (0, 0), 1, (8, 16)))]
+    #[case::stride_x("stride x", config((1, 1), (2, 1), (0, 0), 1, (8, 16)))]
+    #[case::stride_y("stride y", config((1, 1), (1, 2), (0, 0), 1, (8, 16)))]
+    #[case::pad_x("pad x", config((1, 1), (1, 1), (1, 0), 1, (8, 16)))]
+    #[case::pad_y("pad y", config((1, 1), (1, 1), (0, 1), 1, (8, 16)))]
+    fn every_pointwise_condition_is_load_bearing(#[case] what: &str, #[case] c: Conv2dConfig) {
         // Start from the pointwise config and break one thing at a time.
-        for (what, c) in [
-            ("kernel width", config((2, 1), (1, 1), (0, 0), 1, (8, 16))),
-            ("kernel height", config((1, 2), (1, 1), (0, 0), 1, (8, 16))),
-            ("stride x", config((1, 1), (2, 1), (0, 0), 1, (8, 16))),
-            ("stride y", config((1, 1), (1, 2), (0, 0), 1, (8, 16))),
-            ("pad x", config((1, 1), (1, 1), (1, 0), 1, (8, 16))),
-            ("pad y", config((1, 1), (1, 1), (0, 1), 1, (8, 16))),
-        ] {
-            assert_ne!(
-                kernel_for(&c),
-                Kernel::Pointwise,
-                "{what} should have disqualified the pointwise kernel"
-            );
-        }
+        assert_ne!(
+            kernel_for(&c),
+            Kernel::Pointwise,
+            "{what} should have disqualified the pointwise kernel"
+        );
         // Grouped disqualifies it too, and lands on the grouped kernel rather than general.
         let grouped = config((1, 1), (1, 1), (0, 0), 4, (8, 16));
         assert_eq!(kernel_for(&grouped), Kernel::Grouped);
     }
 
-    #[test]
-    fn every_depthwise_condition_is_load_bearing() {
-        for (what, c) in [
-            ("kernel width", config((2, 3), (1, 1), (1, 1), 8, (8, 8))),
-            ("kernel height", config((3, 2), (1, 1), (1, 1), 8, (8, 8))),
-            ("stride x", config((3, 3), (2, 1), (1, 1), 8, (8, 8))),
-            ("stride y", config((3, 3), (1, 2), (1, 1), 8, (8, 8))),
-            ("pad x", config((3, 3), (1, 1), (0, 1), 8, (8, 8))),
-            ("pad y", config((3, 3), (1, 1), (1, 0), 8, (8, 8))),
-            // groups != input channels, and output != input channels.
-            ("groups", config((3, 3), (1, 1), (1, 1), 4, (8, 8))),
-            (
-                "output channels",
-                config((3, 3), (1, 1), (1, 1), 8, (8, 16)),
-            ),
-        ] {
-            assert_ne!(
-                kernel_for(&c),
-                Kernel::Depthwise,
-                "{what} should have disqualified the depthwise kernel"
-            );
-        }
+    #[rstest]
+    #[case::kernel_width("kernel width", config((2, 3), (1, 1), (1, 1), 8, (8, 8)))]
+    #[case::kernel_height("kernel height", config((3, 2), (1, 1), (1, 1), 8, (8, 8)))]
+    #[case::stride_x("stride x", config((3, 3), (2, 1), (1, 1), 8, (8, 8)))]
+    #[case::stride_y("stride y", config((3, 3), (1, 2), (1, 1), 8, (8, 8)))]
+    #[case::pad_x("pad x", config((3, 3), (1, 1), (0, 1), 8, (8, 8)))]
+    #[case::pad_y("pad y", config((3, 3), (1, 1), (1, 0), 8, (8, 8)))]
+    // groups != input channels, and output != input channels.
+    #[case::groups("groups", config((3, 3), (1, 1), (1, 1), 4, (8, 8)))]
+    #[case::output_channels("output channels", config((3, 3), (1, 1), (1, 1), 8, (8, 16)))]
+    fn every_depthwise_condition_is_load_bearing(#[case] what: &str, #[case] c: Conv2dConfig) {
+        assert_ne!(
+            kernel_for(&c),
+            Kernel::Depthwise,
+            "{what} should have disqualified the depthwise kernel"
+        );
     }
 
     /// The stem: 3x3 stride 2, ungrouped. Neither fast path, and not the grouped fallback.

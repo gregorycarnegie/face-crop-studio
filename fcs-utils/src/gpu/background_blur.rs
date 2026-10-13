@@ -176,6 +176,7 @@ impl GpuBackgroundBlur {
 mod tests {
     use super::*;
     use image::RgbaImage;
+    use rstest::rstest;
 
     use crate::gpu::test_support::test_context;
 
@@ -280,8 +281,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blend_clamps_the_mask_size_rather_than_failing() {
+    #[rstest]
+    fn blend_clamps_the_mask_size_rather_than_failing(#[values(-5.0, 0.0, 1.0, 99.0)] mask: f32) {
         let Some(ctx) = test_context() else {
             eprintln!("Skipping background_blur blend test: no GPU");
             return;
@@ -299,9 +300,7 @@ mod tests {
         ));
 
         // Out of range on both sides: mask_size clamps to 0.3 / 1.0.
-        for mask in [-5.0f32, 0.0, 1.0, 99.0] {
-            let result = blurrer.blend(&sharp, &blurred, mask).expect("blend");
-            assert_plausible_output(&result, &sharp, "blend (clamped mask)");
-        }
+        let result = blurrer.blend(&sharp, &blurred, mask).expect("blend");
+        assert_plausible_output(&result, &sharp, "blend (clamped mask)");
     }
 }

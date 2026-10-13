@@ -230,6 +230,7 @@ impl GpuPixelAdjust {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Neutral settings need no pass; one setting off neutral does. Forcing `true` only costs
     /// time, but the function states a contract and callers skip the GPU on it.
@@ -257,43 +258,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn flags_pack_each_adjustment_into_its_own_bit() {
+    #[rstest]
+    #[case::exposure(AdjustmentActivity { exposure: true, ..none_active() }, 1)]
+    #[case::brightness(AdjustmentActivity { brightness: true, ..none_active() }, 2)]
+    #[case::contrast(AdjustmentActivity { contrast: true, ..none_active() }, 4)]
+    #[case::saturation(AdjustmentActivity { saturation: true, ..none_active() }, 8)]
+    fn flags_pack_each_adjustment_into_its_own_bit(
+        #[case] activity: AdjustmentActivity,
+        #[case] expected: u32,
+    ) {
         assert_eq!(none_active().flags(), 0);
 
-        let cases = [
-            (
-                AdjustmentActivity {
-                    exposure: true,
-                    ..none_active()
-                },
-                1,
-            ),
-            (
-                AdjustmentActivity {
-                    brightness: true,
-                    ..none_active()
-                },
-                2,
-            ),
-            (
-                AdjustmentActivity {
-                    contrast: true,
-                    ..none_active()
-                },
-                4,
-            ),
-            (
-                AdjustmentActivity {
-                    saturation: true,
-                    ..none_active()
-                },
-                8,
-            ),
-        ];
-        for (activity, expected) in cases {
-            assert_eq!(activity.flags(), expected);
-        }
+        assert_eq!(activity.flags(), expected);
 
         // All four combine rather than overwrite one another.
         let all = AdjustmentActivity {
@@ -305,19 +281,16 @@ mod tests {
         assert_eq!(all.flags(), 0b1111);
     }
 
-    #[test]
-    fn has_any_is_true_for_each_adjustment_alone() {
+    #[rstest]
+    #[case::exposure(|a: &mut AdjustmentActivity| a.exposure = true)]
+    #[case::brightness(|a: &mut AdjustmentActivity| a.brightness = true)]
+    #[case::contrast(|a: &mut AdjustmentActivity| a.contrast = true)]
+    #[case::saturation(|a: &mut AdjustmentActivity| a.saturation = true)]
+    fn has_any_is_true_for_each_adjustment_alone(#[case] setter: fn(&mut AdjustmentActivity)) {
         assert!(!none_active().has_any());
-        for setter in [
-            |a: &mut AdjustmentActivity| a.exposure = true,
-            |a: &mut AdjustmentActivity| a.brightness = true,
-            |a: &mut AdjustmentActivity| a.contrast = true,
-            |a: &mut AdjustmentActivity| a.saturation = true,
-        ] {
-            let mut activity = none_active();
-            setter(&mut activity);
-            assert!(activity.has_any(), "one live adjustment is enough");
-        }
+        let mut activity = none_active();
+        setter(&mut activity);
+        assert!(activity.has_any(), "one live adjustment is enough");
     }
 
     #[test]

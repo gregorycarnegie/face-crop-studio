@@ -310,6 +310,7 @@ mod tests {
     use super::*;
     use crate::ui::test_support::click_at;
     use egui_kittest::{Harness, kittest::Queryable};
+    use rstest::rstest;
 
     /// Captured layout inputs plus whatever the widget under test mutates.
     ///
@@ -418,25 +419,26 @@ mod tests {
         assert!(h.state().clicked);
     }
 
-    #[test]
-    fn slider_label_formats_by_kind() {
+    #[rstest]
+    #[case::percentage("pct", 42.0_f32, "42%")]
+    #[case::confidence("conf", 0.5, "0.50")]
+    #[case::degrees("deg", 90.0, "90\u{b0}")]
+    #[case::pixels("px", 12.0, "12px")]
+    #[case::default("", 3.25, "3.2")]
+    fn slider_label_formats_by_kind(
+        #[case] fmt: &'static str,
+        #[case] value: f32,
+        #[case] expected: &str,
+    ) {
         // Each `fmt` key renders the value differently, and the label text is
         // the only externally visible difference between the match arms.
-        for (fmt, value, expected) in [
-            ("pct", 42.0_f32, "42%"),
-            ("conf", 0.5, "0.50"),
-            ("deg", 90.0, "90\u{b0}"),
-            ("px", 12.0, "12px"),
-            ("", 3.25, "3.2"),
-        ] {
-            let mut h = harness(move |ui, probe| {
-                probe.value = value;
-                slider_with_label(ui, "L", &mut probe.value, 0.0, 100.0, fmt);
-            });
-            h.run();
-            // Panics listing the available labels if the text is absent.
-            h.get_by_label(expected);
-        }
+        let mut h = harness(move |ui, probe| {
+            probe.value = value;
+            slider_with_label(ui, "L", &mut probe.value, 0.0, 100.0, fmt);
+        });
+        h.run();
+        // Panics listing the available labels if the text is absent.
+        h.get_by_label(expected);
     }
 
     #[test]

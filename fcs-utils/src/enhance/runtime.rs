@@ -217,6 +217,7 @@ fn fill_transparent(image: DynamicImage, fill: RgbaColor) -> DynamicImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// "Over" with both alphas strictly between 0 and 1, worked by hand: out alpha
     /// 0.4 + 0.6 * 0.6 = 0.76, and red (200 * 0.4 + 10 * 0.36) / 0.76 = 110.
@@ -388,8 +389,10 @@ mod tests {
     /// Dense outlines -- a Koch rectangle at 4 iterations is 1,024 points, a 9-sided Koch
     /// polygon at 3 is 576 -- used to be cut to their first 512 points on the GPU, closing the
     /// shape along a diagonal. They now take the CPU mask, so the two paths agree exactly.
-    #[test]
-    fn dense_outlines_match_the_cpu_mask_on_the_gpu_path() {
+    #[rstest]
+    #[case::koch_rectangle(CropShape::KochRectangle { iterations: 4 })]
+    #[case::koch_polygon(CropShape::KochPolygon { sides: 9, rotation_deg: 0.0, iterations: 3, })]
+    fn dense_outlines_match_the_cpu_mask_on_the_gpu_path(#[case] shape: CropShape) {
         let Some(context) = crate::gpu::test_support::test_context() else {
             eprintln!("skipped: no GPU");
             return;
@@ -401,19 +404,10 @@ mod tests {
             image::Rgba([90, 120, 150, 255]),
         ));
         let color = RgbaColor::opaque(0, 0, 0);
-        for shape in [
-            CropShape::KochRectangle { iterations: 4 },
-            CropShape::KochPolygon {
-                sides: 9,
-                rotation_deg: 0.0,
-                iterations: 3,
-            },
-        ] {
-            let mut expected = image.clone();
-            apply_shape_mask_dynamic(&mut expected, &shape, 0.0, 1.0, color);
-            let masked = runtime.apply_shape_mask(&image, &shape, 0.0, 1.0, color);
-            assert_eq!(masked.to_rgba8(), expected.to_rgba8(), "{shape:?}");
-        }
+        let mut expected = image.clone();
+        apply_shape_mask_dynamic(&mut expected, &shape, 0.0, 1.0, color);
+        let masked = runtime.apply_shape_mask(&image, &shape, 0.0, 1.0, color);
+        assert_eq!(masked.to_rgba8(), expected.to_rgba8(), "{shape:?}");
     }
 
     /// The CPU rasteriser at the densest Koch rectangle keeps the shape's 180-degree symmetry;

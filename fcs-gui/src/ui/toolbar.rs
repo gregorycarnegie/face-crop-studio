@@ -172,6 +172,7 @@ fn danger_btn(ui: &mut Ui, label: &str, action: impl FnOnce()) -> bool {
 mod tests {
     use super::*;
     use crate::ui::test_support::{click_at, harness};
+    use rstest::rstest;
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -250,23 +251,21 @@ mod tests {
         assert_eq!(h.state().clicks, 1);
     }
 
-    #[test]
-    fn toggle_btn_reports_clicks_in_both_states() {
+    #[rstest]
+    fn toggle_btn_reports_clicks_in_both_states(#[values(false, true)] active: bool) {
         // `active` only changes how the button paints; it must not gate the
         // click, or a toggle could be switched on but never off.
-        for active in [false, true] {
-            let mut h = harness(Probe::default(), move |ui, probe| {
-                probe.origin = ui.cursor().min;
-                if toggle_btn(ui, "GRID", active) {
-                    probe.clicks += 1;
-                }
-            });
-            h.run();
-            let origin = h.state().origin;
+        let mut h = harness(Probe::default(), move |ui, probe| {
+            probe.origin = ui.cursor().min;
+            if toggle_btn(ui, "GRID", active) {
+                probe.clicks += 1;
+            }
+        });
+        h.run();
+        let origin = h.state().origin;
 
-            click_at(&mut h, origin + INSIDE);
-            assert_eq!(h.state().clicks, 1, "active = {active}");
-        }
+        click_at(&mut h, origin + INSIDE);
+        assert_eq!(h.state().clicks, 1, "active = {active}");
     }
 
     #[test]
@@ -292,32 +291,35 @@ mod tests {
         assert_eq!(fired.get(), 2, "a second click fires again");
     }
 
-    #[test]
-    fn icon_btn_when_disabled_swallows_the_click_and_the_action() {
+    #[rstest]
+    #[case::disabled(false, 0)]
+    #[case::enabled(true, 1)]
+    fn icon_btn_when_disabled_swallows_the_click_and_the_action(
+        #[case] enabled: bool,
+        #[case] expected: usize,
+    ) {
         // The disabled path is the one that matters: `show` wires undo/redo and
         // the destructive queue actions through it, so a disabled button that
         // still ran its action would fire an operation the app has said is
         // unavailable.
         let fired = Rc::new(Cell::new(0usize));
 
-        for (enabled, expected) in [(false, 0), (true, 1)] {
-            let counter = Rc::clone(&fired);
-            counter.set(0);
-            let mut h = harness(Probe::default(), move |ui, probe| {
-                probe.origin = ui.cursor().min;
-                if icon_btn(ui, "↶", "Undo", enabled, || {
-                    counter.set(counter.get() + 1)
-                }) {
-                    probe.clicks += 1;
-                }
-            });
-            h.run();
-            let origin = h.state().origin;
+        let counter = Rc::clone(&fired);
+        counter.set(0);
+        let mut h = harness(Probe::default(), move |ui, probe| {
+            probe.origin = ui.cursor().min;
+            if icon_btn(ui, "↶", "Undo", enabled, || {
+                counter.set(counter.get() + 1)
+            }) {
+                probe.clicks += 1;
+            }
+        });
+        h.run();
+        let origin = h.state().origin;
 
-            // icon_btn is a fixed 34x34 square.
-            click_at(&mut h, origin + egui::vec2(17.0, 17.0));
-            assert_eq!(h.state().clicks, expected, "enabled = {enabled}");
-            assert_eq!(fired.get(), expected, "action, enabled = {enabled}");
-        }
+        // icon_btn is a fixed 34x34 square.
+        click_at(&mut h, origin + egui::vec2(17.0, 17.0));
+        assert_eq!(h.state().clicks, expected, "enabled = {enabled}");
+        assert_eq!(fired.get(), expected, "action, enabled = {enabled}");
     }
 }

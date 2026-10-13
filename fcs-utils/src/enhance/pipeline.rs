@@ -66,6 +66,7 @@ pub fn apply_enhancements(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Noise, not a flat colour or a gradient: `fast_blur` at radius 0 has to visibly change
     /// something for a test to see it run.
@@ -79,34 +80,22 @@ mod tests {
     /// A zero radius switches the blur-based effects off even when their amount is set. That
     /// is more than a fast path: `fast_blur` at radius 0 still changes pixels, so running an
     /// effect there alters an image the settings leave alone.
-    #[test]
-    fn a_zero_radius_switches_the_blur_based_effects_off() {
+    #[rstest]
+    #[case::sharpening("sharpening", |s: &mut EnhancementSettings| { s.sharpness = 0.8; s.unsharp_radius = 0.0; })]
+    #[case::background_blur("background blur", |s: &mut EnhancementSettings| { s.background_blur = true; s.background_blur_radius = 0.0; })]
+    fn a_zero_radius_switches_the_blur_based_effects_off(
+        #[case] name: &str,
+        #[case] mutate: fn(&mut EnhancementSettings),
+    ) {
         let base = EnhancementSettings {
             unsharp_amount: 0.0,
             sharpness: 0.0,
             ..EnhancementSettings::default()
         };
         let untouched = apply_enhancements(&noisy(24, 18), &base, None).to_rgba8();
-        for (name, settings) in [
-            (
-                "sharpening",
-                EnhancementSettings {
-                    sharpness: 0.8,
-                    unsharp_radius: 0.0,
-                    ..base.clone()
-                },
-            ),
-            (
-                "background blur",
-                EnhancementSettings {
-                    background_blur: true,
-                    background_blur_radius: 0.0,
-                    ..base.clone()
-                },
-            ),
-        ] {
-            let out = apply_enhancements(&noisy(24, 18), &settings, None).to_rgba8();
-            assert_eq!(out, untouched, "{name} at radius 0 changed the image");
-        }
+        let mut settings = base.clone();
+        mutate(&mut settings);
+        let out = apply_enhancements(&noisy(24, 18), &settings, None).to_rgba8();
+        assert_eq!(out, untouched, "{name} at radius 0 changed the image");
     }
 }

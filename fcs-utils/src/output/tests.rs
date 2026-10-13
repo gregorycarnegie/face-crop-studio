@@ -4,6 +4,7 @@ use crate::{
     config::{CropSettings, PositioningMode},
 };
 use image::{DynamicImage, Rgba, RgbaImage};
+use rstest::rstest;
 use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
 use tempfile::tempdir;
@@ -36,29 +37,18 @@ fn make_exif_segment(payload_suffix: &[u8]) -> Vec<u8> {
     segment
 }
 
-#[test]
-fn image_format_hint_from_extension_accepts_common_aliases() {
-    assert_eq!(
-        ImageFormatHint::from_extension("png"),
-        Some(ImageFormatHint::Png)
-    );
-    assert_eq!(
-        ImageFormatHint::from_extension("JPG"),
-        Some(ImageFormatHint::Jpeg)
-    );
-    assert_eq!(
-        ImageFormatHint::from_extension("jpeg"),
-        Some(ImageFormatHint::Jpeg)
-    );
-    assert_eq!(
-        ImageFormatHint::from_extension("tif"),
-        Some(ImageFormatHint::Tiff)
-    );
-    assert_eq!(
-        ImageFormatHint::from_extension("bmp"),
-        Some(ImageFormatHint::Bmp)
-    );
-    assert_eq!(ImageFormatHint::from_extension("gif"), None);
+#[rstest]
+#[case::png("png", Some(ImageFormatHint::Png))]
+#[case::uppercase_jpg("JPG", Some(ImageFormatHint::Jpeg))]
+#[case::jpeg("jpeg", Some(ImageFormatHint::Jpeg))]
+#[case::tif("tif", Some(ImageFormatHint::Tiff))]
+#[case::bmp("bmp", Some(ImageFormatHint::Bmp))]
+#[case::unsupported_gif("gif", None)]
+fn image_format_hint_from_extension_accepts_common_aliases(
+    #[case] extension: &str,
+    #[case] expected: Option<ImageFormatHint>,
+) {
+    assert_eq!(ImageFormatHint::from_extension(extension), expected);
 }
 
 /// An opaque crop is written without an alpha channel (experiment 101), but one transparent pixel
@@ -91,16 +81,20 @@ fn png_keeps_an_rgb_image_rgb() {
     assert_eq!(decoded.to_rgb8(), rgb.to_rgb8());
 }
 
-#[test]
-fn png_compression_parse_maps_keywords_and_numeric_levels() {
-    assert_eq!(PngCompression::parse("fast"), PngCompression::Fast);
-    assert_eq!(PngCompression::parse("default"), PngCompression::Default);
-    assert_eq!(PngCompression::parse("best"), PngCompression::Best);
-    assert_eq!(PngCompression::parse("0"), PngCompression::Fast);
-    assert_eq!(PngCompression::parse("3"), PngCompression::Fast);
-    assert_eq!(PngCompression::parse("5"), PngCompression::Default);
-    assert_eq!(PngCompression::parse("9"), PngCompression::Best);
-    assert_eq!(PngCompression::parse("invalid"), PngCompression::Default);
+#[rstest]
+#[case::fast("fast", PngCompression::Fast)]
+#[case::default("default", PngCompression::Default)]
+#[case::best("best", PngCompression::Best)]
+#[case::zero("0", PngCompression::Fast)]
+#[case::three("3", PngCompression::Fast)]
+#[case::five("5", PngCompression::Default)]
+#[case::nine("9", PngCompression::Best)]
+#[case::unknown("invalid", PngCompression::Default)]
+fn png_compression_parse_maps_keywords_and_numeric_levels(
+    #[case] input: &str,
+    #[case] expected: PngCompression,
+) {
+    assert_eq!(PngCompression::parse(input), expected);
 }
 
 #[test]
@@ -143,24 +137,17 @@ fn determine_format_prefers_extension_when_auto_detect_is_enabled() {
     );
 }
 
-#[test]
-fn append_suffix_to_filename_preserves_extension() {
-    assert_eq!(
-        append_suffix_to_filename("portrait.png", "_highq"),
-        "portrait_highq.png"
-    );
-    assert_eq!(
-        append_suffix_to_filename("archive.tar.gz", "_v2"),
-        "archive.tar_v2.gz"
-    );
-    assert_eq!(
-        append_suffix_to_filename("portrait", "_highq"),
-        "portrait_highq"
-    );
-    assert_eq!(
-        append_suffix_to_filename("portrait.png", ""),
-        "portrait.png"
-    );
+#[rstest]
+#[case::extension("portrait.png", "_highq", "portrait_highq.png")]
+#[case::multiple_dots("archive.tar.gz", "_v2", "archive.tar_v2.gz")]
+#[case::bare_name("portrait", "_highq", "portrait_highq")]
+#[case::empty_suffix("portrait.png", "", "portrait.png")]
+fn append_suffix_to_filename_preserves_extension(
+    #[case] filename: &str,
+    #[case] suffix: &str,
+    #[case] expected: &str,
+) {
+    assert_eq!(append_suffix_to_filename(filename, suffix), expected);
 }
 
 #[test]
@@ -283,21 +270,19 @@ fn metadata_loaders_reject_truncated_headers_without_panicking() {
 /// A JPEG segment's length field counts its own two bytes, so a value below 2 is
 /// malformed. The subtraction used to happen before any check, which underflowed
 /// on a crafted file: a panic in debug builds and a wrapped offset in release.
-#[test]
-fn load_jpeg_exif_survives_undersized_segment_length() {
+#[rstest]
+fn load_jpeg_exif_survives_undersized_segment_length(#[values(0, 1)] bad_length: u16) {
     let dir = tempdir().unwrap();
 
-    for bad_length in [0u16, 1] {
-        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE1];
-        bytes.extend_from_slice(&bad_length.to_be_bytes());
-        bytes.extend_from_slice(b"Exif\0\0trailing");
-        let path = write_bytes(&dir, &format!("len_{bad_length}.jpg"), &bytes);
+    let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE1];
+    bytes.extend_from_slice(&bad_length.to_be_bytes());
+    bytes.extend_from_slice(b"Exif\0\0trailing");
+    let path = write_bytes(&dir, &format!("len_{bad_length}.jpg"), &bytes);
 
-        assert!(
-            load_jpeg_exif(Some(&path)).is_none(),
-            "segment length {bad_length} is malformed and must be rejected"
-        );
-    }
+    assert!(
+        load_jpeg_exif(Some(&path)).is_none(),
+        "segment length {bad_length} is malformed and must be rejected"
+    );
 
     // Length exactly 2 means an empty payload: valid arithmetic, still no EXIF.
     let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x02];

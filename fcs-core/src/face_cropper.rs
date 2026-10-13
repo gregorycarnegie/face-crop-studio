@@ -274,26 +274,26 @@ pub fn crop_face_from_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// A 120x80 crop turned by 0.3 rad has a 138.3 x 111.9 bounding box, so it grows by
     /// ceil(18.3 / 2) = 10 and ceil(31.9 / 2) = 16 a side, plus the bilinear pixel. A non-square
     /// crop, so swapping the axes shows; any larger margin would leave the pixels unchanged,
     /// which is why the numbers are pinned here rather than through an image.
-    #[test]
-    fn the_rotation_margin_covers_the_turned_crop() {
+    #[rstest]
+    #[case::clockwise(0.3, (11, 17), (19, 23, 142, 114))]
+    #[case::counterclockwise(-0.3, (11, 17), (19, 23, 142, 114))]
+    #[case::level(0.0, (1, 1), (29, 39, 122, 82))]
+    fn the_rotation_margin_covers_the_turned_crop(
+        #[case] angle: f32,
+        #[case] expected_margin: (u32, u32),
+        #[case] expected_region: (i32, i32, u32, u32),
+    ) {
         let region = CropRegion::new(30, 40, 120, 80, 500, 400);
-        for angle in [0.3, -0.3] {
-            let (grown, margin) = grown_for_rotation(&region, angle, 500, 400);
-            assert_eq!(margin, (11, 17), "angle {angle}");
-            assert_eq!(
-                grown,
-                CropRegion::new(19, 23, 142, 114, 500, 400),
-                "angle {angle}"
-            );
-        }
-        let (level, margin) = grown_for_rotation(&region, 0.0, 500, 400);
-        assert_eq!(margin, (1, 1));
-        assert_eq!(level, CropRegion::new(29, 39, 122, 82, 500, 400));
+        let (grown, margin) = grown_for_rotation(&region, angle, 500, 400);
+        assert_eq!(margin, expected_margin);
+        let (x, y, w, h) = expected_region;
+        assert_eq!(grown, CropRegion::new(x, y, w, h, 500, 400));
     }
 
     /// Clipped to zero width but not zero height: without the early return the row loop would
@@ -311,8 +311,19 @@ mod tests {
     /// produced, including at the clipped edges and with a non-zero source offset, because
     /// the crops they feed are compared byte for byte against previous releases
     /// (experiment 98).
-    #[test]
-    fn the_blit_fast_paths_agree_with_the_generic_one() {
+    #[rstest]
+    #[case::width_clipped((0, 0, 23, 17), (20, 20), (0, 0))]
+    #[case::both_axes_clipped((0, 0, 23, 17), (10, 8), (0, 0))]
+    #[case::canvas_offset((0, 0, 23, 17), (30, 30), (7, 5))]
+    #[case::source_offset((4, 3, 11, 9), (30, 30), (2, 6))]
+    #[case::offset_and_clipping((4, 3, 11, 9), (8, 8), (5, 5))]
+    fn the_blit_fast_paths_agree_with_the_generic_one(
+        #[values(image::ColorType::Rgb8, image::ColorType::Rgba8, image::ColorType::L8)]
+        format: image::ColorType,
+        #[case] rect: (u32, u32, u32, u32),
+        #[case] canvas_size: (u32, u32),
+        #[case] offset: (u32, u32),
+    ) {
         /// The pre-experiment-98 loop, kept here as the reference.
         fn reference(
             img: &DynamicImage,
@@ -334,56 +345,44 @@ mod tests {
         }
 
         // Every pixel distinct, so a wrong stride or a swapped axis cannot survive.
-        let mut rgb = image::RgbImage::new(23, 17);
-        for (x, y, px) in rgb.enumerate_pixels_mut() {
-            *px = image::Rgb([
-                (x * 7 % 251) as u8,
-                (y * 13 % 241) as u8,
-                ((x + y) % 239) as u8,
-            ]);
-        }
-        let mut rgba = RgbaImage::new(23, 17);
-        for (x, y, px) in rgba.enumerate_pixels_mut() {
-            *px = Rgba([
-                (x * 5 % 251) as u8,
-                (y * 11 % 241) as u8,
-                ((x * y) % 239) as u8,
-                ((x + y * 3) % 253) as u8,
-            ]);
-        }
-        let luma = DynamicImage::ImageLuma8(image::GrayImage::from_fn(23, 17, |x, y| {
-            image::Luma([((x * 3 + y * 29) % 251) as u8])
-        }));
-
-        let sources = [
-            DynamicImage::ImageRgb8(rgb),
-            DynamicImage::ImageRgba8(rgba),
-            luma,
-        ];
-        // Exact fit, clipped on both axes, offset into the canvas, and a region that
-        // starts away from the origin.
-        let cases = [
-            ((0, 0, 23, 17), (20, 20), (0, 0)),
-            ((0, 0, 23, 17), (10, 8), (0, 0)),
-            ((0, 0, 23, 17), (30, 30), (7, 5)),
-            ((4, 3, 11, 9), (30, 30), (2, 6)),
-            ((4, 3, 11, 9), (8, 8), (5, 5)),
-        ];
-
-        for src in &sources {
-            for (rect, (cw, ch), offset) in cases {
-                let fill = Rgba([9, 8, 7, 200]);
-                let mut want = RgbaImage::from_pixel(cw, ch, fill);
-                let mut got = RgbaImage::from_pixel(cw, ch, fill);
-                reference(src, rect, &mut want, offset);
-                blit_region(src, rect, &mut got, offset);
-                assert_eq!(
-                    got.as_raw(),
-                    want.as_raw(),
-                    "blit disagreed for {src:?} rect {rect:?} canvas {cw}x{ch} offset {offset:?}"
-                );
+        let src = match format {
+            image::ColorType::Rgb8 => {
+                DynamicImage::ImageRgb8(image::RgbImage::from_fn(23, 17, |x, y| {
+                    image::Rgb([
+                        (x * 7 % 251) as u8,
+                        (y * 13 % 241) as u8,
+                        ((x + y) % 239) as u8,
+                    ])
+                }))
             }
-        }
+            image::ColorType::Rgba8 => {
+                DynamicImage::ImageRgba8(RgbaImage::from_fn(23, 17, |x, y| {
+                    Rgba([
+                        (x * 5 % 251) as u8,
+                        (y * 11 % 241) as u8,
+                        ((x * y) % 239) as u8,
+                        ((x + y * 3) % 253) as u8,
+                    ])
+                }))
+            }
+            image::ColorType::L8 => {
+                DynamicImage::ImageLuma8(image::GrayImage::from_fn(23, 17, |x, y| {
+                    image::Luma([((x * 3 + y * 29) % 251) as u8])
+                }))
+            }
+            _ => unreachable!("unsupported test format {format:?}"),
+        };
+        let (cw, ch) = canvas_size;
+        let fill = Rgba([9, 8, 7, 200]);
+        let mut want = RgbaImage::from_pixel(cw, ch, fill);
+        let mut got = RgbaImage::from_pixel(cw, ch, fill);
+        reference(&src, rect, &mut want, offset);
+        blit_region(&src, rect, &mut got, offset);
+        assert_eq!(
+            got.as_raw(),
+            want.as_raw(),
+            "blit disagreed for {format:?} rect {rect:?} canvas {cw}x{ch} offset {offset:?}"
+        );
     }
     use crate::{
         cropper::{CropSettings, FillColor},
@@ -903,8 +902,15 @@ mod tests {
         assert_eq!(top_left[2], 50);
     }
 
-    #[test]
-    fn eye_line_aligns_from_any_non_level_pair() {
+    #[rstest]
+    #[case::right_eye_x((7.0, 0.0), (0.0, 0.0))]
+    #[case::right_eye_y((0.0, 7.0), (0.0, 0.0))]
+    #[case::left_eye_y((0.0, 0.0), (0.0, 7.0))]
+    #[case::left_eye_x((0.0, 0.0), (-7.0, 0.0))]
+    fn eye_line_aligns_from_any_non_level_pair(
+        #[case] right_eye: (f32, f32),
+        #[case] left_eye: (f32, f32),
+    ) {
         // Both eyes are present in every case; what varies is where they sit. The tilts are
         // quarter or half turns, which are unmistakable in the output -- an eye line that is
         // merely horizontal rotates by zero and looks exactly like skipping the alignment,
@@ -935,27 +941,20 @@ mod tests {
         };
         let baseline = crop_face_from_image(&img, &detection_at(bbox), &unaligned).to_rgba8();
 
-        for (label, right_eye, left_eye) in [
-            ("right eye x only", (7.0, 0.0), (0.0, 0.0)),
-            ("right eye y only", (0.0, 7.0), (0.0, 0.0)),
-            ("left eye y only", (0.0, 0.0), (0.0, 7.0)),
-            ("left eye x only", (0.0, 0.0), (-7.0, 0.0)),
-        ] {
-            let mut detection = detection_at(bbox);
-            detection.landmarks[0] = Some(crate::postprocess::Landmark {
-                x: right_eye.0,
-                y: right_eye.1,
-            });
-            detection.landmarks[1] = Some(crate::postprocess::Landmark {
-                x: left_eye.0,
-                y: left_eye.1,
-            });
-            assert_ne!(
-                crop_face_from_image(&img, &detection, &settings).to_rgba8(),
-                baseline,
-                "{label}: a populated eye coordinate must still align"
-            );
-        }
+        let mut detection = detection_at(bbox);
+        detection.landmarks[0] = Some(crate::postprocess::Landmark {
+            x: right_eye.0,
+            y: right_eye.1,
+        });
+        detection.landmarks[1] = Some(crate::postprocess::Landmark {
+            x: left_eye.0,
+            y: left_eye.1,
+        });
+        assert_ne!(
+            crop_face_from_image(&img, &detection, &settings).to_rgba8(),
+            baseline,
+            "a populated eye coordinate must still align"
+        );
     }
 
     /// `eye_positions` maps the two eyes out of source pixels and into crop pixels.
@@ -1100,8 +1099,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn eye_positions_are_empty_unless_both_eyes_are_present() {
+    #[rstest]
+    fn eye_positions_are_empty_unless_both_eyes_are_present(
+        #[values((None, None), (Some(crate::postprocess::Landmark { x: 30.0, y: 45.0 }), None), (None, Some(crate::postprocess::Landmark { x: 30.0, y: 45.0 })))]
+        (left, right): (
+            Option<crate::postprocess::Landmark>,
+            Option<crate::postprocess::Landmark>,
+        ),
+    ) {
         let bbox = BoundingBox {
             x: 10.0,
             y: 20.0,
@@ -1120,15 +1125,13 @@ mod tests {
         };
         let eye = Some(crate::postprocess::Landmark { x: 30.0, y: 45.0 });
 
-        for (left, right) in [(None, None), (eye, None), (None, eye)] {
-            let mut detection = detection_at(bbox);
-            detection.landmarks[0] = left;
-            detection.landmarks[1] = right;
-            assert!(
-                eye_positions(&detection, 200, 300, &settings).is_empty(),
-                "a half pair must produce no targets"
-            );
-        }
+        let mut detection = detection_at(bbox);
+        detection.landmarks[0] = left;
+        detection.landmarks[1] = right;
+        assert!(
+            eye_positions(&detection, 200, 300, &settings).is_empty(),
+            "a half pair must produce no targets"
+        );
 
         // And with both, it does produce them -- so the emptiness above is the guard, not a
         // function that always returns nothing.

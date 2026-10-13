@@ -242,6 +242,7 @@ mod tests {
     use super::*;
     use crate::postprocess::{BoundingBox, Detection};
     use proptest::prelude::*;
+    use rstest::rstest;
 
     fn detection_with_score(score: f32, bbox: BoundingBox) -> Detection {
         Detection {
@@ -305,18 +306,24 @@ mod tests {
         assert!(compute_scene_bounds(&ok).is_some());
     }
 
-    #[test]
-    fn grid_cell_index_maps_offsets_to_cells() {
+    #[rstest]
+    #[case::ordinary(15.0, 10.0, 10, 1)]
+    #[case::origin(0.0, 10.0, 10, 0)]
+    #[case::past_last(1000.0, 10.0, 10, 9)]
+    #[case::negative(-5.0, 10.0, 10, 0)]
+    #[case::zero_cell_size(50.0, 0.0, 10, 0)]
+    fn grid_cell_index_maps_offsets_to_cells(
+        #[case] offset: f32,
+        #[case] cell_size: f32,
+        #[case] cells: usize,
+        #[case] expected: usize,
+    ) {
         // Ordinary case: 15 units into 10-unit cells is cell 1.
-        assert_eq!(grid_cell_index(15.0, 10.0, 10), 1);
-        assert_eq!(grid_cell_index(0.0, 10.0, 10), 0);
         // Past the last cell it clamps rather than indexing out of range.
-        assert_eq!(grid_cell_index(1000.0, 10.0, 10), 9);
         // Negative offsets clamp to the first cell.
-        assert_eq!(grid_cell_index(-5.0, 10.0, 10), 0);
         // A degenerate cell size short-circuits instead of dividing by zero,
         // which would otherwise clamp infinity to the last cell.
-        assert_eq!(grid_cell_index(50.0, 0.0, 10), 0);
+        assert_eq!(grid_cell_index(offset, cell_size, cells), expected);
     }
 
     #[test]
@@ -431,195 +438,103 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compute_scene_bounds_returns_none_for_degenerate_scene() {
-        let detections = vec![
-            detection_with_score(
-                1.0,
-                BoundingBox {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                },
-            ),
-            detection_with_score(
-                0.9,
-                BoundingBox {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 0.0,
-                    height: 0.0,
-                },
-            ),
-        ];
-
+    #[rstest]
+    #[case::empty(vec![])]
+    #[case::coincident_origin(vec![bbox(0.0, 0.0, 0.0, 0.0); 2])]
+    #[case::coincident_offset(vec![bbox(4.0, 7.0, 0.0, 0.0); 2])]
+    fn compute_scene_bounds_returns_none_for_degenerate_scene(#[case] boxes: Vec<BoundingBox>) {
+        let detections: Vec<_> = boxes
+            .into_iter()
+            .enumerate()
+            .map(|(i, bbox)| detection_with_score(1.0 - i as f32 * 0.1, bbox))
+            .collect();
         assert!(compute_scene_bounds(&detections).is_none());
     }
 
-    #[test]
-    fn build_spatial_grid_covers_all_cells_touched_by_bbox() {
-        let detections = vec![
-            detection_with_score(
-                1.0,
-                BoundingBox {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 96.0,
-                    height: 96.0,
-                },
-            ),
-            detection_with_score(
-                0.9,
-                BoundingBox {
-                    x: 48.0,
-                    y: 48.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-            ),
-        ];
+    #[rstest]
+    #[case::square([bbox(0.0, 0.0, 96.0, 96.0), bbox(48.0, 48.0, 1.0, 1.0)])]
+    #[case::translated([bbox(-50.0, 100.0, 96.0, 96.0), bbox(-2.0, 148.0, 1.0, 1.0)])]
+    #[case::wide([bbox(0.0, 0.0, 192.0, 48.0), bbox(96.0, 24.0, 1.0, 1.0)])]
+    #[case::tall([bbox(0.0, 0.0, 48.0, 192.0), bbox(24.0, 96.0, 1.0, 1.0)])]
+    fn build_spatial_grid_covers_all_cells_touched_by_bbox(#[case] boxes: [BoundingBox; 2]) {
+        let detections: Vec<_> = boxes
+            .into_iter()
+            .enumerate()
+            .map(|(i, bbox)| detection_with_score(1.0 - i as f32 * 0.1, bbox))
+            .collect();
         let bounds = compute_scene_bounds(&detections).expect("scene should be valid");
         let grid = build_spatial_grid(&detections, bounds);
 
-        let range = grid
-            .bounds
-            .cell_range_for_bbox(&detections[0].bbox, grid.grid_size);
-        for row in range.min_row..=range.max_row {
-            for col in range.min_col..=range.max_col {
-                assert!(
-                    grid.cells[row * grid.grid_size + col].contains(&0),
-                    "cell ({row}, {col}) should contain detection 0"
-                );
+        for (index, detection) in detections.iter().enumerate() {
+            let range = grid
+                .bounds
+                .cell_range_for_bbox(&detection.bbox, grid.grid_size);
+            for row in range.min_row..=range.max_row {
+                for col in range.min_col..=range.max_col {
+                    assert!(
+                        grid.cells[row * grid.grid_size + col].contains(&index),
+                        "cell ({row}, {col}) should contain detection {index}"
+                    );
+                }
             }
         }
     }
 
-    #[test]
-    fn compact_unsuppressed_detections_preserves_kept_order() {
+    #[rstest]
+    #[case::keep_all([false, false, false], &[0, 1, 2])]
+    #[case::suppress_all([true, true, true], &[])]
+    #[case::suppress_first([true, false, false], &[1, 2])]
+    #[case::suppress_middle([false, true, false], &[0, 2])]
+    #[case::suppress_last([false, false, true], &[0, 1])]
+    #[case::suppress_consecutive([true, true, false], &[2])]
+    fn compact_unsuppressed_detections_preserves_kept_order(
+        #[case] suppressed: [bool; 3],
+        #[case] kept: &[usize],
+    ) {
         let mut detections = vec![
-            detection_with_score(
-                0.9,
-                BoundingBox {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
-            ),
-            detection_with_score(
-                0.8,
-                BoundingBox {
-                    x: 20.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
-            ),
-            detection_with_score(
-                0.7,
-                BoundingBox {
-                    x: 40.0,
-                    y: 0.0,
-                    width: 10.0,
-                    height: 10.0,
-                },
-            ),
+            detection_with_score(0.9, bbox(0.0, 0.0, 10.0, 10.0)),
+            detection_with_score(0.8, bbox(20.0, 0.0, 10.0, 10.0)),
+            detection_with_score(0.7, bbox(40.0, 0.0, 10.0, 10.0)),
         ];
-        let suppressed = vec![false, true, false];
+        let expected: Vec<_> = kept
+            .iter()
+            .map(|&index| detections[index].clone())
+            .collect();
 
         compact_unsuppressed_detections(&mut detections, &suppressed);
 
-        assert_eq!(detections.len(), 2);
-        assert!((detections[0].score - 0.9).abs() < f32::EPSILON);
-        assert!((detections[1].score - 0.7).abs() < f32::EPSILON);
+        assert_eq!(detections, expected);
     }
 
-    #[test]
-    fn grid_and_naive_agree_across_scene_shapes() {
-        // The grid is an acceleration structure, so sizing its cells to the scene
-        // (experiment 58) must change speed and nothing else. These four shapes cover the
-        // cases that pick different resolutions: a tight cluster where boxes are large
-        // against the scene bounds, a spread-out scene where they are tiny, one of each
-        // mixed, and identical stacked boxes where the extent collapses to a point.
-        let scenes: Vec<(&str, Vec<Detection>)> = vec![
-            (
-                "clustered",
-                (0..600)
-                    .map(|i| {
-                        detection_with_score(
-                            1.0 - i as f32 * 1e-4,
-                            BoundingBox {
-                                x: 100.0 + i as f32 * 0.1,
-                                y: 100.0,
-                                width: 80.0,
-                                height: 80.0,
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            (
-                "spread",
-                (0..600)
-                    .map(|i| {
-                        detection_with_score(
-                            1.0 - i as f32 * 1e-4,
-                            BoundingBox {
-                                x: (i % 30) as f32 * 200.0,
-                                y: (i / 30) as f32 * 200.0,
-                                width: 40.0,
-                                height: 40.0,
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            (
-                "mixed scales",
-                (0..600)
-                    .map(|i| {
-                        let big = i % 3 == 0;
-                        detection_with_score(
-                            1.0 - i as f32 * 1e-4,
-                            BoundingBox {
-                                x: (i % 25) as f32 * 37.0,
-                                y: (i / 25) as f32 * 41.0,
-                                width: if big { 300.0 } else { 12.0 },
-                                height: if big { 300.0 } else { 12.0 },
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-            (
-                "identical stack",
-                (0..300)
-                    .map(|i| {
-                        detection_with_score(
-                            1.0 - i as f32 * 1e-4,
-                            BoundingBox {
-                                x: 5.0,
-                                y: 5.0,
-                                width: 50.0,
-                                height: 50.0,
-                            },
-                        )
-                    })
-                    .collect(),
-            ),
-        ];
-
-        for (name, scene) in scenes {
-            let mut fast = scene.clone();
-            let mut naive = scene;
-            apply_nms_in_place(&mut fast, 0.3);
-            apply_nms_naive(&mut naive, 0.3);
-            assert_eq!(fast.len(), naive.len(), "{name}: kept a different count");
-            for (a, b) in fast.iter().zip(&naive) {
-                assert_eq!(a.score, b.score, "{name}: different detection kept");
-                assert_eq!(a.bbox, b.bbox, "{name}: different box kept");
-            }
+    // Cell sizing (experiment 58) must preserve results for clusters, spread-out boxes,
+    // mixed scales and identical stacks, which each pick different grid resolutions.
+    #[rstest]
+    #[case::clustered((0..600)
+        .map(|i| bbox(100.0 + i as f32 * 0.1, 100.0, 80.0, 80.0))
+        .collect())]
+    #[case::spread((0..600)
+        .map(|i| bbox((i % 30) as f32 * 200.0, (i / 30) as f32 * 200.0, 40.0, 40.0))
+        .collect())]
+    #[case::mixed_scales((0..600)
+        .map(|i| {
+            let size = if i % 3 == 0 { 300.0 } else { 12.0 };
+            bbox((i % 25) as f32 * 37.0, (i / 25) as f32 * 41.0, size, size)
+        })
+        .collect())]
+    #[case::identical_stack(vec![bbox(5.0, 5.0, 50.0, 50.0); 300])]
+    fn grid_and_naive_agree_across_scene_shapes(#[case] boxes: Vec<BoundingBox>) {
+        let mut fast: Vec<_> = boxes
+            .into_iter()
+            .enumerate()
+            .map(|(i, bbox)| detection_with_score(1.0 - i as f32 * 1e-4, bbox))
+            .collect();
+        let mut naive = fast.clone();
+        apply_nms_in_place(&mut fast, 0.3);
+        apply_nms_naive(&mut naive, 0.3);
+        assert_eq!(fast.len(), naive.len(), "kept a different count");
+        for (a, b) in fast.iter().zip(&naive) {
+            assert_eq!(a.score, b.score, "different detection kept");
+            assert_eq!(a.bbox, b.bbox, "different box kept");
         }
     }
 

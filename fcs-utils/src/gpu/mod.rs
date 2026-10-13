@@ -852,6 +852,7 @@ pub enum GpuInitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn vulkan_is_tried_only_for_the_default_set_when_safe() {
@@ -1147,8 +1148,13 @@ mod tests {
     }
 
     /// Only meaningful on a machine with both an integrated and a discrete adapter.
-    #[test]
-    fn power_preference_picks_the_matching_adapter_kind() {
+    #[rstest]
+    #[case::integrated(PowerPreference::LowPower, wgpu::DeviceType::IntegratedGpu)]
+    #[case::discrete(PowerPreference::HighPerformance, wgpu::DeviceType::DiscreteGpu)]
+    fn power_preference_picks_the_matching_adapter_kind(
+        #[case] preference: PowerPreference,
+        #[case] kind: wgpu::DeviceType,
+    ) {
         let options = GpuContextOptions::default();
         let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
         let adapters = block_on(instance.enumerate_adapters(options.backends));
@@ -1156,21 +1162,13 @@ mod tests {
         if !(has(wgpu::DeviceType::IntegratedGpu) && has(wgpu::DeviceType::DiscreteGpu)) {
             return;
         }
-        for (preference, kind) in [
-            (PowerPreference::LowPower, wgpu::DeviceType::IntegratedGpu),
-            (
-                PowerPreference::HighPerformance,
-                wgpu::DeviceType::DiscreteGpu,
-            ),
-        ] {
-            let ctx = GpuContext::initialize(&GpuContextOptions {
-                respect_env: false,
-                power_preference: preference,
-                ..GpuContextOptions::default()
-            })
-            .expect("an adapter of the preferred kind exists");
-            assert_eq!(ctx.adapter_info().device_type, kind, "{preference:?}");
-        }
+        let ctx = GpuContext::initialize(&GpuContextOptions {
+            respect_env: false,
+            power_preference: preference,
+            ..GpuContextOptions::default()
+        })
+        .expect("an adapter of the preferred kind exists");
+        assert_eq!(ctx.adapter_info().device_type, kind, "{preference:?}");
     }
 
     /// The status event reaches the log exactly when telemetry allows Info. `emit_telemetry` is

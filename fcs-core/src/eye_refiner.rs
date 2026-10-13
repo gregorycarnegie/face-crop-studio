@@ -250,6 +250,7 @@ fn sample_bilinear(image: &DynamicImage, width: u32, height: u32, x: f32, y: f32
 mod tests {
     use super::*;
     use image::{Rgba, RgbaImage};
+    use rstest::rstest;
 
     fn box_at(x: f32, y: f32, width: f32, height: f32) -> BoundingBox {
         BoundingBox {
@@ -366,21 +367,18 @@ mod tests {
     /// Each edge is its own case because the bounds test is four `||`-joined comparisons: with
     /// one sample point they agree, and `||` collapsing to `&&` or a `<` widening to `<=`
     /// survives. The image is 5x3, so the x and y limits are different numbers.
-    #[test]
-    fn sampling_pads_with_zero_outside_every_edge() {
+    #[rstest]
+    #[case::left(-1.7, 1.4)]
+    #[case::right(5.4, 1.4)]
+    #[case::top(2.3, -1.6)]
+    #[case::bottom(2.3, 3.5)]
+    fn sampling_pads_with_zero_outside_every_edge(#[case] x: f32, #[case] y: f32) {
         let image = gradient_image();
-        for (x, y, edge) in [
-            (-1.7f32, 1.4f32, "left"),
-            (5.4, 1.4, "right"),
-            (2.3, -1.6, "top"),
-            (2.3, 3.5, "bottom"),
-        ] {
-            assert_eq!(
-                sample_bilinear(&image, 5, 3, x, y),
-                [0.0, 0.0, 0.0],
-                "{edge} edge should read as zero padding"
-            );
-        }
+        assert_eq!(
+            sample_bilinear(&image, 5, 3, x, y),
+            [0.0, 0.0, 0.0],
+            "outside the image should read as zero padding"
+        );
         // Just inside the far corner still reads real pixels, so the bounds are not simply
         // rejecting everything.
         let inside = sample_bilinear(&image, 5, 3, 3.6, 1.8);
@@ -425,8 +423,16 @@ mod tests {
     /// Every other test here works on the geometry helpers, so `refine` and `predict` had no
     /// coverage at all: `refine -> 0`, `refine -> 1` and `refined += 1` becoming `-=` all
     /// survived. Two detections, so a hard-coded 1 is distinguishable from a real count.
-    #[test]
-    fn refine_reports_and_applies_both_predictions() {
+    #[rstest]
+    #[case::different_boxes([
+        box_at(40.0, 50.0, 90.0, 110.0),
+        box_at(220.0, 180.0, 130.0, 70.0),
+    ])]
+    #[case::reversed_boxes([
+        box_at(220.0, 180.0, 130.0, 70.0),
+        box_at(40.0, 50.0, 90.0, 110.0),
+    ])]
+    fn refine_reports_and_applies_both_predictions(#[case] boxes: [BoundingBox; 2]) {
         let model = refiner_model();
         let Some(refiner) = EyeRefiner::load_from(&model) else {
             assert!(
@@ -441,10 +447,7 @@ mod tests {
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(400, 400, Rgba([90, 120, 150, 255])));
         // Two boxes of different sizes at different places, so one prediction cannot stand in
         // for the other.
-        let mut detections = vec![
-            detection_at(box_at(40.0, 50.0, 90.0, 110.0)),
-            detection_at(box_at(220.0, 180.0, 130.0, 70.0)),
-        ];
+        let mut detections = boxes.map(detection_at);
         let refined = refiner.refine(&image, &mut detections);
         assert_eq!(refined, 2, "both detections should have been refined");
 
@@ -505,8 +508,11 @@ mod tests {
     }
 
     /// A box with no area is skipped rather than sampled, and reported as not refined.
-    #[test]
-    fn a_degenerate_box_is_not_refined() {
+    #[rstest]
+    #[case::zero_width(box_at(10.0, 10.0, 0.0, 30.0))]
+    #[case::zero_height(box_at(10.0, 10.0, 30.0, 0.0))]
+    #[case::zero_area(box_at(10.0, 10.0, 0.0, 0.0))]
+    fn a_degenerate_box_is_not_refined(#[case] bbox: BoundingBox) {
         let model = refiner_model();
         let Some(refiner) = EyeRefiner::load_from(&model) else {
             assert!(
@@ -517,19 +523,13 @@ mod tests {
         };
         let image =
             DynamicImage::ImageRgba8(RgbaImage::from_pixel(64, 64, Rgba([10, 20, 30, 255])));
-        for bbox in [
-            box_at(10.0, 10.0, 0.0, 30.0),
-            box_at(10.0, 10.0, 30.0, 0.0),
-            box_at(10.0, 10.0, 0.0, 0.0),
-        ] {
-            let mut detections = vec![detection_at(bbox)];
-            assert_eq!(
-                refiner.refine(&image, &mut detections),
-                0,
-                "a zero-area box must not be refined"
-            );
-            assert!(detections[0].landmarks[0].is_none());
-        }
+        let mut detections = vec![detection_at(bbox)];
+        assert_eq!(
+            refiner.refine(&image, &mut detections),
+            0,
+            "a zero-area box must not be refined"
+        );
+        assert!(detections[0].landmarks[0].is_none());
     }
 
     fn detection_at(bbox: BoundingBox) -> Detection {

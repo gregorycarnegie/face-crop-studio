@@ -362,6 +362,7 @@ pub fn apply_shape_mask_dynamic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// Signed distances are exact small rationals for the probes below, but
     /// the diagonal and elliptical cases involve a sqrt, so compare with a
@@ -809,20 +810,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn raster_mask_matches_the_reference_loop() {
+    #[rstest]
+    #[case::hard_edge(0.0, 0.0)]
+    #[case::hard_vignette(0.0, 0.8)]
+    #[case::soft_vignette(0.4, 0.6)]
+    fn raster_mask_matches_the_reference_loop(#[case] softness: f32, #[case] intensity: f32) {
         let source = RgbaImage::from_pixel(16, 16, image::Rgba([200u8, 100, 50, 255]));
         let colour = RgbaColor::opaque(10, 20, 30);
 
-        for (softness, intensity) in [(0.0, 0.0), (0.0, 0.8), (0.4, 0.6)] {
-            let mut got = source.clone();
-            apply_shape_mask(&mut got, &star(), softness, intensity, colour);
-            let want = reference_raster_mask(&source, &star(), softness, intensity, colour);
-            assert_eq!(
-                got, want,
-                "mismatch at softness {softness}, intensity {intensity}"
-            );
-        }
+        let mut got = source.clone();
+        apply_shape_mask(&mut got, &star(), softness, intensity, colour);
+        let want = reference_raster_mask(&source, &star(), softness, intensity, colour);
+        assert_eq!(
+            got, want,
+            "mismatch at softness {softness}, intensity {intensity}"
+        );
 
         // Sanity: the star must actually carve something out, otherwise the
         // comparison above would hold on an untouched image.

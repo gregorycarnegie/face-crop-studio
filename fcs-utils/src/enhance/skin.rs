@@ -179,6 +179,7 @@ pub(super) fn skin_smooth_rgba(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// A deliberately naive, single-threaded bilateral filter written straight
     /// from the definition.
@@ -357,17 +358,17 @@ mod tests {
         assert_eq!(skin_smooth_rgba(&src, 0.3, 2.0, 60.0), src);
     }
 
-    #[test]
-    fn degenerate_sigmas_clamp_like_the_gpu_filter_instead_of_panicking() {
+    #[rstest]
+    fn degenerate_sigmas_clamp_like_the_gpu_filter_instead_of_panicking(
+        #[values(0.0, -3.0, f32::NAN)] sigma: f32,
+    ) {
         let src = sample_image();
         let at_floor = skin_smooth_rgba(&src, 0.8, 0.1, 0.1);
-        for sigma in [0.0, -3.0, f32::NAN] {
-            assert_eq!(
-                skin_smooth_rgba(&src, 0.8, sigma, sigma),
-                at_floor,
-                "sigma {sigma}"
-            );
-        }
+        assert_eq!(
+            skin_smooth_rgba(&src, 0.8, sigma, sigma),
+            at_floor,
+            "sigma {sigma}"
+        );
         // Radius capped at 8: an unbounded one overflows computing the kernel side.
         assert_eq!(
             skin_smooth_rgba(&src, 0.8, f32::INFINITY, 25.0).dimensions(),

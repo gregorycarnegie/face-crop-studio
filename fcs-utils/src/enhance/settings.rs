@@ -114,6 +114,7 @@ impl EnhancementSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     /// The preset values are the product decision this module exists to hold;
     /// nothing else in the codebase asserts them, so any one of them could be
@@ -185,30 +186,21 @@ mod tests {
         assert_eq!(s.brightness, 0);
     }
 
-    #[test]
-    fn preset_by_name_resolves_each_preset() {
-        // Compare a field that is unique to each preset so the arms cannot be
-        // swapped without failing.
+    #[rstest]
+    #[case::natural("natural", 0.1)]
+    #[case::vivid("vivid", 0.3)]
+    #[case::professional("professional", 0.2)]
+    fn preset_by_name_resolves_each_preset(#[case] name: &str, #[case] exposure: f32) {
         assert_eq!(
-            EnhancementSettings::preset_by_name("natural").map(|s| s.exposure_stops),
-            Some(0.1)
-        );
-        assert_eq!(
-            EnhancementSettings::preset_by_name("vivid").map(|s| s.exposure_stops),
-            Some(0.3)
-        );
-        assert_eq!(
-            EnhancementSettings::preset_by_name("professional").map(|s| s.exposure_stops),
-            Some(0.2)
+            EnhancementSettings::preset_by_name(name).map(|s| s.exposure_stops),
+            Some(exposure)
         );
     }
 
-    #[test]
-    fn preset_by_name_rejects_unknown_and_miscased_names() {
-        assert!(EnhancementSettings::preset_by_name("").is_none());
-        assert!(EnhancementSettings::preset_by_name("custom").is_none());
-        // Documented as case-sensitive lowercase.
-        assert!(EnhancementSettings::preset_by_name("Natural").is_none());
-        assert!(EnhancementSettings::preset_by_name("VIVID").is_none());
+    #[rstest]
+    fn preset_by_name_rejects_unknown_and_miscased_names(
+        #[values("", "custom", "Natural", "VIVID")] name: &str,
+    ) {
+        assert!(EnhancementSettings::preset_by_name(name).is_none());
     }
 }
