@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install build dependencies
         run: |
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # No Python and no onnxsim any more: YuNet was the only model that needed re-exporting
       # from a public upstream. Both remaining models are this project's own exports, fetched
@@ -70,7 +70,7 @@ jobs:
           scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Upload prepared models
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-models
           path: |
@@ -112,10 +112,10 @@ jobs:
       DIST_NAME: face-crop-studio-windows-${{ matrix.arch }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download prepared models
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-models
           path: models
@@ -173,7 +173,7 @@ jobs:
           nasm -v
 
       - name: Cache vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\vcpkg\installed
           # Triplet is in the key: both runners report runner.os == "Windows",
@@ -373,7 +373,7 @@ jobs:
           cat "SHA256SUMS-windows-${{ matrix.arch }}.txt"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-release-artifacts-${{ matrix.arch }}
           # Globs rather than literal names so the arm64 leg, which has no NSIS
@@ -388,7 +388,7 @@ jobs:
         # The unpacked dist directory, consumed by the msix-package job. Kept
         # separate from the release artifacts above because it is an
         # intermediate, not something a user downloads.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-msix-payload-${{ matrix.arch }}
           path: dist/${{ env.DIST_NAME }}
@@ -405,32 +405,15 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # Downloads every payload the windows-release matrix produced. Written as
-      # a pattern rather than one step per architecture so that adding an arch
-      # back to the matrix needs no change here — and so a single missing arch
-      # cannot skip the whole Store package, which is what happened when this
-      # job hard-required both x86_64 and arm64.
+      # The Windows matrix currently builds x86_64 only. v7 extracts a single
+      # artifact directly into path, so provide the architecture directory here.
       - name: Download Windows payloads
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
-          pattern: windows-msix-payload-*
-          path: dist/windows
-
-      - name: Normalise payload directory names
-        # download-artifact names each directory after the artifact, so
-        # "windows-msix-payload-x86_64" has to become the "x86_64" arch slug
-        # that build_msix.ps1 looks for.
-        shell: pwsh
-        run: |
-          Get-ChildItem dist/windows -Directory |
-            Where-Object { $_.Name -like 'windows-msix-payload-*' } |
-            ForEach-Object {
-              $arch = $_.Name -replace '^windows-msix-payload-', ''
-              Rename-Item $_.FullName -NewName $arch
-              Write-Host "payload: $arch"
-            }
+          name: windows-msix-payload-x86_64
+          path: dist/windows/x86_64
 
       - name: Build MSIX bundle
         shell: pwsh
@@ -457,7 +440,7 @@ jobs:
         # Workflow artifact only, not a GitHub release asset: the bundle is
         # deliberately unsigned (the Store signs it), so it is not installable
         # by end users and would only confuse the releases page.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: msix-store-package
           path: dist/msix/*
@@ -482,13 +465,13 @@ jobs:
 
     steps:
       - name: Download MSIX package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: msix-store-package
           path: dist/msix
 
       - name: Set up Microsoft Store CLI
-        uses: microsoft/microsoft-store-apppublisher@v1.1
+        uses: microsoft/microsoft-store-apppublisher@v1.4
 
       - name: Configure Store credentials
         shell: pwsh
@@ -520,10 +503,10 @@ jobs:
       HAS_APPLE_SIGNING: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_CERT')] != '' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download prepared models
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-models
           path: models
@@ -605,7 +588,7 @@ jobs:
           cat SHA256SUMS-macos-arm64.txt
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-release-artifacts
           path: |
@@ -631,10 +614,10 @@ jobs:
             appimagetool-arch: aarch64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download prepared models
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-models
           path: models
@@ -703,7 +686,7 @@ jobs:
           cat "SHA256SUMS-linux-${{ matrix.arch }}.txt"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-release-artifacts-${{ matrix.arch }}
           path: |
@@ -723,14 +706,14 @@ jobs:
 
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: "*-release-artifacts*"
           path: dist
           merge-multiple: true
 
       - name: Publish GitHub release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Any tag with a suffix (v1.5.1-rc1) is a release candidate.
           # Without this every RC publishes as a full release and becomes

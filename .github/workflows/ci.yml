@@ -50,7 +50,7 @@ jobs:
     name: Check Installer Scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Parse every shell script
         shell: bash
         run: |
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Only needed for the local verify-models composite action below.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download models
         shell: bash
@@ -89,7 +89,7 @@ jobs:
           scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Upload models
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-models
           path: models
@@ -135,10 +135,10 @@ jobs:
             ort-library: libonnxruntime.so
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download models
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ci-models
           path: models
@@ -153,7 +153,7 @@ jobs:
 
       - name: Cache vcpkg (Windows)
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: C:\vcpkg\installed
           # Triplet, not runner.os, so an arch-blind key cannot hand an arm64
