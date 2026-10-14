@@ -143,11 +143,6 @@ impl Blocked {
         self.channels.div_ceil(BLOCK)
     }
 
-    /// Real channels, not counting the padding in the last block.
-    pub fn channels(&self) -> usize {
-        self.channels
-    }
-
     /// Channels `first..first + count`, back in NCHW.
     pub fn to_nchw(&self, first: usize, count: usize) -> Result<Tensor> {
         ensure!(

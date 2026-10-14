@@ -358,10 +358,10 @@ pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
 
     let outputs = super::topology::OUTPUTS
         .iter()
+        // Every output is one head of a merged convolution, so each is a `Part`.
         .map(|&at| match slots.get(at) {
-            Some(Slot::Data(tensor)) => tensor.to_nchw(0, tensor.channels()),
             Some(&Slot::Part { of, first, count }) => merged[of].to_nchw(first, count),
-            _ => anyhow::bail!("output slot {at} was never written"),
+            _ => anyhow::bail!("output slot {at} is not a merged head"),
         })
         .collect::<Result<Vec<_>>>()?;
 

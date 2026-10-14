@@ -895,6 +895,15 @@ mod tests {
         assert_eq!(vulkan_is_safe(), lists_no_intel(Some(vendors)));
     }
 
+    /// Nothing consults the answer off Windows, but it must stay the documented `false` rather
+    /// than report a DXGI walk that never happened.
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn vulkan_is_never_called_safe_off_windows() {
+        assert_eq!(dxgi_adapter_vendors(), None);
+        assert!(!vulkan_is_safe());
+    }
+
     #[test]
     fn the_vulkan_attempt_keeps_every_option_but_the_backends() {
         let options = GpuContextOptions {
