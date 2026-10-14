@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       # No Python and no onnxsim any more: YuNet was the only model that needed re-exporting
       # from a public upstream. Both remaining models are this project's own exports, fetched
@@ -70,7 +70,7 @@ jobs:
           scrfd-sha256: ${{ env.SCRFD_SHA256 }}
 
       - name: Upload prepared models
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-models
           path: |
@@ -112,10 +112,10 @@ jobs:
       DIST_NAME: face-crop-studio-windows-${{ matrix.arch }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download prepared models
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-models
           path: models
@@ -173,7 +173,7 @@ jobs:
           nasm -v
 
       - name: Cache vcpkg
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: C:\vcpkg\installed
           # Triplet is in the key: both runners report runner.os == "Windows",
@@ -373,7 +373,7 @@ jobs:
           cat "SHA256SUMS-windows-${{ matrix.arch }}.txt"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: windows-release-artifacts-${{ matrix.arch }}
           # Globs rather than literal names so the arm64 leg, which has no NSIS
@@ -388,7 +388,7 @@ jobs:
         # The unpacked dist directory, consumed by the msix-package job. Kept
         # separate from the release artifacts above because it is an
         # intermediate, not something a user downloads.
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: windows-msix-payload-${{ matrix.arch }}
           path: dist/${{ env.DIST_NAME }}
@@ -405,12 +405,12 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      # The Windows matrix currently builds x86_64 only. v7 extracts a single
+      # The Windows matrix currently builds x86_64 only. v8 extracts a single
       # artifact directly into path, so provide the architecture directory here.
       - name: Download Windows payloads
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: windows-msix-payload-x86_64
           path: dist/windows/x86_64
@@ -440,7 +440,7 @@ jobs:
         # Workflow artifact only, not a GitHub release asset: the bundle is
         # deliberately unsigned (the Store signs it), so it is not installable
         # by end users and would only confuse the releases page.
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: msix-store-package
           path: dist/msix/*
@@ -465,7 +465,7 @@ jobs:
 
     steps:
       - name: Download MSIX package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: msix-store-package
           path: dist/msix
@@ -503,10 +503,10 @@ jobs:
       HAS_APPLE_SIGNING: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_CERT')] != '' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download prepared models
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-models
           path: models
@@ -588,7 +588,7 @@ jobs:
           cat SHA256SUMS-macos-arm64.txt
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: macos-release-artifacts
           path: |
@@ -614,10 +614,10 @@ jobs:
             appimagetool-arch: aarch64
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Download prepared models
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-models
           path: models
@@ -686,7 +686,7 @@ jobs:
           cat "SHA256SUMS-linux-${{ matrix.arch }}.txt"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: linux-release-artifacts-${{ matrix.arch }}
           path: |
@@ -706,7 +706,7 @@ jobs:
 
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: "*-release-artifacts*"
           path: dist
