@@ -16,13 +16,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-/// A temporary file that deletes itself unless [`Self::keep`] is called.
+/// A temporary file that deletes itself when dropped.
 ///
 /// Without it, a failed write or a panic mid-write would leave `fcs-tmp1234-0` sitting in the
-/// user's output directory. The destination is untouched either way, which is the point.
+/// user's output directory. The destination is untouched either way, which is the point. After
+/// a successful rename there is nothing at the path any more, and the delete quietly fails.
 struct TempFile {
     path: PathBuf,
-    keep: bool,
 }
 
 impl TempFile {
@@ -35,21 +35,13 @@ impl TempFile {
             // Deliberately short, and not derived from the destination: output names are
             // already long, and prefixing one risks passing the 255-byte filename limit.
             path: dir.join(format!("fcs-tmp{}-{n}", std::process::id())),
-            keep: false,
         }
-    }
-
-    /// The file has been renamed away, so there is nothing left to clean up.
-    fn keep(mut self) {
-        self.keep = true;
     }
 }
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        if !self.keep {
-            let _ = fs::remove_file(&self.path);
-        }
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -107,7 +99,6 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
             path.display()
         )
     })?;
-    temp.keep();
     Ok(())
 }
 

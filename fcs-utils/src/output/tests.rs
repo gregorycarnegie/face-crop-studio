@@ -355,15 +355,24 @@ fn load_jpeg_exif_extracts_embedded_exif_segment() {
 
 #[test]
 fn load_jpeg_exif_skips_fill_bytes_before_a_marker() {
-    // T.81 allows any number of 0xFF fill bytes before a marker.
+    // T.81 allows any number of 0xFF fill bytes before a marker. A segment goes first so the
+    // fill sits well into the file: right after SOI, `index * 4` and `index + 4` agree.
     let exif_segment = make_exif_segment(b"minimal-exif");
-    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xFF, 0xFF];
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x16];
+    jpeg.extend_from_slice(&[0x4A; 20]);
+    jpeg.extend_from_slice(&[0xFF, 0xFF]);
     jpeg.extend_from_slice(&exif_segment[1..]);
     jpeg.extend_from_slice(&[0xFF, 0xD9]);
     let dir = tempdir().unwrap();
     let path = write_bytes(&dir, "fill.jpg", &jpeg);
 
     assert_eq!(load_jpeg_exif(Some(&path)), Some(exif_segment));
+
+    // Fill bytes that run to the end of the file end the walk instead of reading past it.
+    let mut truncated = jpeg[..26].to_vec();
+    truncated.extend_from_slice(&[0xFF; 6]);
+    let path = write_bytes(&dir, "fill-to-eof.jpg", &truncated);
+    assert_eq!(load_jpeg_exif(Some(&path)), None);
 }
 
 #[test]
