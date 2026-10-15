@@ -333,9 +333,36 @@ The extra runners are optional for day-to-day work but match what CI does:
 - `cargo nextest-fast` (or `cargo test-fast`) – The same suite without compiling fcs-core's examples, roughly halving the build after an fcs-core change. Aliases in `.cargo/config.toml`; CI still builds the examples, and doctests need `cargo test --workspace --doc`.
 - `FCS_STRICT_TESTS=1 cargo nextest run --workspace --all-features` – Turn "model/fixture missing, skipping" into a hard failure. CI sets this so a broken asset path cannot masquerade as a green run; leave it unset on a fresh clone, where skipping is the correct behaviour.
 - `cargo llvm-cov nextest --workspace --all-features --summary-only` – Line and region coverage. CI fails below 65% line coverage; pass `--fail-under-lines 65` to check the gate locally. Note that the nextest profile must travel via `NEXTEST_PROFILE`, because `--profile` on the command line belongs to `cargo-llvm-cov`.
-- `cargo mutants -p fcs-core --test-tool nextest -j 4 --file fcs-core/src/postprocess.rs --file fcs-core/src/cropper.rs` – Mutation testing: mutates the source and reports which changes no test caught, which is a sharper signal than coverage about where tests are missing. Results land in `mutants.out/missed.txt` (the gaps), `caught.txt`, and `unviable.txt` (mutants that did not compile — ignore those).
+- `cargo mutants -p fcs-core -j 4 --file postprocess.rs --file cropper.rs` – Mutation testing: mutates the source and reports which changes no test caught, which is a sharper signal than coverage about where tests are missing. Results land in `mutants.out/missed.txt` (the gaps), `caught.txt`, and `unviable.txt` (mutants that did not compile). Feature selection and exclusions come from `.cargo/mutants.toml`. Don't use `--test-tool nextest` here: it runs each test in its own process, which defeats the shared GPU test context.
 
-Mutation testing is deliberately not in CI: every mutant is a fresh incremental rebuild, so the two files above take one to two hours and the whole of `fcs-core` (831 mutants) takes closer to ten. Run it locally against a couple of files at a time, on an otherwise idle machine — drop to `-j 2` if it becomes unusable, since the per-job source-tree copies are I/O heavy. Skip `fcs-core/src/gpu/*`: those mutants mostly land in adapter plumbing that only executes with hardware present, so they report as missed without telling you anything.
+### Mutation testing
+
+Most recent full run: 2026-10-14, all six crates, from commit `2a8c25e`.
+
+| Crate | Mutants | Caught | Missed | Timed out | Score |
+|---|---:|---:|---:|---:|---:|
+| `fcs-utils` | 2,262 | 2,230 | 24 | 8 | 98.6% |
+| `fcs-core` | 1,311 | 1,250 | 17 | 44 | 95.3% |
+| `fcs-ort` | 47 | 45 | 2 | 0 | 95.7% |
+| `fcs-cli` | 208 | 208 | 0 | 0 | 100% |
+| `fcs-mapping` | 71 | 71 | 0 | 0 | 100% |
+| `fcs-gui` | 48 | 48 | 0 | 0 | 100% |
+| **Workspace** | **3,947** | **3,852** | **43** | **52** | **97.6%** |
+
+Score is caught ÷ (caught + missed + timed out). A timed-out mutant made the suite hang, so a
+test did notice it. Counting those as detected gives 98.9%. Mutants that did not compile are
+left out.
+
+The run's real gaps were fixed afterwards ([#7](https://github.com/gregorycarnegie/face-crop-studio/pull/7)). What is still missed is equivalent: a guard
+that only skips a no-op, OR vs XOR on disjoint flag bits, a symmetric kernel, or a
+performance-only code path that produces the same output. The rest is code that only compiles
+on another platform: the two `fcs-ort` mutants are Unix-only and are caught in WSL, and three
+`fcs-utils` mutants are macOS-only.
+
+Mutation testing is deliberately not in CI: every mutant is a fresh incremental rebuild. The
+whole workspace takes about 32 hours at `-j 4`, or 13 at `-j 8` on an idle 16-core machine.
+Above `-j 4`, check `unviable.txt` against the logs: a build that runs out of memory is
+recorded as unviable, not missed. For day-to-day work, run it against a couple of files at a time.
 
 ## Configuration
 
