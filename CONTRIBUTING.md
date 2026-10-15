@@ -183,8 +183,11 @@ Run a bounded fuzz target on Linux (CI uses the same commands):
 rustup toolchain install nightly-2026-08-24
 cargo install cargo-fuzz --version 0.13.2 --locked
 mkdir -p fuzz/corpus/metadata
-cargo +nightly-2026-08-24 fuzz run metadata fuzz/corpus/metadata fuzz/seeds/metadata -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=512
+cargo +nightly-2026-08-24 fuzz run metadata fuzz/corpus/metadata fuzz/seeds/metadata -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=2048 -malloc_limit_mb=512
 ```
+
+The 2 GiB process limit includes sanitizer and corpus bookkeeping; any individual
+allocation is still capped at 512 MiB.
 
 Replace `metadata` with `metadata_roundtrip`, `onnx_initializers` or `color` to
 exercise the other parsers. `metadata` only checks the EXIF walkers never panic;

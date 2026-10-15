@@ -23,7 +23,7 @@ jobs:
       # Keep memory validity and race checks enabled.
       MIRIFLAGS: -Zmiri-tree-borrows -Zmiri-ignore-leaks
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.NIGHTLY }}
@@ -43,7 +43,7 @@ jobs:
       matrix:
         target: [onnx_initializers, metadata, metadata_roundtrip, color]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.NIGHTLY }}
@@ -56,20 +56,22 @@ jobs:
       # Each run starts from what earlier runs found instead of from the seeds alone.
       # actions/cache only saves on success, so a crashing input never becomes the corpus.
       - name: Restore corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
       # The prebuilt cargo-fuzz is a musl binary and defaults to its own target, where
       # ASan cannot link, so name the runner's gnu target explicitly.
+      # RSS includes sanitizer/corpus overhead: use libFuzzer's default 2 GiB cap,
+      # while keeping the original 512 MiB limit on an individual allocation.
       - name: Fuzz with AddressSanitizer
         run: |
           mkdir -p fuzz/corpus/${{ matrix.target }}
-          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=512
+          cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} fuzz/corpus/${{ matrix.target }} fuzz/seeds/${{ matrix.target }} -- -max_total_time=30 -max_len=16384 -timeout=5 -rss_limit_mb=2048 -malloc_limit_mb=512
       - name: Save crash inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashes-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
