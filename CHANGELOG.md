@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The GUI status bar shows what the app is doing.** It said "Ready" while the detector was
+  still loading, and none of the app's messages reached it: "Detected 3 face(s)", "Batch
+  complete", and the text of an error all went nowhere. It now shows them, with the dot
+  showing the state. The model cell no longer ends in "· ONNX", which the app has not used
+  since its built-in engines replaced ONNX Runtime.
 - **Source EXIF is kept for JPEGs that pad their markers.** The JPEG spec allows extra
   `0xFF` fill bytes before a marker; the metadata reader stopped at the first one, so
   the default Preserve metadata mode silently dropped the EXIF from those files.

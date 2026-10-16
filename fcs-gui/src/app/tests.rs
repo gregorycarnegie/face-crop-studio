@@ -38,6 +38,39 @@ fn every_panel_is_on_screen_at_launch() {
     }
 }
 
+/// The status bar shows the app's own message for each state. It once said "Ready" whatever
+/// happened, while every message the app wrote went nowhere.
+#[test]
+fn the_status_bar_shows_what_the_app_is_doing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = launch(&dir);
+    harness.get_by_label(STATUS_DETECTOR_PENDING);
+    assert!(harness.query_by_label("Ready").is_none());
+
+    // What `poll_detector` does once the background build reports in.
+    harness.state_mut().detector_rx = None;
+    harness.state_mut().show_success("Detected 3 face(s)");
+    harness.run();
+    harness.get_by_label("Detected 3 face(s)");
+
+    harness.state_mut().show_error("Export failed", "disk full");
+    harness.run();
+    harness.get_by_label("Export failed: disk full");
+
+    harness.state_mut().is_busy = true;
+    harness.run_steps(2);
+    harness.get_by_label("Running");
+    assert!(harness.query_by_label("Export failed: disk full").is_none());
+}
+
+#[test]
+fn the_status_bar_names_the_model_without_onnx() {
+    let dir = tempfile::tempdir().unwrap();
+    let harness = launch(&dir);
+    harness.get_by_label("scrfd80k_500m_640");
+    assert!(harness.query_by_label_contains("ONNX").is_none());
+}
+
 #[test]
 fn the_inspector_tabs_swap_their_controls() {
     let dir = tempfile::tempdir().unwrap();

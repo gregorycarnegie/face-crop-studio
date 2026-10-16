@@ -14,20 +14,27 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
         .frame(Frame::new().fill(P::BG).inner_margin(egui::Margin::ZERO))
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                // Status dot + label
-                let (ready_dot, ready_text) = if app.is_busy || app.batch_running {
-                    (P::PEACH, "  Running".to_string())
+                // The app's own message, with a dot for its state. This used to be a fixed
+                // "Ready", which it said while the detector was still loading, and nothing showed
+                // `status_line` at all, so "Detected 3 face(s)" and the rest never appeared.
+                // A running job keeps "Running": nothing updates `status_line` when one starts,
+                // so it would still describe the previous result.
+                let (dot, text) = if app.is_busy || app.batch_running {
+                    (P::PEACH, "Running")
+                } else if app.detector_rx.is_some() {
+                    (P::PEACH, app.status_line.as_str())
                 } else if app.last_error.is_some() {
-                    (P::ROSE, " Error".to_string())
+                    (P::ROSE, app.status_line.as_str())
                 } else {
-                    (P::LIME, " Ready".to_string())
+                    (P::LIME, app.status_line.as_str())
                 };
-                status_cell(ui, &ready_text, Some(ready_dot));
+                status_cell(ui, &clip(text, STATUS_MAX_CHARS), Some(dot));
 
                 // Model. From the loaded detector rather than from `settings.model_path`, which
                 // only ever names the YuNet fallback -- so this cell read
-                // "face_detection_yunet_2023mar_640 · ONNX" on a run where SCRFD was detecting.
-                // Before one loads there is nothing to report but the configured path.
+                // "face_detection_yunet_2023mar_640" on a run where SCRFD was detecting.
+                // Before one loads there is nothing to report but the configured path. No
+                // "· ONNX" suffix: the app has not run ONNX Runtime since the built-in engines.
                 let model_name = match app.detector.as_deref() {
                     Some(detector) => detector.model_name().to_string(),
                     None => app
@@ -39,7 +46,7 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
                         .unwrap_or("no model")
                         .to_string(),
                 };
-                status_cell(ui, &format!("{model_name} · ONNX"), None);
+                status_cell(ui, &model_name, None);
 
                 // Where detection runs
                 let backend = app.detector.as_deref().map(|d| d.inference_backend());
@@ -110,6 +117,19 @@ pub fn show(ui: &mut egui::Ui, app: &mut App2) {
                 });
             });
         });
+}
+
+/// Long enough for every message the app writes; an error carrying a long path is clipped so it
+/// cannot push the model, GPU and batch cells off the bar.
+const STATUS_MAX_CHARS: usize = 72;
+
+fn clip(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_owned()
+    } else {
+        let kept: String = text.chars().take(max - 1).collect();
+        format!("{kept}…")
+    }
 }
 
 fn status_cell(ui: &mut egui::Ui, text: &str, dot: Option<egui::Color32>) {
@@ -255,6 +275,15 @@ fn gpu_vram_mb() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_keeps_short_text_and_marks_cut_text() {
+        assert_eq!(clip("Detected 3 face(s)", 72), "Detected 3 face(s)");
+        assert_eq!(clip("abcdef", 6), "abcdef");
+        assert_eq!(clip("abcdefg", 6), "abcde…");
+        // Counted in characters, so a multi-byte path is never cut mid-character.
+        assert_eq!(clip("ééééééé", 4), "ééé…");
+    }
 
     #[test]
     fn local_time_str_is_a_valid_wall_clock() {
