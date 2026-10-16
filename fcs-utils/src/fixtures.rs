@@ -145,10 +145,7 @@ mod tests {
 
     #[test]
     fn fixture_path_resolves_existing_file() {
-        let Ok(path) = fixture_path("images/test_pattern.png") else {
-            eprintln!("skipping: fixture images not available in this environment");
-            return;
-        };
+        let path = fixture_path("images/test_pattern.png").expect("committed fixture");
         assert!(path.ends_with(Path::new("images/test_pattern.png")));
     }
 
@@ -159,10 +156,7 @@ mod tests {
 
     #[test]
     fn load_fixture_image_reads_pattern() {
-        let Ok(image) = load_fixture_image("images/test_pattern.png") else {
-            eprintln!("skipping: fixture images not available in this environment");
-            return;
-        };
+        let image = load_fixture_image("images/test_pattern.png").expect("committed fixture");
         assert_eq!(image.dimensions(), (4, 4));
     }
 
@@ -186,10 +180,7 @@ mod tests {
 
     #[test]
     fn load_fixture_bytes_reads_file() {
-        let Ok(bytes) = load_fixture_bytes("images/test_pattern.png") else {
-            eprintln!("skipping: fixture images not available in this environment");
-            return;
-        };
+        let bytes = load_fixture_bytes("images/test_pattern.png").expect("committed fixture");
         assert!(!bytes.is_empty());
         // PNG magic bytes: \x89PNG
         assert_eq!(&bytes[0..4], b"\x89PNG");
@@ -197,19 +188,15 @@ mod tests {
 
     #[test]
     fn load_fixture_json_deserializes() {
-        // Try to load a known JSON fixture; skip if not available.
-        let result = load_fixture_json::<_, serde_json::Value>("images/test_pattern.json");
-        match result {
-            Ok(_) => {} // fixture exists and parsed
-            Err(e) => {
-                let msg = e.to_string();
-                // Acceptable: fixture missing OR JSON parse error
-                assert!(
-                    msg.contains("does not exist") || msg.contains("failed"),
-                    "unexpected error: {msg}"
-                );
-            }
-        }
+        let truth: serde_json::Value =
+            load_fixture_json("images/ground_truth.json").expect("committed fixture");
+        assert!(
+            truth["images"]
+                .as_object()
+                .is_some_and(|images| !images.is_empty())
+        );
+        let missing = load_fixture_json::<_, serde_json::Value>("images/missing.json");
+        assert!(missing.is_err_and(|e| e.to_string().contains("does not exist")));
     }
 
     #[test]

@@ -31,7 +31,7 @@ serde_json.workspace = true
 [dev-dependencies]
 googletest.workspace = true
 rstest.workspace = true
-egui_kittest.workspace = true
+egui_kittest = { workspace = true, features = ["eframe"] }
 fcs-utils = { workspace = true, features = ["fixtures"] }
 tempfile.workspace = true
 

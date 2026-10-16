@@ -19,10 +19,9 @@
 # heic/raw loaders in image_utils.
 all_features = true
 
-# The scratch copy must include gitignored inputs: `fixtures/images/` (the
-# detection corpus) and the 320 model. Without them the model- and
-# fixture-driven tests skip themselves, pass, and every mutant they guard is
-# recorded as missed. `target/` is governed by `copy_target`, not this.
+# The scratch copy must include gitignored inputs: the models under `models/`
+# (`fixtures/images/` is committed now). Without them the model-driven tests
+# skip themselves, pass, and every mutant they guard is recorded as missed. `target/` is governed by `copy_target`, not this.
 gitignore = false
 
 exclude_globs = [

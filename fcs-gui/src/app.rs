@@ -138,6 +138,27 @@ impl App2 {
             let _ = detector_tx.send(built);
         });
 
+        Self::with_settings(settings, settings_path, Some(detector_rx))
+    }
+
+    /// The app without the user's settings file or a detector: default settings, saved to
+    /// `settings_path` (a temporary file in tests, since the GUI autosaves), and no detector
+    /// thread, so the status stays on the startup line.
+    #[cfg(test)]
+    pub(crate) fn for_tests(cc: &CreationContext<'_>, settings_path: PathBuf) -> Self {
+        crate::theme::apply(&cc.egui_ctx);
+        Self::with_settings(
+            fcs_utils::config::AppSettings::default(),
+            settings_path,
+            None,
+        )
+    }
+
+    fn with_settings(
+        settings: fcs_utils::config::AppSettings,
+        settings_path: PathBuf,
+        detector_rx: Option<mpsc::Receiver<DetectorBuild>>,
+    ) -> Self {
         let gpu = GpuPipeline::from_context(
             GpuStatusIndicator::pending(),
             None,
@@ -161,7 +182,7 @@ impl App2 {
             detector,
             // Arrives with the detector, on the same channel.
             eye_refiner: None,
-            detector_rx: Some(detector_rx),
+            detector_rx,
             job_tx,
             job_rx,
             preview: PreviewState::default(),
@@ -1364,3 +1385,6 @@ fn show_about_window(ctx: &egui::Context, open: &mut bool) {
         *open = false;
     }
 }
+
+#[cfg(test)]
+mod tests;
