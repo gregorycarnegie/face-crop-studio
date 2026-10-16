@@ -84,7 +84,15 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants,nextest
+          tool: nextest
+
+      # Built here, not taken prebuilt: the release binary needs glibc 2.39 and 22.04 has 2.35.
+      # rust-cache keeps ~/.cargo/bin, so only a cold cache pays for the build.
+      - name: Install cargo-mutants
+        run: |
+          if ! cargo mutants --version 2>/dev/null | grep -q '27.1.0'; then
+            cargo install cargo-mutants --version 27.1.0 --locked
+          fi
 
       # nextest here, unlike the local runs: on a real NVIDIA card, one process per test opens
       # a device per test and wedges the driver, but this runner's adapter is lavapipe, where
