@@ -1,0 +1,129 @@
+name: Mutants
+
+# Mutation testing on the code a pull request changes. A full run takes 13-32 hours, so it stays
+# local (see README "Mutation testing"); between those runs nothing noticed the score slipping.
+# `--in-diff` mutates only the lines the PR touches, which for a typical change is minutes.
+#
+# A missed mutant fails the job: it is new or changed code that no test would notice breaking.
+# If one is genuinely equivalent, add an `exclude_re` entry to .cargo/mutants.toml with the reason.
+on:
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mutants-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in step with ci.yml.
+  RUST_TOOLCHAIN: "1.99.0"
+  ORT_VERSION: "1.24.4"
+  EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
+  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1.1/eye_refiner.onnx
+  SCRFD_SHA256: 2437def9510f2af6431a5b2090ae9f357bc189cb0223be1b6c4d4ff085798e64
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2.1/scrfd80k_500m_640.onnx
+
+jobs:
+  mutants:
+    name: Mutants in the diff
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Diff against the base branch
+        run: git diff "origin/${{ github.base_ref || 'master' }}...HEAD" -- '*.rs' > "$RUNNER_TEMP/pr.diff"
+
+      # The models are gitignored, and without them the strict tests fail rather than skip.
+      - name: Download models
+        run: |
+          mkdir -p models
+          curl -fsSL -o models/eye_refiner.onnx "$EYE_REFINER_URL"
+          curl -fsSL -o models/scrfd80k_500m_640.onnx "$SCRFD_URL"
+
+      - name: Verify model checksums
+        uses: ./.github/actions/verify-models
+        with:
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
+
+      # .cargo/mutants.toml builds with every feature, so HEIC and AVIF need their libraries.
+      - name: Install native dependencies
+        uses: ./.github/actions/linux-build-deps
+
+      - name: Install lavapipe
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
+
+      - name: Fetch ONNX Runtime
+        run: |
+          set -euo pipefail
+          Name="onnxruntime-linux-x64-${ORT_VERSION}"
+          curl -fsSL -o "$RUNNER_TEMP/onnxruntime.tgz" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${Name}.tgz"
+          mkdir -p "$RUNNER_TEMP/ort"
+          tar -xzf "$RUNNER_TEMP/onnxruntime.tgz" -C "$RUNNER_TEMP/ort"
+          test -f "$RUNNER_TEMP/ort/$Name/lib/libonnxruntime.so"
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/ort/$Name/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: mutants
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,nextest
+
+      # nextest here, unlike the local runs: on a real NVIDIA card, one process per test opens
+      # a device per test and wedges the driver, but this runner's adapter is lavapipe, where
+      # nextest is what ci.yml already uses -- and plain `cargo test` runs into lavapipe
+      # crashing under concurrent pipeline creation.
+      - name: Mutate the changed lines
+        env:
+          FCS_STRICT_TESTS: "1"
+          NEXTEST_PROFILE: ci
+        run: |
+          status=0
+          cargo mutants --in-diff "$RUNNER_TEMP/pr.diff" --test-tool nextest -j2 \
+            --output "$RUNNER_TEMP" || status=$?
+          out="$RUNNER_TEMP/mutants.out"
+          {
+            echo '### Mutants in this diff'
+            if [ -f "$out/outcomes.json" ]; then
+              for kind in caught missed timeout unviable; do
+                echo "- $kind: $(cat "$out/$kind.txt" 2>/dev/null | wc -l)"
+              done
+              if [ -s "$out/missed.txt" ]; then
+                echo; echo 'Missed (no test noticed these changes):'; echo '```'
+                cat "$out/missed.txt"; echo '```'
+              fi
+            else
+              echo 'No mutants in the changed lines.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 2 = missed mutants, 4 = the unmutated tree failed. 3 (timeouts only) is a test
+          # that hung on a mutant, which means it noticed.
+          if [ "$status" -eq 2 ] || [ "$status" -eq 4 ] || [ "$status" -eq 1 ]; then
+            exit "$status"
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-out
+          path: ${{ runner.temp }}/mutants.out
+          if-no-files-found: ignore
+          retention-days: 7

@@ -59,10 +59,6 @@ fn detect_annotate_matches_fixture_when_no_detections() -> Result<(), Box<dyn Er
     let Some(model) = ensure_model_path() else {
         return Ok(());
     };
-    if !fixtures_available() {
-        eprintln!("skipping: fixture images not available in this environment");
-        return Ok(());
-    }
     let fixture_image = fixture_path("images/test_pattern.png")?;
 
     let work_dir = tempdir()?;
@@ -108,9 +104,7 @@ fn detect_annotate_matches_fixture_when_no_detections() -> Result<(), Box<dyn Er
 // (`fcs-core/tests/scrfd_parity.rs`) and the snapshot below, both of which only compare this
 // project against itself. The `fixtures/opencv/` goldens went with the test: 276 files of
 // YuNet's opinions at its own threshold, which this detector disagrees with by design.
-fn fixtures_available() -> bool {
-    fcs_utils::fixture_path("images/006.jpg").is_ok()
-}
+// `fcs-core/tests/detection_accuracy.rs` now scores the detector against human-drawn boxes.
 
 fn ensure_model_path() -> Option<PathBuf> {
     let path = Path::new(MODEL_REL_PATH);
@@ -160,12 +154,8 @@ fn cli_json_output_matches_snapshot() -> Result<(), Box<dyn Error>> {
     let Some(model) = ensure_model_path() else {
         return Ok(());
     };
-    if !fixtures_available() {
-        eprintln!("skipping: fixture images not available in this environment");
-        return Ok(());
-    }
 
-    let fixture_image = fixture_path("images/006.jpg")?;
+    let fixture_image = fixture_path("images/be265201d5152ba3.jpg")?;
 
     let work_dir = tempdir()?;
     let json_path = work_dir.path().join("out.json");

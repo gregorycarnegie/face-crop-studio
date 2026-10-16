@@ -279,7 +279,7 @@ jobs:
         # nextest invocation. The nextest profile has to travel via NEXTEST_PROFILE because
         # `--profile` on the command line belongs to cargo-llvm-cov (build profile).
         #
-        # The 65% floor sits a few points under the current 68.9% line coverage: ordinary
+        # The 72% floor sits a few points under the current 73.9% line coverage: ordinary
         # refactors should not turn the pipeline red, but deleting a test module or landing
         # a large untested file will. Raise it as coverage climbs, don't lower it.
         #
@@ -293,7 +293,7 @@ jobs:
         run: |
           status=0
           cargo llvm-cov nextest --workspace --all-features \
-            --summary-only --fail-under-lines 65 | tee coverage.txt || status=$?
+            --summary-only --fail-under-lines 72 | tee coverage.txt || status=$?
           {
             echo '### Coverage'
             echo '```'

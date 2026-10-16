@@ -35,10 +35,8 @@ pub fn find_model_path() -> Option<PathBuf> {
 
 pub fn find_fixture_image() -> Option<PathBuf> {
     let candidates = vec![
-        "fixtures/images/006.jpg",
-        "../fixtures/images/006.jpg",
-        "samples/sample_01.jpg",
-        "../samples/sample_01.jpg",
+        "fixtures/images/be265201d5152ba3.jpg",
+        "../fixtures/images/be265201d5152ba3.jpg",
     ];
     require(
         candidates

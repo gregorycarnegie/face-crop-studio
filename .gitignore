@@ -7,20 +7,19 @@ models/
 *.onnx
 
 # Fixtures
-# Image fixtures are kept local — they can contain sensitive faces
-# (see fixtures/README.md), so they are intentionally not committed. Using
-# `fixtures/*` (not `fixtures/`) lets git descend into the re-included subdirs.
+# Only licence-clean fixtures are tracked. Using `fixtures/*` (not `fixtures/`)
+# lets git descend into the re-included subdirs, so anything else dropped under
+# fixtures/ stays local.
 #
-# Three exceptions are tracked: the README, the synthetic golden data, and
-# fixtures/oracle/ — eight Open Images photographs that are all CC BY 2.0 and
-# attributed in fixtures/oracle/ATTRIBUTION.md. They are the only images in the
-# repository, and they are here because tests/python_parity.rs is the only check
-# that compares this project against an implementation it did not write, and it
-# needs real faces to have anything to compare.
+# Tracked: the README, the synthetic golden data, and two folders of Open Images
+# photographs, all CC BY 2.0 and attributed: fixtures/oracle/ (the Python
+# parity reference) and fixtures/images/ (the accuracy sample and general
+# fixtures; see fixtures/images/ATTRIBUTION.md).
 fixtures/*
 !/fixtures/README.md
 !/fixtures/golden/
 !/fixtures/oracle/
+!/fixtures/images/
 
 # IDEs / Editors
 .claude/

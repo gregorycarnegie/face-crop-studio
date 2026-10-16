@@ -41,10 +41,10 @@ fn main() -> Result<()> {
         let args: Vec<String> = std::env::args().skip(1).collect();
         if args.is_empty() {
             vec![
-                "fixtures/images/249_o.jpg".into(),
-                "fixtures/images/271_n.jpg".into(),
-                "fixtures/images/006.jpg".into(),
-                "fixtures/images/189_g.jpg".into(),
+                "fixtures/images/b603425e87278910.jpg".into(),
+                "fixtures/images/9aafe7686ae9c36e.jpg".into(),
+                "fixtures/images/be265201d5152ba3.jpg".into(),
+                "fixtures/images/a099a1dbba3f15ce.jpg".into(),
             ]
         } else {
             args

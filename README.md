@@ -290,6 +290,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 
 - `cargo check --workspace` – Fast type checking across all crates.
 - `cargo test --workspace --all-features` – Run the full test suite (requires `models/scrfd80k_500m_640.onnx`; set `FCS_STRICT_TESTS=1` to fail rather than skip when it is missing).
+- `cargo test -p fcs-core --test detection_accuracy -- --nocapture` – Score the shipped detector against human-drawn boxes on 60 held-out Open Images photographs (`fixtures/images/`). Fails if recall drops or unmatched detections rise, which the engine-parity tests cannot see.
 - `cargo test -p fcs-core --test python_parity` – Compare the Rust detector against the Python implementation it was ported from, on committed CC BY 2.0 fixtures. The only test here that checks this project against something it did not write; see `fixtures/oracle/ATTRIBUTION.md`.
 - `cargo run -p fcs-cli -- --help` – View CLI options.
 - `cargo run --release -p fcs-core --example engine_speed -- <image>` – What a detection costs, per engine (see `docs/ENGINE_SPEED.md`).
@@ -332,7 +333,7 @@ The extra runners are optional for day-to-day work but match what CI does:
 - `cargo nextest run --workspace --all-features` – The suite as CI runs it. Add `--profile ci` for no fail-fast, one retry on flaky GPU adapter acquisition, and a five-minute hang timeout.
 - `cargo nextest-fast` (or `cargo test-fast`) – The same suite without compiling fcs-core's examples, roughly halving the build after an fcs-core change. Aliases in `.cargo/config.toml`; CI still builds the examples, and doctests need `cargo test --workspace --doc`.
 - `FCS_STRICT_TESTS=1 cargo nextest run --workspace --all-features` – Turn "model/fixture missing, skipping" into a hard failure. CI sets this so a broken asset path cannot masquerade as a green run; leave it unset on a fresh clone, where skipping is the correct behaviour.
-- `cargo llvm-cov nextest --workspace --all-features --summary-only` – Line and region coverage. CI fails below 65% line coverage; pass `--fail-under-lines 65` to check the gate locally. Note that the nextest profile must travel via `NEXTEST_PROFILE`, because `--profile` on the command line belongs to `cargo-llvm-cov`.
+- `cargo llvm-cov nextest --workspace --all-features --summary-only` – Line and region coverage. CI fails below 72% line coverage; pass `--fail-under-lines 72` to check the gate locally. Note that the nextest profile must travel via `NEXTEST_PROFILE`, because `--profile` on the command line belongs to `cargo-llvm-cov`.
 - `cargo mutants -p fcs-core -j 4 --file postprocess.rs --file cropper.rs` – Mutation testing: mutates the source and reports which changes no test caught, which is a sharper signal than coverage about where tests are missing. Results land in `mutants.out/missed.txt` (the gaps), `caught.txt`, and `unviable.txt` (mutants that did not compile). Feature selection and exclusions come from `.cargo/mutants.toml`. Don't use `--test-tool nextest` here: it runs each test in its own process, which defeats the shared GPU test context.
 
 ### Mutation testing
@@ -359,8 +360,10 @@ performance-only code path that produces the same output. The rest is code that 
 on another platform: the two `fcs-ort` mutants are Unix-only and are caught in WSL, and three
 `fcs-utils` mutants are macOS-only.
 
-Mutation testing is deliberately not in CI: every mutant is a fresh incremental rebuild. The
-whole workspace takes about 32 hours at `-j 4`, or 13 at `-j 8` on an idle 16-core machine.
+A full run is not in CI: every mutant is a fresh incremental rebuild, and the whole workspace
+takes about 32 hours at `-j 4`, or 13 at `-j 8` on an idle 16-core machine. Instead, every pull
+request that touches Rust runs `cargo mutants --in-diff` on just the lines it changed
+(`.github/workflows/mutants.yml`), and a missed mutant fails it.
 Above `-j 4`, check `unviable.txt` against the logs: a build that runs out of memory is
 recorded as unviable, not missed. For day-to-day work, run it against a couple of files at a time.
 

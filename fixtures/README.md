@@ -6,9 +6,15 @@ or sensitive information; prefer synthetic or cleared data.
 
 ## Layout
 
-- `fixtures/images/` — raw input frames used by the CLI tests.
-  **Local only** (git-ignored): these are real faces, so they are not committed.
-  Tests that need them skip gracefully when the directory is absent (e.g. in CI).
+- `fixtures/images/` — **committed.** 60 Open Images photographs (145 faces), all
+  CC BY 2.0 and attributed in `fixtures/images/ATTRIBUTION.md`, downscaled to 640 px,
+  with their face boxes in `ground_truth.json`, plus a synthetic `test_pattern.png`.
+  `fcs-core/tests/detection_accuracy.rs` scores the detector against those boxes, and
+  the CLI tests use them as ordinary inputs. They are a fixed sample of the held-out
+  set behind `docs/MODEL_COMPARISON.md`; `tools/dataset/make_accuracy_fixtures.py`
+  rebuilds them (see below). This folder used to hold local photographs with no
+  licence to redistribute, which is why it was git-ignored and CI never ran the tests
+  that needed it.
 - `fixtures/opencv/` — **no longer used by any test.** These were OpenCV YuNet's
   detections, and `cli_detections_match_opencv_parity_samples` compared this
   project against them. That test went with YuNet: the scores are on a different
@@ -26,24 +32,20 @@ or sensitive information; prefer synthetic or cleared data.
   - `crop_regions.json` — expected `CropRegion` for the scenarios in
     `fcs-core/tests/golden_crop_regions.rs`.
 
-## Curating your own image fixtures
+## Rebuilding `fixtures/images/`
 
-Use images you own or have permission to process. Keep real faces local: both
-`fixtures/images/` and `fixtures/opencv/` are git-ignored. Include varied face
-sizes, poses, lighting, skin tones, image sizes, and supported file formats.
+Only commit images you are licensed to redistribute. The set is a rule, not a
+hand-picked selection: the held-out images ordered by the SHA-256 of their file
+name, the eight in `fixtures/oracle/` skipped, the first 60 taken. To rebuild it
+(for example after the held-out labels change), run this in the SCRFD venv from
+the repository root, then re-measure the bounds in `detection_accuracy.rs`:
 
-Copy each image into `fixtures/images/` and add one category suffix immediately
-before its extension:
+```bash
+/home/grego/work/scrfd-venv/bin/python tools/dataset/make_accuracy_fixtures.py     /mnt/c/Users/grego/Downloads/face-data/openimages fixtures/images
+```
 
-- `_n` — no face, for example `street_n.jpg`.
-- `_o` — an obscured face, for example `mask_o.png`.
-- `_g` — a group of faces, for example `team_g.webp`.
-- No suffix — one unobscured face, for example `portrait.jpg`.
-
-Use only one category suffix and inspect every image manually. The parity test
-sorts filenames and checks at most the first three usable images in each
-category. A negative golden must contain no detections; every other category
-must contain at least one.
+Any other images you want to test with locally can go anywhere under `fixtures/`
+outside the tracked folders; git ignores them.
 
 ## Generating OpenCV golden detections
 
