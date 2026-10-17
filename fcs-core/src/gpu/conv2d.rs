@@ -15,10 +15,10 @@ use std::{
     },
 };
 
-const CONV2D_WGSL: &str = include_str!("conv2d.wgsl");
+const CONV2D_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/conv2d.wgsl"));
 const CONV_WORKGROUP_X: u32 = 8;
 const CONV_WORKGROUP_Y: u32 = 8;
-// Must match the pointwise channel tile in conv2d.wgsl.
+// Must match the pointwise channel tile in conv2d.wesl.
 const POINTWISE_CHANNEL_TILE: u32 = 4;
 
 /// The tensor operands of one convolution.
@@ -35,7 +35,7 @@ pub(super) struct Conv2dTensors<'a> {
 /// Which specialized kernel a configuration dispatches.
 ///
 /// The host has to know this anyway to size dispatch z, so selecting a pipeline by it costs
-/// nothing extra. Mirrors the conditions in `conv2d.wgsl`.
+/// nothing extra. Mirrors the conditions in `conv2d.wesl`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kernel {
     Pointwise,
@@ -593,7 +593,7 @@ impl From<&Conv2dConfig> for Conv2dUniforms {
 /// reference cannot see it. What is wrong in that case is the dispatch, and the only way to
 /// check a dispatch is to look at it.
 ///
-/// The selection order must match `main` in conv2d.wgsl, which is still the grouped fallback's
+/// The selection order must match `main` in conv2d.wesl, which is still the grouped fallback's
 /// entry point: pointwise, then depthwise, then ungrouped-general.
 fn kernel_for(config: &Conv2dConfig) -> Kernel {
     let pointwise = config.kernel_width == 1

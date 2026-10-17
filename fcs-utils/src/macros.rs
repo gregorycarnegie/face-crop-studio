@@ -97,7 +97,7 @@ macro_rules! uniform_buffer_entry {
 /// ```
 // Pipeline creation panics if the shader fails to compile.
 // The label (e.g. "bilateral_filter.wgsl shader") is included in the wgpu panic
-// message — look for that label and check the corresponding .wgsl source file.
+// message — look for that label and check the corresponding .wesl source file.
 // If the device enters a lost state, verify wgpu feature support on this GPU.
 #[macro_export]
 macro_rules! create_gpu_pipeline {

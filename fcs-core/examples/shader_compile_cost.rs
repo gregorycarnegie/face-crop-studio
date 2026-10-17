@@ -1,12 +1,12 @@
-//! How long each WGSL file takes to become a compute pipeline.
+//! GPU pipeline compilation time for each WESL shader, excluding WESL linking.
 //!
-//! Experiment 80 put `conv2d.wgsl` at 197 ms of a ~900 ms cold start -- 90% of all shader
+//! Experiment 80 put `conv2d.wesl` at 197 ms of a ~900 ms cold start -- 90% of all shader
 //! compilation, and the other four shaders together are 20 ms. So the question for
 //! experiment 82 is not how to compile five shaders in parallel; it is what to do about one.
 //! `PIPELINE_CACHE` would be the answer, and `examples/adapter_cost.rs` shows D3D12 does not
 //! expose it.
 //!
-//! That leaves splitting. `conv2d.wgsl` carries four kernels behind one entry point and the
+//! That leaves splitting. `conv2d.wesl` carries four kernels behind one entry point and the
 //! host picks between them from the uniforms, so FXC compiles all four every launch. If
 //! compilation is superlinear in shader size, per-path pipelines would compile to less in
 //! total; if it is linear, splitting buys nothing and the cost is irreducible.
@@ -15,7 +15,7 @@
 //! measurement of each is the one that counts -- there is no warm-up, because a cold start
 //! has none.
 //!
-//!   cargo run --release -p fcs-core --example shader_compile_cost -- a.wgsl b.wgsl ...
+//!   cargo run --release -p fcs-core --example shader_compile_cost -- a.wesl b.wesl ...
 
 use std::time::Instant;
 
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let paths: Vec<String> = std::env::args().skip(1).collect();
     anyhow::ensure!(
         !paths.is_empty(),
-        "usage: shader_compile_cost <file.wgsl>..."
+        "usage: shader_compile_cost <file.wesl>..."
     );
 
     let context = match GpuContext::init_with_fallback(&GpuContextOptions::default()) {
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
     println!("{:<34} {:>7} {:>11}", "shader", "lines", "compile ms");
     let mut total = 0.0;
     for spec in &paths {
-        // `file.wgsl:entry` compiles one entry point of a module, which is how a multi-entry
+        // `file.wesl:entry` compiles one entry point of a module, which is how a multi-entry
         // module is priced: if naga and FXC only emit the reachable half, each entry should
         // cost what its own small file costs.
         let (path, entry) = match spec.rsplit_once(":main") {
@@ -54,7 +54,10 @@ fn main() -> Result<()> {
             None => (spec.clone(), "main".to_string()),
         };
         let path = &path;
-        let source = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
+        let source = wesl::Compiler::default()
+            .compile(path)
+            .with_context(|| format!("compile {path}"))?
+            .to_string();
         let lines = source.lines().count();
         let started = Instant::now();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {

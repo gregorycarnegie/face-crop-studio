@@ -793,11 +793,11 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Fuse the four head branches per level | **-26% of GPU compute**, 61 dispatches to 43 | `gpu/graph.rs`, `gpu/runtime.rs` |
 | At most four in-flight inferences per model | GPU pool -58 to -75% at 16-32 callers; iGPU folder -10% | `gpu/runtime.rs` |
 | Backbone keeps only the outputs the neck reads | GPU pool -7 to -16% at every concurrency | `gpu/graph.rs` |
-| Register accumulators and rows instead of local arrays | DXC 0.696 -> 0.375 ms (4090), 18.3 -> 10.3 ms (iGPU); FXC iGPU -4 to -26% per layer | `gpu/conv2d.wgsl` |
+| Register accumulators and rows instead of local arrays | DXC 0.696 -> 0.375 ms (4090), 18.3 -> 10.3 ms (iGPU); FXC iGPU -4 to -26% per layer | `gpu/conv2d.wesl` |
 | Threshold edits swap postprocessing instead of rebuilding | 6.2 ms UI stall + 21.5 ms -> 3.0 ms per edit; confidence slider fixed | `detector.rs`, `fcs-gui` |
 | One preprocessing cutoff for integrated adapters too | **2.07x** on a folder on the Radeon iGPU; -28 ms per 10 MP image | `preprocess.rs` |
 | Upsample and add in one dispatch (neck) | -0.012 to -0.017 ms on a 4090, -0.13 to -0.19 ms on an iGPU; 43 dispatches to 41 | `gpu/resize2x_add.wgsl`, `gpu/upsample2x.rs`, `gpu/graph.rs` |
-| Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
+| Four-channel tile for the ungrouped general conv | **-56% of the stem**, 42.0 to 18.4 us | `gpu/conv2d.wesl`, `gpu/conv2d.rs` |
 | Cache convolution bind groups | **-60% of recording**, -6% of a detection | `gpu/conv2d.rs` |
 | Skip decoding cells below the score threshold | **-82% of decode**, 0.077 to 0.014 ms | `model.rs`, `gpu/runtime.rs` |
 | Branch the heads off the mapped view, not a copy of it | -0.011 to -0.021 ms | `gpu/runtime.rs` |
@@ -806,7 +806,7 @@ A/A control that reads exactly 0.00 px and IoU 1.0000.
 | Letterbox instead of stretching to the model input | **+100 faces over 1239 images**, -0.38 ms at 2 MP | `image_utils.rs`, both preprocess shaders, `detector.rs` |
 | Delete the GPU batch cropper, crop on the CPU | **-43%** of folder wall time; ~740 lines removed | `face_cropper.rs` |
 | libjpeg-turbo for JPEG decode | **1.23x** decode | `fcs-utils/src/image_utils.rs` |
-| One shader entry point per convolution kernel | `compile_conv2d` ~197 -> ~120 ms at start-up | `gpu/conv2d.wgsl`, `gpu/conv2d.rs` |
+| One shader entry point per convolution kernel | `compile_conv2d` ~197 -> ~120 ms at start-up | `gpu/conv2d.wesl`, `gpu/conv2d.rs` |
 | Preprocessing cutoff 1.75 MP instead of 1.5 | -0.25 to -0.29 ms on 1.5-1.75 MP sources | `preprocess.rs` |
 | NMS grid sized to the boxes; bitmap dedup | clustered, n=5000: NMS 23.1 -> 0.25 ms, dedup 6.1 -> 0.009 ms | `nms.rs` |
 | ONNX Runtime intra-op threads = logical CPUs / 4, clamped 1..=4 | CPU inference 7.27 -> 4.17 ms; folder unchanged | `fcs-ort/src/session.rs` |
@@ -998,7 +998,7 @@ cargo run --release --example profile_pipeline -p fcs-core
 cargo run --release -p fcs-core --example gpu_pass_breakdown
 
 # Actual shader A/B, current four-channel pointwise grid on both sides
-cargo run --release -p fcs-core --example conv2d_experiment -- fcs-core/src/gpu/conv2d.wgsl fcs-core/src/gpu/conv2d.wgsl 32 8 4 32 8 4
+cargo run --release -p fcs-core --example conv2d_experiment -- fcs-core/src/gpu/conv2d.wesl fcs-core/src/gpu/conv2d.wesl 32 8 4 32 8 4
 
 # Paired separate/merged pass encoding costs
 cargo run --release -p fcs-core --example gpu_encode_comparison
@@ -1054,7 +1054,7 @@ cargo run --release -p fcs-core --example adapter_cost -- dx12
 
 # What each WGSL file or entry point costs to compile (order matters: the first
 # pipeline in a process carries ~180 ms of one-off warm-up)
-cargo run --release -p fcs-core --example shader_compile_cost -- fcs-core/src/gpu/conv2d.wgsl
+cargo run --release -p fcs-core --example shader_compile_cost -- fcs-core/src/gpu/conv2d.wesl
 
 # Cost of the per-dispatch host objects: uniform buffers and bind groups
 cargo run --release -p fcs-core --example encode_cost
@@ -1132,16 +1132,16 @@ would sacrifice large-layer performance to enable the small-layer subgroup
 candidate. Selective kernels need a compiler/deployment solution and a full-graph
 measurement before adoption. Other subgroup algorithms have not been exhausted.
 
-The standalone [FP16](../fcs-core/examples/shaders/pointwise_f16.wgsl) and
-[subgroup](../fcs-core/examples/shaders/pointwise_subgroup.wgsl) probes reproduce
+The standalone [FP16](../fcs-core/examples/shaders/pointwise_f16.wesl) and
+[subgroup](../fcs-core/examples/shaders/pointwise_subgroup.wesl) probes reproduce
 these; neither adds a production feature requirement. Run them in a fresh
 PowerShell process so the PATH change stays local (adjust the SDK path):
 
 ```powershell
 cargo build --release -p fcs-core --example conv2d_experiment
 $env:PATH='C:/Program Files (x86)/Windows Kits/10/bin/10.0.28000.0/x64;' + $env:PATH
-& target/release/examples/conv2d_experiment.exe fcs-core/src/gpu/conv2d.wgsl fcs-core/examples/shaders/pointwise_f16.wgsl 32 8 4 32 8 4 --f16-storage
-& target/release/examples/conv2d_experiment.exe fcs-core/src/gpu/conv2d.wgsl fcs-core/examples/shaders/pointwise_subgroup.wgsl 32 8 4 4 1 1
+& target/release/examples/conv2d_experiment.exe fcs-core/src/gpu/conv2d.wesl fcs-core/examples/shaders/pointwise_f16.wesl 32 8 4 32 8 4 --f16-storage
+& target/release/examples/conv2d_experiment.exe fcs-core/src/gpu/conv2d.wesl fcs-core/examples/shaders/pointwise_subgroup.wesl 32 8 4 4 1 1
 ```
 
 The subgroup kernel assumes a 32-lane subgroup and is not portable; with this naga

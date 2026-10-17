@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use fcs_core::gpu::{
     GpuInferenceOps, GpuTensor,
     conv2d::{Conv2dChannels, Conv2dConfig, Conv2dOptions, SpatialDims},
@@ -55,8 +55,7 @@ fn main() -> Result<()> {
     anyhow::ensure!(context.profiler().is_some(), "GPU timestamps unavailable");
     println!("adapter: {}\n", context.adapter_info().name);
 
-    let source = std::fs::read_to_string("fcs-core/src/gpu/conv2d.wgsl")
-        .context("read fcs-core/src/gpu/conv2d.wgsl")?;
+    let source = include_str!(concat!(env!("OUT_DIR"), "/conv2d.wgsl"));
     let shader = context
         .device()
         .create_shader_module(wgpu::ShaderModuleDescriptor {

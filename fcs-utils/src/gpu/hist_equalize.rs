@@ -42,7 +42,7 @@ impl GpuHistogramEqualizer {
     pub fn new(context: Arc<GpuContext>) -> Result<Self> {
         let device = context.device();
         // Panics if WGSL compilation fails; the label appears in the panic message.
-        // If this panics, inspect hist_equalize.wgsl and verify wgpu feature support.
+        // If this panics, inspect hist_equalize.wesl and verify wgpu feature support.
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hist_equalize.wgsl shader"),
             source: wgpu::ShaderSource::Wgsl(HIST_EQUALIZE_WGSL.into()),

@@ -30,7 +30,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
-version = "2.2.0"
+version = "2.2.1"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
@@ -60,13 +60,13 @@ log = "0.4.34"
 thiserror = "2.0.21"
 
 # CLI and desktop UI
-arboard = "3.6.1"
+arboard = "3.7.0"
 clap = { version = "4.6.7", features = ["derive"] }
-eframe = { version = "0.36.2", features = ["wgpu"] }
-egui = "0.36.2"
-egui_extras = "0.36.2"
+eframe = { version = "0.37.0", features = ["wgpu"] }
+egui = "0.37.0"
+egui_extras = "0.37.0"
 # Test-only harness that drives a real egui app. Kept in lockstep with egui.
-egui_kittest = "0.36.2"
+egui_kittest = "0.37.0"
 rfd = "0.17.2"
 # Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
 # APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
@@ -117,6 +117,7 @@ metal = "0.33.0"
 naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out"] }
 pollster = "1.0.1"
 wgpu = "30.0.1"
+wesl = "0.6.0"
 
 # Camera and platform integration
 nokhwa = { version = "0.10.11", features = ["input-native"] }
@@ -180,4 +181,4 @@ rstest = { version = "0.27.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.0.3", default-features = false }
+zip = { version = "9.0.4", default-features = false }

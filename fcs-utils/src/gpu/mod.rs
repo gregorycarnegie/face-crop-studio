@@ -7,17 +7,19 @@
 /// Combined resize + RGB→BGR + HWC→CHW WGSL compute shader.
 /// Packed 8-bit RGB → f32 BGR CHW, for sources resized on the CPU first.
 /// Per-pixel exposure/brightness/contrast/saturation adjust shader.
-pub const PIXEL_ADJUST_WGSL: &str = include_str!("pixel_adjust.wgsl");
+pub const PIXEL_ADJUST_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/pixel_adjust.wgsl"));
 /// Gaussian blur shader (horizontal/vertical).
-pub const GAUSSIAN_BLUR_WGSL: &str = include_str!("gaussian_blur.wgsl");
+pub const GAUSSIAN_BLUR_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/gaussian_blur.wgsl"));
 /// Bilateral filter shader for skin smoothing.
-pub const BILATERAL_FILTER_WGSL: &str = include_str!("bilateral_filter.wgsl");
+pub const BILATERAL_FILTER_WGSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/bilateral_filter.wgsl"));
 /// Background blur shader for elliptical blending.
-pub const BACKGROUND_BLUR_WGSL: &str = include_str!("background_blur.wgsl");
+pub const BACKGROUND_BLUR_WGSL: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/background_blur.wgsl"));
 /// Shape mask shader.
-pub const SHAPE_MASK_WGSL: &str = include_str!("shape_mask.wgsl");
+pub const SHAPE_MASK_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/shape_mask.wgsl"));
 /// Histogram equalization shader module.
-pub const HIST_EQUALIZE_WGSL: &str = include_str!("hist_equalize.wgsl");
+pub const HIST_EQUALIZE_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/hist_equalize.wgsl"));
 
 /// GPU exposure, brightness, contrast, and saturation adjustments.
 pub mod pixel_adjust;

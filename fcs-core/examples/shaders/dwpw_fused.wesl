@@ -1,31 +1,12 @@
+import package::common::{params, write_output};
+import package::bindings_f32::{input_tensor, weights, bias};
+
 // Candidate for experiment 35: depthwise, ReLU and the following pointwise in one dispatch, for a
 // depthwise output read by nothing but that pointwise. Per output tile it recomputes the depthwise
 // value of every input channel -- 41's register rows -- activates it and accumulates it into four
 // pointwise registers, in exactly the order the two separate kernels use, so a real version would
 // be bit-exact. Timing only: for a C -> C layer the depthwise weights and biases are read from the
 // front of the pointwise buffers, which costs the same as reading their own.
-struct Conv2dUniforms {
-    input_width: u32,
-    input_height: u32,
-    input_channels: u32,
-    output_width: u32,
-    output_height: u32,
-    output_channels: u32,
-    kernel_width: u32,
-    kernel_height: u32,
-    stride_x: u32,
-    stride_y: u32,
-    pad_x: u32,
-    pad_y: u32,
-    groups: u32,
-    activation_mode: u32,
-};
-
-@group(0) @binding(0) var<storage, read> input_tensor: array<f32>;
-@group(0) @binding(1) var<storage, read> weights: array<f32>;
-@group(0) @binding(2) var<storage, read> bias: array<f32>;
-@group(0) @binding(3) var<storage, read_write> output_tensor: array<f32>;
-@group(0) @binding(4) var<uniform> params: Conv2dUniforms;
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -75,20 +56,4 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 fn load_or_zero(base: u32, ix: i32) -> f32 {
     let safe = u32(clamp(ix, 0, i32(params.input_width) - 1));
     return select(0.0, input_tensor[base + safe], ix >= 0 && ix < i32(params.input_width));
-}
-
-fn write_output(ox_start: u32, oy: u32, oc: u32, value: vec4<f32>) {
-    var acc = value;
-    if params.activation_mode == 1u {
-        acc = max(acc, vec4<f32>(0.0));
-    } else if params.activation_mode == 2u {
-        acc = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-acc));
-    } else if params.activation_mode == 3u {
-        acc = acc / (vec4<f32>(1.0) + exp(-acc));
-    }
-    let out_row_base = (oc * params.output_height + oy) * params.output_width;
-    if ox_start < params.output_width { output_tensor[out_row_base + ox_start] = acc.x; }
-    if ox_start + 1u < params.output_width { output_tensor[out_row_base + ox_start + 1u] = acc.y; }
-    if ox_start + 2u < params.output_width { output_tensor[out_row_base + ox_start + 2u] = acc.z; }
-    if ox_start + 3u < params.output_width { output_tensor[out_row_base + ox_start + 3u] = acc.w; }
 }

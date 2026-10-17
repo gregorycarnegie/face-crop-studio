@@ -96,7 +96,7 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
     let mut variant = shape_variant(&shape);
 
     // Shape type selector
-    field_label(ui, "Shape");
+    let shape_label = field_label(ui, "Shape");
     let mut variant_changed = false;
     egui::ComboBox::from_id_salt("shape_combo")
         .selected_text(variant_label(variant))
@@ -108,7 +108,9 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
                     variant_changed = true;
                 }
             }
-        });
+        })
+        .response
+        .labelled_by(shape_label);
 
     if variant_changed {
         shape = default_for_variant(variant);
@@ -139,9 +141,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
             corner_style,
         } => {
             let mut s = *sides as u32;
-            field_label(ui, "Sides");
+            let label = field_label(ui, "Sides");
             if ui
                 .add(egui::DragValue::new(&mut s).range(3..=24).speed(0.1))
+                .labelled_by(label)
                 .changed()
             {
                 *sides = s.clamp(3, 24) as u8;
@@ -187,9 +190,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
             rotation_deg,
         } => {
             let mut p = *points as u32;
-            field_label(ui, "Points");
+            let label = field_label(ui, "Points");
             if ui
                 .add(egui::DragValue::new(&mut p).range(3..=24).speed(0.1))
+                .labelled_by(label)
                 .changed()
             {
                 *points = p.clamp(3, 24) as u8;
@@ -214,9 +218,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
             iterations,
         } => {
             let mut s = *sides as u32;
-            field_label(ui, "Sides");
+            let label = field_label(ui, "Sides");
             if ui
                 .add(egui::DragValue::new(&mut s).range(3..=24).speed(0.1))
+                .labelled_by(label)
                 .changed()
             {
                 *sides = s.clamp(3, 24) as u8;
@@ -229,9 +234,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
             }
 
             let mut iter = *iterations as u32;
-            field_label(ui, "Iterations");
+            let label = field_label(ui, "Iterations");
             if ui
                 .add(egui::DragValue::new(&mut iter).range(0..=5).speed(0.1))
+                .labelled_by(label)
                 .changed()
             {
                 *iterations = iter.clamp(0, 5) as u8;
@@ -240,9 +246,10 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
         }
         CropShape::KochRectangle { iterations } => {
             let mut iter = *iterations as u32;
-            field_label(ui, "Iterations");
+            let label = field_label(ui, "Iterations");
             if ui
                 .add(egui::DragValue::new(&mut iter).range(0..=5).speed(0.1))
+                .labelled_by(label)
                 .changed()
             {
                 *iterations = iter.clamp(0, 5) as u8;

@@ -51,6 +51,6 @@ pub use ops::GpuInferenceOps;
 pub mod tensor;
 pub use tensor::{GpuTensor, TensorShape};
 
-const MAX_POOL_WGSL: &str = include_str!("pool.wgsl");
-const ADD_WGSL: &str = include_str!("add.wgsl");
-const UPSAMPLE2X_WGSL: &str = include_str!("resize2x.wgsl");
+const MAX_POOL_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/pool.wgsl"));
+const ADD_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/add.wgsl"));
+const UPSAMPLE2X_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/resize2x.wgsl"));

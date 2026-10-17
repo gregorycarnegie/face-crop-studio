@@ -138,7 +138,7 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         ui.spacing_mut().item_spacing.y = 10.0;
 
         // Preset dropdown
-        field_label(ui, "Preset");
+        let preset_label = field_label(ui, "Preset");
         const PRESETS: &[(&str, &str)] = &[
             ("LinkedIn", "LinkedIn (400×400)"),
             ("Passport", "Passport (413×531)"),
@@ -161,7 +161,9 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
                 for (key, label) in PRESETS {
                     ui.selectable_value(&mut selected_key, key.to_string(), *label);
                 }
-            });
+            })
+            .response
+            .labelled_by(preset_label);
         if selected_key != app.settings.crop.preset {
             app.settings.crop.preset = selected_key.clone();
             if let Some(p) = preset_by_name(&selected_key)
@@ -256,10 +258,11 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 6.0) / 2.0);
-                field_label(ui, "Width");
+                let label = field_label(ui, "Width");
                 let mut w_str = app.settings.crop.output_width.to_string();
                 if ui
                     .add(egui::TextEdit::singleline(&mut w_str).desired_width(ui.available_width()))
+                    .labelled_by(label)
                     .changed()
                     && let Ok(v) = w_str.parse::<u32>()
                 {
@@ -269,10 +272,11 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
             });
             ui.add_space(6.0);
             ui.vertical(|ui| {
-                field_label(ui, "Height");
+                let label = field_label(ui, "Height");
                 let mut h_str = app.settings.crop.output_height.to_string();
                 if ui
                     .add(egui::TextEdit::singleline(&mut h_str).desired_width(ui.available_width()))
+                    .labelled_by(label)
                     .changed()
                     && let Ok(v) = h_str.parse::<u32>()
                 {
@@ -383,25 +387,27 @@ fn panel_03_positioning(ui: &mut Ui, app: &mut App2) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.set_width((ui.available_width() - 6.0) / 2.0);
-                field_label(ui, "Offset X");
+                let label = field_label(ui, "Offset X");
                 ui.add_enabled(
                     custom,
                     egui::DragValue::new(&mut app.settings.crop.horizontal_offset)
                         .range(-1.0..=1.0)
                         .speed(0.01)
                         .fixed_decimals(2),
-                );
+                )
+                .labelled_by(label);
             });
             ui.add_space(6.0);
             ui.vertical(|ui| {
-                field_label(ui, "Offset Y");
+                let label = field_label(ui, "Offset Y");
                 ui.add_enabled(
                     custom,
                     egui::DragValue::new(&mut app.settings.crop.vertical_offset)
                         .range(-1.0..=1.0)
                         .speed(0.01)
                         .fixed_decimals(2),
-                );
+                )
+                .labelled_by(label);
             });
         });
 

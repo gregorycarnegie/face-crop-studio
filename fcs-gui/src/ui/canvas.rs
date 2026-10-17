@@ -928,7 +928,7 @@ fn canvas_bottom_bar(ui: &mut Ui, app: &mut App2) {
         // Zoom controls on right
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
-            if zoom_btn(ui, "⛶", "Fit") {
+            if zoom_btn(ui, "□", "Fit") {
                 app.zoom = 1.0;
                 app.pan = egui::Vec2::ZERO;
             }

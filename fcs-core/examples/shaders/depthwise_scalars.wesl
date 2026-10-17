@@ -1,29 +1,10 @@
+import package::common::{params, write_output};
+import package::bindings_f32::{input_tensor, weights, bias};
+
 // Candidate for experiments 41 and 32: production's depthwise with the six-value row held in
 // registers instead of `array<f32, 6>`, the pattern 41 found DXC lowering to stack memory.
 // Padding comes from `select`, which reads a clamped in-range index and discards it, so every
 // value -- zero or loaded -- is exactly what production computes: bit-exact.
-struct Conv2dUniforms {
-    input_width: u32,
-    input_height: u32,
-    input_channels: u32,
-    output_width: u32,
-    output_height: u32,
-    output_channels: u32,
-    kernel_width: u32,
-    kernel_height: u32,
-    stride_x: u32,
-    stride_y: u32,
-    pad_x: u32,
-    pad_y: u32,
-    groups: u32,
-    activation_mode: u32,
-};
-
-@group(0) @binding(0) var<storage, read> input_tensor: array<f32>;
-@group(0) @binding(1) var<storage, read> weights: array<f32>;
-@group(0) @binding(2) var<storage, read> bias: array<f32>;
-@group(0) @binding(3) var<storage, read_write> output_tensor: array<f32>;
-@group(0) @binding(4) var<uniform> params: Conv2dUniforms;
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -59,20 +40,4 @@ fn depthwise(ox_start: u32, oy: u32, oc: u32) {
         acc = fma(vec4<f32>(r2, r3, r4, r5), vec4<f32>(weights[w + 2u]), acc);
     }
     write_output(ox_start, oy, oc, acc);
-}
-
-fn write_output(ox_start: u32, oy: u32, oc: u32, value: vec4<f32>) {
-    var acc = value;
-    if params.activation_mode == 1u {
-        acc = max(acc, vec4<f32>(0.0));
-    } else if params.activation_mode == 2u {
-        acc = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-acc));
-    } else if params.activation_mode == 3u {
-        acc = acc / (vec4<f32>(1.0) + exp(-acc));
-    }
-    let out_row_base = (oc * params.output_height + oy) * params.output_width;
-    if ox_start < params.output_width { output_tensor[out_row_base + ox_start] = acc.x; }
-    if ox_start + 1u < params.output_width { output_tensor[out_row_base + ox_start + 1u] = acc.y; }
-    if ox_start + 2u < params.output_width { output_tensor[out_row_base + ox_start + 2u] = acc.z; }
-    if ox_start + 3u < params.output_width { output_tensor[out_row_base + ox_start + 3u] = acc.w; }
 }

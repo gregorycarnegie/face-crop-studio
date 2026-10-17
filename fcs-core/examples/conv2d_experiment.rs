@@ -1,5 +1,5 @@
-//! GPU timestamp A/B comparison of two WGSL files with the existing conv2d bindings.
-//! cargo run --release -p fcs-core --example conv2d_experiment -- baseline.wgsl candidate.wgsl
+//! GPU timestamp A/B comparison of two WESL files with the existing conv2d bindings.
+//! cargo run --release -p fcs-core --example conv2d_experiment -- baseline.wesl candidate.wesl
 //! Uploads, compilation, validation readback and timestamp resolution are outside timing.
 //! See docs/PERFORMANCE.md (experiments 0-4, 26-33, 41-46) for tile coverage and optional-feature probes.
 use std::{path::Path, sync::Arc};
@@ -16,8 +16,10 @@ use wgpu::util::DeviceExt;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn pipeline(context: &GpuContext, path: &Path) -> Result<wgpu::ComputePipeline> {
-    let source =
-        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let source = wesl::Compiler::default()
+        .compile(path)
+        .with_context(|| format!("compile {}", path.display()))?
+        .to_string();
     let shader = context
         .device()
         .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -242,18 +244,7 @@ fn pack_half(context: &GpuContext, input: &GpuTensor) -> wgpu::Buffer {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("pack f16"),
         source: wgpu::ShaderSource::Wgsl(
-            r#"
-enable f16;
-@group(0) @binding(0) var<storage, read> src: array<f32>;
-@group(0) @binding(1) var<storage, read_write> dst: array<f16>;
-@compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if id.x < arrayLength(&dst) && id.x < arrayLength(&src) {
-        dst[id.x] = f16(src[id.x]);
-    }
-}
-"#
-            .into(),
+            include_str!(concat!(env!("OUT_DIR"), "/pack_half.wgsl")).into(),
         ),
     });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -297,7 +288,7 @@ fn main() -> Result<()> {
     }
     anyhow::ensure!(
         args.len() == 2 || args.len() == 5 || args.len() == 8,
-        "usage: conv2d_experiment baseline.wgsl candidate.wgsl [B-x B-y B-z | A-x A-y A-z B-x B-y B-z] [--f16-storage]"
+        "usage: conv2d_experiment baseline.wesl candidate.wesl [B-x B-y B-z | A-x A-y A-z B-x B-y B-z] [--f16-storage]"
     );
     // Optional output coverage selects pointwise-only cases for kernels with a different grid.
     let parse_tile = |start: usize| -> Result<[u32; 3]> {

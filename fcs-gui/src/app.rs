@@ -147,6 +147,8 @@ impl App2 {
     #[cfg(test)]
     pub(crate) fn for_tests(cc: &CreationContext<'_>, settings_path: PathBuf) -> Self {
         crate::theme::apply(&cc.egui_ctx);
+        // The About window draws the logo; with no loader egui draws a warning glyph no font has.
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         Self::with_settings(
             fcs_utils::config::AppSettings::default(),
             settings_path,
@@ -520,7 +522,7 @@ fn install_resize_edges(ui: &mut egui::Ui) {
     ];
 
     for (id, rect, direction, cursor) in entries {
-        let response = ui.interact(rect, ui.id().with(id), egui::Sense::click_and_drag());
+        let response = ui.interact(rect, ui.scope_id().with(id), egui::Sense::click_and_drag());
         if response.hovered() {
             ui.output_mut(|o| o.cursor_icon = cursor);
         }
@@ -1234,7 +1236,7 @@ fn show_overwrite_dialog(
 
     const LISTED: usize = 6;
     let mut choice = None;
-    let response = egui::Modal::new(egui::Id::new("overwrite_dialog")).show(ctx, |ui| {
+    let response = egui::Modal::new(egui::Id::unique("overwrite_dialog")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.label(
             egui::RichText::new("Some files already exist")

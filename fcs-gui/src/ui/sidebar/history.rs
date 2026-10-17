@@ -81,7 +81,11 @@ pub(super) fn show_history(ui: &mut Ui, app: &mut App2) {
                 egui::pos2(r.max.x - 36.0, r.center().y),
                 Vec2::new(52.0, 22.0),
             );
-            let btn_resp = ui.interact(btn_rect, ui.id().with(("hist_restore", i)), Sense::click());
+            let btn_resp = ui.interact(
+                btn_rect,
+                ui.scope_id().with(("hist_restore", i)),
+                Sense::click(),
+            );
             let btn_bg = if btn_resp.hovered() {
                 P::peach_alpha(50)
             } else {

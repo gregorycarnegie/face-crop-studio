@@ -68,7 +68,7 @@ pub mod telemetry;
 #[cfg(feature = "webcam")]
 pub mod webcam;
 #[cfg(test)]
-mod wgsl_validation_tests;
+mod wesl_validation_tests;
 
 use anyhow::Result;
 pub use atomic_write::write_atomically;

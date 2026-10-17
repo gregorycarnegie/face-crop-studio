@@ -7,7 +7,7 @@ use bytemuck::{Pod, Zeroable};
 use fcs_utils::gpu::GpuContext;
 use std::sync::Arc;
 
-const ACTIVATION_WGSL: &str = include_str!("activation.wgsl");
+const ACTIVATION_WGSL: &str = include_str!(concat!(env!("OUT_DIR"), "/activation.wgsl"));
 const ACTIVATION_WORKGROUP_SIZE: u32 = 256;
 
 /// Supported activation operations.

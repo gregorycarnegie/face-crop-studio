@@ -1,35 +1,9 @@
+import package::common::{params, write_output};
+import package::bindings_f16::{input_tensor, weights, bias};
+
 // Candidate for experiment 45: f16 storage *and* f16 arithmetic, in 41's register form.
 // Run with --f16-storage under DXC (FXC has no f16). Output converts to f32 at the write.
 enable f16;
-struct Conv2dUniforms {
-    input_width: u32,
-    input_height: u32,
-    input_channels: u32,
-    output_width: u32,
-    output_height: u32,
-    output_channels: u32,
-    kernel_width: u32,
-    kernel_height: u32,
-    stride_x: u32,
-    stride_y: u32,
-    pad_x: u32,
-    pad_y: u32,
-    groups: u32,
-    activation_mode: u32, // 0=None, 1=ReLU, 2=Sigmoid, 3=SiLU
-};
-
-@group(0) @binding(0) var<storage, read> input_tensor: array<f16>;
-@group(0) @binding(1) var<storage, read> weights: array<f16>;
-@group(0) @binding(2) var<storage, read> bias: array<f16>;
-@group(0) @binding(3) var<storage, read_write> output_tensor: array<f32>;
-@group(0) @binding(4) var<uniform> params: Conv2dUniforms;
-
-
-const ACT_NONE: u32 = 0u;
-const ACT_RELU: u32 = 1u;
-const ACT_SIGMOID: u32 = 2u;
-const ACT_SILU: u32 = 3u;
-
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -88,36 +62,4 @@ fn one_channel(ox_start: u32, oy: u32, oc: u32) {
         a = fma(load4(ox_start, ic * plane + pixel), vec4<f16>(weights[oc * c_in + ic]), a);
     }
     write_output(ox_start, oy, oc, vec4<f32>(a));
-}
-
-fn write_output(ox_start: u32, oy: u32, oc: u32, value: vec4<f32>) {
-    var acc = value;
-    // Apply fused activation
-    if params.activation_mode == ACT_RELU {
-        acc = max(acc, vec4<f32>(0.0));
-    } else if params.activation_mode == ACT_SIGMOID {
-        acc = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-acc));
-    } else if params.activation_mode == ACT_SILU {
-        acc = acc / (vec4<f32>(1.0) + exp(-acc));
-    }
-
-    // Write output
-    let out_row_base = (oc * params.output_height + oy) * params.output_width;
-
-    // Pixel 0
-    if ox_start < params.output_width {
-        output_tensor[out_row_base + ox_start] = acc.x;
-    }
-    // Pixel 1
-    if ox_start + 1u < params.output_width {
-        output_tensor[out_row_base + ox_start + 1u] = acc.y;
-    }
-    // Pixel 2
-    if ox_start + 2u < params.output_width {
-        output_tensor[out_row_base + ox_start + 2u] = acc.z;
-    }
-    // Pixel 3
-    if ox_start + 3u < params.output_width {
-        output_tensor[out_row_base + ox_start + 3u] = acc.w;
-    }
 }

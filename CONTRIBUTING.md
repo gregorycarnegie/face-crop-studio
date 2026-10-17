@@ -37,6 +37,18 @@ AVIF support).
 
 ## Development Setup
 
+Shaders are authored in WESL under `fcs-core/src/gpu`, `fcs-utils/src/gpu`, and
+`fcs-core/examples/shaders`. Each crate's `build.rs` compiles its embedded shaders
+to WGSL and tracks imported files for rebuilds. Edit the WESL sources; generated
+WGSL stays in Cargo's output directory. The profiling examples accept WESL paths
+and link them before timing GPU compilation or execution. Run
+`cargo test -p fcs-utils --lib wesl_validation_tests` to compile and validate every
+WESL file, including SPIR-V and Metal translation of the resulting WGSL.
+The convolution experiments share uniforms and output/activation code in
+`examples/shaders/common.wesl`; `bindings_f32.wesl`, `bindings_f16.wesl`, and
+`bindings_packed.wesl` define their input buffer layouts. Kernel experiments keep
+their own arithmetic and sampling helpers.
+
 Install the usual Rust and Windows build tools first:
 
 - Rust `1.99.0`, matching the workspace minimum and CI/release toolchain.

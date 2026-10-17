@@ -15,6 +15,7 @@ use egui_kittest::Harness;
 /// computed click positions non-deterministic.
 pub fn harness<'a, S>(state: S, app: impl FnMut(&mut Ui, &mut S) + 'a) -> Harness<'a, S> {
     Harness::builder()
+        .with_context_setup(crate::theme::apply)
         .with_size(egui::vec2(240.0, 120.0))
         .build_ui_state(app, state)
 }

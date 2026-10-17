@@ -98,7 +98,6 @@ fn setup_fonts(ctx: &Context) {
     // Add Hack (embedded monospace) as a fallback for the proportional family.
     // Ubuntu-Light only covers Latin/Cyrillic; Hack adds arrows, box-drawing,
     // and geometric shapes so characters like → ─ □ ↶ ↷ render correctly.
-    // No bundled font has ✓ (U+2713); use ✔ (U+2714, from the emoji fonts).
     fonts
         .families
         .entry(FontFamily::Proportional)

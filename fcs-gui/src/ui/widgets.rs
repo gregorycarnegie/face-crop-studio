@@ -92,12 +92,10 @@ pub fn panel_header(ui: &mut Ui, num: &str, title: &str, open: bool) -> bool {
         .allocate_response(Vec2::new(ui.available_width(), 36.0), Sense::click())
         .on_hover_cursor(CursorIcon::PointingHand);
     resp.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::CollapsingHeader,
-            ui.is_enabled(),
-            open,
-            title,
-        )
+        egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, ui.is_enabled(), title)
+    });
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_expanded(open);
     });
     let rect = resp.rect;
     let painter = ui.painter();
@@ -184,12 +182,7 @@ pub fn face_chip(ui: &mut Ui, label: String, selected: bool, _alt: bool) -> Resp
     let (resp, painter) = ui.allocate_painter(Vec2::new(total_w, total_h), Sense::click());
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
     resp.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::Checkbox,
-            ui.is_enabled(),
-            selected,
-            &label,
-        )
+        egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), selected, &label)
     });
     if (resp.hovered() || resp.has_focus()) && !selected {
         bg = P::white_alpha(16);
@@ -213,13 +206,15 @@ pub fn face_chip(ui: &mut Ui, label: String, selected: bool, _alt: bool) -> Resp
         egui::StrokeKind::Outside,
     );
     if selected {
-        painter.text(
-            check_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "✔",
-            egui::FontId::proportional(9.0),
-            P::BG,
-        );
+        let mark = check_rect.shrink(3.0);
+        painter.add(egui::Shape::line(
+            vec![
+                egui::pos2(mark.left(), mark.center().y),
+                egui::pos2(mark.center().x, mark.bottom()),
+                egui::pos2(mark.right(), mark.top()),
+            ],
+            Stroke::new(1.5, P::BG),
+        ));
     }
     // Label
     painter.galley(
@@ -259,10 +254,14 @@ pub fn gpu_pill(ui: &mut Ui, label: &str) {
 
 // ── Field label ───────────────────────────────────────────────────────────────
 
-pub fn field_label(ui: &mut Ui, text: &str) {
+/// Returns the label's id so the control it names can say so with `Response::labelled_by`.
+pub fn field_label(ui: &mut Ui, text: &str) -> egui::Id {
     ui.add_space(2.0);
-    ui.label(egui::RichText::new(text).size(12.0).color(P::INK2));
+    let id = ui
+        .label(egui::RichText::new(text).size(12.0).color(P::INK2))
+        .id;
     ui.add_space(2.0);
+    id
 }
 
 // ── Separators ────────────────────────────────────────────────────────────────
