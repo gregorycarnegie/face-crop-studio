@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-10-20
+
+### Changed
+
+- Updated dependencies: calamine to 0.37.0, crc32fast to 1.5.3, rstest to 0.28.0,
+  and zip to 9.0.5.
+
 ## [2.2.1] - 2026-10-17
 
 ### Fixed
@@ -2500,7 +2507,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.1...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...HEAD
+[2.2.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.0...v2.1.1

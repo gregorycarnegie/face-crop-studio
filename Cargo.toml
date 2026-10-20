@@ -30,7 +30,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
-version = "2.2.1"
+version = "2.2.2"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
@@ -138,8 +138,8 @@ winresource = "0.1.34"
 
 # Data formats and storage
 base64 = "0.23.1"
-calamine = "0.36.1"
-crc32fast = "1.5.2"
+calamine = "0.37.0"
+crc32fast = "1.5.3"
 csv = "1.4.0"
 parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
@@ -177,8 +177,8 @@ insta = { version = "1.48.0", default-features = false, features = ["json"] }
 proptest = "1.12.0"
 # Table-driven tests: one named test per `#[case]`, so a failing row is reported on its own and
 # the rows after it still run. Default features only add async timeouts, which no test uses.
-rstest = { version = "0.27.0", default-features = false }
+rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.0.4", default-features = false }
+zip = { version = "9.0.5", default-features = false }
