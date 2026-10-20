@@ -70,6 +70,7 @@ expression: "super::AppSettings::default()"
   },
   "batch_parallelism": null,
   "gpu": {
+    "experimental_cuda": false,
     "enabled": true,
     "respect_env": true
   }

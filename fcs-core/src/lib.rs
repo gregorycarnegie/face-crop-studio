@@ -43,6 +43,8 @@
 pub mod cpu;
 /// Face cropping geometry and padding.
 pub mod cropper;
+/// Experimental CUDA Rust inference and runtime availability.
+pub mod cuda;
 /// Optional refinement of a detector's two eye points, for eye-line alignment.
 pub mod eye_refiner;
 /// Utilities to extract and resize face crops from images.

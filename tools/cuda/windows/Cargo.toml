@@ -1,0 +1,13 @@
+[package]
+name = "fcs-cuda-kernels"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["rlib"]
+
+[profile.release]
+panic = "abort"

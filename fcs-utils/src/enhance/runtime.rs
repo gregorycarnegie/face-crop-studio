@@ -37,6 +37,8 @@ use crate::{
 #[derive(Clone)]
 pub struct EnhancementRuntime {
     enhancer: Option<Arc<WgpuEnhancer>>,
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    cuda: Option<Arc<super::cuda::CudaEnhancer>>,
 }
 
 impl std::fmt::Debug for EnhancementRuntime {
@@ -50,7 +52,11 @@ impl std::fmt::Debug for EnhancementRuntime {
 impl EnhancementRuntime {
     /// CPU only. Every method still works; nothing is optional about the results.
     pub fn cpu_only() -> Self {
-        Self { enhancer: None }
+        Self {
+            enhancer: None,
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            cuda: None,
+        }
     }
 
     /// Build the GPU path on `context`, falling back to the CPU if the pipelines will not build.
@@ -63,6 +69,8 @@ impl EnhancementRuntime {
         match WgpuEnhancer::new(context) {
             Ok(enhancer) => Self {
                 enhancer: Some(Arc::new(enhancer)),
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                cuda: None,
             },
             Err(err) => {
                 warn!("GPU enhancer initialization failed: {err}; enhancement will run on the CPU");
@@ -71,8 +79,28 @@ impl EnhancementRuntime {
         }
     }
 
+    /// Explicit CUDA opt-in; initialization errors are reported instead of selecting WESL.
+    pub fn experimental_cuda() -> anyhow::Result<Self> {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let enhancer = super::cuda::CudaEnhancer::new(crate::cuda::runtime::Runtime::new()?);
+            Ok(Self {
+                enhancer: None,
+                cuda: Some(Arc::new(enhancer)),
+            })
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        anyhow::bail!(
+            "CUDA Rust is supported only on Windows and Linux with a compatible NVIDIA GPU"
+        )
+    }
+
     /// Which path enhancement will take, for logs and the status bar.
     pub fn backend(&self) -> &'static str {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if self.cuda.is_some() {
+            return "cuda-rust";
+        }
         if self.enhancer.is_some() {
             "wgsl-gpu"
         } else {
@@ -82,6 +110,10 @@ impl EnhancementRuntime {
 
     /// The adapter behind the GPU path, when there is one.
     pub fn adapter_name(&self) -> Option<String> {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Some(cuda) = &self.cuda {
+            return cuda.runtime.context.name().ok();
+        }
         self.enhancer
             .as_ref()
             .map(|e| e.context().adapter_info().name.clone())
@@ -98,6 +130,13 @@ impl EnhancementRuntime {
         settings: &EnhancementSettings,
         eyes: Option<&[RedEye]>,
     ) -> DynamicImage {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Some(cuda) = &self.cuda {
+            match cuda.apply(image, settings, eyes) {
+                Ok(output) => return output,
+                Err(err) => warn!("CUDA enhancement failed: {err}; falling back to the CPU"),
+            }
+        }
         if let Some(enhancer) = &self.enhancer {
             match enhancer.apply(image, settings, eyes) {
                 Ok(output) => return output,
@@ -118,6 +157,20 @@ impl EnhancementRuntime {
         vignette_intensity: f32,
         vignette_color: RgbaColor,
     ) -> DynamicImage {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Some(cuda) = &self.cuda {
+            match cuda.apply_shape(
+                image,
+                shape,
+                vignette_softness,
+                vignette_intensity,
+                vignette_color,
+            ) {
+                Ok(Some(output)) => return output,
+                Ok(None) => {}
+                Err(err) => warn!("CUDA shape mask failed: {err}; falling back to the CPU"),
+            }
+        }
         if let Some(enhancer) = &self.enhancer {
             match enhancer.apply_shape_mask_gpu(
                 image,

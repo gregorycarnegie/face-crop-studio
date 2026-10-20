@@ -27,7 +27,9 @@ fn point_in_polygon(p: vec2<f32>) -> bool {
         }
         let pi = polygon_points[i];
         let pj = polygon_points[j];
-        let intersects = ((pi.y > p.y) != (pj.y > p.y)) && (p.x < fma((pj.x - pi.x), (p.y - pi.y) / (pj.y - pi.y), pi.x));
+        // Half-open edges must agree despite backend division/FMA rounding.
+        let epsilon = 0.0000005 * max(max(abs(p.x), abs(pi.x)), max(abs(pj.x), 1.0));
+        let intersects = ((pi.y > p.y) != (pj.y > p.y)) && (p.x < fma((pj.x - pi.x), (p.y - pi.y) / (pj.y - pi.y), pi.x) - epsilon);
         inside = select(inside, !inside, intersects);
         j = i;
         i = i + 1u;

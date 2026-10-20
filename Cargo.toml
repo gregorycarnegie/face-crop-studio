@@ -113,6 +113,8 @@ prost = "0.14.4"
 libloading = "0.9.0"
 
 # GPU and shader support
+# nvrtc supplies the PTX container; kernels are precompiled, so no runtime compiler is loaded.
+cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-12000"] }
 metal = "0.33.0"
 naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out"] }
 pollster = "1.0.1"

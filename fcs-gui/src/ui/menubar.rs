@@ -170,6 +170,9 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                         .checkbox(&mut app.settings.gpu.enabled, "Enable GPU")
                         .changed()
                     {
+                        if !app.settings.gpu.enabled {
+                            app.settings.gpu.experimental_cuda = false;
+                        }
                         app.needs_detector_rebuild = true;
                     }
                     ui.add_enabled_ui(app.settings.gpu.enabled, |ui| {
@@ -180,6 +183,44 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
                             app.needs_detector_rebuild = true;
                         }
                     });
+                    let availability = app
+                        .settings
+                        .gpu
+                        .enabled
+                        .then(fcs_core::cuda::availability)
+                        .flatten();
+                    if app.settings.gpu.enabled && availability.is_none() {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(100));
+                    }
+                    let available = app.settings.gpu.enabled && matches!(availability, Some(Ok(_)));
+                    let mut cuda = app.settings.gpu.experimental_cuda;
+                    let response = ui.add_enabled(
+                        available || cuda,
+                        egui::Checkbox::new(&mut cuda, "CUDA Rust (experimental)"),
+                    );
+                    if response.changed() {
+                        if cuda {
+                            app.confirm_cuda = true;
+                        } else {
+                            app.settings.gpu.experimental_cuda = false;
+                            app.needs_detector_rebuild = true;
+                        }
+                    }
+                    let tooltip = match availability {
+                        Some(Ok(name)) => {
+                            format!("NVIDIA CUDA device: {name}. Detection, enhancement and crop masking.")
+                        }
+                        Some(Err(reason)) => reason.clone(),
+                        None if !app.settings.gpu.enabled => "Enable GPU acceleration first".into(),
+                        None => "Checking NVIDIA CUDA support...".into(),
+                    };
+                    response
+                        .on_hover_text(&tooltip)
+                        .on_disabled_hover_text(&tooltip);
+                    if app.settings.gpu.experimental_cuda {
+                        ui.label("Experimental CUDA Rust is enabled");
+                    }
 
                     // ── Telemetry ──────────────────────────────────────────────
                     ui.separator();

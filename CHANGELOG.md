@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in experimental CUDA Rust detection, enhancement and crop masking on compatible
+  NVIDIA GPUs on Windows and Linux, with runtime capability checks and an activation warning. Linux kernels use
+  NVIDIA CUDA Rust; Windows kernels use Rust's NVPTX target. WESL/CPU remain the default.
+
+### Fixed
+
+- Stabilized diagonal crop-mask edges across GPU backends to avoid inconsistent alpha coverage.
+
 ## [2.2.2] - 2026-10-20
 
 ### Changed

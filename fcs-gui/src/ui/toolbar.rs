@@ -116,6 +116,9 @@ pub fn show(ui: &mut Ui, app: &mut App2) {
 /// the status carries no adapter, and with the GPU off this must not claim one at all (it used
 /// to fall back to "GPU · wgpu").
 pub(crate) fn gpu_label(status: &GpuStatusIndicator, inference_backend: Option<&str>) -> String {
+    if inference_backend == Some("cuda-rust") {
+        return "GPU · CUDA Rust (experimental)".into();
+    }
     let gpu_inference = inference_backend == Some("wgsl-gpu");
     match status.adapter_name.as_deref() {
         Some(name) if gpu_inference || status.mode == GpuStatusMode::Available => {

@@ -63,6 +63,11 @@ pub const SCRFD_SCORE_THRESHOLD: f32 = 0.5;
 pub const SCRFD_NMS_THRESHOLD: f32 = 0.4;
 
 impl FaceDetector {
+    /// Opt into the experimental CUDA Rust engine, validating GPU policy and hardware.
+    pub fn load_from_cuda(path: &Path, gpu: &fcs_utils::config::GpuSettings) -> Result<Self> {
+        ScrfdDetector::load_from_cuda(path, gpu).map(Self::new)
+    }
+
     /// Load the detector, or `None` when no model is present.
     ///
     /// `None` means detection cannot run at all now that there is no second detector to fall
@@ -198,6 +203,16 @@ mod tests {
         assert_eq!(under_policy.inference_backend(), "cpu-graph");
         let on_context = FaceDetector::load_from_with_context(&model, None).expect("loads");
         assert_eq!(on_context.inference_backend(), "cpu-graph");
+    }
+
+    #[test]
+    fn cuda_cannot_bypass_the_disabled_gpu_policy() {
+        let settings = fcs_utils::config::GpuSettings {
+            enabled: false,
+            ..Default::default()
+        };
+        let error = FaceDetector::load_from_cuda(Path::new("missing.onnx"), &settings).unwrap_err();
+        assert!(error.to_string().contains("Enable GPU"));
     }
 
     #[test]

@@ -552,6 +552,7 @@ pub(crate) mod tests {
             &model_path,
             &fcs_utils::config::DetectionSettings::default(),
             None,
+            &fcs_utils::config::GpuSettings::default(),
         )
         .expect("the bundled model builds a detector");
         Some(Arc::new(detector))

@@ -39,11 +39,16 @@ pub fn load_settings(config_path: Option<&PathBuf>) -> Result<AppSettings> {
 
 /// Apply command-line arguments to override loaded or default settings.
 pub fn apply_cli_overrides(settings: &mut AppSettings, args: &DetectArgs) {
+    if args.experimental_cuda {
+        settings.gpu.experimental_cuda = true;
+        settings.gpu.enabled = true;
+    }
     if args.gpu {
         settings.gpu.enabled = true;
     }
     if args.no_gpu {
         settings.gpu.enabled = false;
+        settings.gpu.experimental_cuda = false;
     }
     if let Some(mode) = args.gpu_env {
         settings.gpu.respect_env = mode.respects_env();
@@ -380,12 +385,36 @@ mod tests {
     }
 
     #[test]
+    fn cuda_is_opt_in_and_conflicts_with_disabling_the_gpu() {
+        let mut settings = AppSettings::default();
+        assert!(!settings.gpu.experimental_cuda);
+        settings.gpu.enabled = false;
+        apply_cli_overrides(
+            &mut settings,
+            &parse_args(&["--input", "x.jpg", "--experimental-cuda"]),
+        );
+        assert!(settings.gpu.experimental_cuda && settings.gpu.enabled);
+        assert!(
+            DetectArgs::try_parse_from([
+                "fcs-cli",
+                "--input",
+                "x.jpg",
+                "--experimental-cuda",
+                "--no-gpu"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn override_no_gpu_disables_the_gpu() {
         let mut settings = AppSettings::default();
         settings.gpu.enabled = true;
+        settings.gpu.experimental_cuda = true;
         let args = parse_args(&["--input", "x.jpg", "--no-gpu"]);
         apply_cli_overrides(&mut settings, &args);
         assert!(!settings.gpu.enabled);
+        assert!(!settings.gpu.experimental_cuda);
     }
 
     #[test]

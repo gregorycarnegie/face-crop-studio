@@ -67,6 +67,8 @@ jobs:
             exit 1
           fi
           echo "$found script(s) parsed"
+      - name: Check embedded CUDA Rust artifacts
+        run: python3 tools/cuda/build.py --check
 
   models:
     name: Prepare Models

@@ -80,7 +80,12 @@ fn main() -> Result<()> {
 
     // Check if webcam mode is enabled
     if args.webcam {
-        let detector = build_cli_detector(&model_path, &settings.detection, gpu_runtime.context())?;
+        let detector = build_cli_detector(
+            &model_path,
+            &settings.detection,
+            gpu_runtime.context(),
+            &settings.gpu,
+        )?;
         let detector = Arc::new(detector);
         let settings = Arc::new(settings);
         let quality_filter = Arc::new(quality_filter);
@@ -112,7 +117,12 @@ fn main() -> Result<()> {
         anyhow::bail!("no images were queued for processing");
     }
 
-    let detector = build_cli_detector(&model_path, &settings.detection, gpu_runtime.context())?;
+    let detector = build_cli_detector(
+        &model_path,
+        &settings.detection,
+        gpu_runtime.context(),
+        &settings.gpu,
+    )?;
 
     if args.mapping_waits_for_crop() {
         info!(

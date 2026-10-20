@@ -432,6 +432,11 @@ impl GpuStatusIndicator {
         }
     }
 
+    /// The experimental CUDA Rust engine on an NVIDIA device.
+    pub fn cuda(adapter_name: impl Into<String>) -> Self {
+        Self::available(adapter_name, "cuda-rust", None, Some(0x10de), None)
+    }
+
     /// GPU explicitly disabled.
     pub fn disabled(reason: impl Into<String>) -> Self {
         Self {

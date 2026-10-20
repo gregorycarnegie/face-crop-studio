@@ -4,6 +4,8 @@
 //! when `--enhance` is requested. The implementations are intentionally
 //! lightweight and pure-Rust using the `image` crate.
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod cuda;
 mod detail;
 mod gpu;
 mod pipeline;

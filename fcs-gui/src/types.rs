@@ -646,6 +646,7 @@ pub struct App2 {
 
     // Dialogs
     pub show_about: bool,
+    pub confirm_cuda: bool,
 
     // Deferred side-effects
     pub needs_detector_rebuild: bool,

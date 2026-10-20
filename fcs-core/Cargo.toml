@@ -22,6 +22,9 @@ serde.workspace = true
 wgpu.workspace = true
 wide.workspace = true
 
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+cudarc.workspace = true
+
 [dev-dependencies]
 wesl.workspace = true
 googletest.workspace = true

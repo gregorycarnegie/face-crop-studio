@@ -105,6 +105,22 @@ pub fn init_cli_gpu_runtime(
     settings: &AppSettings,
     enhancement: Option<&EnhancementSettings>,
 ) -> Result<CliGpuRuntime> {
+    if settings.gpu.experimental_cuda {
+        eprintln!("Warning: {}", fcs_utils::cuda::WARNING);
+        anyhow::ensure!(
+            settings.gpu.enabled,
+            "CUDA Rust requires GPU acceleration to be enabled"
+        );
+        let enhancement = EnhancementRuntime::experimental_cuda()?;
+        let status = GpuStatusIndicator::cuda(enhancement.adapter_name().unwrap_or_default());
+        let runtime = CliGpuRuntime {
+            status,
+            context: None,
+            enhancement,
+        };
+        runtime.log_status();
+        return Ok(runtime);
+    }
     let options: GpuContextOptions = (&settings.gpu).into();
     let availability = GpuContext::init_preferring_vulkan(&options);
 

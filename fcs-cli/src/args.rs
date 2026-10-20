@@ -67,6 +67,10 @@ pub struct DetectArgs {
     #[arg(long = "no-gpu", action = ArgAction::SetTrue)]
     pub no_gpu: bool,
 
+    /// Experimental NVIDIA CUDA Rust detection, enhancement and masking. May crash, be slower, or produce different results.
+    #[arg(long, conflicts_with = "no_gpu")]
+    pub experimental_cuda: bool,
+
     /// Control whether `WGPU_*` env vars influence GPU selection (`auto` or `ignore`).
     #[arg(long = "gpu-env", value_enum)]
     pub gpu_env: Option<GpuEnvMode>,

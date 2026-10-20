@@ -173,3 +173,40 @@ fn space_toggles_the_result_preview() {
     harness.run();
     assert_eq!(harness.state().result_preview.enabled, !before);
 }
+
+#[test]
+fn cancelling_cuda_leaves_it_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = launch(&dir);
+    harness.state_mut().settings.gpu.enabled = false;
+    harness.state_mut().confirm_cuda = true;
+    harness.run();
+    harness.get_by_label(fcs_core::cuda::WARNING);
+    assert!(!harness.state().settings.gpu.experimental_cuda);
+    click_button(&mut harness, "Cancel");
+    assert!(!harness.state().confirm_cuda);
+    assert!(!harness.state().settings.gpu.experimental_cuda);
+}
+
+#[test]
+fn cuda_confirmation_requires_available_hardware() {
+    for available in [false, true] {
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(600.0, 400.0))
+            .build_ui_state(
+                |ui, choice: &mut Option<bool>| {
+                    if let Some(answer) = show_cuda_warning(ui.ctx(), available) {
+                        *choice = Some(answer);
+                    }
+                },
+                None,
+            );
+        harness.run();
+        assert_eq!(*harness.state(), None);
+        harness
+            .get_by_role_and_label(Role::Button, "Enable CUDA Rust")
+            .click();
+        harness.run();
+        assert_eq!(*harness.state(), available.then_some(true));
+    }
+}

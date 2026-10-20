@@ -20,10 +20,16 @@ pub fn build_cli_detector(
     model_path: &std::path::Path,
     settings: &DetectionSettings,
     gpu: Option<Arc<GpuContext>>,
+    gpu_settings: &fcs_utils::config::GpuSettings,
 ) -> Result<FaceDetector> {
-    let detector = FaceDetector::load_from_with_context(model_path, gpu)
-        .map(|detector| detector.with_settings(settings))
-        .with_context(|| format!("no usable detector model at {}", model_path.display()))?;
+    let detector = if gpu_settings.experimental_cuda {
+        FaceDetector::load_from_cuda(model_path, gpu_settings)
+            .with_context(|| format!("loading the CUDA detector at {}", model_path.display()))
+    } else {
+        FaceDetector::load_from_with_context(model_path, gpu)
+            .with_context(|| format!("no usable detector model at {}", model_path.display()))
+    }?
+    .with_settings(settings);
     // Reported once, after selection: the hardware alone does not say which engine won.
     info!(
         "Detector: {} on {}",

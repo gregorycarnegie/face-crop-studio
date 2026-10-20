@@ -466,4 +466,26 @@ mod tests {
             "the ellipse edge should have partially covered pixels"
         );
     }
+
+    #[test]
+    fn samples_on_diagonal_edges_use_consistent_half_open_coverage() {
+        let Some(context) = test_context() else {
+            return;
+        };
+        let mask = GpuShapeMask::new(context).expect("init");
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(96, 65, image::Rgba([255; 4])));
+        let output = mask
+            .apply(
+                &image,
+                &CropShape::ChamferedRectangle { size_pct: 0.2 },
+                0.0,
+                0.0,
+                RgbaColor::opaque(0, 0, 0),
+            )
+            .expect("mask")
+            .expect("chamfered rectangle")
+            .to_rgba8();
+        assert_eq!(output.get_pixel(0, 12)[3], 191);
+        assert_eq!(output.get_pixel(95, 12)[3], 64);
+    }
 }

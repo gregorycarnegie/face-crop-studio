@@ -22,7 +22,11 @@ pub fn build_detector(
     settings: &AppSettings,
     shared_gpu_context: Option<Arc<GpuContext>>,
 ) -> crate::types::DetectorBuild {
-    let (gpu_context, gpu_status) = if let Some(shared_ctx) = shared_gpu_context {
+    // A disabled GPU overrides a saved CUDA opt-in, as `--no-gpu` does in the CLI.
+    let cuda = settings.gpu.experimental_cuda && settings.gpu.enabled;
+    let (gpu_context, gpu_status) = if cuda {
+        (None, GpuStatusIndicator::pending())
+    } else if let Some(shared_ctx) = shared_gpu_context {
         info!("Using shared GPU context from egui renderer");
         describe_context(shared_ctx, settings)
     } else {
@@ -30,8 +34,28 @@ pub fn build_detector(
     };
 
     // Built here rather than on the UI thread: seven WGSL pipelines is not frame work.
-    let enhancement = fcs_utils::EnhancementRuntime::new(gpu_context.clone());
+    let enhancement = if cuda {
+        match fcs_utils::EnhancementRuntime::experimental_cuda() {
+            Ok(enhancement) => enhancement,
+            Err(err) => {
+                return (
+                    GpuStatusIndicator::error(err.to_string()),
+                    gpu_context,
+                    Err(err),
+                    None,
+                    fcs_utils::EnhancementRuntime::cpu_only(),
+                );
+            }
+        }
+    } else {
+        fcs_utils::EnhancementRuntime::new(gpu_context.clone())
+    };
     info!("Enhancement pipeline on {}", enhancement.backend());
+    let gpu_status = if cuda {
+        GpuStatusIndicator::cuda(enhancement.adapter_name().unwrap_or_default())
+    } else {
+        gpu_status
+    };
 
     let Some(configured_model_path) = settings.model_path.as_deref() else {
         return (
@@ -49,9 +73,14 @@ pub fn build_detector(
     // shaders off the UI thread (experiment 81); neither belongs in a frame.
     // The same GPU policy as the enhancement context above, so switching the GPU off in
     // settings keeps detection off it too.
-    let detector_result = FaceDetector::load_from_with_gpu(&model_path, &(&settings.gpu).into())
-        .map(|detector| detector.with_settings(&settings.detection))
-        .with_context(|| format!("no detector model at {model_path_display}"));
+    let detector_result = if cuda {
+        FaceDetector::load_from_cuda(&model_path, &settings.gpu)
+    } else {
+        FaceDetector::load_from_with_gpu(&model_path, &(&settings.gpu).into())
+            .with_context(|| format!("no detector model at {model_path_display}"))
+    }
+    .map(|detector| detector.with_settings(&settings.detection))
+    .with_context(|| format!("loading detector at {model_path_display}"));
     if let Ok(detector) = &detector_result {
         info!(
             "Detector: {} on {}",
@@ -507,6 +536,18 @@ mod tests {
         // A uniform source stays uniform through a downscale, so the value is checkable.
         let px = out.to_rgba8();
         assert_eq!(px.get_pixel(0, 0)[3], 40, "alpha value changed");
+    }
+
+    #[test]
+    fn a_disabled_gpu_overrides_a_saved_cuda_opt_in() {
+        let mut settings = AppSettings::default();
+        settings.gpu.enabled = false;
+        settings.gpu.experimental_cuda = true;
+        settings.model_path = Some("missing.onnx".into());
+        let (_, _, detector, _, enhancement) = build_detector(&settings, None);
+        let error = format!("{:#}", detector.unwrap_err());
+        assert!(!error.contains("CUDA"), "{error}");
+        assert_eq!(enhancement.backend(), "cpu");
     }
 
     #[test]

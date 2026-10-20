@@ -41,6 +41,8 @@ pub mod atomic_write;
 pub mod color;
 /// Application configuration and settings management.
 pub mod config;
+/// Experimental NVIDIA CUDA runtime and availability.
+pub mod cuda;
 /// Image enhancement utilities (unsharp mask, contrast, exposure, etc.)
 pub mod enhance;
 /// Test fixture loading and path resolution (tests/benches/examples only).

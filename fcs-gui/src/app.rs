@@ -230,6 +230,7 @@ impl App2 {
             pan: egui::Vec2::ZERO,
             canvas_rotation: 0.0,
             show_about: false,
+            confirm_cuda: false,
             needs_detector_rebuild: false,
             needs_postprocess_update: false,
             last_window_title: String::new(),
@@ -447,6 +448,17 @@ impl App for App2 {
 
         if self.show_about {
             show_about_window(root_ui.ctx(), &mut self.show_about);
+        }
+        if self.confirm_cuda {
+            let available =
+                self.settings.gpu.enabled && matches!(fcs_core::cuda::availability(), Some(Ok(_)));
+            if let Some(enable) = show_cuda_warning(root_ui.ctx(), available) {
+                if enable {
+                    self.settings.gpu.experimental_cuda = true;
+                    self.needs_detector_rebuild = true;
+                }
+                self.confirm_cuda = false;
+            }
         }
         if let Some(pending) = &self.pending_export {
             let choice = show_overwrite_dialog(root_ui.ctx(), pending);
@@ -1224,6 +1236,30 @@ fn collect_supported_images_in_dir(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 // ── Overwrite dialog ──────────────────────────────────────────────────────────
+
+fn show_cuda_warning(ctx: &egui::Context, available: bool) -> Option<bool> {
+    let mut choice = None;
+    let response = egui::Modal::new(egui::Id::unique("confirm_cuda")).show(ctx, |ui| {
+        ui.set_width(420.0);
+        ui.heading("Enable experimental CUDA Rust?");
+        ui.label(fcs_core::cuda::WARNING);
+        ui.horizontal(|ui| {
+            if ui.button("Cancel").clicked() {
+                choice = Some(false);
+            }
+            if ui
+                .add_enabled(available, egui::Button::new("Enable CUDA Rust"))
+                .clicked()
+            {
+                choice = Some(true);
+            }
+        });
+    });
+    if choice.is_none() && response.should_close() {
+        choice = Some(false);
+    }
+    choice
+}
 
 /// Ask what to do about files an export would replace. `Some(None)` is Cancel; `None` means the
 /// user has not answered yet.

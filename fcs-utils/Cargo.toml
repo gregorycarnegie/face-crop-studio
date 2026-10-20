@@ -73,3 +73,6 @@ windows.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal.workspace = true
+
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+cudarc.workspace = true

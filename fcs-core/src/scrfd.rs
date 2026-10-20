@@ -65,6 +65,8 @@ pub struct ScrfdDetector {
 /// and ONNX Runtime.
 #[derive(Debug)]
 enum Backend {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    Cuda(Box<crate::cuda::CudaDetector>),
     Gpu(Box<(crate::gpu::GpuInferenceOps, gpu::ScrfdGpuWeights)>),
     Cpu(Box<plan::ScrfdWeights>),
 }
@@ -77,6 +79,27 @@ pub struct Letterbox {
 }
 
 impl ScrfdDetector {
+    /// Explicitly opt into CUDA Rust. Rejects disabled GPU policy and unsupported hardware.
+    /// Errors are returned rather than silently selecting a different engine.
+    pub fn load_from_cuda(path: &Path, settings: &fcs_utils::config::GpuSettings) -> Result<Self> {
+        anyhow::ensure!(
+            settings.enabled,
+            "Enable GPU acceleration before enabling CUDA Rust"
+        );
+        info!("SCRFD: experimental CUDA Rust requested");
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            Ok(Self {
+                backend: Backend::Cuda(Box::new(crate::cuda::CudaDetector::load(path)?)),
+            })
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            let _ = path;
+            anyhow::bail!("CUDA Rust is supported only on NVIDIA GPUs on Windows and Linux")
+        }
+    }
+
     /// Load from the default location, or `None` when it cannot run.
     ///
     /// Returns `None` if the model is missing or cannot load on either built-in engine.
@@ -193,6 +216,8 @@ impl ScrfdDetector {
     fn infer(&self, input: Vec<f32>) -> Result<Vec<(Vec<f32>, [usize; 4])>> {
         let side = INPUT_SIZE as usize;
         match &self.backend {
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            Backend::Cuda(detector) => detector.infer(&input),
             Backend::Gpu(boxed) => {
                 let (ops, weights) = boxed.as_ref();
                 let uploaded =
@@ -221,6 +246,8 @@ impl ScrfdDetector {
     /// Which engine is running, for logs.
     pub fn engine(&self) -> &'static str {
         match self.backend {
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            Backend::Cuda(_) => "cuda-rust",
             Backend::Gpu(_) => "wgsl-gpu",
             Backend::Cpu(_) => "cpu-graph",
         }

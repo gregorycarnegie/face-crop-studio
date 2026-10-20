@@ -1,5 +1,8 @@
 # Rust / Cargo
 target/
+/tools/cuda/linux/*.ptx
+/tools/cuda/linux/*.json
+/tools/cuda/linux/*.ll
 
 # Models
 models/

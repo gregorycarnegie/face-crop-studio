@@ -95,6 +95,14 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 - **GPU contexts** – The CLI opens one context for enhancement; the GUI shares eframe's. The detector opens its own, under the same settings.
 - **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. `--no-gpu` (or the GUI's GPU toggle) keeps enhancement *and* detection on the CPU.
 
+**Experimental CUDA Rust:** on compatible NVIDIA GPUs on Windows and Linux,
+enable **Settings → GPU → CUDA Rust (experimental)** and confirm the warning, or pass
+`--experimental-cuda` to the CLI. It is off by default, requires compute capability 8.0+
+and a compatible NVIDIA driver, and accelerates detection, enhancement and crop masking. Unsupported hardware
+cannot enable it; CUDA initialization errors are reported explicitly. macOS and other GPU
+vendors continue using the standard WESL/CPU paths. See [the CUDA experiment notes](docs/CUDA.md)
+for driver requirements, testing, and rebuilding the Rust kernels.
+
 ### Batch worker threads
 
 The timings below are historical measurements. The SCRFD sweep used the ONNX Runtime

@@ -242,7 +242,7 @@ fn dispatch_blur(
     pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
 }
 
-fn build_kernel(radius: u32) -> [f32; MAX_KERNEL_SIZE] {
+pub(crate) fn build_kernel(radius: u32) -> [f32; MAX_KERNEL_SIZE] {
     let sigma = (radius.max(1) as f32) * 0.5 + 0.5;
     let kernel_size = radius * 2 + 1;
     let mut weights = [0.0f32; MAX_KERNEL_SIZE];

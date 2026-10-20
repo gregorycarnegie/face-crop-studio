@@ -477,6 +477,8 @@ pub fn default_settings_path() -> PathBuf {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GpuSettings {
+    /// Explicit opt-in to experimental CUDA Rust detection, enhancement and masking on NVIDIA GPUs.
+    pub experimental_cuda: bool,
     /// Whether GPU acceleration should be attempted (auto-detect by default).
     pub enabled: bool,
     /// Respect `WGPU_*` environment overrides when initializing the backend.
@@ -486,6 +488,7 @@ pub struct GpuSettings {
 impl Default for GpuSettings {
     fn default() -> Self {
         Self {
+            experimental_cuda: false,
             enabled: true,
             respect_env: true,
         }
@@ -583,6 +586,23 @@ mod tests {
     }
 
     #[test]
+    fn existing_settings_do_not_enable_cuda_and_opt_in_round_trips() {
+        let legacy: GpuSettings =
+            serde_json::from_str(r#"{"enabled":true,"respect_env":false}"#).unwrap();
+        assert!(!legacy.experimental_cuda);
+        let opted_in = GpuSettings {
+            experimental_cuda: true,
+            ..legacy
+        };
+        let saved = serde_json::to_string(&opted_in).unwrap();
+        assert!(
+            serde_json::from_str::<GpuSettings>(&saved)
+                .unwrap()
+                .experimental_cuda
+        );
+    }
+
+    #[test]
     fn crop_settings_sanitize_clamps_values() {
         let mut c = CropSettings {
             face_height_pct: 200.0,
@@ -620,6 +640,7 @@ mod tests {
     #[test]
     fn gpu_settings_into_context_options() {
         let gs = GpuSettings {
+            experimental_cuda: false,
             enabled: false,
             respect_env: false,
         };
@@ -628,6 +649,7 @@ mod tests {
         assert!(!opts.respect_env);
 
         let gs_ref = GpuSettings {
+            experimental_cuda: false,
             enabled: true,
             respect_env: true,
         };
@@ -814,6 +836,7 @@ mod tests {
         #[values(true, false)] respect_env: bool,
     ) {
         let settings = GpuSettings {
+            experimental_cuda: false,
             enabled,
             respect_env,
         };
