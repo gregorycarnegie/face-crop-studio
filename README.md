@@ -40,12 +40,18 @@ achieved **1.18° median eye-line error**, versus **1.81°** for RetinaFace and 
 public SCRFD-500M. **94.1%** of refined eye lines were within 5° of the hand-clicked
 labels. Refinement added a median **1.49 ms per face** in this benchmark.
 
+On **COCO 2017**, which none of the three models trained on (23,883 hand-labelled faces,
+with the same thresholds), SCRFD-80k found the most faces with eyes at least 8 px apart:
+84.8%, against 78.3% for RetinaFace. But it also fired about five times as often on photos
+with no people in them, mostly on animals and round objects like clocks. At equal
+false-positive rates, RetinaFace found the most faces and SCRFD-80k the fewest. With the
+eye refiner, SCRFD-80k still had the lowest eye-line error, at 2.03° median.
+
 > **Scope:** These are model benchmarks using ONNX Runtime on the same CPU at 640 × 640,
 > not timings of either finished application or the built-in Rust/WGSL engines.
-> Unmatched detections include real faces missing from the annotations, so the detection
-> ranking is provisional. The held-out images share the Open Images domain used for
-> SCRFD-80k training. At more permissive mismatch budgets, SCRFD-80k and RetinaFace
-> were essentially tied.
+> Unmatched detections include real faces missing from the annotations, so the Open Images
+> ranking is provisional. Those held-out images share the Open Images domain used for
+> SCRFD-80k training, and on COCO the ranking at equal false-positive rates reverses.
 
 [Full results, hardware, methodology and model hashes](docs/MODEL_COMPARISON.md).
 

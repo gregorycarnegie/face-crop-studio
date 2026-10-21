@@ -12,6 +12,20 @@ virtual devices. It says nothing about speed or driver quirks on real hardware.
 - [ ] Test on real macOS hardware (Metal via wgpu).
 - [ ] Test on real Linux hardware (Vulkan via wgpu).
 
+## Detector false positives off its home domain
+
+On COCO (`docs/MODEL_COMPARISON.md`), SCRFD-80k fires 5–6x as often as RetinaFace or the
+public SCRFD on photographs with no people, mostly on animal faces and round objects (clocks,
+tomatoes, plates, wheels). At equal false-positive rates it finds the fewest faces of the
+three. Every one of its 80,000 training photographs contains faces, so it has seen almost no
+face-free scenes.
+
+- [ ] Retrain with face-free hard negatives: Open Images photographs with no person label,
+  which cost nothing to label, kept out of the COCO evaluation. Re-score with
+  `tools/dataset/detector_bench.py` on both corpora; a fix has to hold Open Images recall.
+- [ ] Recheck the eye refiner off-domain: 2.03° median on COCO against 1.18° on Open Images.
+  Work out how much of that is COCO's coarser eye labels before training anything.
+
 ## CUDA kernel optimisation
 
 After the 2.3.0 work (memory pool, merged split-K heads, graph replay, GPU normalisation and

@@ -8,7 +8,9 @@ Weights were evaluated locally; FaceCropJet was neither installed nor executed. 
 
 SCRFD-80k is competitive with RetinaFace R34 on this held-out domain, while its weights are about 35 times smaller and it runs about 9.5 times faster at the compared CPU operating points. SCRFD-80k plus the eye refiner gives lower paired eye-line error than RetinaFace's native landmarks.
 
-**The detector ranking is provisional.** A visual spot-check of 20 randomly sampled unmatched detections per model found many genuine faces missing from the ground truth, and some real faces whose boxes narrowly fail the overlap cutoff. The table compares equal **annotation-mismatch budgets**, not human-verified false-positive rates. This was a spot-check, not a fully adjudicated new dataset. The underlying photographs, review sheets and per-image detections are not bundled with this document.
+**On a second domain the ranking does not hold.** On COCO, which none of the three models trained on, SCRFD-80k still finds the most faces at the October thresholds, but it also fires 5–6 times as often on photographs with no people in them, mostly on animals and round objects such as clocks, tomatoes and plates. Compared at equal false-positive rates, it finds the fewest faces of the three. See [Second domain: COCO 2017](#second-domain-coco-2017--21-october-2026).
+
+**The Open Images ranking is provisional.** A visual spot-check of 20 randomly sampled unmatched detections per model found many genuine faces missing from the ground truth, and some real faces whose boxes narrowly fail the overlap cutoff. The table compares equal **annotation-mismatch budgets**, not human-verified false-positive rates. This was a spot-check, not a fully adjudicated new dataset. The underlying photographs, review sheets and per-image detections are not bundled with this document.
 
 ## Conditions
 
@@ -66,9 +68,63 @@ Paired on the same 1,318 side-known, manually clicked faces that all three detec
 
 The eye refiner took a median 1.49 ms per face, including the crop. This is additional to detection time.
 
+## Second domain: COCO 2017 — 21 October 2026
+
+SCRFD-80k trained only on Open Images; RetinaFace and the public SCRFD trained on WIDER FACE. None of them trained on COCO, so on COCO none of them has a home-domain advantage. The thresholds are October's, unchanged, so they were fixed before COCO was scored.
+
+`tools/dataset/detector_bench.py` produced every figure here and can reproduce them. Before it was used on COCO, it re-ran the October Open Images comparison above: every budget came within 0.4 points of October's figures, and RetinaFace matched exactly. The model files' SHA-256 hashes match those listed below.
+
+### Conditions
+
+- COCO 2017 train and val, limited to licences that allow commercial use (NonCommercial images left out). That gives 12,060 photographs with 23,883 people whose eyes are both labelled by hand, plus 1,687 randomly chosen photographs with no person in them.
+- COCO has eye points but no face boxes. A face counts as found when a detection contains both of its eye points and is at most 8 times as wide as the distance between them. Matching is one-to-one, in score order. On 1,562 Open Images faces that have both a box and clicked eyes, this rule agrees with IoU ≥ 0.5 on 98% of faces for every model. It is about 1–1.5 points more generous than IoU, by much the same amount for all three, so it does not change the ranking.
+- **FP/neg** is detections per no-person photograph. **FP/out** is detections per person photograph that fall outside every person box. A detection on a person but not on a labelled face (a profile, the back of a head, a hand) counts as neither.
+- COCO images are at most 640 pixels on their longer side, so the eye distances below are close to their size at the detector's input.
+- Preprocessing, NMS and the proposal floor are the same as in the October run.
+
+### At the October thresholds
+
+| Model | Threshold | All faces | Eyes ≥ 8 px apart | <8 px | 8–16 px | 16–32 px | ≥32 px | FP/neg | FP/out |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Face Crop Studio SCRFD-80k | 0.4851 | 64.0% | **84.8%** | 30.3% | 76.6% | 92.7% | 97.0% | 0.030 | 0.017 |
+| RetinaFace R34 | 0.9807 | 53.9% | 78.3% | 14.7% | 64.8% | 91.9% | 96.8% | 0.006 | 0.009 |
+| Public SCRFD-500M | 0.6415 | 66.7% | 82.4% | 41.6% | 76.7% | 88.4% | 89.4% | 0.005 | 0.022 |
+
+The face counts by eye distance are 9,151 (<8 px), 7,834, 4,570 and 2,328 (≥32 px).
+
+### At equal false-positive rates
+
+Recall on faces with eyes at least 8 px apart, at the threshold that allows the given number of detections per no-person photograph. These thresholds were chosen on COCO itself, so this table describes this set rather than predicting others.
+
+| Model | 0.01 | 0.02 | 0.05 | 0.1 |
+|---|---:|---:|---:|---:|
+| Face Crop Studio SCRFD-80k | 78.8% | 83.1% | 87.0% | 88.9% |
+| RetinaFace R34 | **88.1%** | **93.5%** | **95.0%** | **95.7%** |
+| Public SCRFD-500M | 86.8% | 89.6% | 91.9% | 93.0% |
+
+### What the false positives are
+
+All of them were inspected by eye. At its October threshold, SCRFD-80k made 50 detections on the 1,687 no-person photographs. Most were animal faces (dogs, cats, sheep, a bear, cattle) or round objects: six clock faces, tomato slices, plates and bowls, wheels. RetinaFace made 10 and the public SCRFD 9. Most of RetinaFace's look human: faces on a TV screen, dolls, a poster. COCO's no-person photographs are not all face-free: the TV faces are real faces, and all three models find them.
+
+SCRFD-80k was trained on 80,000 photographs that all contain faces, so it has seen few clocks or plates without a face nearby. Its training data has no photographs without faces. That gap is the most likely cause, and fixing it is a training-data change, not a threshold change.
+
+### Eye alignment
+
+On the 5,948 faces that all three detectors found at their October thresholds, with both eyes marked visible and at least 16 px apart. Distance is the median eye-point error divided by the labelled eye separation, because COCO has no face box to normalise by.
+
+| Pipeline | Median angle error | 90th percentile | Within 5° | Eye distance / separation |
+|---|---:|---:|---:|---:|
+| SCRFD-80k raw landmarks | 6.10° | 20.10° | 43.0% | 0.311 |
+| RetinaFace R34 raw landmarks | 2.38° | 6.88° | 80.2% | 0.083 |
+| Public SCRFD-500M raw landmarks | 2.71° | 7.83° | 75.9% | 0.092 |
+| SCRFD-80k + eye refiner | **2.03°** | **5.99°** | **85.4%** | **0.075** |
+| RetinaFace + eye refiner | 2.04° | 5.93° | 85.4% | 0.074 |
+
+On COCO the refiner is still the most accurate pipeline. But its median error is 2.03° here against 1.18° on Open Images, the domain it trained on. COCO's eye points come from body-keypoint labelling rather than careful clicks, so some of that rise is label noise. That noise affects every pipeline here, so it does not change the comparison.
+
 ## Limits and interpretation
 
-Open Images is the SCRFD-80k training-data source, although these images are held out. That domain match can favour SCRFD-80k. No independent labelled corpus was available in this run. Image-ID checks confirmed zero overlap with both the SCRFD-80k 80,000-image detector training manifest and the 2,482-image eye-label training set; this does not rule out near-duplicate photographs.
+Open Images is the SCRFD-80k training-data source, although these images are held out. That domain match can favour SCRFD-80k, and the COCO comparison above suggests it did. Image-ID checks confirmed zero overlap with both the SCRFD-80k 80,000-image detector training manifest and the 2,482-image eye-label training set; this does not rule out near-duplicate photographs.
 
 Open Images does not label every real face. “Unmatched” is an annotation-based upper bound on false positives: it also includes genuine unlabelled faces and plausible boxes failing the 0.5 overlap test. Do not interpret it as a human-verified error count.
 
@@ -76,7 +132,7 @@ The [older training notes](../tools/dataset/SCRFD_80K.md) evaluated only images 
 
 This does not reproduce FaceCropJet’s complete preprocessing, chosen input resolution, confidence settings, PDF/photo-boundary detection, crop logic or DirectML execution. It tests its detector weights under controlled settings.
 
-A credible broader claim needs an independently labelled set containing ordinary portraits, rotated images, low light, crowds, scans and faceless negatives, with thresholds frozen before scoring.
+COCO covers part of what a broader claim needs: a second domain, photographs with no faces, and thresholds fixed before scoring. It does not cover ordinary studio or school portraits, rotated images or scans, and most of its faces are small.
 
 ## Model identity and sources
 
@@ -98,8 +154,8 @@ and [UniFace RetinaFace reference](https://github.com/yakhyo/uniface/blob/main/u
 The RetinaFace benchmark implementation was checked against the upstream methods on three
 images; box matching, suppression and the mismatch-budget cutoff also passed self-checks.
 
-This document records the local run rather than providing a bundled benchmark suite.
-The repository's [dataset tools](../tools/dataset/) and
+The October timing figures come from a local run that is not in the repository. The detection and eye-alignment figures, on both corpora, can be reproduced with
+[`detector_bench.py`](../tools/dataset/detector_bench.py). The repository's [dataset tools](../tools/dataset/) and
 [training notes](../tools/dataset/SCRFD_80K.md) describe the held-out data and annotation format.
 Timing results here use ONNX Runtime to compare weights under equal conditions; see the
 [engine measurements](ENGINE_SPEED.md) for the separate historical Rust/WGSL runtime study.
