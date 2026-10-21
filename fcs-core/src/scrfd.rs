@@ -26,7 +26,7 @@ pub mod topology;
 use std::path::Path;
 
 use anyhow::Result;
-use image::DynamicImage;
+use image::{DynamicImage, RgbImage};
 use log::{debug, info, warn};
 
 use crate::{
@@ -217,7 +217,7 @@ impl ScrfdDetector {
         let side = INPUT_SIZE as usize;
         match &self.backend {
             #[cfg(any(target_os = "windows", target_os = "linux"))]
-            Backend::Cuda(detector) => detector.infer(&input),
+            Backend::Cuda(_) => anyhow::bail!("CUDA detection takes the 8-bit letterbox"),
             Backend::Gpu(boxed) => {
                 let (ops, weights) = boxed.as_ref();
                 let uploaded =
@@ -264,9 +264,20 @@ impl ScrfdDetector {
         score_threshold: f32,
         nms_threshold: f32,
     ) -> Result<Vec<Detection>> {
-        let (input, letterbox) = preprocess(image, INPUT_SIZE);
-        let mut detections =
-            decode_maps(&self.infer(input)?, letterbox, score_threshold, INPUT_SIZE)?;
+        let (maps, letterbox) = match &self.backend {
+            // CUDA normalises on the device: the 8-bit letterbox is a quarter of the f32 tensor
+            // to upload, and the CPU skips writing the tensor at all.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            Backend::Cuda(detector) => {
+                let (resized, letterbox) = letterbox(image, INPUT_SIZE);
+                (detector.infer(&resized)?, letterbox)
+            }
+            _ => {
+                let (input, letterbox) = preprocess(image, INPUT_SIZE);
+                (self.infer(input)?, letterbox)
+            }
+        };
+        let mut detections = decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?;
         detections.sort_by(|a, b| b.score.total_cmp(&a.score));
         apply_nms_in_place(&mut detections, nms_threshold);
         Ok(detections)
@@ -313,6 +324,12 @@ fn prefer_gpu(gpu_ms: f64, cpu_ms: f64) -> bool {
 /// else. The Python builds a zeroed `uint8` canvas and then subtracts, so the padding is
 /// `(0 - 127.5) / 128`, not zero, and a model fed zeroed padding sees a border it never met.
 pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
+    let (resized, letterbox) = letterbox(image, size);
+    (normalize(&resized, size), letterbox)
+}
+
+/// The resize half of [`preprocess`]: the source scaled to fit `size`, still 8-bit RGB.
+pub(crate) fn letterbox(image: &DynamicImage, size: u32) -> (RgbImage, Letterbox) {
     let (width, height) = (image.width().max(1), image.height().max(1));
     let ratio = height as f32 / width as f32;
     let (new_width, new_height) = if ratio > 1.0 {
@@ -328,7 +345,13 @@ pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
         new_height,
         image::imageops::FilterType::Triangle,
     );
+    (resized, Letterbox { scale })
+}
 
+/// The normalise half of [`preprocess`]: `resized` at the top-left of a `size` square, padded.
+/// `fcs_normalize` in `tools/cuda/kernels.rs` is the device copy of this and must agree.
+pub(crate) fn normalize(resized: &RgbImage, size: u32) -> Vec<f32> {
+    let (new_width, new_height) = resized.dimensions();
     let plane = (size * size) as usize;
     // The padding value, not 0.0: see the note above.
     let mut tensor = vec![(0.0 - 127.5) / 128.0; 3 * plane];
@@ -353,7 +376,7 @@ pub fn preprocess(image: &DynamicImage, size: u32) -> (Vec<f32>, Letterbox) {
             *b = (pixel[2] as f32 - 127.5) / 128.0;
         }
     }
-    (tensor, Letterbox { scale })
+    tensor
 }
 
 /// Turn the nine raw tensors into detections in source-image coordinates.

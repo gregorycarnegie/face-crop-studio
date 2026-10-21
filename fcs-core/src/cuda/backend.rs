@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use cudarc::driver::{CudaGraph, CudaSlice, CudaStream, LaunchConfig, PushKernelArg, sys};
+use image::RgbImage;
 
 use crate::{
     onnx::OnnxInitializerMap,
@@ -37,6 +38,9 @@ pub(crate) struct CudaDetector {
 struct Executor {
     stream: Arc<CudaStream>,
     graph: CudaGraph,
+    /// The 8-bit letterbox, room for a full square, and its `[width, height]`.
+    rgb: CudaSlice<u8>,
+    dims: CudaSlice<u32>,
     /// Slot 0 is the network input, and the split-K scratch follows the last slot. The graph's
     /// launches hold these pointers, so they live exactly as long as it does.
     buffers: Vec<CudaSlice<f32>>,
@@ -173,10 +177,12 @@ impl CudaDetector {
         })
     }
 
-    pub(crate) fn infer(&self, input: &[f32]) -> Result<Vec<(Vec<f32>, [usize; 4])>> {
+    /// Run the network on an 8-bit letterbox (`scrfd::letterbox`), normalising it on the device.
+    pub(crate) fn infer(&self, letterbox: &RgbImage) -> Result<Vec<(Vec<f32>, [usize; 4])>> {
+        let (width, height) = letterbox.dimensions();
         ensure!(
-            input.len() == self.shapes[0].iter().product::<usize>(),
-            "invalid CUDA input length"
+            width > 0 && height > 0 && width <= INPUT_SIZE && height <= INPUT_SIZE,
+            "invalid CUDA letterbox {width}x{height}"
         );
         let idle = self
             .idle
@@ -188,7 +194,9 @@ impl CudaDetector {
             None => self.capture()?,
         };
         let stream = executor.stream.clone();
-        stream.memcpy_htod(input, &mut executor.buffers[0])?;
+        let bytes = letterbox.as_raw();
+        stream.memcpy_htod(bytes, &mut executor.rgb.slice_mut(0..bytes.len()))?;
+        stream.memcpy_htod(&[width, height], &mut executor.dims)?;
         executor.graph.launch()?;
         let outputs = OUTPUTS
             .iter()
@@ -210,6 +218,9 @@ impl CudaDetector {
     /// Allocate an inference's buffers, then record its launches into a graph.
     fn capture(&self) -> Result<Executor> {
         let stream = self.runtime.context.new_stream()?;
+        let side = INPUT_SIZE as usize;
+        let rgb = stream.alloc_zeros::<u8>(side * side * 3)?;
+        let dims = stream.alloc_zeros::<u32>(2)?;
         let mut buffers = vec![stream.alloc_zeros::<f32>(self.shapes[0].iter().product())?];
         let mut views = vec![(0, 0, buffers[0].len())];
         let mut scratch = Vec::with_capacity(STEPS.len());
@@ -238,7 +249,9 @@ impl CudaDetector {
         // Allocations must be complete, not merely queued, before a capture refers to them.
         stream.synchronize()?;
         stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
-        let enqueued = self.enqueue(&stream, &mut buffers, &mut scratch, &views);
+        let enqueued = self
+            .normalize(&stream, &rgb, &dims, &mut buffers[0])
+            .and_then(|()| self.enqueue(&stream, &mut buffers, &mut scratch, &views));
         // Always end the capture, even after a failed launch, so the stream is usable again.
         let graph = stream.end_capture(sys::CUgraphInstantiate_flags(0));
         enqueued?;
@@ -247,9 +260,36 @@ impl CudaDetector {
         Ok(Executor {
             stream,
             graph,
+            rgb,
+            dims,
             buffers,
             views,
         })
+    }
+
+    fn normalize(
+        &self,
+        stream: &Arc<CudaStream>,
+        rgb: &CudaSlice<u8>,
+        dims: &CudaSlice<u32>,
+        input: &mut CudaSlice<f32>,
+    ) -> Result<()> {
+        let len = input.len() as u32;
+        // SAFETY: `rgb` holds a full square and `input` is exactly the 3 x size x size tensor.
+        unsafe {
+            stream
+                .launch_builder(&self.runtime.normalize)
+                .arg(rgb)
+                .arg(dims)
+                .arg(input)
+                .arg(&INPUT_SIZE)
+                .launch(LaunchConfig {
+                    grid_dim: (len.div_ceil(128), 1, 1),
+                    block_dim: (128, 1, 1),
+                    shared_mem_bytes: 0,
+                })?;
+        }
+        Ok(())
     }
 
     fn enqueue(
@@ -405,26 +445,36 @@ mod tests {
         let mut cuda = CudaDetector::load(&path)?;
         let cpu = crate::scrfd::plan::ScrfdWeights::load(&path)?;
         let side = INPUT_SIZE as usize;
-        let input: Vec<_> = (0..3 * side * side)
-            .map(|i| (i % 251) as f32 / 125.0 - 1.0)
-            .collect();
-        let expected = crate::scrfd::plan::run(
-            crate::cpu::tensor::Tensor::new(1, 3, side, side, input.clone())?,
-            &cpu,
-        )?;
+        // Landscape pads below the image and portrait to its right, as letterboxes do.
+        let cases = [(640, 481), (333, 640)]
+            .map(|(width, height)| -> Result<_> {
+                let letterbox = RgbImage::from_fn(width, height, |x, y| {
+                    image::Rgb([(x * 7 + y) as u8, (x + y * 5) as u8, (x * y % 251) as u8])
+                });
+                let input = crate::scrfd::normalize(&letterbox, INPUT_SIZE);
+                let expected = crate::scrfd::plan::run(
+                    crate::cpu::tensor::Tensor::new(1, 3, side, side, input)?,
+                    &cpu,
+                )?;
+                Ok((letterbox, expected))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
         let check = |cuda: &CudaDetector| -> Result<()> {
-            let actual = cuda.infer(&input)?;
-            assert_eq!(actual.len(), expected.len());
-            for ((values, shape), expected) in actual.iter().zip(&expected) {
-                assert_eq!(*shape, expected.dims());
-                assert_eq!(values.len(), expected.data().len());
-                let error = values
-                    .iter()
-                    .zip(expected.data())
-                    .map(|(a, b)| (a - b).abs())
-                    .fold(0.0f32, f32::max);
-                assert!(error < 2e-4, "CUDA/CPU error {error}");
-                assert!(values.iter().all(|x| x.is_finite()));
+            for (letterbox, expected) in &cases {
+                let actual = cuda.infer(letterbox)?;
+                assert_eq!(actual.len(), expected.len());
+                for ((values, shape), expected) in actual.iter().zip(expected) {
+                    assert_eq!(*shape, expected.dims());
+                    assert_eq!(values.len(), expected.data().len());
+                    let error = values
+                        .iter()
+                        .zip(expected.data())
+                        .map(|(a, b)| (a - b).abs())
+                        .fold(0.0f32, f32::max);
+                    assert!(error < 2e-4, "CUDA/CPU error {error}");
+                    assert!(values.iter().all(|x| x.is_finite()));
+                }
             }
             Ok(())
         };

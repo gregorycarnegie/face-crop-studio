@@ -320,6 +320,27 @@ cuda_kernel! {
     }
 }
 
+// The device copy of scrfd::normalize: the width x height RGB letterbox at the top-left of a
+// size x size NCHW tensor, padded with normalised black. dims is [width, height] in device
+// memory, so a captured graph can run it on any image.
+cuda_kernel! {
+    fn fcs_normalize(rgb: *const u8, dims: *const u32, output: *mut f32, size: u32) {
+        let i = index();
+        let plane = size * size;
+        if size == 0 || plane == 0 || i >= 3 * plane { return; }
+        let c = i / plane;
+        let x = i % plane % size;
+        let y = i % plane / size;
+        // SAFETY: the host uploads width, height <= size and width * height * 3 bytes of rgb.
+        unsafe {
+            let width = *dims;
+            let height = *dims.add(1);
+            let v = if x < width && y < height { *rgb.add(((y * width + x) * 3 + c) as usize) as f32 } else { 0.0 };
+            *output.add(i as usize) = (v - 127.5) / 128.0;
+        }
+    }
+}
+
 // Split-K for narrow outputs over deep inputs (the detection heads): one thread per chunk of
 // input channels per output, so a 20x20 head still fills the GPU. The partial sums are added
 // in chunk order by fcs_conv_reduce, never by atomics, so results are reproducible.
