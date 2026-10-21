@@ -7,11 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-21
+
+`GpuSettings` gained a public `experimental_cuda` field, so code that builds it with a struct
+literal needs the field, or `..Default::default()` at the end. Saved settings files are
+unaffected -- a missing field reads as `false`, so nobody is moved onto CUDA by upgrading.
+
 ### Added
 
 - Opt-in experimental CUDA Rust detection, enhancement and crop masking on compatible
   NVIDIA GPUs on Windows and Linux, with runtime capability checks and an activation warning. Linux kernels use
   NVIDIA CUDA Rust; Windows kernels use Rust's NVPTX target. WESL/CPU remain the default.
+  On an RTX 4090 it detects nearly three times as fast as WESL (1.0 ms against 2.9 ms for a
+  640-wide image, end to end) and finishes a 512x512 crop about 30% faster (4.5 ms against
+  6.9 ms). The first cut was slower than WESL: CUDA's default memory pool hands freed memory
+  back to the driver at every synchronize, so each detection re-mapped its ~65 MiB of buffers.
+  The pool now keeps up to 512 MiB. The class, box and keypoint heads also run as one merged
+  convolution with their sums split across threads, each detection replays a captured CUDA
+  graph rather than launching ~60 kernels from the host, the input is normalised on the GPU
+  from the 8-bit letterbox (a quarter of the bytes to upload), and the GPU shortlists the
+  anchors that may pass the score threshold so only those are read back and decoded.
 
 ### Fixed
 
@@ -2517,7 +2532,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.1.1...v2.2.0
