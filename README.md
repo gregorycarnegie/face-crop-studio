@@ -7,6 +7,7 @@ GPU accelerated face detection and cropping software built in Rust.
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
 ![WESL](https://img.shields.io/badge/WESL-GPU%20Compute-blue?logo=webgpu)
+[![CUDA](https://img.shields.io/badge/CUDA-Experimental-76B900?logo=nvidia)](docs/CUDA.md)
 [![SCRFD-80k](https://img.shields.io/badge/SCRFD-80k-purple)](tools/dataset/SCRFD_80K.md)
 ![License](https://img.shields.io/badge/code-MIT%20OR%20Apache--2.0-green)
 [![Models](https://img.shields.io/badge/models-CC%20BY%204.0-green)](models/README.md#licence)
