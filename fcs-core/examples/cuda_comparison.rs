@@ -10,6 +10,11 @@ use fcs_utils::{
     gpu::{GpuAvailability, GpuContext, GpuContextOptions},
 };
 
+// The CLI and GUI allocator. Without it every detection page-faults in a fresh 4.9 MB input
+// tensor, ~0.6 ms that the application never pays.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn median_ms(mut work: impl FnMut() -> Result<()>) -> Result<f64> {
     for _ in 0..3 {
         work()?;
