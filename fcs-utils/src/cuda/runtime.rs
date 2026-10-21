@@ -70,6 +70,12 @@ impl Runtime {
             if let Err(err) = retain_pool_memory(&context) {
                 log::warn!("CUDA memory pool keeps its default release threshold: {err}");
             }
+            // The wrapper's per-buffer events order work across streams, and a graph capture
+            // cannot wait on events recorded outside it. Nothing here needs them.
+            // SAFETY: every buffer is allocated, used and freed on one stream, except detector
+            // weights, which are synchronized after upload and only read until the detector
+            // drops; every user reads its results back synchronously before returning.
+            unsafe { context.disable_event_tracking() };
             // Loading the actual module validates the driver's PTX support, too.
             let module = context
                 .load_module(Ptx::from_src(ptx))

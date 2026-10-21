@@ -1,7 +1,10 @@
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex, PoisonError},
+};
 
 use anyhow::{Context, Result, ensure};
-use cudarc::driver::{CudaSlice, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaGraph, CudaSlice, CudaStream, LaunchConfig, PushKernelArg, sys};
 
 use crate::{
     onnx::OnnxInitializerMap,
@@ -14,7 +17,7 @@ use crate::{
 
 use fcs_utils::cuda::runtime::Runtime;
 
-/// Weights are shared read-only; each inference owns a stream and its temporary buffers.
+/// Weights are shared read-only; each inference borrows an [`Executor`] of its own.
 #[derive(Debug)]
 pub(crate) struct CudaDetector {
     runtime: Arc<Runtime>,
@@ -23,6 +26,32 @@ pub(crate) struct CudaDetector {
     /// How many consecutive steps each step's launch writes: sibling heads run as one wider
     /// convolution on the first of them (n), and the rest launch nothing (0).
     covers: Vec<usize>,
+    /// Captured executors not running an inference right now. There are as many as the most
+    /// inferences ever run at once, each holding its ~68 MiB of buffers.
+    // ponytail: never shrinks; bounded by the batch worker count, so trim only if that grows.
+    idle: Mutex<Vec<Executor>>,
+}
+
+/// One inference's launches captured as a CUDA graph, and the buffers they point into. Replaying
+/// the graph replaces ~60 kernel launches from the host with one.
+struct Executor {
+    stream: Arc<CudaStream>,
+    graph: CudaGraph,
+    /// Slot 0 is the network input, and the split-K scratch follows the last slot. The graph's
+    /// launches hold these pointers, so they live exactly as long as it does.
+    buffers: Vec<CudaSlice<f32>>,
+    /// Per slot: which buffer holds it, and where.
+    views: Vec<(usize, usize, usize)>,
+}
+
+// SAFETY: a CUDA graph must not be used from two threads at once, and an executor never is:
+// it belongs to one inference at a time and moves between threads only through `idle`.
+unsafe impl Send for Executor {}
+
+impl std::fmt::Debug for Executor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Executor").finish_non_exhaustive()
+    }
 }
 
 /// Input channels per thread in split-K convolutions. Each detection head (64 inputs) then
@@ -140,6 +169,7 @@ impl CudaDetector {
             weights,
             shapes,
             covers,
+            idle: Mutex::default(),
         })
     }
 
@@ -148,12 +178,87 @@ impl CudaDetector {
             input.len() == self.shapes[0].iter().product::<usize>(),
             "invalid CUDA input length"
         );
+        let idle = self
+            .idle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop();
+        let mut executor = match idle {
+            Some(executor) => executor,
+            None => self.capture()?,
+        };
+        let stream = executor.stream.clone();
+        stream.memcpy_htod(input, &mut executor.buffers[0])?;
+        executor.graph.launch()?;
+        let outputs = OUTPUTS
+            .iter()
+            .map(|&at| {
+                let (buffer, offset, n) = executor.views[at];
+                let values =
+                    stream.clone_dtoh(&executor.buffers[buffer].slice(offset..offset + n))?;
+                Ok((values, self.shapes[at]))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // An executor whose run failed is dropped above rather than trusted again.
+        self.idle
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(executor);
+        Ok(outputs)
+    }
+
+    /// Allocate an inference's buffers, then record its launches into a graph.
+    fn capture(&self) -> Result<Executor> {
         let stream = self.runtime.context.new_stream()?;
-        let mut buffers = Vec::with_capacity(STEPS.len() + 1);
-        buffers.push(stream.clone_htod(input)?);
-        // Per slot: which buffer holds it, and where.
-        let mut views = vec![(0, 0, input.len())];
-        // shortcut: per-inference buffers; pool only after profiling establishes an allocation bottleneck.
+        let mut buffers = vec![stream.alloc_zeros::<f32>(self.shapes[0].iter().product())?];
+        let mut views = vec![(0, 0, buffers[0].len())];
+        let mut scratch = Vec::with_capacity(STEPS.len());
+        for (index, step) in STEPS.iter().enumerate() {
+            let mut len = 0;
+            for slot in index + 1..index + 1 + self.covers[index] {
+                let n = self.shapes[slot].iter().product::<usize>();
+                views.push((buffers.len(), len, n));
+                len += n;
+            }
+            scratch.push(match *step {
+                Step::Conv {
+                    groups: 1,
+                    kernel,
+                    in_per_group,
+                    ..
+                } if len > 0 && kernel > 1 && in_per_group >= 2 * SPLIT_CHUNK => {
+                    Some(stream.alloc_zeros::<f32>(len * in_per_group.div_ceil(SPLIT_CHUNK))?)
+                }
+                _ => None,
+            });
+            if len > 0 {
+                buffers.push(stream.alloc_zeros::<f32>(len)?);
+            }
+        }
+        // Allocations must be complete, not merely queued, before a capture refers to them.
+        stream.synchronize()?;
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
+        let enqueued = self.enqueue(&stream, &mut buffers, &mut scratch, &views);
+        // Always end the capture, even after a failed launch, so the stream is usable again.
+        let graph = stream.end_capture(sys::CUgraphInstantiate_flags(0));
+        enqueued?;
+        let graph = graph?.context("CUDA graph capture recorded nothing")?;
+        buffers.extend(scratch.into_iter().flatten());
+        Ok(Executor {
+            stream,
+            graph,
+            buffers,
+            views,
+        })
+    }
+
+    fn enqueue(
+        &self,
+        stream: &Arc<CudaStream>,
+        buffers: &mut [CudaSlice<f32>],
+        scratch: &mut [Option<CudaSlice<f32>>],
+        views: &[(usize, usize, usize)],
+    ) -> Result<()> {
         for (index, step) in STEPS.iter().enumerate() {
             let covers = self.covers[index];
             if covers == 0 {
@@ -165,16 +270,17 @@ impl CudaDetector {
                 .clone()
                 .map(|slot| self.shapes[slot].iter().product::<usize>())
                 .sum::<usize>() as u32;
-            let channels: usize = written.clone().map(|slot| self.shapes[slot][1]).sum();
-            // SAFETY: each kernel below writes all `len` elements before any step reads them.
-            let mut output = unsafe { stream.alloc::<f32>(len as usize)? };
+            let channels: usize = written.map(|slot| self.shapes[slot][1]).sum();
             let config = LaunchConfig {
                 grid_dim: (len.div_ceil(128), 1, 1),
                 block_dim: (128, 1, 1),
                 shared_mem_bytes: 0,
             };
-            // SAFETY: load validates the fixed topology and all buffer lengths; outputs are
-            // disjoint, retained until readback, and every operation uses this run's stream.
+            // Every step writes a buffer after all the ones it reads.
+            let (before, after) = buffers.split_at_mut(views[index + 1].0);
+            let output = &mut after[0];
+            // SAFETY: load validates the fixed topology and capture allocated every buffer at its
+            // length; outputs are disjoint from inputs, and every operation uses this stream.
             unsafe {
                 match *step {
                     Step::Conv {
@@ -208,13 +314,13 @@ impl CudaDetector {
                         if groups == 1 && kernel > 1 && in_per_group >= 2 * SPLIT_CHUNK {
                             let chunks = in_per_group.div_ceil(SPLIT_CHUNK);
                             let total = u32::try_from(len as usize * chunks)?;
-                            // fcs_conv_partial writes every one of the `total` partial sums.
-                            let mut partial = stream.alloc::<f32>(total as usize)?;
+                            let partial =
+                                scratch[index].as_mut().context("missing CUDA scratch")?;
                             stream
                                 .launch_builder(&self.runtime.conv_partial)
-                                .arg(&buffers[views[input].0])
+                                .arg(&before[views[input].0])
                                 .arg(weights)
-                                .arg(&mut partial)
+                                .arg(&mut *partial)
                                 .arg(&(h as u32))
                                 .arg(&(w as u32))
                                 .arg(&(shape[2] as u32))
@@ -232,9 +338,9 @@ impl CudaDetector {
                                 })?;
                             stream
                                 .launch_builder(&self.runtime.conv_reduce)
-                                .arg(&partial)
+                                .arg(&*partial)
                                 .arg(bias)
-                                .arg(&mut output)
+                                .arg(&mut *output)
                                 .arg(&len)
                                 .arg(&((shape[2] * shape[3]) as u32))
                                 .arg(&(chunks as u32))
@@ -250,10 +356,10 @@ impl CudaDetector {
                             };
                             let mut launch = stream.launch_builder(function);
                             launch
-                                .arg(&buffers[views[input].0])
+                                .arg(&before[views[input].0])
                                 .arg(weights)
                                 .arg(bias)
-                                .arg(&mut output);
+                                .arg(&mut *output);
                             for param in &params {
                                 launch.arg(param);
                             }
@@ -263,9 +369,9 @@ impl CudaDetector {
                     Step::Add { a, b } => {
                         stream
                             .launch_builder(&self.runtime.add)
-                            .arg(&buffers[views[a].0])
-                            .arg(&buffers[views[b].0])
-                            .arg(&mut output)
+                            .arg(&before[views[a].0])
+                            .arg(&before[views[b].0])
+                            .arg(&mut *output)
                             .arg(&len)
                             .launch(config)?;
                     }
@@ -273,8 +379,8 @@ impl CudaDetector {
                         let [_, c, h, w] = self.shapes[input];
                         stream
                             .launch_builder(&self.runtime.upsample)
-                            .arg(&buffers[views[input].0])
-                            .arg(&mut output)
+                            .arg(&before[views[input].0])
+                            .arg(&mut *output)
                             .arg(&(c as u32))
                             .arg(&(h as u32))
                             .arg(&(w as u32))
@@ -282,22 +388,8 @@ impl CudaDetector {
                     }
                 }
             }
-            let mut offset = 0;
-            for slot in written {
-                let n = self.shapes[slot].iter().product::<usize>();
-                views.push((buffers.len(), offset, n));
-                offset += n;
-            }
-            buffers.push(output);
         }
-        OUTPUTS
-            .iter()
-            .map(|&at| {
-                let (buffer, offset, n) = views[at];
-                let values = stream.clone_dtoh(&buffers[buffer].slice(offset..offset + n))?;
-                Ok((values, self.shapes[at]))
-            })
-            .collect()
+        Ok(())
     }
 }
 
@@ -341,6 +433,8 @@ mod tests {
             include_str!("../../../fcs-utils/src/cuda/linux.ptx"),
         ] {
             cuda.runtime = Arc::new(Runtime::from_ptx(ptx)?);
+            // Executors captured the previous module's kernels.
+            cuda.idle.get_mut().unwrap().clear();
             check(&cuda)?;
             std::thread::scope(|scope| -> Result<()> {
                 let first = scope.spawn(|| check(&cuda));

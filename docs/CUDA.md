@@ -35,7 +35,8 @@ Each level's class, box and keypoint heads run as one merged convolution, split 
 channels into partial sums that a second kernel adds in a fixed order (no atomics), so the
 narrow heads fill the GPU and results stay reproducible.
 The existing SCRFD topology, ONNX weight reader, input preprocessing, decoding and NMS are reused. Weights stay on the device;
-concurrent inference uses separate streams and temporary buffers. The host uses cudarc's
+each concurrent inference replays its own CUDA graph of the network's launches, on its own
+stream and fixed buffers, captured on first use and reused after. The host uses cudarc's
 driver wrapper with dynamic loading. End users need a compatible NVIDIA driver, without
 installing a CUDA Toolkit or Rust toolchain.
 
