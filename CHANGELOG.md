@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-10-21
+
+### Fixed
+
+- `fcs-cli` no longer skips unreadable folders silently. Collecting a batch from a directory
+  used to discard every error from the directory walk, so a subfolder the process could not
+  read simply left its images out of the run, and nothing said so. Each such path is now
+  logged as a warning, and the rest of the batch still runs.
+
+### Changed
+
+- `docs/MODEL_COMPARISON.md` and the README now include a second test domain. On COCO 2017,
+  which none of the compared models trained on, SCRFD-80k still finds the most faces at the
+  October thresholds. But it fires five to six times as often as RetinaFace R34 or the public
+  SCRFD-500M on photographs with no people in them, mostly on animals and round objects such
+  as clocks. At equal false-positive rates it finds the fewest faces of the three. The
+  earlier lead on Open Images was partly a home-domain advantage. With the eye refiner,
+  SCRFD-80k keeps the lowest eye-line error. `tools/dataset/detector_bench.py` reproduces
+  both comparisons.
+- The GUI's `app.rs` is split into modules for clipboard paste, dialogs, the webcam,
+  undo/redo and dropped files. Behaviour is unchanged.
+
 ## [2.3.0] - 2026-10-21
 
 `GpuSettings` gained a public `experimental_cuda` field, so code that builds it with a struct
@@ -2532,7 +2554,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...HEAD
+[2.3.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.0...v2.2.1
