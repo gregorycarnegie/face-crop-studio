@@ -37,7 +37,8 @@ pub fn collect_images(path: &Path) -> Result<Vec<PathBuf>> {
     for entry in WalkDir::new(path)
         .follow_links(false)
         .into_iter()
-        .filter_map(Result::ok)
+        // An unreadable folder must not shrink the batch silently; walkdir's error names the path.
+        .filter_map(|entry| entry.inspect_err(|e| warn!("Skipping: {e}")).ok())
         .filter(|e| e.file_type().is_file())
     {
         if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {

@@ -152,9 +152,9 @@ carries over — SCRFD runs on the same ops — but the batch run has not been r
 The race that caused the original 1% variation is a property of the shared infrastructure and
 does still apply: buffers released while a command encoder was still being built went straight
 back to `GpuBufferPool`, so another worker could encode into memory the first submission still
-referenced. `GpuBufferPool::execution_scope` fixed it. The test that guarded it,
-`concurrent_inference_matches_sequential`, ran YuNet's graph concurrently and went with it;
-**nothing guards that race at the graph level now**, only `fcs-utils`' own pool tests.
+referenced. `GpuBufferPool::execution_scope` fixed it. The YuNet test that guarded it went with
+YuNet; `concurrent_gpu_inference_matches_sequential` in `fcs-core/tests/scrfd_parity.rs` now runs
+SCRFD's graph across rayon workers and compares every head tensor bit for bit.
 
 #### Duplicate suppression
 
@@ -182,7 +182,6 @@ centre-duplicated boxes at a lowered confidence floor has not been measured.
 | Enhancement pipeline | `fcs-utils/src/enhance.rs`             | Unit + pipeline parity tests                    |
 | Full crop workflow   | `fcs-core/tests/full_crop_workflow.rs` | Integration test from detection to export       |
 | CLI scenarios        | `fcs-cli/tests/*.rs`                   | Snapshot, batch, naming, enhancement workflows  |
-| GUI smoke tests      | `fcs-gui/src/main.rs` (test module)    | Crop adjustments, undo/redo, preset application |
-| GUI visuals          | `fcs-gui/tests/screenshot.rs`          | Snapshot-based overlay verification             |
+| GUI window           | `fcs-gui/src/app/tests.rs`             | Whole window via egui_kittest: panels, tabs, menus, shortcuts |
 
 These layers give confidence that the crop calculation flow remains stable across both user interfaces while providing hooks to measure and iterate on performance.
