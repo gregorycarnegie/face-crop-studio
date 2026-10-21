@@ -33,14 +33,36 @@ pub(crate) struct CudaDetector {
     idle: Mutex<Vec<Executor>>,
 }
 
+/// What a CUDA run hands back for decoding.
+#[derive(Debug)]
+pub(crate) enum Heads {
+    /// Anchors whose score logit passed the device's cutoff, by row id in the CPU decode's
+    /// order, each with its nine raw values (`fcs_candidates` in `tools/cuda/kernels.rs`).
+    Candidates(Vec<(u32, [f32; 9])>),
+    /// The nine head maps, when no threshold was given or the shortlist overflowed.
+    Maps(Vec<(Vec<f32>, [usize; 4])>),
+}
+
+/// Shortlist slots per inference. A face lights up a handful of anchors at 0.5, so this only
+/// overflows -- falling back to reading every map -- at very low thresholds or in vast crowds.
+const CANDIDATES: usize = 4096;
+
+/// How far below the threshold's logit the device still shortlists. The host re-applies the
+/// exact threshold; the margin only has to cover the sigmoid's rounding near the boundary.
+const CUTOFF_MARGIN: f32 = 1e-3;
+
 /// One inference's launches captured as a CUDA graph, and the buffers they point into. Replaying
 /// the graph replaces ~60 kernel launches from the host with one.
 struct Executor {
     stream: Arc<CudaStream>,
     graph: CudaGraph,
-    /// The 8-bit letterbox, room for a full square, and its `[width, height]`.
+    /// The 8-bit letterbox, room for a full square, and `[width, height, cutoff logit bits]`.
     rgb: CudaSlice<u8>,
-    dims: CudaSlice<u32>,
+    params: CudaSlice<u32>,
+    /// The shortlist: how many anchors passed, their row ids and their raw values.
+    count: CudaSlice<u32>,
+    rows: CudaSlice<u32>,
+    values: CudaSlice<f32>,
     /// Slot 0 is the network input, and the split-K scratch follows the last slot. The graph's
     /// launches hold these pointers, so they live exactly as long as it does.
     buffers: Vec<CudaSlice<f32>>,
@@ -178,7 +200,9 @@ impl CudaDetector {
     }
 
     /// Run the network on an 8-bit letterbox (`scrfd::letterbox`), normalising it on the device.
-    pub(crate) fn infer(&self, letterbox: &RgbImage) -> Result<Vec<(Vec<f32>, [usize; 4])>> {
+    /// With a score threshold the device shortlists the anchors that may pass it; without one,
+    /// or when the shortlist overflows, every head map comes back.
+    pub(crate) fn infer(&self, letterbox: &RgbImage, threshold: Option<f32>) -> Result<Heads> {
         let (width, height) = letterbox.dimensions();
         ensure!(
             width > 0 && height > 0 && width <= INPUT_SIZE && height <= INPUT_SIZE,
@@ -196,23 +220,54 @@ impl CudaDetector {
         let stream = executor.stream.clone();
         let bytes = letterbox.as_raw();
         stream.memcpy_htod(bytes, &mut executor.rgb.slice_mut(0..bytes.len()))?;
-        stream.memcpy_htod(&[width, height], &mut executor.dims)?;
+        let cutoff = match threshold {
+            // Nothing is shortlisted, so the counter stays at zero.
+            None => f32::INFINITY,
+            Some(t) if t > 0.0 && t < 1.0 => {
+                ((t as f64 / (1.0 - t as f64)).ln() as f32) - CUTOFF_MARGIN
+            }
+            // Every anchor qualifies: the shortlist overflows and the maps come back.
+            Some(_) => f32::NEG_INFINITY,
+        };
+        stream.memcpy_htod(&[width, height, cutoff.to_bits()], &mut executor.params)?;
         executor.graph.launch()?;
-        let outputs = OUTPUTS
-            .iter()
-            .map(|&at| {
-                let (buffer, offset, n) = executor.views[at];
-                let values =
-                    stream.clone_dtoh(&executor.buffers[buffer].slice(offset..offset + n))?;
-                Ok((values, self.shapes[at]))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let shortlisted = if threshold.is_some() {
+            Some(stream.clone_dtoh(&executor.count)?[0] as usize).filter(|&n| n <= CANDIDATES)
+        } else {
+            None
+        };
+        let heads = match shortlisted {
+            Some(0) => Heads::Candidates(Vec::new()),
+            Some(n) => {
+                let rows = stream.clone_dtoh(&executor.rows.slice(0..n))?;
+                let values = stream.clone_dtoh(&executor.values.slice(0..n * 9))?;
+                let mut candidates: Vec<(u32, [f32; 9])> = rows
+                    .into_iter()
+                    .zip(values.as_chunks::<9>().0)
+                    .map(|(row, values)| (row, *values))
+                    .collect();
+                // The device fills slots in whatever order threads arrive.
+                candidates.sort_unstable_by_key(|&(row, _)| row);
+                Heads::Candidates(candidates)
+            }
+            None => Heads::Maps(
+                OUTPUTS
+                    .iter()
+                    .map(|&at| {
+                        let (buffer, offset, n) = executor.views[at];
+                        let values = stream
+                            .clone_dtoh(&executor.buffers[buffer].slice(offset..offset + n))?;
+                        Ok((values, self.shapes[at]))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        };
         // An executor whose run failed is dropped above rather than trusted again.
         self.idle
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(executor);
-        Ok(outputs)
+        Ok(heads)
     }
 
     /// Allocate an inference's buffers, then record its launches into a graph.
@@ -220,7 +275,10 @@ impl CudaDetector {
         let stream = self.runtime.context.new_stream()?;
         let side = INPUT_SIZE as usize;
         let rgb = stream.alloc_zeros::<u8>(side * side * 3)?;
-        let dims = stream.alloc_zeros::<u32>(2)?;
+        let params = stream.alloc_zeros::<u32>(3)?;
+        let mut count = stream.alloc_zeros::<u32>(1)?;
+        let mut rows = stream.alloc_zeros::<u32>(CANDIDATES)?;
+        let mut values = stream.alloc_zeros::<f32>(CANDIDATES * 9)?;
         let mut buffers = vec![stream.alloc_zeros::<f32>(self.shapes[0].iter().product())?];
         let mut views = vec![(0, 0, buffers[0].len())];
         let mut scratch = Vec::with_capacity(STEPS.len());
@@ -250,8 +308,12 @@ impl CudaDetector {
         stream.synchronize()?;
         stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
         let enqueued = self
-            .normalize(&stream, &rgb, &dims, &mut buffers[0])
-            .and_then(|()| self.enqueue(&stream, &mut buffers, &mut scratch, &views));
+            .normalize(&stream, &rgb, &params, &mut buffers[0])
+            .and_then(|()| self.enqueue(&stream, &mut buffers, &mut scratch, &views))
+            .and_then(|()| {
+                let shortlist = (&mut count, &mut rows, &mut values);
+                self.shortlist(&stream, &buffers, &views, &params, shortlist)
+            });
         // Always end the capture, even after a failed launch, so the stream is usable again.
         let graph = stream.end_capture(sys::CUgraphInstantiate_flags(0));
         enqueued?;
@@ -261,10 +323,71 @@ impl CudaDetector {
             stream,
             graph,
             rgb,
-            dims,
+            params,
+            count,
+            rows,
+            values,
             buffers,
             views,
         })
+    }
+
+    /// Zero the counter, then shortlist each level's anchors from its merged head buffer.
+    fn shortlist(
+        &self,
+        stream: &Arc<CudaStream>,
+        buffers: &[CudaSlice<f32>],
+        views: &[(usize, usize, usize)],
+        params: &CudaSlice<u32>,
+        (count, rows, values): (
+            &mut CudaSlice<u32>,
+            &mut CudaSlice<u32>,
+            &mut CudaSlice<f32>,
+        ),
+    ) -> Result<()> {
+        stream.memset_zeros(count)?;
+        let mut base = 0u32;
+        for level in 0..3 {
+            let [score, boxes, points] = [level, level + 3, level + 6].map(|i| OUTPUTS[i]);
+            let [_, _, cells, _] = self.shapes[score];
+            let plane = (cells * cells) as u32;
+            for (slot, channels) in [(score, 2), (boxes, 8), (points, 20)] {
+                ensure!(
+                    self.shapes[slot] == [1, channels, cells, cells],
+                    "level {level} head shape {:?}",
+                    self.shapes[slot]
+                );
+            }
+            let buffer = views[score].0;
+            ensure!(
+                views[boxes].0 == buffer && views[points].0 == buffer,
+                "level {level} heads are not merged into one buffer"
+            );
+            // SAFETY: the three offsets index the level's merged buffer at the shapes checked
+            // above; the shortlist buffers hold CANDIDATES rows of one id and nine values.
+            unsafe {
+                stream
+                    .launch_builder(&self.runtime.candidates)
+                    .arg(&buffers[buffer])
+                    .arg(params)
+                    .arg(&mut *count)
+                    .arg(&mut *rows)
+                    .arg(&mut *values)
+                    .arg(&plane)
+                    .arg(&(views[score].1 as u32))
+                    .arg(&(views[boxes].1 as u32))
+                    .arg(&(views[points].1 as u32))
+                    .arg(&base)
+                    .arg(&(CANDIDATES as u32))
+                    .launch(LaunchConfig {
+                        grid_dim: ((plane * 2).div_ceil(128), 1, 1),
+                        block_dim: (128, 1, 1),
+                        shared_mem_bytes: 0,
+                    })?;
+            }
+            base += plane * 2;
+        }
+        Ok(())
     }
 
     fn normalize(
@@ -438,6 +561,48 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires a compatible NVIDIA GPU and the detector model"]
+    fn the_shortlist_decodes_exactly_as_the_maps() -> Result<()> {
+        use crate::scrfd::{decode_candidates, decode_maps};
+        let model =
+            fcs_utils::model_path("models/scrfd80k_500m_640.onnx")?.context("model required")?;
+        let cuda = CudaDetector::load(&model)?;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut images = std::fs::read_dir(root.join("fixtures/images"))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        images.retain(|path| fcs_utils::is_supported_image_path(path));
+        images.sort();
+        let mut faces = 0;
+        let mut last = None;
+        for path in &images {
+            let (letterbox, fit) =
+                crate::scrfd::letterbox(&fcs_utils::load_image(path)?, INPUT_SIZE);
+            let Heads::Maps(maps) = cuda.infer(&letterbox, None)? else {
+                anyhow::bail!("maps were asked for");
+            };
+            for threshold in [0.2, 0.5, 0.8] {
+                let expected = decode_maps(&maps, fit, threshold, INPUT_SIZE)?;
+                let Heads::Candidates(candidates) = cuda.infer(&letterbox, Some(threshold))? else {
+                    panic!(
+                        "{}: the shortlist overflowed at {threshold}",
+                        path.display()
+                    );
+                };
+                let actual = decode_candidates(&candidates, fit, threshold, INPUT_SIZE);
+                assert_eq!(actual, expected, "{} at {threshold}", path.display());
+                faces += expected.len();
+            }
+            last = Some(letterbox);
+        }
+        ensure!(faces > 0, "the fixtures produced no detections to compare");
+        // At 0 every anchor qualifies, so the shortlist overflows into the full maps.
+        let letterbox = last.context("image fixtures required")?;
+        assert!(matches!(cuda.infer(&letterbox, Some(0.0))?, Heads::Maps(_)));
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "requires a compatible NVIDIA GPU; run explicitly before shipping CUDA changes"]
     fn cuda_matches_cpu_and_is_safe_for_concurrent_inference() -> Result<()> {
         let path =
@@ -462,7 +627,9 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         let check = |cuda: &CudaDetector| -> Result<()> {
             for (letterbox, expected) in &cases {
-                let actual = cuda.infer(letterbox)?;
+                let Heads::Maps(actual) = cuda.infer(letterbox, None)? else {
+                    anyhow::bail!("maps were asked for");
+                };
                 assert_eq!(actual.len(), expected.len());
                 for ((values, shape), expected) in actual.iter().zip(expected) {
                     assert_eq!(*shape, expected.dims());

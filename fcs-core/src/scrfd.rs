@@ -264,24 +264,32 @@ impl ScrfdDetector {
         score_threshold: f32,
         nms_threshold: f32,
     ) -> Result<Vec<Detection>> {
-        let (maps, letterbox) = match &self.backend {
-            // CUDA normalises on the device: the 8-bit letterbox is a quarter of the f32 tensor
-            // to upload, and the CPU skips writing the tensor at all.
-            #[cfg(any(target_os = "windows", target_os = "linux"))]
-            Backend::Cuda(detector) => {
-                let (resized, letterbox) = letterbox(image, INPUT_SIZE);
-                (detector.infer(&resized)?, letterbox)
-            }
-            _ => {
-                let (input, letterbox) = preprocess(image, INPUT_SIZE);
-                (self.infer(input)?, letterbox)
-            }
-        };
-        let mut detections = decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?;
-        detections.sort_by(|a, b| b.score.total_cmp(&a.score));
-        apply_nms_in_place(&mut detections, nms_threshold);
-        Ok(detections)
+        // CUDA normalises on the device -- the 8-bit letterbox is a quarter of the f32 tensor
+        // to upload -- and shortlists the anchors there, so only those come back.
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Backend::Cuda(detector) = &self.backend {
+            let (resized, letterbox) = letterbox(image, INPUT_SIZE);
+            let detections = match detector.infer(&resized, Some(score_threshold))? {
+                crate::cuda::Heads::Candidates(candidates) => {
+                    decode_candidates(&candidates, letterbox, score_threshold, INPUT_SIZE)
+                }
+                crate::cuda::Heads::Maps(maps) => {
+                    decode_maps(&maps, letterbox, score_threshold, INPUT_SIZE)?
+                }
+            };
+            return Ok(suppress(detections, nms_threshold));
+        }
+        let (input, letterbox) = preprocess(image, INPUT_SIZE);
+        let detections = decode_maps(&self.infer(input)?, letterbox, score_threshold, INPUT_SIZE)?;
+        Ok(suppress(detections, nms_threshold))
     }
+}
+
+/// Best first, then non-maximum suppression: the same for every engine.
+fn suppress(mut detections: Vec<Detection>, nms_threshold: f32) -> Vec<Detection> {
+    detections.sort_by(|a, b| b.score.total_cmp(&a.score));
+    apply_nms_in_place(&mut detections, nms_threshold);
+    detections
 }
 
 /// Median time of `run` in milliseconds, after untimed runs that absorb first-use costs (buffer
@@ -429,53 +437,114 @@ fn decode_level(
     score_threshold: f32,
     detections: &mut Vec<Detection>,
 ) {
-    {
-        let rows = cells * cells * ANCHORS_PER_CELL;
-        for row in 0..rows {
-            let score = scores[row];
-            if score < score_threshold {
+    let rows = cells * cells * ANCHORS_PER_CELL;
+    for row in 0..rows {
+        let score = scores[row];
+        if score < score_threshold {
+            continue;
+        }
+        detections.push(decode_row(
+            score,
+            &boxes[row * 4..row * 4 + 4],
+            &points[row * LANDMARKS * 2..],
+            row,
+            cells,
+            stride,
+            letterbox,
+        ));
+    }
+}
+
+/// The CUDA shortlist (`cuda::Heads::Candidates`) decoded exactly as [`decode_maps`] would:
+/// the same sigmoid, threshold and geometry over the same raw values, in the same row order.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub(crate) fn decode_candidates(
+    candidates: &[(u32, [f32; 9])],
+    letterbox: Letterbox,
+    score_threshold: f32,
+    size: u32,
+) -> Vec<Detection> {
+    let mut detections = Vec::new();
+    for &(id, ref values) in candidates {
+        let mut row = id as usize;
+        for stride in STRIDES {
+            let cells = (size / stride) as usize;
+            let rows = cells * cells * ANCHORS_PER_CELL;
+            if row >= rows {
+                row -= rows;
                 continue;
             }
-            // Rows run spatially with the anchors interleaved, so a cell's anchors are adjacent.
-            let cell = row / ANCHORS_PER_CELL;
-            let centre_x = (cell % cells) as f32 * stride;
-            let centre_y = (cell / cells) as f32 * stride;
-
-            // distance2bbox: left, top, right, bottom distances outward from the centre.
-            let d = &boxes[row * 4..row * 4 + 4];
-            let x1 = centre_x - d[0] * stride;
-            let y1 = centre_y - d[1] * stride;
-            let x2 = centre_x + d[2] * stride;
-            let y2 = centre_y + d[3] * stride;
-
-            // Only the two eyes are real. This model's landmark head was trained on eye pairs
-            // clicked for this project, with nose and mouth corners written `-1` and weighted
-            // to zero (`tools/dataset/to_labelv2.py`), so those three outputs received no
-            // gradient at all: they emit near-zero distances that decode to the anchor centre,
-            // which lands *above* the face and is identical for all three. Left in, they look
-            // like landmarks and are drawn as landmarks, so they are reported absent.
-            let mut landmarks = [None; LANDMARKS];
-            for (index, landmark) in landmarks.iter_mut().enumerate().take(TRAINED_LANDMARKS) {
-                let dx = points[row * LANDMARKS * 2 + index * 2];
-                let dy = points[row * LANDMARKS * 2 + index * 2 + 1];
-                *landmark = Some(Landmark::new(
-                    (centre_x + dx * stride) / letterbox.scale,
-                    (centre_y + dy * stride) / letterbox.scale,
+            let score = sigmoid(values[0]);
+            if score >= score_threshold {
+                detections.push(decode_row(
+                    score,
+                    &values[1..5],
+                    &values[5..],
+                    row,
+                    cells,
+                    stride as f32,
+                    letterbox,
                 ));
             }
-
-            detections.push(Detection {
-                bbox: BoundingBox {
-                    x: x1 / letterbox.scale,
-                    y: y1 / letterbox.scale,
-                    width: (x2 - x1) / letterbox.scale,
-                    height: (y2 - y1) / letterbox.scale,
-                },
-                landmarks,
-                score,
-            });
+            break;
         }
     }
+    detections
+}
+
+/// One row's detection: `boxes` holds its four distances and `points` starts at its landmark
+/// offsets, of which only the two trained eyes are read.
+fn decode_row(
+    score: f32,
+    boxes: &[f32],
+    points: &[f32],
+    row: usize,
+    cells: usize,
+    stride: f32,
+    letterbox: Letterbox,
+) -> Detection {
+    // Rows run spatially with the anchors interleaved, so a cell's anchors are adjacent.
+    let cell = row / ANCHORS_PER_CELL;
+    let centre_x = (cell % cells) as f32 * stride;
+    let centre_y = (cell / cells) as f32 * stride;
+
+    // distance2bbox: left, top, right, bottom distances outward from the centre.
+    let x1 = centre_x - boxes[0] * stride;
+    let y1 = centre_y - boxes[1] * stride;
+    let x2 = centre_x + boxes[2] * stride;
+    let y2 = centre_y + boxes[3] * stride;
+
+    // Only the two eyes are real. This model's landmark head was trained on eye pairs
+    // clicked for this project, with nose and mouth corners written `-1` and weighted
+    // to zero (`tools/dataset/to_labelv2.py`), so those three outputs received no
+    // gradient at all: they emit near-zero distances that decode to the anchor centre,
+    // which lands *above* the face and is identical for all three. Left in, they look
+    // like landmarks and are drawn as landmarks, so they are reported absent.
+    let mut landmarks = [None; LANDMARKS];
+    for (index, landmark) in landmarks.iter_mut().enumerate().take(TRAINED_LANDMARKS) {
+        let dx = points[index * 2];
+        let dy = points[index * 2 + 1];
+        *landmark = Some(Landmark::new(
+            (centre_x + dx * stride) / letterbox.scale,
+            (centre_y + dy * stride) / letterbox.scale,
+        ));
+    }
+
+    Detection {
+        bbox: BoundingBox {
+            x: x1 / letterbox.scale,
+            y: y1 / letterbox.scale,
+            width: (x2 - x1) / letterbox.scale,
+            height: (y2 - y1) / letterbox.scale,
+        },
+        landmarks,
+        score,
+    }
+}
+
+/// The score head's activation. One function, so both decode paths round identically.
+fn sigmoid(value: f32) -> f32 {
+    1.0 / (1.0 + (-value).exp())
 }
 
 /// Decode the raw `(1, anchors*channels, height, width)` maps the built-in engines produce.
@@ -540,11 +609,8 @@ fn deployment_rows(
                 for channel in 0..channels {
                     let value = data[(anchor * channels + channel) * plane + y * width + x];
                     let row = (y * width + x) * ANCHORS_PER_CELL + anchor;
-                    rows[row * channels + channel] = if sigmoid {
-                        1.0 / (1.0 + (-value).exp())
-                    } else {
-                        value
-                    };
+                    rows[row * channels + channel] =
+                        if sigmoid { self::sigmoid(value) } else { value };
                 }
             }
         }

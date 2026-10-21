@@ -20,9 +20,9 @@ fn sqrt(x: f32) -> f32 { cuda_device::float::sqrt_rn_f32(x) }
 #[cuda_device::device]
 fn fma(x: f32, y: f32, z: f32) -> f32 { cuda_device::float::fma_rn_f32(x, y, z) }
 #[cuda_device::device]
-unsafe fn atomic_increment(p: *mut u32) {
+unsafe fn atomic_increment(p: *mut u32) -> u32 {
     use cuda_device::atomic::{DeviceAtomicU32, AtomicOrdering};
-    unsafe { (&*p.cast::<DeviceAtomicU32>()).fetch_add(1, AtomicOrdering::Relaxed); }
+    unsafe { (&*p.cast::<DeviceAtomicU32>()).fetch_add(1, AtomicOrdering::Relaxed) }
 }
 
 include!("../../kernels.rs");

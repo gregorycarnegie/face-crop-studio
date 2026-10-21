@@ -341,6 +341,40 @@ cuda_kernel! {
     }
 }
 
+// Shortlist one level's anchors whose raw score logit reaches params[2] (a logit, as f32 bits)
+// for the host to decode exactly. Each candidate writes its row id (base + cell * 2 + anchor,
+// the CPU decode's order) and nine raw values: score logit, four box distances, the two trained
+// eyes' four offsets. Slots come from an atomic counter, so their order varies; the host sorts.
+// Past `capacity` only the count grows, and the host reads the full maps instead.
+cuda_kernel! {
+    fn fcs_candidates(level: *const f32, params: *const u32, count: *mut u32, rows: *mut u32,
+        values: *mut f32, plane: u32, score_at: u32, box_at: u32, point_at: u32, base: u32,
+        capacity: u32,
+    ) {
+        let i = index();
+        if i >= plane * 2 { return; }
+        let cell = i / 2;
+        let anchor = i % 2;
+        // SAFETY: the host passes the level's merged head buffer and these channel offsets into
+        // it, a zeroed counter, and room for `capacity` rows and nine values per row.
+        unsafe {
+            let logit = *level.add((score_at + anchor * plane + cell) as usize);
+            if logit < f32::from_bits(*params.add(2)) { return; }
+            let slot = atomic_increment(count);
+            if slot >= capacity { return; }
+            *rows.add(slot as usize) = base + i;
+            let out = values.add((slot * 9) as usize);
+            *out = logit;
+            let mut k = 0;
+            while k < 4 {
+                *out.add((1 + k) as usize) = *level.add((box_at + (anchor * 4 + k) * plane + cell) as usize);
+                *out.add((5 + k) as usize) = *level.add((point_at + (anchor * 10 + k) * plane + cell) as usize);
+                k += 1;
+            }
+        }
+    }
+}
+
 // Split-K for narrow outputs over deep inputs (the detection heads): one thread per chunk of
 // input channels per output, so a 20x20 head still fills the GPU. The partial sums are added
 // in chunk order by fcs_conv_reduce, never by atomics, so results are reproducible.

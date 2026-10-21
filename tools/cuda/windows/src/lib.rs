@@ -32,8 +32,8 @@ fn fma(x: f32, y: f32, z: f32) -> f32 {
     unsafe { core::arch::asm!("fma.rn.f32 {0}, {1}, {2}, {3};", out(reg32) out, in(reg32) x, in(reg32) y, in(reg32) z); }
     out
 }
-unsafe fn atomic_increment(p: *mut u32) {
-    unsafe { (&*p.cast::<core::sync::atomic::AtomicU32>()).fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+unsafe fn atomic_increment(p: *mut u32) -> u32 {
+    unsafe { (&*p.cast::<core::sync::atomic::AtomicU32>()).fetch_add(1, core::sync::atomic::Ordering::Relaxed) }
 }
 
 include!("../../kernels.rs");
