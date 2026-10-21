@@ -51,8 +51,10 @@ exclude_globs = [
     "fcs-gui/src/ui/**",
     "fcs-gui/src/core/**",
     "fcs-gui/src/rendering/**",
-    # app.rs, types.rs, theme.rs, lib.rs, main.rs — the crate-root modules.
+    # app.rs, types.rs, theme.rs, lib.rs, main.rs — the crate-root modules —
+    # and the pieces split out of app.rs, excluded as they were before the split.
     "fcs-gui/src/*.rs",
+    "fcs-gui/src/app/**",
 
     # These two genuinely need hardware in the loop: an enumerable camera and a
     # wgpu adapter. Every mutant survives because the code never runs in CI.
