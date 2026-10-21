@@ -128,7 +128,7 @@ enum Prepared {
 /// Each level's class, box and keypoint heads are three such steps (64->2, 64->8, 64->20).
 /// Run apart, each reads the same input: merged, it is read once, and the 2-channel class head
 /// stops wasting six of its block's eight lanes.
-fn siblings(steps: &[Step], at: usize) -> usize {
+pub(crate) fn siblings(steps: &[Step], at: usize) -> usize {
     let key = |step: &Step| match *step {
         Step::Conv {
             input,

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use cudarc::{
-    driver::{CudaContext, CudaFunction, sys},
+    driver::{CudaContext, CudaFunction, result, sys},
     nvrtc::Ptx,
 };
 use std::sync::Arc;
@@ -15,6 +15,8 @@ pub(crate) const PTX: &str = include_str!("linux.ptx");
 pub struct Runtime {
     pub context: Arc<CudaContext>,
     pub conv: CudaFunction,
+    pub conv_partial: CudaFunction,
+    pub conv_reduce: CudaFunction,
     pub pointwise: CudaFunction,
     pub depthwise: CudaFunction,
     pub add: CudaFunction,
@@ -65,6 +67,9 @@ impl Runtime {
             if context.compute_capability()?.0 < 8 {
                 continue;
             }
+            if let Err(err) = retain_pool_memory(&context) {
+                log::warn!("CUDA memory pool keeps its default release threshold: {err}");
+            }
             // Loading the actual module validates the driver's PTX support, too.
             let module = context
                 .load_module(Ptx::from_src(ptx))
@@ -76,6 +81,8 @@ impl Runtime {
             };
             return Ok(Self {
                 conv: load("fcs_conv")?,
+                conv_partial: load("fcs_conv_partial")?,
+                conv_reduce: load("fcs_conv_reduce")?,
                 pointwise: load("fcs_pointwise")?,
                 depthwise: load("fcs_depthwise")?,
                 add: load("fcs_add")?,
@@ -95,4 +102,23 @@ impl Runtime {
             "CUDA Rust requires a compatible NVIDIA GPU with compute capability 8.0 or newer"
         )
     }
+}
+
+/// Stream-ordered allocations come from the device's default pool, which by default hands
+/// freed memory back to the driver at every synchronize. Every detection then re-mapped its
+/// ~65 MiB of buffers on the GPU timeline, which was half the CUDA inference time.
+// ponytail: fixed 512 MiB covers ~8 concurrent detections; size it from batch parallelism if
+// memory on small cards matters.
+fn retain_pool_memory(context: &CudaContext) -> Result<()> {
+    let mut threshold: u64 = 512 << 20;
+    // SAFETY: the default pool of this context's device; the attribute takes a u64.
+    unsafe {
+        let pool = result::device::get_default_mem_pool(context.cu_device())?;
+        result::mem_pool::set_attribute(
+            pool,
+            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+            (&raw mut threshold).cast(),
+        )?;
+    }
+    Ok(())
 }

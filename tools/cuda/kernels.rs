@@ -320,6 +320,72 @@ cuda_kernel! {
     }
 }
 
+// Split-K for narrow outputs over deep inputs (the detection heads): one thread per chunk of
+// input channels per output, so a 20x20 head still fills the GPU. The partial sums are added
+// in chunk order by fcs_conv_reduce, never by atomics, so results are reproducible.
+cuda_kernel! {
+    fn fcs_conv_partial(
+        input: *const f32, weights: *const f32, partial: *mut f32,
+        height: u32, width: u32, out_h: u32, out_w: u32, in_channels: u32,
+        out_channels: u32, kernel: u32, stride: u32, pad: u32, chunk: u32,
+    ) {
+        let i = index();
+        let plane = out_h * out_w;
+        if out_h == 0 || out_w == 0 || plane == 0 || chunk == 0 { return; }
+        let outputs = out_channels * plane;
+        if outputs == 0 || i >= outputs * ((in_channels + chunk - 1) / chunk) { return; }
+        let o = i % outputs;
+        let x = o % out_w;
+        let y = o / out_w % out_h;
+        let channel = o / plane;
+        let first = i / outputs * chunk;
+        let last = (first + chunk).min(in_channels);
+        // SAFETY: the host checks the geometry and allocations; each thread owns partial[i].
+        unsafe {
+            let mut sum = 0.0;
+            let mut c = first;
+            while c < last {
+                let mut ky = 0;
+                while ky < kernel {
+                    let iy = y * stride + ky;
+                    let mut kx = 0;
+                    while kx < kernel {
+                        let ix = x * stride + kx;
+                        if iy >= pad && iy - pad < height && ix >= pad && ix - pad < width {
+                            let source = (c * height + iy - pad) * width + ix - pad;
+                            let weight = ((channel * in_channels + c) * kernel + ky) * kernel + kx;
+                            sum += *input.add(source as usize) * *weights.add(weight as usize);
+                        }
+                        kx += 1;
+                    }
+                    ky += 1;
+                }
+                c += 1;
+            }
+            *partial.add(i as usize) = sum;
+        }
+    }
+}
+
+cuda_kernel! {
+    fn fcs_conv_reduce(partial: *const f32, bias: *const f32, output: *mut f32,
+        outputs: u32, plane: u32, chunks: u32, relu: u32,
+    ) {
+        let i = index();
+        if plane == 0 || i >= outputs { return; }
+        // SAFETY: partial holds chunks * outputs sums; each thread owns output[i].
+        unsafe {
+            let mut sum = *bias.add((i / plane) as usize);
+            let mut part = 0;
+            while part < chunks {
+                sum += *partial.add((part * outputs + i) as usize);
+                part += 1;
+            }
+            *output.add(i as usize) = if relu != 0 && sum < 0.0 { 0.0 } else { sum };
+        }
+    }
+}
+
 // Dedicated paths avoid the generic convolution's group and kernel loops.
 cuda_kernel! {
     fn fcs_pointwise(input: *const f32, weights: *const f32, bias: *const f32, output: *mut f32,

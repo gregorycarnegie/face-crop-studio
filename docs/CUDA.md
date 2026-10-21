@@ -31,6 +31,9 @@ Uncheck the option to return to automatic WESL/CPU selection.
 
 Both compilers use the same Rust bodies for general/grouped convolution, dedicated
 pointwise/depthwise convolution, fused bias/ReLU, add and nearest-neighbour upsampling.
+Each level's class, box and keypoint heads run as one merged convolution, split over input
+channels into partial sums that a second kernel adds in a fixed order (no atomics), so the
+narrow heads fill the GPU and results stay reproducible.
 The existing SCRFD topology, ONNX weight reader, input preprocessing, decoding and NMS are reused. Weights stay on the device;
 concurrent inference uses separate streams and temporary buffers. The host uses cudarc's
 driver wrapper with dynamic loading. End users need a compatible NVIDIA driver, without
