@@ -175,7 +175,7 @@ def main() -> None:
     ap.add_argument("--scrfd-tools",
                     default="/home/grego/work/insightface/detection/scrfd/tools")
     ap.add_argument("--all-boxes", type=Path,
-                    help="labelv2 file boxing every face (oi_to_labelv2.py). Without it, FP/image "
+                    help="labelv2 file boxing every face (oi_to_labelv2.zig). Without it, FP/image "
                          "is judged against the clicked faces alone and is inflated -- 2,597 real "
                          "test faces were never clicked")
     args = ap.parse_args()

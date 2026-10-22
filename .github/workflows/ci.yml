@@ -67,8 +67,11 @@ jobs:
             exit 1
           fi
           echo "$found script(s) parsed"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
       - name: Check embedded CUDA Rust artifacts
-        run: python3 tools/cuda/build.py --check
+        run: zig run tools/cuda/build.zig -- --check
 
   models:
     name: Prepare Models

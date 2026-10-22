@@ -7,7 +7,7 @@ Copy into the SCRFD checkout's `configs/scrfd/` beside `scrfd_500m_bnkps.py`, th
 The model is upstream's, unchanged. Three things differ from `scrfd_fcs_500m.py`, the config
 behind the label-count curve, and each is there because that run got it wrong or could not ask:
 
-1. **Every face is boxed.** `labelv2_train_all.txt` comes from `oi_to_labelv2.py`, which writes
+1. **Every face is boxed.** `labelv2_train_all.txt` comes from `oi_to_labelv2.zig`, which writes
    every Open Images face box. The curve's `labelv2_train.txt` held only the clicked faces --
    2,500 boxes where Open Images drew 12,070 -- so each curve run learned ~9,300 real faces as
    background.

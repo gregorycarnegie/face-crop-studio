@@ -516,7 +516,7 @@ fn decode_row(
 
     // Only the two eyes are real. This model's landmark head was trained on eye pairs
     // clicked for this project, with nose and mouth corners written `-1` and weighted
-    // to zero (`tools/dataset/to_labelv2.py`), so those three outputs received no
+    // to zero (`tools/dataset/to_labelv2.zig`), so those three outputs received no
     // gradient at all: they emit near-zero distances that decode to the anchor centre,
     // which lands *above* the face and is identical for all three. Left in, they look
     // like landmarks and are drawn as landmarks, so they are reported absent.

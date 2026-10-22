@@ -174,7 +174,7 @@ plausibly costs some recall.
 ## Training on this project's labels
 
 ```sh
-python tools/dataset/to_labelv2.py <data_dir>          # COCO keypoints -> labelv2.txt
+zig run -O ReleaseFast tools/dataset/to_labelv2.zig -- <data_dir>          # COCO keypoints -> labelv2.txt
 cp tools/dataset/scrfd_fcs_500m.py <scrfd>/configs/scrfd/
 cd <scrfd>
 env PYTHONPATH=. ~/work/scrfd-venv/bin/python tools/train.py \

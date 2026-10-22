@@ -91,7 +91,7 @@ never loads ONNX Runtime, even when `ORT_DYLIB_PATH` is set. The library is reta
 as a dev-dependency for tests and benchmarks.
 
 Release packages contain CLI and GUI binaries and the two model files, with no
-ONNX Runtime library. `tools/verify_package.py` runs the packaged CLI from an empty
+ONNX Runtime library. `tools/verify_package.zig` runs the packaged CLI from an empty
 working directory, checks detection, verifies changed eye coordinates, and requires an
 exported aligned crop. Windows, macOS, AppImage staging, and extracted .deb packages
 all use this check.

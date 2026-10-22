@@ -66,3 +66,7 @@ installer/linux/face-crop-studio.png
 # samply profiles and their symbol sidecars
 *.json.gz
 *.json.syms.json
+
+# Zig build cache
+.zig-cache/
+zig-out/

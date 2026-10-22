@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The maintenance scripts that needed only the Python standard library are now Zig 0.17 programs:
+  `tools/cuda/build.zig`, `tools/verify_package.zig`, `tools/find_god_files.zig` and the
+  dataset tools that read and write labels (`to_labelv2`, `subsample_labels`, `oi_to_labelv2`,
+  `to_coco_keypoints`, `review_flagged`, `sample_unmatched`, `eval_yunet`, `baseline_yunet_angle`,
+  `oi_faces`, `coco_faces`, `oi_train_fetch`, `label_eyes`), sharing `tools/dataset/util.zig`. Each was
+  checked against its Python original on the real corpus and gives the same output, including
+  Python's seeded `random` shuffles and sampling; the only difference is LF line endings where the
+  Python wrote CRLF on Windows. CI and the release workflow install Zig with `mlugg/setup-zig`.
+  The scripts that need numpy, torch, OpenCV or ONNX stay in Python.
+
 ## [2.3.1] - 2026-10-21
 
 ### Fixed

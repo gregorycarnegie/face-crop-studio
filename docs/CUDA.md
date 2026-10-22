@@ -65,7 +65,7 @@ Windows kernel regeneration (Python and rustup required):
 
 ```powershell
 rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src
-python tools/cuda/build.py --platform windows
+zig run tools/cuda/build.zig -- --platform windows
 ```
 
 Linux regeneration uses NVIDIA's compiler and its pinned nightly:
@@ -73,7 +73,7 @@ Linux regeneration uses NVIDIA's compiler and its pinned nightly:
 ```bash
 rustup toolchain install nightly-2026-10-11 --profile minimal --component rust-src,rustc-dev,llvm-tools
 cargo +nightly-2026-10-11 install --git https://github.com/NVIDIA/cuda-rust.git --rev e027ac324f663e8408c13c116d7dddd58d5e8daf --locked cargo-oxide
-python3 tools/cuda/build.py --platform linux
+zig run tools/cuda/build.zig -- --platform linux
 ```
 
 The current kernels need no toolkit math libraries during compilation. See
@@ -88,7 +88,7 @@ cargo test -p fcs-core --lib cuda_matches_cpu -- --ignored --nocapture
 cargo test -p fcs-core --test cuda_detection -- --ignored --nocapture
 cargo test -p fcs-utils --lib cuda_image_passes -- --ignored --nocapture
 cargo run --release -p fcs-core --example cuda_comparison -- photo.jpg
-python tools/cuda/build.py --check
+zig run tools/cuda/build.zig -- --check
 ```
 
 The hardware test compares all nine network output maps against the built-in CPU graph

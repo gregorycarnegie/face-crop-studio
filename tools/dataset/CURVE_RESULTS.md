@@ -3,14 +3,14 @@
 The question behind two labelling sessions: 3,605 faces were clicked, and nobody knew how many
 were actually required. This records the measurement rather than the estimate. Four SCRFD-500M
 models are trained on 400, 800, 1600 and 1988 labelled eye pairs, every run seeing every image
-and every box so that only the landmark supervision varies (see `subsample_labels.py`), then
+and every box so that only the landmark supervision varies (see `subsample_labels.zig`), then
 scored on the held-out test set of 1,562 faces whose eyes were clicked and whose side is known.
 
 **Status: complete.** All four trained 640 epochs on an RTX 4090, 17-18 September 2026, about
 six and a half hours each. The answer is in "What the curve says" at the end.
 
 > **Correction, 19 September 2026: the boxes were not all there.** "Every run seeing every
-> image and every box" was true of the label *file* and false of the photographs. `to_labelv2.py`
+> image and every box" was true of the label *file* and false of the photographs. `to_labelv2.zig`
 > builds from the eye-labelling JSON, which holds one entry per clicked face, so
 > `labelv2_train.txt` boxed 2,500 faces in images where Open Images drew 12,070, and
 > `labelv2_test.txt` boxed 2,000 where it drew 4,597.
@@ -27,7 +27,7 @@ six and a half hours each. The answer is in "What the curve says" at the end.
 > * **Recall and angle figures are unaffected** -- both are scored only on the clicked faces,
 >   which were boxed correctly.
 >
-> `oi_to_labelv2.py` now writes every Open Images box (`labelv2_{train,test}_all.txt`), with
+> `oi_to_labelv2.zig` now writes every Open Images box (`labelv2_{train,test}_all.txt`), with
 > group-of boxes, depictions and unboxed YuNet detections as ignore regions, and the 80,000-image
 > run (`scrfd_fcs80k_500m.py`) trains and is scored on those.
 >

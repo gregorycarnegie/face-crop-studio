@@ -282,11 +282,15 @@ jobs:
             }
           }
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
       - name: Verify packaged inference without ONNX Runtime
         shell: pwsh
         run: |
           $DistDir = "dist/$env:DIST_NAME"
-          python tools/verify_package.py "$DistDir" "$DistDir/fcs-cli.exe" "$DistDir/samples/sample_01.jpg"
+          zig run tools/verify_package.zig -- "$DistDir" "$DistDir/fcs-cli.exe" "$DistDir/samples/sample_01.jpg"
           if ($LASTEXITCODE -ne 0) { throw "packaged inference check failed" }
 
       - name: Build NSIS installer
@@ -574,11 +578,15 @@ jobs:
           Version="${RawVersion#v}"
           bash installer/macos/build_macos.sh "$Version"
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
       - name: Verify packaged inference without ONNX Runtime
         run: |
           set -euo pipefail
           App="dist/macos/Face Crop Studio.app"
-          python3 tools/verify_package.py "$App" "$App/Contents/MacOS/fcs-cli" "$App/Contents/Resources/samples/sample_01.jpg"
+          zig run tools/verify_package.zig -- "$App" "$App/Contents/MacOS/fcs-cli" "$App/Contents/Resources/samples/sample_01.jpg"
 
       - name: Generate checksums
         shell: bash
@@ -668,15 +676,19 @@ jobs:
           bash installer/linux/build_linux.sh "$Version"
           ls -lh dist/linux
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
       - name: Verify packaged inference without ONNX Runtime
         run: |
           set -euo pipefail
           AppDir="dist/linux/face-crop-studio.AppDir"
-          python3 tools/verify_package.py "$AppDir" "$AppDir/usr/bin/fcs-cli" "$AppDir/usr/share/face-crop-studio/samples/sample_01.jpg"
+          zig run tools/verify_package.zig -- "$AppDir" "$AppDir/usr/bin/fcs-cli" "$AppDir/usr/share/face-crop-studio/samples/sample_01.jpg"
           DebDir="$RUNNER_TEMP/fcs-deb-smoke"
           mkdir -p "$DebDir"
           dpkg-deb -x dist/linux/*.deb "$DebDir"
-          python3 tools/verify_package.py "$DebDir" "$DebDir/usr/bin/fcs-cli" "$DebDir/usr/share/face-crop-studio/samples/sample_01.jpg"
+          zig run tools/verify_package.zig -- "$DebDir" "$DebDir/usr/bin/fcs-cli" "$DebDir/usr/share/face-crop-studio/samples/sample_01.jpg"
 
       - name: Generate checksums
         shell: bash

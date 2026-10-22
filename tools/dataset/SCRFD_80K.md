@@ -48,7 +48,7 @@ Two changes, and they cannot be fully separated:
 1. **32x the images.** 80,000 against 2,482.
 2. **Every face boxed.** The curve's label files boxed only the clicked faces -- 2,500 boxes in
    images where Open Images drew 12,070 -- so each curve run was taught that ~9,300 real faces
-   were background. `oi_to_labelv2.py` writes every box; see the correction at the top of
+   were background. `oi_to_labelv2.zig` writes every box; see the correction at the top of
    `CURVE_RESULTS.md`.
 
 Whoever wants the split can have it for ~7 hours of GPU: train the 2,482 images again with

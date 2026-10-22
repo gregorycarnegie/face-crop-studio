@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Train SCRFD-500M-bnkps four times, on 400 / 800 / 1600 / 1988 labelled eye pairs, to find
 # out how many the landmark head actually needs. Every run sees every image and every box;
-# only the number of faces whose eye points are supervised changes (see subsample_labels.py).
+# only the number of faces whose eye points are supervised changes (see subsample_labels.zig).
 #
 # Roughly 7 hours per run, so about a day in total. Launch it detached and poll the logs:
 #

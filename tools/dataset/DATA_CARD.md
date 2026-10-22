@@ -48,7 +48,7 @@ Recall barely moves, because a face YuNet found that nobody labelled adds to bot
 the fraction. Precision moves a long way: the detector is right nearly every time it fires,
 and it is the labels that are incomplete. A further 1,202 detections overlapped an ignore
 region and are excluded from both columns as unjudgeable. Rebuild the contact sheet this
-came from with `sample_unmatched.py`.
+came from with `sample_unmatched.zig`.
 
 ## 2. Open Images V7 — the training pool
 
@@ -99,12 +99,12 @@ with no labelling work.
   test set, which is what section 1 measures. They hold 15,475 labelable faces, 2,000 of
   which now carry eye points, so they are spent as a test set and must not be trained on.
   Training labels come from the train split instead -- 571,247 labelable faces across
-  278,655 images -- which `label_eyes.py --split train` queues without needing the images
+  278,655 images -- which `label_eyes.zig --split train` queues without needing the images
   downloaded first.
 
 ### First eye-point pass, 2026-09-16
 
-2,000 boxes from those splits went through `label_eyes.py`:
+2,000 boxes from those splits went through `label_eyes.zig`:
 
 | | Count |
 |---|---|
@@ -129,7 +129,7 @@ head should be supervised, since a second eye is not visible to supervise it wit
 
 ### Second pass, train split, 2026-09-17
 
-2,500 more boxes, this time from the train split via `label_eyes.py --split train`, whose
+2,500 more boxes, this time from the train split via `label_eyes.zig --split train`, whose
 images were pulled from the mirror as they came up rather than downloaded in advance:
 
 | | Count |
@@ -142,12 +142,12 @@ images were pulled from the mirror as they came up rather than downloaded in adv
 Yield rose slightly, 80% against 78%, and eye separation and eye-line height landed on the
 same medians as the first pass -- 0.40 of box width and 0.39 of box height -- which is what
 consistent clicking looks like across two sittings on different images. Candidates were found
-by the same two rules and shown by `review_flagged.py`; as in the first pass, every
+by the same two rules and shown by `review_flagged.zig`; as in the first pass, every
 right-to-left pair turned out to be an inverted face rather than a slip.
 
 ### Training labels
 
-`to_coco_keypoints.py` writes two files, one per role, because validation+test is the held-out
+`to_coco_keypoints.zig` writes two files, one per role, because validation+test is the held-out
 set and a single file holding both is one careless glob away from training on it:
 
 | | `face_keypoints_train.json` | `face_keypoints_test.json` |
@@ -169,7 +169,7 @@ An earlier version of this card claimed SCRFD's own format could not express par
 That is wrong, and reading `RetinaFaceDataset._parse_ann_line` settled it: SCRFD trains from
 `labelv2.txt`, where each of the five landmarks carries its own weight and a point written as
 `-1 -1 -1` is dropped from the landmark loss while its box still trains. Partial labels are
-therefore native to it. `to_labelv2.py` emits that format from these COCO files, writing the
+therefore native to it. `to_labelv2.zig` emits that format from these COCO files, writing the
 two eyes and ignoring nose and mouth, and ignoring both eyes on `steep_roll` faces rather than
 guessing which side is which.
 
@@ -206,7 +206,7 @@ image appears in both files.
 ```sh
 # COCO: licence tiers and hand-labelled eye points (~241 MB)
 curl -O http://images.cocodataset.org/annotations/annotations_trainval2017.zip
-python tools/dataset/coco_faces.py annotations_trainval2017.zip
+zig run -O ReleaseFast tools/dataset/coco_faces.zig -- annotations_trainval2017.zip
 
 # Open Images: face boxes, streamed so the 2.3 GB box file never lands on disk
 for f in v6/oidv6-train-annotations-bbox v5/validation-annotations-bbox v5/test-annotations-bbox; do
@@ -217,27 +217,27 @@ for s in train/train-images-boxable-with-rotation validation/validation-images-w
          test/test-images-with-rotation; do
   curl -sSL -O "https://storage.googleapis.com/openimages/2018_04/$s.csv"
 done
-python tools/dataset/oi_faces.py .        # argument is the directory holding those CSVs
+zig run -O ReleaseFast tools/dataset/oi_faces.zig -- .        # argument is the directory holding those CSVs
 
 # YuNet baseline: images from the public mirror, then detect and score
 #   https://open-images-dataset.s3.amazonaws.com/{validation,test}/<ImageID>.jpg
 fcs-cli --input images/ --json det.json --gpu --score-threshold 0.8
-python tools/dataset/eval_yunet.py det.json images/
+zig run -O ReleaseFast tools/dataset/eval_yunet.zig -- det.json images/
 
 # Audit: contact sheet of the detections that matched no box, to judge by eye
-python tools/dataset/sample_unmatched.py . det.json unmatched.html 60
+zig run -O ReleaseFast tools/dataset/sample_unmatched.zig -- . det.json unmatched.html 60
 
 # Label eye points, which Open Images has none of: click-through page, resumable,
 # appending to eye_labels.jsonl. validation+test is the held-out test set, so training
 # labels come from --split train, whose images are pulled from the mirror as they come up.
-python tools/dataset/label_eyes.py . --count 2000                 # test set (done)
-python tools/dataset/label_eyes.py . --split train --count 2500   # training labels
+zig run -O ReleaseFast tools/dataset/label_eyes.zig -- . --count 2000                 # test set (done)
+zig run -O ReleaseFast tools/dataset/label_eyes.zig -- . --split train --count 2500   # training labels
 
 # Convert those clicks into COCO keypoint annotations
-python tools/dataset/to_coco_keypoints.py .
+zig run -O ReleaseFast tools/dataset/to_coco_keypoints.zig -- .
 
 # And into SCRFD's own labelv2.txt, for training (see TRAINING_SETUP.md)
-python tools/dataset/to_labelv2.py .
+zig run -O ReleaseFast tools/dataset/to_labelv2.zig -- .
 ```
 
 A by-product of the first full run: 7 of these images are CMYK JPEGs, which used to kill
