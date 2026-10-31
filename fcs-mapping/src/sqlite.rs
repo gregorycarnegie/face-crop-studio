@@ -31,7 +31,7 @@ pub(super) type Denied = Arc<Mutex<Option<String>>>;
 /// complete as its twelve words, and had to hand-roll word boundaries to avoid rejecting a
 /// column called `updated_at`.
 pub(super) fn open_guarded(path: &Path) -> Result<(Connection, Denied)> {
-    let conn = Connection::open_with_flags(path, READ_ONLY)
+    let mut conn = Connection::open_with_flags(path, READ_ONLY)
         .with_context(|| format!("failed to open sqlite database {}", path.display()))?;
     let denied: Denied = Denied::default();
     let sink = Arc::clone(&denied);
@@ -102,7 +102,6 @@ pub(super) fn table_sqlite_internal(
     let mut stmt = prepare_guarded(&conn, &denied, &sql)?;
     let columns = stmt
         .column_names()
-        .iter()
         .enumerate()
         .map(|(idx, name)| {
             let trimmed = name.trim();

@@ -86,9 +86,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "googletest"
-version = "0.14.3"
+version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6b5e2f2b556b7b90297a5a35c8267dd43a537923d2b329beefdba2b4ec19d94"
+checksum = "07de445a934242060307c2570b9f2dc4788b02ff3637de2f42268756a3eaad4c"
 dependencies = [
  "googletest_macro",
  "num-traits",
@@ -98,9 +98,9 @@ dependencies = [
 
 [[package]]
 name = "googletest_macro"
-version = "0.14.3"
+version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ae6abc96141edd26bf5aeec0f119c129c44de3ced09e5073711a02cb74725d0"
+checksum = "088fcbe402e99d60ed6611e1b5105ab556b8a984a6a420977850d806c2aba882"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -197,18 +197,18 @@ checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 
 [[package]]
 name = "rstest"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948203e6d13b83e51a90d7cf236dd58a0065f23f4b902f00f306e7eb2bd09b9c"
+checksum = "b376e512f30a7686a8dbc6aeaace99b3ade1c26c1c63473473a817ade226dafc"
 dependencies = [
  "rstest_macros",
 ]
 
 [[package]]
 name = "rstest_macros"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8d92eaf7b6e51e12471d71ddc72608e7151573de44099aacfbb1128177c0da4"
+checksum = "88512dbfb5b73a0dfa38aef7bc73b5657035fce477b923faf12d332dd83051ea"
 dependencies = [
  "cfg-if",
  "glob",

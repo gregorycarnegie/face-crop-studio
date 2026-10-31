@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-10-31
+
+### Fixed
+
+- Adapted the SQLite mapping reader to the updated rusqlite API while retaining its
+  read-only guards, and synchronized the safety and fuzz harness lockfiles.
+
 ### Changed
 
+- Updated notify, Parquet/Arrow, rusqlite, googletest, and zip dependencies.
 - The maintenance scripts that needed only the Python standard library are now Zig 0.17 programs:
   `tools/cuda/build.zig`, `tools/verify_package.zig`, `tools/find_god_files.zig` and the
   dataset tools that read and write labels (`to_labelv2`, `subsample_labels`, `oi_to_labelv2`,
@@ -2566,7 +2574,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...HEAD
+[2.3.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.1...v2.2.2

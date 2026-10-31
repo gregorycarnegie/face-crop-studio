@@ -30,7 +30,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
-version = "2.3.1"
+version = "2.3.2"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
@@ -71,7 +71,7 @@ rfd = "0.17.2"
 # Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
 # APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
 # ours, because a create event fires before the file finishes being written.
-notify = "8.2.0"
+notify = "8.2.1"
 
 # Image processing and graphics
 fast_image_resize = { version = "6.1.0", features = ["rayon"] }
@@ -143,7 +143,7 @@ base64 = "0.23.1"
 calamine = "0.37.0"
 crc32fast = "1.5.3"
 csv = "1.4.0"
-parquet = { version = "60.0.0", default-features = false, features = [
+parquet = { version = "60.1.0", default-features = false, features = [
     "arrow",
     "flate2",
     "flate2-zlib-rs",
@@ -154,7 +154,7 @@ parquet = { version = "60.0.0", default-features = false, features = [
 # `hooks` is not a default feature and is what `Connection::authorizer` lives behind.
 # It is the read-only guard for user-supplied SQL in fcs-mapping: an allowlist SQLite
 # enforces while it compiles the statement, rather than a keyword denylist of ours.
-rusqlite = { version = "0.40.2", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
@@ -174,7 +174,7 @@ walkdir = "2.5.0"
 # Testing and benchmarking
 assert_cmd = "2.2.2"
 criterion = "0.8.2"
-googletest = "0.14.3"
+googletest = "0.14.4"
 insta = { version = "1.48.0", default-features = false, features = ["json"] }
 proptest = "1.12.0"
 # Table-driven tests: one named test per `#[case]`, so a failing row is reported on its own and
@@ -183,4 +183,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.0.5", default-features = false }
+zip = { version = "9.1.3", default-features = false }

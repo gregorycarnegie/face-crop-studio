@@ -13,7 +13,7 @@ cargo-fuzz = true
 [dependencies]
 # Not workspace-inherited (see above); keep in step with the root [workspace.dependencies].
 anyhow = "1.0.104"
-crc32fast = "1.5.2"
+crc32fast = "1.5.3"
 image = { version = "0.25.10", default-features = false }
 libfuzzer-sys = "0.4.13"
 prost = "0.14.4"
