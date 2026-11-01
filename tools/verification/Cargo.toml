@@ -1,0 +1,11 @@
+[package]
+name = "crop-region"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Translate production geometry without GPU, image codecs, or the Rust workspace.
+[workspace]
+
+[lib]
+path = "lib.rs"
