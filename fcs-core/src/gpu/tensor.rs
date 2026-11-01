@@ -7,6 +7,8 @@ use std::{
 };
 use wgpu::util::DeviceExt;
 
+use crate::tensor::size::checked_f32_bytes;
+
 /// Describes the dimensionality of a GPU tensor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorShape {
@@ -274,7 +276,8 @@ impl GpuTensor {
             shape.elements(),
             data.len()
         );
-        let size_bytes = (shape.elements() * std::mem::size_of::<f32>()) as u64;
+        let size_bytes = checked_f32_bytes(shape.elements())
+            .context("tensor buffer size overflows usize")? as u64;
         let usage = tensor_usage();
         let buffer = if let Some(pool_ref) = pool.as_ref() {
             let buffer = pool_ref.acquire(size_bytes, usage, label)?;
@@ -302,7 +305,8 @@ impl GpuTensor {
         D: Into<Vec<usize>>,
     {
         let shape = TensorShape::new(dims)?;
-        let size_bytes = (shape.elements() * std::mem::size_of::<f32>()) as u64;
+        let size_bytes = checked_f32_bytes(shape.elements())
+            .context("tensor buffer size overflows usize")? as u64;
         let usage = tensor_usage();
         let buffer = if let Some(pool_ref) = pool.as_ref() {
             pool_ref.acquire(size_bytes, usage, label)?
@@ -344,7 +348,8 @@ fn read_buffer(
     elements: usize,
     label: &str,
 ) -> Result<Vec<f32>> {
-    let size_bytes = (elements * std::mem::size_of::<f32>()) as u64;
+    let size_bytes =
+        checked_f32_bytes(elements).context("tensor buffer size overflows usize")? as u64;
     let slice = buffer.slice(0..size_bytes);
     let (sender, receiver) = mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |result| {

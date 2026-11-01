@@ -21,6 +21,7 @@ cargo test --locked --target-dir "$cache/rust-target"
 lake -d "$backend" env lean -DwarningAsError=true \
     --root="$build" -o "$build/CropRegion.olean" "$build/CropRegion.lean"
 lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/Proofs.lean"
+lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/TensorProofs.lean"
 
 # Prove the checker rejects a real Rust regression without touching production sources.
 mutant="$build/mutation"

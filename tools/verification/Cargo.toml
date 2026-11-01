@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# Translate production geometry without GPU, image codecs, or the Rust workspace.
+# Translate production integer calculations without GPU or image codec dependencies.
 [workspace]
 
 [lib]

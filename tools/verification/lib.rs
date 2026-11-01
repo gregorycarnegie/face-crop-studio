@@ -1,6 +1,10 @@
 #[path = "../../fcs-core/src/cropper/region.rs"]
 pub mod region;
 
+#[path = "../../fcs-core/src/tensor/size.rs"]
+#[allow(dead_code)]
+pub mod size;
+
 #[cfg(test)]
 mod tests {
     use super::region::CropRegion;

@@ -1,4 +1,4 @@
-name: Lean Crop Geometry
+name: Lean Geometry and Tensor Sizes
 
 on:
   push:
@@ -6,12 +6,18 @@ on:
     paths:
       - fcs-core/src/cropper.rs
       - fcs-core/src/cropper/**
+      - fcs-core/src/tensor.rs
+      - fcs-core/src/tensor/**
+      - fcs-core/src/gpu/tensor.rs
       - tools/verification/**
       - .github/workflows/lean.yml
   pull_request:
     paths:
       - fcs-core/src/cropper.rs
       - fcs-core/src/cropper/**
+      - fcs-core/src/tensor.rs
+      - fcs-core/src/tensor/**
+      - fcs-core/src/gpu/tensor.rs
       - tools/verification/**
       - .github/workflows/lean.yml
   workflow_dispatch:

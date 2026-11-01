@@ -1,11 +1,13 @@
-# Lean crop geometry pilot
+# Lean geometry and tensor sizing
 
 This verifies the production `CropRegion` implementation, rather than a separately
 written Lean version. `lib.rs` imports `fcs-core/src/cropper/region.rs` directly;
 the app re-exports the same type through its existing public paths.
+It also imports the production helpers in `fcs-core/src/tensor/size.rs` used by
+the CPU tensor constructors and GPU buffer sizing.
 
 Every check translates that Rust file through Charon and Aeneas, then checks
-`Proofs.lean` against the freshly generated model. Generated files and toolchains
+`Proofs.lean` and `TensorProofs.lean` against the freshly generated model. Generated files and toolchains
 stay outside the tracked source tree.
 
 The check also changes the width clamp from `min` to `max` in a disposable Rust
@@ -24,6 +26,17 @@ sources are never changed by this negative control; its log is in
   **same image dimensions** returns exactly the geometric overlap. It returns
   `None` exactly when either overlap length is zero, including zero-sized images
   and crops completely outside the image.
+- `checked_elements_spec`: the dimension loop terminates without panicking and
+  returns the exact unbounded mathematical product, or rejects a prefix whose
+  product exceeds `usize::MAX`. Empty shapes have one element; zero dimensions
+  produce zero unless an earlier prefix already overflowed.
+- `checked_f32_bytes_spec`: the byte count is exactly four times the element
+  count, or it exceeds `usize::MAX` and is rejected. It never silently wraps.
+
+Both CPU tensor constructors now reject dimension-product overflow rather than
+panicking in debug or accepting a wrapped product in release. GPU upload,
+allocation, and readback reject byte-count overflow using the proved helper.
+The existing GPU shape checks and their dimension-specific diagnostics remain.
 
 The independent Rust boundary test checks 117,649 combinations of coordinates,
 crop sizes, and image sizes against an `i64` geometric oracle. Unlike that finite
@@ -54,13 +67,15 @@ Charon), Lean `4.35.0`, and Rust `nightly-2026-09-17`. The verification Rust com
 is isolated from the app's normal Rust toolchain. The Aeneas release supplies
 precompiled Aeneas libraries; `lake update` fetches their pinned mathlib dependencies.
 
-The Lean workflow checks changes to the geometry, verification files, and workflow.
+The Lean workflow checks changes to the geometry, tensor sizing, verification files, and workflow.
 Normal application builds do not require Lean or any new runtime dependencies.
 
 ## Scope and trust
 
-The proofs cover these integer geometry operations. They do not cover floating
-point crop placement, pixel copying, detection, GPU kernels, FFI, or the whole app.
+The proofs cover these integer geometry and sizing operations. They do not cover floating
+point crop placement, pixel copying, detection, GPU kernels, FFI, successful GPU
+allocation, or the whole app. The tensor proofs cover the sizing helpers; constructor
+validation and GPU integration also have Rust tests.
 They do not claim that padding magnitudes always equal unbounded mathematical
 distances: existing narrowing casts can wrap for extreme off-image coordinates.
 The intersection proofs account for that behavior.
