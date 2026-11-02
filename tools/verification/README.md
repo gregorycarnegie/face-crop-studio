@@ -1,4 +1,4 @@
-# Lean geometry, layouts, row packing, and output partitions
+# Lean geometry, layouts, row packing, and CPU kernel indices
 
 This verifies the production `CropRegion` implementation, rather than a separately
 written Lean version. `lib.rs` imports `fcs-core/src/cropper/region.rs` directly;
@@ -8,11 +8,13 @@ the CPU tensor constructors and GPU buffer sizing.
 It directly imports `tensor/layout.rs` for CPU inference planes,
 `fcs-utils/src/image_utils/rows.rs` for padded RGB copying, and
 `fcs-core/src/cpu/partition.rs` for parallel output ownership calculations.
+`fcs-core/src/cpu/geometry.rs` supplies the convolution geometry and read addresses
+used by the production dense/depthwise kernels.
 
 Every check translates those Rust files through Charon and Aeneas, then checks
-`Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`, and
-`PartitionProofs.lean` against the freshly generated model. Generated files and
-toolchains stay outside the tracked source tree.
+`Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`,
+`PartitionProofs.lean`, and `GeometryProofs.lean` against the freshly generated
+model. Generated files and toolchains stay outside the tracked source tree.
 
 The check also changes the width clamp from `min` to `max` in a disposable Rust
 copy, translates that copy, and requires Lean to reject its proof. Production
@@ -60,9 +62,24 @@ The additional proofs establish:
   shorter than one tile; valid NCHW output coordinates cannot alias. Row bases
   stay inside the checked allocation. The production dense/depthwise schedulers
   and write-address calculations use these helpers.
+- **Convolution reads:** output dimensions match the existing saturating formula;
+  invalid kernels/strides and overflowing padded sizes are rejected. Horizontal
+  interior columns are exactly the complete in-bounds windows, including every
+  pixel/tap of an interior tile. Vertical tap ranges select exactly the valid rows
+  and yield a bounded input slice, even for windows wholly inside padding.
+  Padded tap coordinates fit in `usize` for valid output tiles. Composed row/lane
+  and tap/filter calculations produce exact input and weight indices below their
+  buffer lengths, including lanes in partial channel blocks.
+
+Convolution read theorems assume valid loop coordinates, matching tensor/weight
+layouts, and representable buffer lengths. Constructors now check weight counts,
+kernel block sizes, and output products; convolution rejects empty spatial inputs.
+The kernels use unsigned padding coordinates and the proved helpers. This fixes
+an underflow before skipping fully padded windows; the regression test fails on
+the previous implementation and passes on the new one.
 
 Partition theorems assume positive divisors, valid coordinates, and representable
-allocation/job sizes. They do not verify Rayon or unsafe write instructions.
+allocation/job sizes. They do not verify Rayon or unsafe pointer instructions.
 `tools/safety` also runs production kernels under Miri with debug pre-initialization
 disabled so missing writes remain observable. Crossbeam emits provenance warnings
 under Miri; that scenario does not prove every unsafe execution path.
@@ -102,10 +119,11 @@ Normal application builds do not require Lean or any new runtime dependencies.
 
 ## Scope and trust
 
-The proofs cover integer geometry, sizing, layout, row-copy and partition operations. They do not cover floating
-point crop placement, crop pixel copying, detection, GPU kernels, FFI, successful GPU
-allocation, or the whole app. Row-copy proofs use Aeneas's allocation model and do
-not establish that sufficient physical memory exists. The tensor proofs cover the sizing helpers; constructor
+The proofs cover integer geometry, sizing, layout, row copying, output partitions,
+and convolution read-index calculations. They do not cover floating-point crop
+placement, crop pixel copying, inference arithmetic, GPU kernels, FFI, successful
+GPU allocation, or the whole app. Row-copy proofs use Aeneas's allocation model
+and do not establish that sufficient physical memory exists. Constructor
 validation and GPU integration also have Rust tests.
 They do not claim that padding magnitudes always equal unbounded mathematical
 distances: existing narrowing casts can wrap for extreme off-image coordinates.

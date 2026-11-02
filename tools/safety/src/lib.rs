@@ -1,5 +1,8 @@
 //! Small Miri scenarios against the production CPU kernels.
 
+#[path = "../../../fcs-core/src/cpu/geometry.rs"]
+pub(crate) mod geometry;
+
 #[path = "../../../fcs-core/src/tensor/layout.rs"]
 pub(crate) mod layout;
 #[path = "../../../fcs-core/src/cpu/nchwc.rs"]
@@ -110,6 +113,57 @@ mod tests {
             )
             .unwrap();
             assert_eq!(output.to_nchw(0, 1).unwrap().data(), input.data());
+
+            // Includes windows wholly above, below, left and right of the input.
+            let input = Tensor::new(1, 1, 1, 1, vec![2.0]).unwrap();
+            let identity = DenseWeights::new(1, 1, 1, 1, &[1.0], &[0.0]).unwrap();
+            let packed = conv(
+                &mut Arena::default(),
+                (&input).into(),
+                &identity,
+                1,
+                0,
+                false,
+            )
+            .unwrap();
+            for k in [1, 3] {
+                for stride in [1, 2] {
+                    let out = (9 - k) / stride + 1;
+                    let expected: Vec<_> = (0..out)
+                        .flat_map(|y| {
+                            (0..out).map(move |x| {
+                                if y * stride <= 4
+                                    && 4 < y * stride + k
+                                    && x * stride <= 4
+                                    && 4 < x * stride + k
+                                {
+                                    5.0
+                                } else {
+                                    3.0
+                                }
+                            })
+                        })
+                        .collect();
+                    let weights = DenseWeights::new(1, 1, k, 1, &vec![1.0; k * k], &[3.0]).unwrap();
+                    let got = conv(
+                        &mut Arena::default(),
+                        (&input).into(),
+                        &weights,
+                        stride,
+                        4,
+                        false,
+                    )
+                    .unwrap();
+                    assert_eq!(got.to_nchw(0, 1).unwrap().data(), expected);
+                    if k == 3 {
+                        let weights = DepthwiseWeights::new(1, k, &[1.0; 9], &[3.0]).unwrap();
+                        let got =
+                            depthwise(&mut Arena::default(), &packed, &weights, stride, 4, false)
+                                .unwrap();
+                        assert_eq!(got.to_nchw(0, 1).unwrap().data(), expected);
+                    }
+                }
+            }
         });
     }
 }

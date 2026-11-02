@@ -25,7 +25,9 @@ lake -d "$backend" env lean -DwarningAsError=true \
     -o "$build/TensorProofs.olean" "$root/tools/verification/TensorProofs.lean"
 lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/LayoutProofs.lean"
 lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/RowsProofs.lean"
-lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/PartitionProofs.lean"
+lake -d "$backend" env lean -DwarningAsError=true \
+    -o "$build/PartitionProofs.olean" "$root/tools/verification/PartitionProofs.lean"
+lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/GeometryProofs.lean"
 
 # Prove the checker rejects a real Rust regression without touching production sources.
 mutant="$build/mutation"

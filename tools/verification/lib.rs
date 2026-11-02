@@ -17,6 +17,10 @@ pub mod partition;
 #[allow(dead_code)]
 pub mod rows;
 
+#[path = "../../fcs-core/src/cpu/geometry.rs"]
+#[allow(dead_code)]
+pub mod geometry;
+
 #[cfg(test)]
 mod tests {
     use super::region::CropRegion;
