@@ -14,10 +14,12 @@
 
 use std::{mem::MaybeUninit, ops::Range};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use wide::f32x8;
 
+use super::partition::{chunk_span, decode_job, row_base, tile_end};
+use super::size::checked_elements;
 use super::tensor::Tensor;
 
 /// Channels per block.
@@ -107,7 +109,8 @@ impl Blocked {
         width: usize,
         fill: impl FnOnce(&mut [MaybeUninit<f32x8>]),
     ) -> Self {
-        let len = batch * channels.div_ceil(BLOCK) * height * width;
+        let len = checked_elements(&[batch, channels.div_ceil(BLOCK), height, width])
+            .expect("blocked tensor layout overflows usize");
         let mut data = arena.take(len);
         if cfg!(debug_assertions) {
             data.fill(MaybeUninit::new(f32x8::splat(f32::NAN)));
@@ -480,11 +483,13 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
         relu,
     };
     let groups = out_blocks.div_ceil(FILTERS);
-    let rows = input.batch * groups * out_h;
+    let rows = checked_elements(&[input.batch, groups, out_h])
+        .context("convolution row count overflows usize")?;
     // Long rows are split so every thread gets work; a 1x1 layer is one row per plane.
     let chunk = column_chunk(out_w, rows);
     let chunks = out_w.div_ceil(chunk);
-    let jobs = rows * chunks;
+    let jobs =
+        checked_elements(&[rows, chunks]).context("convolution job count overflows usize")?;
 
     // SAFETY: the jobs cover every (batch item, block group, row, column chunk), and each
     // `Row::run` writes every column of its chunk for each of its blocks.
@@ -492,13 +497,8 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
         Blocked::written(arena, batch, out_channels, full_h, full_w, |data| {
             let out = OutPtr(data.as_mut_ptr());
             balanced((0..jobs).into_par_iter()).for_each(|job| {
-                let (row_job, c) = (job / chunks, job % chunks);
-                let (n, group, oy) = (
-                    row_job / (groups * out_h),
-                    row_job / out_h % groups,
-                    row_job % out_h,
-                );
-                let first = group * FILTERS;
+                let (n, group, oy, c) = decode_job(job, groups, out_h, chunks);
+                let (first, last) = chunk_span(group, FILTERS, out_blocks);
                 let row = Row::<K, S, B> {
                     input: &input,
                     weights,
@@ -508,9 +508,10 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
                     oy,
                     out,
                 };
-                let span = c * chunk..((c + 1) * chunk).min(out_w);
+                let (start, end) = chunk_span(c, chunk, out_w);
+                let span = start..end;
                 // Accumulators F x P, plus P broadcasts and one weight, within sixteen registers.
-                match FILTERS.min(geometry.out_blocks - first) {
+                match last - first {
                     1 => row.run::<1, 8>(span),
                     2 => row.run::<2, 5>(span),
                     3 => row.run::<3, 4>(span),
@@ -549,12 +550,13 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
         let (lo, hi) = interior(self.input.width, K, S, g.pad, g.out_w);
         let lo = lo.clamp(span.start, span.end);
         let hi = hi.clamp(lo, span.end);
+        let full = tile_end(lo, hi, P);
         let mut ox = span.start;
         while ox < lo {
             self.tile::<F, 1, true>(ox);
             ox += 1;
         }
-        while ox + P <= hi {
+        while ox < full {
             self.tile::<F, P, false>(ox);
             ox += P;
         }
@@ -623,8 +625,14 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
         }
 
         for (f, pixels) in acc.iter().enumerate() {
-            let base =
-                ((self.n * g.out_blocks + self.first + f) * g.out_h + self.oy) * g.out_w + ox;
+            let base = row_base(
+                self.n,
+                self.first + f,
+                self.oy,
+                g.out_blocks,
+                g.out_h,
+                g.out_w,
+            ) + ox;
             for (p, &v) in pixels.iter().enumerate() {
                 let v = if g.relu { v.max(f32x8::ZERO) } else { v };
                 // SAFETY: columns `ox..ox + P` of row `oy` of blocks `first..first + F` belong
@@ -698,7 +706,8 @@ fn depthwise_with<const K: usize, const S: usize>(
                         row.tile::<1, true>(ox, out_row);
                         ox += 1;
                     }
-                    while ox + 4 <= hi {
+                    let full = tile_end(lo, hi, 4);
+                    while ox < full {
                         row.tile::<4, false>(ox, out_row);
                         ox += 4;
                     }

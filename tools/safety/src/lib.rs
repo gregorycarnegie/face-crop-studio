@@ -1,7 +1,13 @@
 //! Small Miri scenarios against the production CPU kernels.
 
+#[path = "../../../fcs-core/src/tensor/layout.rs"]
+pub(crate) mod layout;
 #[path = "../../../fcs-core/src/cpu/nchwc.rs"]
 pub mod nchwc;
+#[path = "../../../fcs-core/src/cpu/partition.rs"]
+pub(crate) mod partition;
+#[path = "../../../fcs-core/src/tensor/size.rs"]
+pub(crate) mod size;
 #[path = "../../../fcs-core/src/cpu/tensor.rs"]
 pub mod tensor;
 
@@ -17,7 +23,7 @@ mod tests {
             .unwrap();
         pool.install(|| {
             let input = Tensor::new(1, 3, 2, 3, (1..=18).map(|v| v as f32).collect()).unwrap();
-            for channels in [5, 9, 33] {
+            for channels in [5, 9, 24, 33] {
                 for kernel in [1, 3] {
                     let mut arena = Arena::default();
                     let mut weights = vec![0.0; channels * 3 * kernel * kernel];
@@ -91,8 +97,8 @@ mod tests {
                 }
             }
 
-            // A long row gives the raw-pointer writer separate parallel column spans.
-            let input = Tensor::new(1, 1, 1, 97, (0..97).map(|v| v as f32).collect()).unwrap();
+            // Long rows in two batches exercise separate column spans and batch offsets.
+            let input = Tensor::new(2, 1, 1, 97, (0..194).map(|v| v as f32).collect()).unwrap();
             let weights = DenseWeights::new(1, 1, 1, 1, &[1.0], &[0.0]).unwrap();
             let output = conv(
                 &mut Arena::default(),

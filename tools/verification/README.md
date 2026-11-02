@@ -1,14 +1,18 @@
-# Lean geometry and tensor sizing
+# Lean geometry, layouts, row packing, and output partitions
 
 This verifies the production `CropRegion` implementation, rather than a separately
 written Lean version. `lib.rs` imports `fcs-core/src/cropper/region.rs` directly;
 the app re-exports the same type through its existing public paths.
 It also imports the production helpers in `fcs-core/src/tensor/size.rs` used by
 the CPU tensor constructors and GPU buffer sizing.
+It directly imports `tensor/layout.rs` for CPU inference planes,
+`fcs-utils/src/image_utils/rows.rs` for padded RGB copying, and
+`fcs-core/src/cpu/partition.rs` for parallel output ownership calculations.
 
-Every check translates that Rust file through Charon and Aeneas, then checks
-`Proofs.lean` and `TensorProofs.lean` against the freshly generated model. Generated files and toolchains
-stay outside the tracked source tree.
+Every check translates those Rust files through Charon and Aeneas, then checks
+`Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`, and
+`PartitionProofs.lean` against the freshly generated model. Generated files and
+toolchains stay outside the tracked source tree.
 
 The check also changes the width clamp from `min` to `max` in a disposable Rust
 copy, translates that copy, and requires Lean to reject its proof. Production
@@ -37,6 +41,31 @@ Both CPU tensor constructors now reject dimension-product overflow rather than
 panicking in debug or accepting a wrapped product in release. GPU upload,
 allocation, and readback reject byte-count overflow using the proved helper.
 The existing GPU shape checks and their dimension-specific diagnostics remain.
+
+The additional proofs establish:
+
+- **CPU layout:** accepted plane/element counts equal the mathematical NCHW sizes,
+  and representable layouts are accepted. Plane ranges stay inside the buffer;
+  valid indices with representable offsets succeed; distinct valid planes do not
+  overlap. Zero-size planes are allowed. CPU construction now rejects overflow,
+  and an invalid channel cannot alias the next batch. The existing infallible
+  `zeros` and `plane_slice` APIs panic on invalid inputs, as documented.
+- **RGB packing:** the loop terminates and concatenates exactly the requested
+  pixel slices, with the exact packed length and no stride padding. Valid nonempty
+  buffers within the allocation-size bound are accepted. Rust checks reject
+  overlapping strides, truncated buffers, and unrepresentable output lengths.
+- **Output ownership:** job decoding reconstructs the original index and produces
+  valid group/row/chunk coordinates. The batch stays inside a bounded job grid.
+  Chunks cover every column without overlap; tile endpoints leave only a tail
+  shorter than one tile; valid NCHW output coordinates cannot alias. Row bases
+  stay inside the checked allocation. The production dense/depthwise schedulers
+  and write-address calculations use these helpers.
+
+Partition theorems assume positive divisors, valid coordinates, and representable
+allocation/job sizes. They do not verify Rayon or unsafe write instructions.
+`tools/safety` also runs production kernels under Miri with debug pre-initialization
+disabled so missing writes remain observable. Crossbeam emits provenance warnings
+under Miri; that scenario does not prove every unsafe execution path.
 
 The independent Rust boundary test checks 117,649 combinations of coordinates,
 crop sizes, and image sizes against an `i64` geometric oracle. Unlike that finite
@@ -67,14 +96,16 @@ Charon), Lean `4.35.0`, and Rust `nightly-2026-09-17`. The verification Rust com
 is isolated from the app's normal Rust toolchain. The Aeneas release supplies
 precompiled Aeneas libraries; `lake update` fetches their pinned mathlib dependencies.
 
-The Lean workflow checks changes to the geometry, tensor sizing, verification files, and workflow.
+The Lean workflow checks changes to geometry, tensor sizing/layouts, CPU kernels,
+image row packing, verification files, and the workflow.
 Normal application builds do not require Lean or any new runtime dependencies.
 
 ## Scope and trust
 
-The proofs cover these integer geometry and sizing operations. They do not cover floating
-point crop placement, pixel copying, detection, GPU kernels, FFI, successful GPU
-allocation, or the whole app. The tensor proofs cover the sizing helpers; constructor
+The proofs cover integer geometry, sizing, layout, row-copy and partition operations. They do not cover floating
+point crop placement, crop pixel copying, detection, GPU kernels, FFI, successful GPU
+allocation, or the whole app. Row-copy proofs use Aeneas's allocation model and do
+not establish that sufficient physical memory exists. The tensor proofs cover the sizing helpers; constructor
 validation and GPU integration also have Rust tests.
 They do not claim that padding magnitudes always equal unbounded mathematical
 distances: existing narrowing casts can wrap for extreme off-image coordinates.

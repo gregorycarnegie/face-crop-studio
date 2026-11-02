@@ -5,6 +5,18 @@ pub mod region;
 #[allow(dead_code)]
 pub mod size;
 
+#[path = "../../fcs-core/src/tensor/layout.rs"]
+#[allow(dead_code)]
+pub mod layout;
+
+#[path = "../../fcs-core/src/cpu/partition.rs"]
+#[allow(dead_code)]
+pub mod partition;
+
+#[path = "../../fcs-utils/src/image_utils/rows.rs"]
+#[allow(dead_code)]
+pub mod rows;
+
 #[cfg(test)]
 mod tests {
     use super::region::CropRegion;

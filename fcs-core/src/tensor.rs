@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 
+pub(crate) mod layout;
 pub(crate) mod size;
 
 /// A densely packed, row-major f32 tensor of arbitrary rank.
