@@ -18,8 +18,10 @@
 
 /// Running the network on the WGSL engine.
 pub mod gpu;
+mod heads;
 /// Running the network without ONNX Runtime, on the built-in CPU graph.
 pub mod plan;
+mod slots;
 /// The generated step table; see `tools/dataset/scrfd_topology.py`.
 pub mod topology;
 

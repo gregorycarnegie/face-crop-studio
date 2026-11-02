@@ -47,6 +47,7 @@ pub(crate) fn test_context() -> Option<std::sync::Arc<fcs_utils::gpu::GpuContext
 pub use activation::ActivationKind;
 pub use conv2d::{Conv2dConfig, Conv2dOptions};
 pub use ops::GpuInferenceOps;
+pub(crate) mod geometry;
 /// Device-resident float tensors and validated shapes.
 pub mod tensor;
 pub use tensor::{GpuTensor, TensorShape};

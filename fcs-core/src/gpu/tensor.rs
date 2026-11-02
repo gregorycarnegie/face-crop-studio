@@ -37,6 +37,8 @@ impl TensorShape {
                 .checked_mul(*dim)
                 .with_context(|| format!("tensor shape would overflow usize at dimension {idx}"))?;
         }
+        super::geometry::shader_dim(elements)
+            .context("tensor exceeds the shader u32 index range")?;
         Ok(Self {
             dims: dims_vec,
             elements,
@@ -381,6 +383,11 @@ mod tests {
     use super::*;
     use fcs_utils::gpu::GpuBufferPool;
     use std::sync::Arc;
+
+    #[test]
+    fn rejects_shapes_whose_shader_indices_would_wrap() {
+        assert!(TensorShape::new([u32::MAX as usize, 2]).is_err());
+    }
 
     fn test_context() -> Option<Arc<GpuContext>> {
         crate::gpu::test_context()

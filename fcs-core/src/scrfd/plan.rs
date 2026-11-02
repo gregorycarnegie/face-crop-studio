@@ -82,26 +82,14 @@ pub struct ScrfdWeights {
 /// backbone levels produced long before it, so this is a scan of the whole plan rather than
 /// "the previous step".
 fn last_reads(steps: &[Step], outputs: &[usize]) -> Vec<Vec<usize>> {
-    let mut last = vec![None; steps.len() + 1];
-    for (index, step) in steps.iter().enumerate() {
-        match *step {
-            Step::Conv { input, .. } | Step::Upsample2x { input } => last[input] = Some(index),
-            Step::Add { a, b } => {
-                last[a] = Some(index);
-                last[b] = Some(index);
-            }
-        }
-    }
-    let mut frees = vec![Vec::new(); steps.len()];
-    for (slot, at) in last.into_iter().enumerate() {
-        if let Some(at) = at
-            && slot != 0
-            && !outputs.contains(&slot)
-        {
-            frees[at].push(slot);
-        }
-    }
-    frees
+    let reads: Vec<_> = steps
+        .iter()
+        .map(|step| match *step {
+            Step::Conv { input, .. } | Step::Upsample2x { input } => (input, input),
+            Step::Add { a, b } => (a, b),
+        })
+        .collect();
+    super::slots::last_reads(&reads, outputs)
 }
 
 /// What a step runs with, once sibling convolutions are merged.
@@ -114,7 +102,7 @@ enum Prepared {
     /// output channels, in step order.
     Dense {
         weights: DenseWeights,
-        split: Vec<usize>,
+        split: Vec<(usize, usize)>,
     },
     /// A depthwise convolution.
     Depthwise(DepthwiseWeights),
@@ -222,7 +210,13 @@ impl ScrfdWeights {
                     "{weight}: grouped convolution that is not depthwise; the plan has no kernel for it"
                 );
                 let tensor = map.tensor(weight)?;
-                let expected = out_channels * in_per_group * kernel * kernel;
+                let expected = crate::tensor::size::checked_elements(&[
+                    out_channels,
+                    in_per_group,
+                    kernel,
+                    kernel,
+                ])
+                .context("topology weight count overflows usize")?;
                 anyhow::ensure!(
                     tensor.data().len() == expected,
                     "{weight} holds {} values, the topology expects {expected}",
@@ -242,8 +236,9 @@ impl ScrfdWeights {
                 unreachable!("checked above");
             };
             let block_in = if input == 0 { 1 } else { BLOCK };
-            let weights =
-                DenseWeights::new(split.iter().sum(), in_per, side, block_in, &data, &biases)?;
+            let (split, total) =
+                super::heads::ranges(&split).context("merged head channels overflow usize")?;
+            let weights = DenseWeights::new(total, in_per, side, block_in, &data, &biases)?;
             convs.push(Prepared::Dense { weights, split });
             convs.extend((1..count).map(|_| Prepared::Merged));
         }
@@ -303,14 +298,12 @@ pub fn run(input: Tensor, weights: &ScrfdWeights) -> Result<Vec<Tensor>> {
                     if split.len() == 1 {
                         Some(output)
                     } else {
-                        let mut first = 0;
-                        for &count in split {
+                        for &(first, count) in split {
                             slots.push(Slot::Part {
                                 of: merged.len(),
                                 first,
                                 count,
                             });
-                            first += count;
                         }
                         merged.push(output);
                         None

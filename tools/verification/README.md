@@ -1,4 +1,4 @@
-# Lean geometry, layouts, row packing, and CPU kernel indices
+# Lean proofs of production integer and byte operations
 
 This verifies the production `CropRegion` implementation, rather than a separately
 written Lean version. `lib.rs` imports `fcs-core/src/cropper/region.rs` directly;
@@ -13,8 +13,25 @@ used by the production dense/depthwise kernels.
 
 Every check translates those Rust files through Charon and Aeneas, then checks
 `Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`,
-`PartitionProofs.lean`, and `GeometryProofs.lean` against the freshly generated
-model. Generated files and toolchains stay outside the tracked source tree.
+`PartitionProofs.lean`, `GeometryProofs.lean`, `TransformProofs.lean`,
+`GpuProofs.lean`, `ShapeProofs.lean`, `ByteProofs.lean`, `CopyProofs.lean`,
+`HeadProofs.lean`, `BufferProofs.lean`, and `GraphProofs.lean` against the freshly
+generated model. Generated files and toolchains stay outside the tracked source tree.
+
+The [proof ledger](PROOF_LEDGER.md) lists the remaining candidates found in the
+source audit and records the theorem file for each completed property. Additional
+proofs now cover blocked-channel extraction and partial lanes, 2x resize mapping,
+Rust allocation limits, GPU host geometry/dispatch/narrowing, signed ONNX/ORT
+dimensions and raw payload lengths, metadata byte ranges and length fields, crop
+copy addresses and RGB bytes, hex decoding, merged-head ranges, graph last-reader
+schedules, and buffer-budget/minimum-selection arithmetic.
+
+These are source-linked component proofs with explicit preconditions. The buffer
+selection proof composes the extracted transition over a fold; it excludes locks
+and device allocation. The graph proof operates on the numeric read-index table
+used by the scheduler. [LIMITS.md](LIMITS.md) records actual translation probes and
+the operations that remain unproved. No proof assumes the external axioms those
+probes generated.
 
 The check also changes the width clamp from `min` to `max` in a disposable Rust
 copy, translates that copy, and requires Lean to reject its proof. Production
@@ -120,7 +137,8 @@ Normal application builds do not require Lean or any new runtime dependencies.
 ## Scope and trust
 
 The proofs cover integer geometry, sizing, layout, row copying, output partitions,
-and convolution read-index calculations. They do not cover floating-point crop
+convolution read-index calculations, and the additional component properties in
+the ledger. They do not cover floating-point crop
 placement, crop pixel copying, inference arithmetic, GPU kernels, FFI, successful
 GPU allocation, or the whole app. Row-copy proofs use Aeneas's allocation model
 and do not establish that sufficient physical memory exists. Constructor

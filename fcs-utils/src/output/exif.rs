@@ -10,21 +10,20 @@ pub(super) fn png_exif_chunks(bytes: &[u8]) -> Vec<Vec<u8>> {
 
     let mut cursor = 8usize;
     let mut chunks = Vec::new();
-    while cursor + 8 <= bytes.len() {
+    while super::ranges::span(cursor, 8, 0, 0, bytes.len()).is_some() {
         let length = u32::from_be_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
         let chunk_type = &bytes[cursor + 4..cursor + 8];
-        let data_start = cursor + 8;
-        let data_end = data_start.saturating_add(length);
-        // `data_end` saturates, so `data_end + 4` could overflow on 32-bit targets.
-        if data_end > bytes.len().saturating_sub(4) {
+        let Some((data_start, data_end, next)) =
+            super::ranges::span(cursor, 8, length, 4, bytes.len())
+        else {
             break;
-        }
+        };
 
         if chunk_type == b"eXIf" {
             chunks.push(exif_chunk_without_orientation(&bytes[data_start..data_end]));
         }
 
-        cursor = data_end + 4;
+        cursor = next;
         if chunk_type == b"IEND" {
             break;
         }
@@ -38,16 +37,14 @@ pub(super) fn jpeg_exif(bytes: &[u8]) -> Option<Vec<u8>> {
     }
 
     let mut index = 2usize;
-    while index + 4 < bytes.len() {
+    while super::ranges::span(index, 5, 0, 0, bytes.len()).is_some() {
         if bytes[index] != 0xFF {
             break;
         }
         // Any number of 0xFF fill bytes may precede a marker (T.81 B.1.1.2).
         while bytes[index + 1] == 0xFF {
             index += 1;
-            if index + 4 >= bytes.len() {
-                return None;
-            }
+            super::ranges::span(index, 5, 0, 0, bytes.len())?;
         }
         let marker = bytes[index + 1];
         index += 2;
@@ -67,11 +64,11 @@ pub(super) fn jpeg_exif(bytes: &[u8]) -> Option<Vec<u8>> {
         if length < 2 {
             break;
         }
-        let data_start = index + 2;
-        let data_end = data_start.saturating_add(length - 2);
-        if data_end > bytes.len() {
+        let Some((data_start, data_end, _)) =
+            super::ranges::span(index, 2, length - 2, 0, bytes.len())
+        else {
             break;
-        }
+        };
 
         if marker == 0xE1 && length >= 8 && &bytes[data_start..data_start + 4] == b"Exif" {
             let mut segment = Vec::with_capacity(length + 2);

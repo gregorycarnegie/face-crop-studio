@@ -4,26 +4,16 @@ on:
   push:
     branches: [master]
     paths:
-      - fcs-core/src/cropper.rs
-      - fcs-core/src/cropper/**
-      - fcs-core/src/tensor.rs
-      - fcs-core/src/tensor/**
-      - fcs-core/src/gpu/tensor.rs
-      - fcs-core/src/cpu/**
-      - fcs-utils/src/image_utils.rs
-      - fcs-utils/src/image_utils/**
+      - fcs-core/src/**
+      - fcs-utils/src/**
+      - fcs-ort/src/**
       - tools/verification/**
       - .github/workflows/lean.yml
   pull_request:
     paths:
-      - fcs-core/src/cropper.rs
-      - fcs-core/src/cropper/**
-      - fcs-core/src/tensor.rs
-      - fcs-core/src/tensor/**
-      - fcs-core/src/gpu/tensor.rs
-      - fcs-core/src/cpu/**
-      - fcs-utils/src/image_utils.rs
-      - fcs-utils/src/image_utils/**
+      - fcs-core/src/**
+      - fcs-utils/src/**
+      - fcs-ort/src/**
       - tools/verification/**
       - .github/workflows/lean.yml
   workflow_dispatch:

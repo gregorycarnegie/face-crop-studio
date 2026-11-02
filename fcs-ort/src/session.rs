@@ -395,7 +395,12 @@ impl Session {
                 ),
             });
         }
-        let expected: usize = shape.iter().product();
+        let invalid = |message: &str| Error {
+            code: sys::OrtErrorCode::InvalidArgument,
+            message: message.into(),
+        };
+        let expected = crate::shape_size::checked_elements(shape)
+            .ok_or_else(|| invalid("input tensor shape overflows usize"))?;
         if expected != input.len() {
             return Err(Error {
                 code: sys::OrtErrorCode::InvalidArgument,
@@ -407,7 +412,13 @@ impl Session {
         }
 
         let api = self.environment.api();
-        let dims: Vec<i64> = shape.iter().map(|d| *d as i64).collect();
+        let dims: Vec<i64> = shape
+            .iter()
+            .map(|&d| {
+                crate::shape_size::ort_dim(d)
+                    .ok_or_else(|| invalid("input tensor dimension exceeds i64"))
+            })
+            .collect::<Result<_>>()?;
         let input_ptrs: Vec<*const std::ffi::c_char> =
             self.input_names.iter().map(|n| n.as_ptr()).collect();
         let output_ptrs: Vec<*const std::ffi::c_char> =
@@ -486,19 +497,26 @@ impl Session {
             // produce an enormous length and a wild read, so reject it.
             let mut shape = Vec::with_capacity(dims.len());
             for dim in dims {
-                if dim < 0 {
-                    return Err(Error {
-                        code: sys::OrtErrorCode::Fail,
-                        message: format!("output tensor has unresolved dimension {dim}"),
-                    });
-                }
-                shape.push(dim as usize);
+                shape.push(crate::shape_size::signed_dim(dim).ok_or_else(|| Error {
+                    code: sys::OrtErrorCode::Fail,
+                    message: format!("output tensor has an unrepresentable dimension {dim}"),
+                })?);
             }
 
-            let len: usize = shape.iter().product();
+            let invalid = |message: &str| Error {
+                code: sys::OrtErrorCode::Fail,
+                message: message.into(),
+            };
+            let len = crate::shape_size::checked_elements(&shape)
+                .ok_or_else(|| invalid("output tensor shape overflows usize"))?;
+            crate::shape_size::checked_allocation(len, 4)
+                .ok_or_else(|| invalid("output tensor exceeds Rust's slice size limit"))?;
             let mut data = ptr::null_mut();
             check(api, ((*api).GetTensorMutableData)(value, &mut data))?;
             if data.is_null() {
+                if len != 0 {
+                    return Err(invalid("nonempty output tensor has a null data pointer"));
+                }
                 // A zero-element tensor legitimately has no buffer.
                 return Ok(OutputTensor {
                     shape,

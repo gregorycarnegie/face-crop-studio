@@ -19,6 +19,43 @@ pub(crate) fn checked_f32_bytes(elements: usize) -> Option<usize> {
     elements.checked_mul(4)
 }
 
+/// Rust vectors and slices require a byte size no greater than isize::MAX.
+pub(crate) fn checked_allocation(elements: usize, element_bytes: usize) -> Option<usize> {
+    match elements.checked_mul(element_bytes) {
+        Some(bytes) if bytes <= isize::MAX as usize => Some(bytes),
+        _ => None,
+    }
+}
+
+/// Convert an ONNX/ORT dimension without accepting negative values or narrowing wrap.
+pub(crate) fn signed_dim(value: i64) -> Option<usize> {
+    if value < 0 || value as u64 > usize::MAX as u64 {
+        None
+    } else {
+        Some(value as usize)
+    }
+}
+
+/// ORT's input shape uses signed 64-bit dimensions.
+#[allow(dead_code)] // Used by the development-only ORT oracle.
+pub(crate) fn ort_dim(value: usize) -> Option<i64> {
+    if value as u128 > i64::MAX as u128 {
+        None
+    } else {
+        Some(value as i64)
+    }
+}
+
+// shortcut: Aeneas lacks is_multiple_of's model, use it when supported.
+#[allow(clippy::manual_is_multiple_of)]
+pub(crate) fn raw_f32_elements(bytes: usize) -> Option<usize> {
+    if bytes % 4 == 0 {
+        Some(bytes / 4)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,5 +77,16 @@ mod tests {
         assert_eq!(checked_f32_bytes(largest), Some(largest * 4));
         assert_eq!(checked_f32_bytes(largest + 1), None);
         assert_eq!(checked_f32_bytes(usize::MAX), None);
+        assert_eq!(
+            checked_allocation(isize::MAX as usize / 4, 4),
+            Some(isize::MAX as usize / 4 * 4)
+        );
+        assert_eq!(checked_allocation(isize::MAX as usize / 4 + 1, 4), None);
+        assert_eq!(checked_allocation(usize::MAX, 4), None);
+        assert_eq!(signed_dim(-1), None);
+        assert_eq!(signed_dim(0), Some(0));
+        assert_eq!(ort_dim(17), Some(17));
+        assert_eq!(raw_f32_elements(12), Some(3));
+        assert_eq!(raw_f32_elements(13), None);
     }
 }

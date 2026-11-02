@@ -42,6 +42,7 @@ pub use shape_mask::GpuShapeMask;
 /// Per-channel histogram equalization on the GPU.
 pub mod hist_equalize;
 pub use hist_equalize::GpuHistogramEqualizer;
+mod buffer_math;
 /// Reusable GPU buffer allocations and execution scopes.
 pub mod buffer_pool;
 pub use buffer_pool::{ExecutionScope, GpuBufferPool};

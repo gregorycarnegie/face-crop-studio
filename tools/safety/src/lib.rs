@@ -10,9 +10,12 @@ pub mod nchwc;
 #[path = "../../../fcs-core/src/cpu/partition.rs"]
 pub(crate) mod partition;
 #[path = "../../../fcs-core/src/tensor/size.rs"]
+#[allow(dead_code)]
 pub(crate) mod size;
 #[path = "../../../fcs-core/src/cpu/tensor.rs"]
 pub mod tensor;
+#[path = "../../../fcs-core/src/cpu/transform.rs"]
+pub(crate) mod transform;
 
 #[cfg(test)]
 mod tests {

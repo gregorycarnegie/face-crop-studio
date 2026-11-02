@@ -20,14 +20,11 @@ cargo test --locked --target-dir "$cache/rust-target"
     -abort-on-error -warnings-as-errors -no-progress-bar "$build/crop_region.llbc"
 lake -d "$backend" env lean -DwarningAsError=true \
     --root="$build" -o "$build/CropRegion.olean" "$build/CropRegion.lean"
-lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/Proofs.lean"
-lake -d "$backend" env lean -DwarningAsError=true \
-    -o "$build/TensorProofs.olean" "$root/tools/verification/TensorProofs.lean"
-lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/LayoutProofs.lean"
-lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/RowsProofs.lean"
-lake -d "$backend" env lean -DwarningAsError=true \
-    -o "$build/PartitionProofs.olean" "$root/tools/verification/PartitionProofs.lean"
-lake -d "$backend" env lean -DwarningAsError=true "$root/tools/verification/GeometryProofs.lean"
+for proof in Proofs TensorProofs LayoutProofs RowsProofs PartitionProofs GeometryProofs \
+    TransformProofs GpuProofs ShapeProofs ByteProofs CopyProofs HeadProofs BufferProofs GraphProofs; do
+    lake -d "$backend" env lean -DwarningAsError=true \
+        -o "$build/$proof.olean" "$root/tools/verification/$proof.lean"
+done
 
 # Prove the checker rejects a real Rust regression without touching production sources.
 mutant="$build/mutation"

@@ -5,6 +5,7 @@
 //! general would be machinery with no caller.
 
 use super::layout::{checked_nchw, plane_range};
+use super::size::checked_allocation;
 use anyhow::{Context, Result};
 
 /// A 4-D NCHW tensor of f32, densely packed.
@@ -47,10 +48,11 @@ impl Tensor {
     /// A zero-filled tensor.
     ///
     /// # Panics
-    /// Panics if the plane or element count overflows usize.
+    /// Panics if the layout overflows usize or its byte size exceeds isize::MAX.
     pub fn zeros(batch: usize, channels: usize, height: usize, width: usize) -> Self {
         let (plane, elements) = checked_nchw(batch, channels, height, width)
             .expect("CPU tensor layout overflows usize");
+        checked_allocation(elements, 4).expect("CPU tensor allocation exceeds isize::MAX");
         Self {
             batch,
             channels,

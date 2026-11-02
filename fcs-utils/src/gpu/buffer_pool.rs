@@ -209,11 +209,11 @@ impl GpuBufferPool {
         // Check memory limits before allocating
         if let Some(limit) = self.max_memory {
             let current = self.memory_usage();
-            if current + size > limit {
+            if !super::buffer_math::budget_fits(current, size, limit) {
                 // Try to free up space by clearing idle buffers
                 self.clear();
                 let current_after_clear = self.memory_usage();
-                if current_after_clear + size > limit {
+                if !super::buffer_math::budget_fits(current_after_clear, size, limit) {
                     return Err(BufferPoolError::MemoryLimitExceeded {
                         size,
                         usage: current_after_clear,
@@ -426,23 +426,19 @@ fn best_fit_index(
     size: u64,
     usage: Option<wgpu::BufferUsages>,
 ) -> Option<usize> {
-    let mut best_index = None;
-    let mut best_size = u64::MAX;
+    let mut best = None;
 
     for (index, entry) in entries.iter().enumerate() {
-        if entry.size < size || usage.is_some_and(|u| entry.usage != u) {
+        if usage.is_some_and(|u| entry.usage != u) {
             continue;
         }
-        if entry.size < best_size {
-            best_size = entry.size;
-            best_index = Some(index);
-            if entry.size == size {
-                break;
-            }
+        best = super::buffer_math::choose_fit(best, index, entry.size, size);
+        if entry.size == size {
+            break;
         }
     }
 
-    best_index
+    best.map(|(index, _)| index)
 }
 
 /// Guard returned by [`GpuBufferPool::execution_scope`]. Ending it releases the buffers the

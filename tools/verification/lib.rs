@@ -21,6 +21,38 @@ pub mod rows;
 #[allow(dead_code)]
 pub mod geometry;
 
+#[path = "../../fcs-core/src/cpu/transform.rs"]
+#[allow(dead_code)]
+pub mod transform;
+
+#[path = "../../fcs-core/src/gpu/geometry.rs"]
+#[allow(dead_code)]
+pub mod gpu_geometry;
+
+#[path = "../../fcs-utils/src/output/ranges.rs"]
+#[allow(dead_code)]
+pub mod metadata_ranges;
+
+#[path = "../../fcs-utils/src/color/hex.rs"]
+#[allow(dead_code)]
+pub mod hex;
+
+#[path = "../../fcs-core/src/face_cropper/copy.rs"]
+#[allow(dead_code)]
+pub mod pixel_copy;
+
+#[path = "../../fcs-core/src/scrfd/slots.rs"]
+#[allow(dead_code)]
+pub mod slots;
+
+#[path = "../../fcs-utils/src/gpu/buffer_math.rs"]
+#[allow(dead_code)]
+pub mod buffer_math;
+
+#[path = "../../fcs-core/src/scrfd/heads.rs"]
+#[allow(dead_code)]
+pub mod heads;
+
 #[cfg(test)]
 mod tests {
     use super::region::CropRegion;

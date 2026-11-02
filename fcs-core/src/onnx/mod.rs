@@ -14,6 +14,7 @@ use std::{
     path::Path,
 };
 
+use crate::tensor::size::{checked_elements, raw_f32_elements, signed_dim};
 use anyhow::{Context, Result, anyhow};
 use prost::Message;
 use proto::{self as pb, DATA_TYPE_FLOAT};
@@ -104,16 +105,14 @@ impl OnnxTensor {
         let dims = proto
             .dims
             .iter()
-            .map(|&d| usize::try_from(d).with_context(|| format!("invalid dimension value {d}")))
+            .map(|&d| signed_dim(d).with_context(|| format!("invalid dimension value {d}")))
             .collect::<Result<Vec<_>>>()?;
 
+        let expected = checked_elements(&dims).context("initializer shape overflows usize")?;
         let data = if !proto.raw_data.is_empty() {
-            let (floats, remainder) = proto.raw_data.as_chunks::<4>();
-            anyhow::ensure!(
-                remainder.is_empty(),
-                "initializer '{}' has an incomplete float payload",
-                proto.name
-            );
+            raw_f32_elements(proto.raw_data.len())
+                .context("initializer has an incomplete float payload")?;
+            let (floats, _) = proto.raw_data.as_chunks::<4>();
             floats
                 .iter()
                 .map(|&bytes| f32::from_le_bytes(bytes))
@@ -124,10 +123,6 @@ impl OnnxTensor {
             return Err(anyhow!("initializer '{}' has no data payload", proto.name));
         };
 
-        let expected = dims
-            .iter()
-            .try_fold(1usize, |size, &dim| size.checked_mul(dim))
-            .context("initializer shape overflows usize")?;
         anyhow::ensure!(
             data.len() == expected,
             "initializer '{}' data length ({}) does not match shape {:?}",

@@ -431,14 +431,8 @@ impl Conv2dConfig {
         );
         anyhow::ensure!(stride_x > 0 && stride_y > 0, "stride must be non-zero");
         anyhow::ensure!(groups > 0, "groups must be > 0");
-        anyhow::ensure!(
-            input_channels.is_multiple_of(groups),
-            "input channels ({input_channels}) must be divisible by groups ({groups})"
-        );
-        anyhow::ensure!(
-            output_channels.is_multiple_of(groups),
-            "output channels ({output_channels}) must be divisible by groups ({groups})"
-        );
+        super::geometry::grouped_channels(input_channels, output_channels, groups)
+            .context("input/output channels must be divisible by groups")?;
 
         let output_width = compute_output_dim(input_width, pad_x, kernel_width, stride_x)
             .context("invalid convolution width configuration")?;
@@ -504,19 +498,15 @@ impl Conv2dConfig {
     /// Returns an error on a length mismatch. Construct the geometry with
     /// [`Self::new`] first; this method does not revalidate its spatial parameters.
     pub fn validate(&self, input_len: usize, weight_len: usize, bias_len: usize) -> Result<()> {
-        let expected_input = self.batch as usize
-            * self.input_channels as usize
-            * self.input_height as usize
-            * self.input_width as usize;
+        let expected_input = crate::tensor::size::checked_elements(&self.input_shape_dims())
+            .context("convolution input size overflows usize")?;
         anyhow::ensure!(
             input_len == expected_input,
             "conv input tensor expected {expected_input} elements, got {input_len}"
         );
 
-        let weights_per_out = (self.input_channels / self.groups) as usize
-            * self.kernel_width as usize
-            * self.kernel_height as usize;
-        let expected_weights = self.output_channels as usize * weights_per_out;
+        let expected_weights = crate::tensor::size::checked_elements(&self.weight_shape_dims())
+            .context("convolution weight size overflows usize")?;
         anyhow::ensure!(
             weight_len == expected_weights,
             "conv weights expected {expected_weights} elements, got {weight_len}"
@@ -638,11 +628,9 @@ fn workgroups(config: &Conv2dConfig, kernel: Kernel, pixels_per_thread: u32) -> 
         Kernel::Depthwise | Kernel::Grouped => 1,
     };
     [
-        config
-            .output_width
-            .div_ceil(CONV_WORKGROUP_X * pixels_per_thread),
-        config.output_height.div_ceil(CONV_WORKGROUP_Y),
-        config.output_channels.div_ceil(channel_tile),
+        super::geometry::ceil_div(config.output_width, CONV_WORKGROUP_X * pixels_per_thread),
+        super::geometry::ceil_div(config.output_height, CONV_WORKGROUP_Y),
+        super::geometry::ceil_div(config.output_channels, channel_tile),
     ]
 }
 

@@ -1,6 +1,8 @@
 //! Basic color utilities shared across CLI and GUI surfaces.
 
 use serde::{Deserialize, Serialize};
+#[path = "color/hex.rs"]
+mod hex;
 
 /// Simple RGBA color stored in 8-bit channels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -161,12 +163,19 @@ pub fn parse_hex_color(input: &str) -> Option<RgbaColor> {
 }
 
 fn parse_byte(slice: &str) -> Option<u8> {
-    u8::from_str_radix(slice, 16).ok()
+    let bytes = slice.as_bytes();
+    if bytes.len() != 2 {
+        return None;
+    }
+    hex::pair(bytes[0], bytes[1])
 }
 
 fn replicate_nibble(slice: &str) -> Option<u8> {
-    let nib = u8::from_str_radix(slice, 16).ok()?;
-    Some(nib * 0x11)
+    let bytes = slice.as_bytes();
+    if bytes.len() != 1 {
+        return None;
+    }
+    hex::short(bytes[0])
 }
 
 /// Convert RGB channels (0-255) to HSL (hue in degrees 0-360, saturation 0-1, lightness 0-1).
