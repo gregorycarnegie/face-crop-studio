@@ -1,6 +1,8 @@
 //! Basic color utilities shared across CLI and GUI surfaces.
 
 use serde::{Deserialize, Serialize};
+#[path = "color/hex.rs"]
+mod hex;
 
 /// Simple RGBA color stored in 8-bit channels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -161,12 +163,19 @@ pub fn parse_hex_color(input: &str) -> Option<RgbaColor> {
 }
 
 fn parse_byte(slice: &str) -> Option<u8> {
-    u8::from_str_radix(slice, 16).ok()
+    let bytes = slice.as_bytes();
+    if bytes.len() != 2 {
+        return None;
+    }
+    hex::pair(bytes[0], bytes[1])
 }
 
 fn replicate_nibble(slice: &str) -> Option<u8> {
-    let nib = u8::from_str_radix(slice, 16).ok()?;
-    Some(nib * 0x11)
+    let bytes = slice.as_bytes();
+    if bytes.len() != 1 {
+        return None;
+    }
+    hex::short(bytes[0])
 }
 
 /// Convert RGB channels (0-255) to HSL (hue in degrees 0-360, saturation 0-1, lightness 0-1).
@@ -652,49 +661,49 @@ mod tests {
     // primary-colour round trips never did.
     // ------------------------------------------------------------------
 
-    /// Each channel survives a round trip to within one step: the inverses
-    /// truncate with `as u8` rather than round, so 254.9999 comes back as 254.
-    fn assert_within_one_step(
-        before: (u8, u8, u8),
-        after: (u8, u8, u8),
-    ) -> Result<(), TestCaseError> {
-        let channels = [
-            (before.0, after.0),
-            (before.1, after.1),
-            (before.2, after.2),
-        ];
-        for (want, got) in channels {
-            prop_assert!(want.abs_diff(got) <= 1, "{before:?} came back as {after:?}");
+    /// Every one of the 2^24 colours survives each round trip to within one step per channel:
+    /// the inverses truncate with `as u8` rather than round, so 254.9999 comes back as 254.
+    /// Exhaustive, so this is a check of the whole `u8` domain rather than a sample.
+    #[test]
+    fn every_colour_round_trips_through_hsv_hsl_and_cmyk() {
+        let near = |before: (u8, u8, u8), after: (u8, u8, u8)| {
+            before.0.abs_diff(after.0) <= 1
+                && before.1.abs_diff(after.1) <= 1
+                && before.2.abs_diff(after.2) <= 1
+        };
+        for rgb in 0..1u32 << 24 {
+            let [_, r, g, b] = rgb.to_be_bytes();
+            let (h, s, v) = rgb_to_hsv(r, g, b);
+            assert!((0.0..360.0).contains(&h), "hsv hue {h} for ({r},{g},{b})");
+            assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&v));
+            let back = hsv_to_rgb(h, s, v);
+            assert!(
+                near((r, g, b), back),
+                "hsv: ({r},{g},{b}) came back as {back:?}"
+            );
+
+            let (h, s, l) = rgb_to_hsl(r, g, b);
+            assert!((0.0..360.0).contains(&h), "hsl hue {h} for ({r},{g},{b})");
+            assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&l));
+            let back = hsl_to_rgb(h, s, l);
+            assert!(
+                near((r, g, b), back),
+                "hsl: ({r},{g},{b}) came back as {back:?}"
+            );
+
+            let (c, m, y, k) = rgb_to_cmyk(r, g, b);
+            for ink in [c, m, y, k] {
+                assert!((0.0..=1.0).contains(&ink), "ink {ink} for ({r},{g},{b})");
+            }
+            let back = cmyk_to_rgb(c, m, y, k);
+            assert!(
+                near((r, g, b), back),
+                "cmyk: ({r},{g},{b}) came back as {back:?}"
+            );
         }
-        Ok(())
     }
 
     proptest! {
-        #[test]
-        fn hsv_round_trips_every_colour(r: u8, g: u8, b: u8) {
-            let (h, s, v) = rgb_to_hsv(r, g, b);
-            prop_assert!((0.0..360.0).contains(&h), "hue {h} for ({r},{g},{b})");
-            prop_assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&v));
-            assert_within_one_step((r, g, b), hsv_to_rgb(h, s, v))?;
-        }
-
-        #[test]
-        fn hsl_round_trips_every_colour(r: u8, g: u8, b: u8) {
-            let (h, s, l) = rgb_to_hsl(r, g, b);
-            prop_assert!((0.0..360.0).contains(&h), "hue {h} for ({r},{g},{b})");
-            prop_assert!((0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&l));
-            assert_within_one_step((r, g, b), hsl_to_rgb(h, s, l))?;
-        }
-
-        #[test]
-        fn cmyk_round_trips_every_colour(r: u8, g: u8, b: u8) {
-            let (c, m, y, k) = rgb_to_cmyk(r, g, b);
-            for ink in [c, m, y, k] {
-                prop_assert!((0.0..=1.0).contains(&ink), "ink {ink} for ({r},{g},{b})");
-            }
-            assert_within_one_step((r, g, b), cmyk_to_rgb(c, m, y, k))?;
-        }
-
         /// Whatever the hue, including values far outside one turn, `hsv_to_rgb` lands on the same colour as the hue wrapped into `[0, 360)`.
         #[test]
         fn hsv_to_rgb_wraps_any_hue(h in -1.0e4f32..1.0e4, s in 0.0f32..=1.0, v in 0.0f32..=1.0) {

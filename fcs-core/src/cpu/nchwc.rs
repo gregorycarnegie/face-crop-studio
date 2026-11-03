@@ -14,11 +14,20 @@
 
 use std::{mem::MaybeUninit, ops::Range};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use wide::f32x8;
 
+use super::geometry::{
+    column_index, column_inside, input_index, interior, output_dim, tap_offset, tap_rows,
+    weight_index,
+};
+use super::partition::{chunk_span, decode_job, row_base, tile_end};
+use super::size::{checked_allocation, checked_elements};
 use super::tensor::Tensor;
+use super::transform::{
+    active_lanes, channel_blocks, channel_end, channel_parts, double_dim, plane_base, upsample_row,
+};
 
 /// Channels per block.
 pub const BLOCK: usize = 8;
@@ -107,7 +116,10 @@ impl Blocked {
         width: usize,
         fill: impl FnOnce(&mut [MaybeUninit<f32x8>]),
     ) -> Self {
-        let len = batch * channels.div_ceil(BLOCK) * height * width;
+        let len = checked_elements(&[batch, channel_blocks(channels), height, width])
+            .expect("blocked tensor layout overflows usize");
+        checked_allocation(len, std::mem::size_of::<f32x8>())
+            .expect("blocked tensor allocation exceeds isize::MAX");
         let mut data = arena.take(len);
         if cfg!(debug_assertions) {
             data.fill(MaybeUninit::new(f32x8::splat(f32::NAN)));
@@ -140,24 +152,26 @@ impl Blocked {
 
     /// Channel blocks, the last one possibly part padding.
     pub fn blocks(&self) -> usize {
-        self.channels.div_ceil(BLOCK)
+        channel_blocks(self.channels)
     }
 
     /// Channels `first..first + count`, back in NCHW.
     pub fn to_nchw(&self, first: usize, count: usize) -> Result<Tensor> {
-        ensure!(
-            first + count <= self.channels,
-            "channels {first}..{} of a {}-channel tensor",
-            first + count,
-            self.channels
-        );
-        let plane = self.height * self.width;
+        let end = channel_end(first, count, self.channels)
+            .context("channel range overflows or exceeds the tensor")?;
+        let plane = checked_elements(&[self.height, self.width])
+            .context("tensor plane size overflows usize")?;
         let lanes: &[f32] = bytemuck::cast_slice(&self.data);
-        let mut data = Vec::with_capacity(self.batch * count * plane);
+        let elements = checked_elements(&[self.batch, count, plane])
+            .context("extracted tensor size overflows usize")?;
+        checked_allocation(elements, 4)
+            .context("extracted tensor allocation exceeds isize::MAX")?;
+        let mut data = Vec::with_capacity(elements);
         for n in 0..self.batch {
-            for c in first..first + count {
-                let block = (n * self.blocks() + c / BLOCK) * plane;
-                data.extend((0..plane).map(|p| lanes[(block + p) * BLOCK + c % BLOCK]));
+            for c in first..end {
+                let (b, lane) = channel_parts(c);
+                let block = plane_base(n, b, self.blocks(), plane);
+                data.extend((0..plane).map(|p| lanes[input_index(block, p, BLOCK, lane)]));
             }
         }
         Tensor::new(self.batch, count, self.height, self.width, data)
@@ -169,11 +183,11 @@ impl Blocked {
         let mut means = Vec::with_capacity(self.batch * self.channels);
         for n in 0..self.batch {
             for b in 0..self.blocks() {
-                let start = (n * self.blocks() + b) * plane;
+                let start = plane_base(n, b, self.blocks(), plane);
                 let sum = self.data[start..start + plane]
                     .iter()
                     .fold(f32x8::ZERO, |acc, &v| acc + v);
-                let take = BLOCK.min(self.channels - b * BLOCK);
+                let take = active_lanes(b, self.channels);
                 means.extend(sum.to_array()[..take].iter().map(|s| s / plane as f32));
             }
         }
@@ -251,22 +265,30 @@ impl DenseWeights {
         weights: &[f32],
         bias: &[f32],
     ) -> Result<Self> {
+        ensure!(kernel > 0, "convolution kernel must be positive");
+        ensure!(block_in == 1 || block_in == BLOCK, "input block {block_in}");
+        let expected = checked_elements(&[out_channels, in_channels, kernel, kernel])
+            .context("dense weight count overflows usize")?;
         ensure!(
-            weights.len() == out_channels * in_channels * kernel * kernel,
+            weights.len() == expected,
             "weights {out_channels}x{in_channels}x{kernel}x{kernel} need {} values, got {}",
-            out_channels * in_channels * kernel * kernel,
+            expected,
             weights.len()
         );
         ensure!(
             bias.len() == out_channels,
             "bias needs {out_channels} values"
         );
-        ensure!(block_in == 1 || block_in == BLOCK, "input block {block_in}");
         let in_blocks = in_channels.div_ceil(block_in);
-        let taps = kernel * kernel;
-        let mut data =
-            Vec::with_capacity(out_channels.div_ceil(BLOCK) * in_blocks * taps * block_in);
-        for ob in 0..out_channels.div_ceil(BLOCK) {
+        let taps = checked_elements(&[kernel, kernel]).context("kernel size overflows usize")?;
+        let per_block = checked_elements(&[in_blocks, kernel, kernel, block_in])
+            .context("dense weight block size overflows usize")?;
+        let len = checked_elements(&[channel_blocks(out_channels), per_block])
+            .context("blocked dense weight count overflows usize")?;
+        checked_allocation(len, std::mem::size_of::<f32x8>())
+            .context("dense weights exceed the allocation limit")?;
+        let mut data = Vec::with_capacity(len);
+        for ob in 0..channel_blocks(out_channels) {
             for ib in 0..in_blocks {
                 for tap in 0..taps {
                     for j in 0..block_in {
@@ -311,16 +333,23 @@ pub struct DepthwiseWeights {
 impl DepthwiseWeights {
     /// Reorder ONNX's `[channels][1][k][k]` weights.
     pub fn new(channels: usize, kernel: usize, weights: &[f32], bias: &[f32]) -> Result<Self> {
-        let taps = kernel * kernel;
+        ensure!(kernel > 0, "convolution kernel must be positive");
+        let taps = checked_elements(&[kernel, kernel]).context("kernel size overflows usize")?;
+        let expected = checked_elements(&[channels, taps])
+            .context("depthwise weight count overflows usize")?;
         ensure!(
-            weights.len() == channels * taps,
+            weights.len() == expected,
             "depthwise weights need {} values, got {}",
-            channels * taps,
+            expected,
             weights.len()
         );
         ensure!(bias.len() == channels, "bias needs {channels} values");
-        let mut data = Vec::with_capacity(channels.div_ceil(BLOCK) * taps);
-        for b in 0..channels.div_ceil(BLOCK) {
+        let len = checked_elements(&[channel_blocks(channels), taps])
+            .context("blocked depthwise weight count overflows usize")?;
+        checked_allocation(len, std::mem::size_of::<f32x8>())
+            .context("depthwise weights exceed the allocation limit")?;
+        let mut data = Vec::with_capacity(len);
+        for b in 0..channel_blocks(channels) {
             for tap in 0..taps {
                 data.push(lanes(|lane| {
                     let c = b * BLOCK + lane;
@@ -346,36 +375,9 @@ fn lanes(f: impl FnMut(usize) -> f32) -> f32x8 {
 }
 
 fn blocked_bias(bias: &[f32]) -> Vec<f32x8> {
-    (0..bias.len().div_ceil(BLOCK))
+    (0..channel_blocks(bias.len()))
         .map(|b| lanes(|lane| bias.get(b * BLOCK + lane).copied().unwrap_or(0.0)))
         .collect()
-}
-
-fn output_dim(input: usize, kernel: usize, stride: usize, pad: usize) -> usize {
-    (input + 2 * pad).saturating_sub(kernel) / stride + 1
-}
-
-/// Output columns `lo..hi` whose every tap lands inside the input, so they need no checks.
-fn interior(
-    width: usize,
-    kernel: usize,
-    stride: usize,
-    pad: usize,
-    out_w: usize,
-) -> (usize, usize) {
-    let hi = (width + pad)
-        .checked_sub(kernel)
-        .map_or(0, |span| span / stride + 1)
-        .min(out_w);
-    (pad.div_ceil(stride).min(hi), hi)
-}
-
-/// Rows of taps `lo..hi` that land inside the input for output row `oy`.
-fn tap_rows(oy: usize, height: usize, kernel: usize, stride: usize, pad: usize) -> (usize, usize) {
-    let top = (oy * stride) as isize - pad as isize;
-    let lo = (-top).clamp(0, kernel as isize) as usize;
-    let hi = (height as isize - top).clamp(0, kernel as isize) as usize;
-    (lo, hi.max(lo))
 }
 
 /// Enough jobs per rayon task that queueing is not the cost, few enough that every thread
@@ -431,6 +433,10 @@ pub fn conv(
     relu: bool,
 ) -> Result<Blocked> {
     ensure!(
+        input.height > 0 && input.width > 0,
+        "convolution needs nonempty spatial dimensions"
+    );
+    ensure!(
         input.block == weights.block_in && input.blocks == weights.in_blocks,
         "weights expect {} blocks of {}, input has {} of {}",
         weights.in_blocks,
@@ -458,17 +464,24 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
     pad: usize,
     relu: bool,
 ) -> Result<Blocked> {
-    let out_h = output_dim(input.height, K, S, pad);
-    let out_w = output_dim(input.width, K, S, pad);
+    let out_h =
+        output_dim(input.height, K, S, pad).context("convolution height overflows usize")?;
+    let out_w = output_dim(input.width, K, S, pad).context("convolution width overflows usize")?;
     let (batch, out_channels, full_h, full_w) = (input.batch, weights.out_channels, out_h, out_w);
-    let out_blocks = out_channels.div_ceil(BLOCK);
+    let out_blocks = channel_blocks(out_channels);
+    let output_elements = checked_elements(&[batch, out_blocks, out_h, out_w])
+        .context("convolution output size overflows usize")?;
+    checked_allocation(output_elements, std::mem::size_of::<f32x8>())
+        .context("convolution output exceeds Rust's allocation limit")?;
 
     // A 1x1 stride-1 convolution has no geometry, so each plane is computed as one long row:
     // register tiles then run straight across row ends instead of stopping at every one.
     let mut input = input;
     let (out_h, out_w) = if K == 1 && S == 1 && pad == 0 {
-        (input.height, input.width) = (1, input.height * input.width);
-        (1, out_h * out_w)
+        let plane = checked_elements(&[input.height, input.width])
+            .context("convolution input plane overflows usize")?;
+        (input.height, input.width) = (1, plane);
+        (1, plane)
     } else {
         (out_h, out_w)
     };
@@ -480,11 +493,13 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
         relu,
     };
     let groups = out_blocks.div_ceil(FILTERS);
-    let rows = input.batch * groups * out_h;
+    let rows = checked_elements(&[input.batch, groups, out_h])
+        .context("convolution row count overflows usize")?;
     // Long rows are split so every thread gets work; a 1x1 layer is one row per plane.
     let chunk = column_chunk(out_w, rows);
     let chunks = out_w.div_ceil(chunk);
-    let jobs = rows * chunks;
+    let jobs =
+        checked_elements(&[rows, chunks]).context("convolution job count overflows usize")?;
 
     // SAFETY: the jobs cover every (batch item, block group, row, column chunk), and each
     // `Row::run` writes every column of its chunk for each of its blocks.
@@ -492,13 +507,8 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
         Blocked::written(arena, batch, out_channels, full_h, full_w, |data| {
             let out = OutPtr(data.as_mut_ptr());
             balanced((0..jobs).into_par_iter()).for_each(|job| {
-                let (row_job, c) = (job / chunks, job % chunks);
-                let (n, group, oy) = (
-                    row_job / (groups * out_h),
-                    row_job / out_h % groups,
-                    row_job % out_h,
-                );
-                let first = group * FILTERS;
+                let (n, group, oy, c) = decode_job(job, groups, out_h, chunks);
+                let (first, last) = chunk_span(group, FILTERS, out_blocks);
                 let row = Row::<K, S, B> {
                     input: &input,
                     weights,
@@ -508,9 +518,10 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
                     oy,
                     out,
                 };
-                let span = c * chunk..((c + 1) * chunk).min(out_w);
+                let (start, end) = chunk_span(c, chunk, out_w);
+                let span = start..end;
                 // Accumulators F x P, plus P broadcasts and one weight, within sixteen registers.
-                match FILTERS.min(geometry.out_blocks - first) {
+                match last - first {
                     1 => row.run::<1, 8>(span),
                     2 => row.run::<2, 5>(span),
                     3 => row.run::<3, 4>(span),
@@ -549,12 +560,13 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
         let (lo, hi) = interior(self.input.width, K, S, g.pad, g.out_w);
         let lo = lo.clamp(span.start, span.end);
         let hi = hi.clamp(lo, span.end);
+        let full = tile_end(lo, hi, P);
         let mut ox = span.start;
         while ox < lo {
             self.tile::<F, 1, true>(ox);
             ox += 1;
         }
-        while ox + P <= hi {
+        while ox < full {
             self.tile::<F, P, false>(ox);
             ox += P;
         }
@@ -582,18 +594,21 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
         let filters = &weights.data[self.first * per_block..(self.first + F) * per_block];
         let mut acc: [[f32x8; P]; F] = std::array::from_fn(|f| [weights.bias[self.first + f]; P]);
 
-        let (ky_lo, ky_hi) = tap_rows(self.oy, input.height, K, S, g.pad);
-        let top = self.oy * S + ky_lo - g.pad;
-        // Leftmost input column of pixel `ox`'s window; wraps below zero at the left border,
-        // where `CHECK` rejects it.
-        let left = (ox * S).wrapping_sub(g.pad);
+        let (ky_lo, ky_hi, top) = tap_rows(self.oy * S, input.height, K, g.pad);
+        let left = ox * S;
         for ib in 0..input.blocks {
-            let plane = (self.n * input.blocks + ib) * input.height;
             for ky in ky_lo..ky_hi {
-                let row = (plane + top + ky - ky_lo) * width;
-                let taps = ((ib * K + ky) * K) * B;
+                let row = row_base(
+                    self.n,
+                    ib,
+                    top + (ky - ky_lo),
+                    input.blocks,
+                    input.height,
+                    width,
+                );
+                let taps = tap_offset(ib, ky, K, B);
                 for kx in 0..K {
-                    if CHECK && left.wrapping_add(kx) >= width {
+                    if CHECK && !column_inside(left + kx, g.pad, width) {
                         continue;
                     }
                     // A run-time bound on purpose: with `B` here LLVM unrolls all eight
@@ -603,7 +618,8 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
                         // of `interior` and `tap_rows`, border ones by the check above -- and
                         // `j < B`, the input's block.
                         let x: [f32x8; P] = std::array::from_fn(|p| {
-                            let at = (row + left.wrapping_add(p * S + kx)) * B + j;
+                            let ix = column_index(left, p * S + kx, g.pad);
+                            let at = input_index(row, ix, B, j);
                             debug_assert!(at < input.lanes.len());
                             f32x8::splat(unsafe { *input.lanes.get_unchecked(at) })
                         });
@@ -611,7 +627,7 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
                             // SAFETY: `f < F`, and the tap offset is below `per_block` because
                             // `ib`, `ky`, `kx` and `j` are each below the sizes it multiplies.
                             let w = unsafe {
-                                *filters.get_unchecked(f * per_block + taps + kx * B + j)
+                                *filters.get_unchecked(weight_index(f, per_block, taps, kx, B, j))
                             };
                             for p in 0..P {
                                 acc[p] = x[p].mul_add(w, acc[p]);
@@ -623,8 +639,14 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
         }
 
         for (f, pixels) in acc.iter().enumerate() {
-            let base =
-                ((self.n * g.out_blocks + self.first + f) * g.out_h + self.oy) * g.out_w + ox;
+            let base = row_base(
+                self.n,
+                self.first + f,
+                self.oy,
+                g.out_blocks,
+                g.out_h,
+                g.out_w,
+            ) + ox;
             for (p, &v) in pixels.iter().enumerate() {
                 let v = if g.relu { v.max(f32x8::ZERO) } else { v };
                 // SAFETY: columns `ox..ox + P` of row `oy` of blocks `first..first + F` belong
@@ -650,6 +672,10 @@ pub fn depthwise(
     relu: bool,
 ) -> Result<Blocked> {
     ensure!(
+        input.height > 0 && input.width > 0,
+        "convolution needs nonempty spatial dimensions"
+    );
+    ensure!(
         input.channels == weights.channels,
         "depthwise weights for {} channels, input has {}",
         weights.channels,
@@ -670,9 +696,13 @@ fn depthwise_with<const K: usize, const S: usize>(
     relu: bool,
 ) -> Result<Blocked> {
     let (h, w) = (input.height, input.width);
-    let out_h = output_dim(h, K, S, pad);
-    let out_w = output_dim(w, K, S, pad);
+    let out_h = output_dim(h, K, S, pad).context("convolution height overflows usize")?;
+    let out_w = output_dim(w, K, S, pad).context("convolution width overflows usize")?;
     let blocks = input.blocks();
+    let output_elements = checked_elements(&[input.batch, blocks, out_h, out_w])
+        .context("convolution output size overflows usize")?;
+    checked_allocation(output_elements, std::mem::size_of::<f32x8>())
+        .context("convolution output exceeds Rust's allocation limit")?;
     let (lo, hi) = interior(w, K, S, pad, out_w);
 
     // SAFETY: one task per output row, and each writes every column of it.
@@ -682,11 +712,10 @@ fn depthwise_with<const K: usize, const S: usize>(
                 .enumerate()
                 .for_each(|(r, out_row)| {
                     let (n, b, oy) = (r / (blocks * out_h), r / out_h % blocks, r % out_h);
-                    let (ky_lo, ky_hi) = tap_rows(oy, h, K, S, pad);
-                    let first_row = oy * S + ky_lo - pad;
+                    let (ky_lo, ky_hi, first_row) = tap_rows(oy * S, h, K, pad);
                     let plane = &input.data[(n * blocks + b) * h * w..(n * blocks + b + 1) * h * w];
                     let row = DepthwiseRow::<K, S> {
-                        rows: &plane[first_row * w..(first_row + ky_hi - ky_lo) * w],
+                        rows: &plane[first_row * w..(first_row + (ky_hi - ky_lo)) * w],
                         taps: &weights.data[(b * K + ky_lo) * K..(b * K + ky_hi) * K],
                         bias: weights.bias[b],
                         width: w,
@@ -698,7 +727,8 @@ fn depthwise_with<const K: usize, const S: usize>(
                         row.tile::<1, true>(ox, out_row);
                         ox += 1;
                     }
-                    while ox + 4 <= hi {
+                    let full = tile_end(lo, hi, 4);
+                    while ox < full {
                         row.tile::<4, false>(ox, out_row);
                         ox += 4;
                     }
@@ -733,15 +763,14 @@ impl<const K: usize, const S: usize> DepthwiseRow<'_, K, S> {
         let mut acc = [self.bias; P];
         let (taps, _) = self.taps.as_chunks::<K>();
         for (row, taps) in self.rows.chunks_exact(self.width).zip(taps) {
-            // Leftmost input column of pixel `ox`'s window; wraps below zero at the left
-            // border, where `CHECK` rejects it.
-            let left = (ox * S).wrapping_sub(self.pad);
+            let left = ox * S;
             for (kx, &tap) in taps.iter().enumerate() {
                 for (p, acc) in acc.iter_mut().enumerate() {
-                    let ix = left.wrapping_add(p * S + kx);
-                    if CHECK && ix >= self.width {
+                    let offset = p * S + kx;
+                    if CHECK && !column_inside(left + offset, self.pad, self.width) {
                         continue;
                     }
+                    let ix = column_index(left, offset, self.pad);
                     debug_assert!(ix < row.len());
                     // SAFETY: border pixels were checked just above; interior ones lie inside
                     // the row by construction of `interior`.
@@ -788,15 +817,20 @@ pub fn add(arena: &mut Arena, lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
 /// Nearest-neighbour 2x upsample.
 pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
     let (h, w) = (input.height, input.width);
+    let out_h = double_dim(h).context("upsample height overflows usize")?;
+    let out_w = double_dim(w).context("upsample width overflows usize")?;
+    let output_elements = checked_elements(&[input.batch, input.blocks(), out_h, out_w])
+        .context("upsample output size overflows usize")?;
+    checked_allocation(output_elements, std::mem::size_of::<f32x8>())
+        .context("upsample output exceeds Rust's allocation limit")?;
     // SAFETY: one task per output row, and each writes every column of it.
     let output = unsafe {
-        Blocked::written(arena, input.batch, input.channels, h * 2, w * 2, |data| {
-            balanced(data.par_chunks_mut((w * 2).max(1)))
+        Blocked::written(arena, input.batch, input.channels, out_h, out_w, |data| {
+            balanced(data.par_chunks_mut(out_w.max(1)))
                 .enumerate()
                 .for_each(|(r, out_row)| {
-                    // Output row r of plane r / (2h) comes from input row r / 2 of the same plane.
-                    let (plane, oy) = (r / (2 * h), r % (2 * h));
-                    let in_row = &input.data[(plane * h + oy / 2) * w..][..w];
+                    let (start, end) = upsample_row(r, w);
+                    let in_row = &input.data[start..end];
                     for (x, o) in out_row.iter_mut().enumerate() {
                         o.write(in_row[x / 2]);
                     }
@@ -832,8 +866,8 @@ mod tests {
         relu: bool,
     ) -> Tensor {
         let [n, c_in, h, w] = input.dims();
-        let out_h = output_dim(h, k, stride, pad);
-        let out_w = output_dim(w, k, stride, pad);
+        let out_h = output_dim(h, k, stride, pad).unwrap();
+        let out_w = output_dim(w, k, stride, pad).unwrap();
         let (group_in, group_out) = (c_in / groups, c_out / groups);
         let mut out = Vec::with_capacity(n * c_out * out_h * out_w);
         for b in 0..n {
@@ -867,6 +901,105 @@ mod tests {
         (0..len)
             .map(|i| (((i * 37 + seed * 17) % 23) as f32 - 11.0) / 7.0)
             .collect()
+    }
+
+    #[test]
+    fn convolution_handles_windows_wholly_in_padding() {
+        let input = Tensor::new(1, 1, 1, 1, vec![2.0]).unwrap();
+        for k in [1, 3] {
+            for stride in [1, 2] {
+                let raw = vec![1.0; k * k];
+                let want = reference(&input, &raw, &[3.0], 1, k, stride, 4, 1, false);
+                let weights = DenseWeights::new(1, 1, k, 1, &raw, &[3.0]).unwrap();
+                let got = conv(
+                    &mut Arena::default(),
+                    (&input).into(),
+                    &weights,
+                    stride,
+                    4,
+                    false,
+                )
+                .unwrap();
+                assert_close(
+                    &got.to_nchw(0, 1).unwrap(),
+                    &want,
+                    "fully padded dense windows",
+                );
+                if k == 3 {
+                    let weights = DepthwiseWeights::new(1, k, &raw, &[3.0]).unwrap();
+                    let got = depthwise(
+                        &mut Arena::default(),
+                        &blocked(&input),
+                        &weights,
+                        stride,
+                        4,
+                        false,
+                    )
+                    .unwrap();
+                    assert_close(
+                        &got.to_nchw(0, 1).unwrap(),
+                        &want,
+                        "fully padded depthwise windows",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn convolution_rejects_unrepresentable_geometry_and_weights() {
+        let input = Tensor::new(1, 1, 1, 1, vec![2.0]).unwrap();
+        let weights = DenseWeights::new(1, 1, 1, 1, &[1.0], &[0.0]).unwrap();
+        assert!(
+            conv(
+                &mut Arena::default(),
+                (&input).into(),
+                &weights,
+                1,
+                1usize << 30,
+                false
+            )
+            .is_err()
+        );
+        assert!(blocked(&input).to_nchw(usize::MAX, 1).is_err());
+        assert!(
+            conv(
+                &mut Arena::default(),
+                (&input).into(),
+                &weights,
+                1,
+                usize::MAX,
+                false
+            )
+            .is_err()
+        );
+        assert!(DenseWeights::new(usize::MAX, 2, 1, 1, &[], &[]).is_err());
+        assert!(DepthwiseWeights::new(usize::MAX, 3, &[], &[]).is_err());
+        let dw = DepthwiseWeights::new(1, 3, &[1.0; 9], &[0.0]).unwrap();
+        assert!(
+            depthwise(
+                &mut Arena::default(),
+                &blocked(&input),
+                &dw,
+                1,
+                usize::MAX,
+                false
+            )
+            .is_err()
+        );
+        let empty = Tensor::zeros(1, 1, 0, 1);
+        assert!(
+            conv(
+                &mut Arena::default(),
+                (&empty).into(),
+                &weights,
+                1,
+                0,
+                false
+            )
+            .is_err()
+        );
+        assert!(depthwise(&mut Arena::default(), &blocked(&empty), &dw, 1, 1, false).is_err());
     }
 
     fn blocked(tensor: &Tensor) -> Blocked {
@@ -1055,7 +1188,7 @@ mod tests {
         #[case] pad: usize,
     ) {
         for width in 1..14 {
-            let out_w = output_dim(width, kernel, stride, pad);
+            let out_w = output_dim(width, kernel, stride, pad).unwrap();
             let inside: Vec<usize> = (0..out_w)
                 .filter(|&ox| ox * stride >= pad && ox * stride - pad + kernel <= width)
                 .collect();

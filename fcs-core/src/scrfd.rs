@@ -17,9 +17,12 @@
 //! units of the stride. No NMS inside the graph, so the decoding below is the whole of it.
 
 /// Running the network on the WGSL engine.
+mod decode;
 pub mod gpu;
+mod heads;
 /// Running the network without ONNX Runtime, on the built-in CPU graph.
 pub mod plan;
+mod slots;
 /// The generated step table; see `tools/dataset/scrfd_topology.py`.
 pub mod topology;
 
@@ -29,26 +32,16 @@ use anyhow::Result;
 use image::{DynamicImage, RgbImage};
 use log::{debug, info, warn};
 
-use crate::{
-    nms::apply_nms_in_place,
-    postprocess::{BoundingBox, Detection, Landmark},
-};
+use crate::{nms::apply_nms_in_place, postprocess::Detection};
+
+pub use decode::Letterbox;
+use decode::{ANCHORS_PER_CELL, LANDMARKS, decode_row, sigmoid};
 
 /// The exported graph's fixed input side.
 pub const INPUT_SIZE: u32 = 640;
 
 /// Strides the head predicts at, in the order their tensors are matched.
 const STRIDES: [u32; 3] = [8, 16, 32];
-
-/// Anchors per cell, from the config's two scales at one ratio.
-const ANCHORS_PER_CELL: usize = 2;
-
-/// Landmarks the head predicts: eyes, nose, then the two mouth corners.
-const LANDMARKS: usize = 5;
-
-/// How many of those five this model was actually taught: the two eyes, and nothing else.
-/// See the note in `decode_level` on why the rest are reported absent rather than passed through.
-const TRAINED_LANDMARKS: usize = 2;
 
 /// Workspace-relative location of the exported model.
 pub(crate) const DEFAULT_MODEL: &str = "models/scrfd80k_500m_640.onnx";
@@ -69,13 +62,6 @@ enum Backend {
     Cuda(Box<crate::cuda::CudaDetector>),
     Gpu(Box<(crate::gpu::GpuInferenceOps, gpu::ScrfdGpuWeights)>),
     Cpu(Box<plan::ScrfdWeights>),
-}
-
-/// How a source image was laid onto the square input, and what undoes it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Letterbox {
-    /// Factor the source was multiplied by; detections are divided by it to come back.
-    pub scale: f32,
 }
 
 impl ScrfdDetector {
@@ -492,61 +478,6 @@ pub(crate) fn decode_candidates(
     detections
 }
 
-/// One row's detection: `boxes` holds its four distances and `points` starts at its landmark
-/// offsets, of which only the two trained eyes are read.
-fn decode_row(
-    score: f32,
-    boxes: &[f32],
-    points: &[f32],
-    row: usize,
-    cells: usize,
-    stride: f32,
-    letterbox: Letterbox,
-) -> Detection {
-    // Rows run spatially with the anchors interleaved, so a cell's anchors are adjacent.
-    let cell = row / ANCHORS_PER_CELL;
-    let centre_x = (cell % cells) as f32 * stride;
-    let centre_y = (cell / cells) as f32 * stride;
-
-    // distance2bbox: left, top, right, bottom distances outward from the centre.
-    let x1 = centre_x - boxes[0] * stride;
-    let y1 = centre_y - boxes[1] * stride;
-    let x2 = centre_x + boxes[2] * stride;
-    let y2 = centre_y + boxes[3] * stride;
-
-    // Only the two eyes are real. This model's landmark head was trained on eye pairs
-    // clicked for this project, with nose and mouth corners written `-1` and weighted
-    // to zero (`tools/dataset/to_labelv2.zig`), so those three outputs received no
-    // gradient at all: they emit near-zero distances that decode to the anchor centre,
-    // which lands *above* the face and is identical for all three. Left in, they look
-    // like landmarks and are drawn as landmarks, so they are reported absent.
-    let mut landmarks = [None; LANDMARKS];
-    for (index, landmark) in landmarks.iter_mut().enumerate().take(TRAINED_LANDMARKS) {
-        let dx = points[index * 2];
-        let dy = points[index * 2 + 1];
-        *landmark = Some(Landmark::new(
-            (centre_x + dx * stride) / letterbox.scale,
-            (centre_y + dy * stride) / letterbox.scale,
-        ));
-    }
-
-    Detection {
-        bbox: BoundingBox {
-            x: x1 / letterbox.scale,
-            y: y1 / letterbox.scale,
-            width: (x2 - x1) / letterbox.scale,
-            height: (y2 - y1) / letterbox.scale,
-        },
-        landmarks,
-        score,
-    }
-}
-
-/// The score head's activation. One function, so both decode paths round identically.
-fn sigmoid(value: f32) -> f32 {
-    1.0 / (1.0 + (-value).exp())
-}
-
 /// Decode the raw `(1, anchors*channels, height, width)` maps the built-in engines produce.
 ///
 /// They stop at the head's convolutions, because the sigmoid and the deployment reshape that
@@ -645,6 +576,7 @@ fn find<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::decode::TRAINED_LANDMARKS;
     use super::*;
     use image::{Rgb, RgbImage};
     use rstest::rstest;
@@ -725,7 +657,7 @@ mod tests {
     /// equal `x * height`, lets an index mistake through however exact the assertion looks.
     ///
     /// Scores are mostly negative so only a handful of anchors clear the threshold after the
-    /// sigmoid; `sigmoid(v) > 0.5` exactly when `v > 0`.
+    /// sigmoid; `sigmoid(v) > 0.5` only when `v > 0` (tiny positive `v` rounds to 0.5).
     fn raw_maps(size: u32) -> Vec<(Vec<f32>, [usize; 4])> {
         let mut maps = Vec::new();
         // Grouped by kind, then stride -- the order `decode_maps` indexes with `level + 3`.

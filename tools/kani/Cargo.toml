@@ -1,0 +1,18 @@
+[package]
+name = "fcs-kani"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Check production floating-point code with Kani, without GPU or image codec dependencies.
+[workspace]
+members = ["shim"]
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+fcs-utils = { path = "shim", package = "fcs-kani-shim" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

@@ -185,8 +185,8 @@ impl MaxPoolPipeline {
             &self.pipeline,
             &bind_group,
             [
-                config.output_width.div_ceil(POOL_WORKGROUP_X),
-                config.output_height.div_ceil(POOL_WORKGROUP_Y),
+                super::geometry::ceil_div(config.output_width, POOL_WORKGROUP_X),
+                super::geometry::ceil_div(config.output_height, POOL_WORKGROUP_Y),
                 config.channels,
             ],
         );

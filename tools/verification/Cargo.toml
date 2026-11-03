@@ -1,0 +1,11 @@
+[package]
+name = "crop-region"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Translate production integer calculations without GPU or image codec dependencies.
+[workspace]
+
+[lib]
+path = "lib.rs"

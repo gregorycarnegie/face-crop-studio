@@ -4,7 +4,9 @@
 //! there is no dtype dispatch, no strides and no broadcasting. Anything more
 //! general would be machinery with no caller.
 
-use anyhow::Result;
+use super::layout::{checked_nchw, plane_range};
+use super::size::checked_allocation;
+use anyhow::{Context, Result};
 
 /// A 4-D NCHW tensor of f32, densely packed.
 #[derive(Debug, Clone, PartialEq)]
@@ -13,6 +15,7 @@ pub struct Tensor {
     channels: usize,
     height: usize,
     width: usize,
+    plane: usize,
     data: Vec<f32>,
 }
 
@@ -25,7 +28,8 @@ impl Tensor {
         width: usize,
         data: Vec<f32>,
     ) -> Result<Self> {
-        let expected = batch * channels * height * width;
+        let (plane, expected) = checked_nchw(batch, channels, height, width)
+            .context("CPU tensor layout overflows usize")?;
         anyhow::ensure!(
             data.len() == expected,
             "tensor {batch}x{channels}x{height}x{width} needs {expected} elements, got {}",
@@ -36,24 +40,32 @@ impl Tensor {
             channels,
             height,
             width,
+            plane,
             data,
         })
     }
 
     /// A zero-filled tensor.
+    ///
+    /// # Panics
+    /// Panics if the layout overflows usize or its byte size exceeds isize::MAX.
     pub fn zeros(batch: usize, channels: usize, height: usize, width: usize) -> Self {
+        let (plane, elements) = checked_nchw(batch, channels, height, width)
+            .expect("CPU tensor layout overflows usize");
+        checked_allocation(elements, 4).expect("CPU tensor allocation exceeds isize::MAX");
         Self {
             batch,
             channels,
             height,
             width,
-            data: vec![0.0; batch * channels * height * width],
+            plane,
+            data: vec![0.0; elements],
         }
     }
 
     /// Elements in one channel plane.
     pub fn plane(&self) -> usize {
-        self.height * self.width
+        self.plane
     }
 
     /// Return dimensions in `[batch, channels, height, width]` order.
@@ -72,16 +84,39 @@ impl Tensor {
     }
 
     /// One channel plane of one batch item.
+    ///
+    /// # Panics
+    /// Panics if either index is outside the tensor's dimensions.
     pub fn plane_slice(&self, batch: usize, channel: usize) -> &[f32] {
-        let plane = self.plane();
-        let start = (batch * self.channels + channel) * plane;
-        &self.data[start..start + plane]
+        let (start, end) = plane_range(
+            batch,
+            channel,
+            self.batch,
+            self.channels,
+            self.plane,
+            self.data.len(),
+        )
+        .expect("CPU tensor plane index out of bounds");
+        &self.data[start..end]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_overflow_even_when_an_outer_dimension_is_zero() {
+        assert!(Tensor::new(usize::MAX, usize::MAX, 1, 1, vec![0.0]).is_err());
+        assert!(Tensor::new(0, 1, usize::MAX, 2, vec![]).is_err());
+        assert!(Tensor::zeros(2, 3, 0, 5).plane_slice(1, 2).is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "CPU tensor plane index out of bounds")]
+    fn invalid_channel_cannot_alias_the_next_batch() {
+        Tensor::zeros(2, 3, 1, 1).plane_slice(0, 3);
+    }
 
     #[test]
     fn new_rejects_a_length_that_disagrees_with_the_shape() {

@@ -75,6 +75,9 @@ opaque!(
 /// Null means success. Any other value is an owned status that must be released.
 pub type OrtStatusPtr = *mut OrtStatus;
 
+/// `ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT`, the only output element type this crate reads.
+pub const TENSOR_ELEMENT_FLOAT: c_int = 1;
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrtLoggingLevel {
@@ -265,7 +268,12 @@ pub struct OrtApi {
     _reserved_57: Unused,
     _reserved_58: Unused,
     _reserved_59: Unused,
-    _reserved_60: Unused,
+    /// `OrtApi` field 60. Written as `c_int`, not an enum, so an element type this crate
+    /// does not know is a value to reject rather than undefined behaviour.
+    pub GetTensorElementType: unsafe extern "system" fn(
+        info: *const OrtTensorTypeAndShapeInfo,
+        out: *mut c_int,
+    ) -> OrtStatusPtr,
     /// `OrtApi` field 61.
     pub GetDimensionsCount: unsafe extern "system" fn(
         info: *const OrtTensorTypeAndShapeInfo,
@@ -347,4 +355,20 @@ pub struct OrtApiBase {
     pub get_api: unsafe extern "system" fn(version: u32) -> *const OrtApi,
     /// Null-terminated library version, e.g. `"1.24.4"`. Borrowed — do not free.
     pub get_version_string: unsafe extern "system" fn() -> *const c_char,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The table is positional: a missing or extra placeholder silently calls the wrong function.
+    #[test]
+    fn named_fields_sit_at_their_c_api_index() {
+        let at = |index: usize| index * size_of::<Unused>();
+        assert_eq!(std::mem::offset_of!(OrtApi, GetTensorMutableData), at(51));
+        assert_eq!(std::mem::offset_of!(OrtApi, GetTensorElementType), at(60));
+        assert_eq!(std::mem::offset_of!(OrtApi, GetDimensionsCount), at(61));
+        assert_eq!(std::mem::offset_of!(OrtApi, GetDimensions), at(62));
+        assert_eq!(std::mem::offset_of!(OrtApi, GetTensorTypeAndShape), at(65));
+    }
 }

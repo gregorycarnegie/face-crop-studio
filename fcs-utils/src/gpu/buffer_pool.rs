@@ -27,12 +27,79 @@ pub enum BufferPoolError {
     AllocationFailed(String),
 }
 
-struct BufferEntry {
-    buffer: wgpu::Buffer,
+/// Generic over the buffer so the idle accounting can be tested without a GPU.
+struct BufferEntry<B = wgpu::Buffer> {
+    buffer: B,
     size: u64,
     /// Kept alongside the buffer so a parked entry can be filed back under the right
     /// usage bucket when its execution scope ends.
     usage: wgpu::BufferUsages,
+}
+
+/// Idle buffers by usage, with their total size held under the same lock so the two cannot
+/// disagree: every change to the lists goes through these methods, which update `bytes` too.
+struct IdleBuffers<B = wgpu::Buffer> {
+    by_usage: HashMap<wgpu::BufferUsages, Vec<BufferEntry<B>>>,
+    bytes: u64,
+}
+
+impl<B> Default for IdleBuffers<B> {
+    fn default() -> Self {
+        Self {
+            by_usage: HashMap::new(),
+            bytes: 0,
+        }
+    }
+}
+
+impl<B> IdleBuffers<B> {
+    fn push(&mut self, entry: BufferEntry<B>) {
+        self.bytes += entry.size;
+        self.by_usage.entry(entry.usage).or_default().push(entry);
+    }
+
+    fn take_best_fit(&mut self, size: u64, usage: wgpu::BufferUsages) -> Option<BufferEntry<B>> {
+        let buffers = self.by_usage.get_mut(&usage)?;
+        let entry = buffers.swap_remove(best_fit_index(buffers, size, None)?);
+        self.bytes -= entry.size;
+        Some(entry)
+    }
+
+    /// Drop buffers, smallest first, until at most `cap` bytes remain; returns the bytes freed.
+    fn evict_to(&mut self, cap: u64) -> u64 {
+        let mut freed = 0;
+        while self.bytes > cap {
+            let Some((usage, index)) = self
+                .by_usage
+                .iter()
+                .flat_map(|(usage, entries)| {
+                    entries
+                        .iter()
+                        .enumerate()
+                        .map(move |(i, e)| (*usage, i, e.size))
+                })
+                .min_by_key(|&(_, _, size)| size)
+                .map(|(usage, index, _)| (usage, index))
+            else {
+                break;
+            };
+            let entries = self.by_usage.get_mut(&usage).expect("usage was just found");
+            let entry = entries.swap_remove(index);
+            self.bytes -= entry.size;
+            freed += entry.size;
+        }
+        freed
+    }
+
+    /// Drop every buffer; returns the bytes freed.
+    fn clear(&mut self) -> u64 {
+        self.by_usage.clear();
+        std::mem::take(&mut self.bytes)
+    }
+
+    fn len(&self) -> usize {
+        self.by_usage.values().map(Vec::len).sum()
+    }
 }
 
 /// A poisoned pool mutex only means some other thread panicked while holding it; the buffer
@@ -81,15 +148,14 @@ pub(crate) const READBACK: wgpu::BufferUsages =
 /// keep an [`Self::execution_scope`] alive until the submitted work completes.
 pub struct GpuBufferPool {
     context: Arc<GpuContext>,
-    idle: Mutex<HashMap<wgpu::BufferUsages, Vec<BufferEntry>>>,
+    /// Idle buffers and their total, kept under `max_idle_bytes`.
+    idle: Mutex<IdleBuffers>,
     /// Buffers released inside an execution scope, keyed by scope id. They are held back from
     /// `idle` until the scope ends, so a buffer whose GPU work is still in flight cannot be
     /// handed to another thread. See [`GpuBufferPool::execution_scope`].
     in_flight: Mutex<HashMap<u64, Vec<BufferEntry>>>,
     next_scope: std::sync::atomic::AtomicU64,
     total_allocated_bytes: std::sync::atomic::AtomicU64,
-    /// Bytes currently sitting in `idle`, kept under `max_idle_bytes`.
-    idle_bytes: std::sync::atomic::AtomicU64,
     max_idle_bytes: u64,
     max_memory: Option<u64>,
 }
@@ -101,11 +167,10 @@ impl GpuBufferPool {
     pub fn new(context: Arc<GpuContext>, max_memory: Option<u64>) -> Self {
         Self {
             context,
-            idle: Mutex::new(HashMap::new()),
+            idle: Mutex::new(IdleBuffers::default()),
             in_flight: Mutex::new(HashMap::new()),
             next_scope: std::sync::atomic::AtomicU64::new(0),
             total_allocated_bytes: std::sync::atomic::AtomicU64::new(0),
-            idle_bytes: std::sync::atomic::AtomicU64::new(0),
             // Pools given an explicit `max_memory` are already bounded: `acquire` releases
             // idle buffers once the budget is reached. Imposing an idle ceiling as well would
             // fight that, evicting at the very threshold the pool is meant to work at and
@@ -206,27 +271,23 @@ impl GpuBufferPool {
             return Ok(entry.buffer);
         }
 
-        // Check memory limits before allocating
-        if let Some(limit) = self.max_memory {
-            let current = self.memory_usage();
-            if current + size > limit {
-                // Try to free up space by clearing idle buffers
-                self.clear();
-                let current_after_clear = self.memory_usage();
-                if current_after_clear + size > limit {
-                    return Err(BufferPoolError::MemoryLimitExceeded {
-                        size,
-                        usage: current_after_clear,
-                        limit,
-                    });
-                }
+        // Reserve before allocating, in one atomic step: a separate check and add let two
+        // threads both pass the check and together overshoot the budget.
+        let limit = self.max_memory.unwrap_or(u64::MAX);
+        if self.try_reserve(size, limit).is_err() {
+            // Try to free up space by clearing idle buffers
+            self.clear();
+            if let Err(usage) = self.try_reserve(size, limit) {
+                return Err(BufferPoolError::MemoryLimitExceeded { size, usage, limit });
             }
         }
 
-        // In wgpu 0.17+, create_buffer can panic on OOM. We wrap it if possible but it's hard.
-        // Assuming standard behavior: returns buffer, but might be invalid if OOM.
-        // For now, we trust the limit check above.
-
+        // wgpu's default error handler panics on a failed allocation, and the GUI survives that
+        // per file, so a reservation left behind would shrink the budget for the whole session.
+        let reservation = Reservation {
+            counter: &self.total_allocated_bytes,
+            size,
+        };
         let buffer = self
             .context
             .device()
@@ -236,11 +297,19 @@ impl GpuBufferPool {
                 usage,
                 mapped_at_creation: false,
             });
-
-        self.total_allocated_bytes
-            .fetch_add(size, std::sync::atomic::Ordering::Relaxed);
+        std::mem::forget(reservation);
 
         Ok(buffer)
+    }
+
+    /// Atomically add `size` to the allocated total if `limit` allows; on refusal, the usage
+    /// that refused it.
+    fn try_reserve(&self, size: u64, limit: u64) -> Result<u64, u64> {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.total_allocated_bytes
+            .try_update(Relaxed, Relaxed, |current| {
+                super::buffer_math::reserve(current, size, limit)
+            })
     }
 
     /// Return a buffer to the pool.
@@ -273,9 +342,7 @@ impl GpuBufferPool {
     }
 
     fn push_idle(&self, entry: BufferEntry) {
-        self.idle_bytes
-            .fetch_add(entry.size, std::sync::atomic::Ordering::Relaxed);
-        lock(&self.idle).entry(entry.usage).or_default().push(entry);
+        lock(&self.idle).push(entry);
     }
 
     /// Drop idle buffers, smallest first, until the pool holds no more than `max_idle_bytes`.
@@ -284,46 +351,13 @@ impl GpuBufferPool {
     /// never the reverse, so the large ones are the reusable ones -- evicting those would just
     /// force them to be allocated again.
     fn evict_to_cap(&self) {
-        use std::sync::atomic::Ordering::Relaxed;
-        if self.idle_bytes.load(Relaxed) <= self.max_idle_bytes {
-            return;
-        }
-
-        let mut idle = lock(&self.idle);
-        let mut freed = 0u64;
-        // Recomputed against the live total so a concurrent acquire that drained the pool in the
-        // meantime does not make this evict more than it needs to.
-        while self.idle_bytes.load(Relaxed).saturating_sub(freed) > self.max_idle_bytes {
-            let Some((usage, index, size)) = idle
-                .iter()
-                .flat_map(|(usage, entries)| {
-                    entries
-                        .iter()
-                        .enumerate()
-                        .map(move |(i, e)| (*usage, i, e.size))
-                })
-                .min_by_key(|(_, _, size)| *size)
-            else {
-                break;
-            };
-            if let Some(entries) = idle.get_mut(&usage) {
-                entries.swap_remove(index);
-            }
-            freed += size;
-        }
-        drop(idle);
-
-        // Both are no-ops when nothing was freed, so no guard.
-        self.idle_bytes.fetch_sub(freed, Relaxed);
-        self.total_allocated_bytes.fetch_sub(freed, Relaxed);
+        let freed = lock(&self.idle).evict_to(self.max_idle_bytes);
+        release(&self.total_allocated_bytes, freed);
     }
 
     /// Return the number of idle buffers, excluding buffers parked in execution scopes.
     pub fn available(&self) -> usize {
-        self.idle
-            .lock()
-            .map(|map| map.values().map(|v| v.len()).sum())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().values().map(|v| v.len()).sum())
+        lock(&self.idle).len()
     }
 
     /// Returns the total size in bytes of all buffers currently managed (or allocated) by this pool.
@@ -334,61 +368,11 @@ impl GpuBufferPool {
 
     /// Clears all idle buffers from the pool, freeing their memory.
     pub fn clear(&self) {
-        let mut idle = match self.idle.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        // Calculate size of dropped buffers to decrement counter correctly
-        let mut freed_bytes = 0;
-        for entries in idle.values() {
-            for entry in entries {
-                freed_bytes += entry.size;
-            }
-        }
-
-        idle.clear();
-        self.idle_bytes
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-
-        // Note: We only decrement for buffers that were actually in the pool.
-        // Buffers currently in use are not affected, but total_allocated_bytes tracks *all* allocated
-        // buffers created through this pool that haven't been dropped by the GPU yet (conceptually).
-        // Wait, `recycle` puts them back. If they are dropped outside, we can't track that easily without a wrapper.
-        //
-        // CORRECTION: The current design allocates new buffers if pool is empty.
-        // `total_allocated_bytes` increments on create.
-        // It should technically decrement when a buffer is destroyed.
-        // But we return raw `wgpu::Buffer`. We don't know when the user drops it unless they call `recycle`.
-        //
-        // If they DROP it instead of recycling, our counter leaks.
-        //
-        // For OOM handling purposes, we care about what's IN the pool mostly, or we accept the leak
-        // as "allocated by app".
-        //
-        // Let's adjust: track `total_allocated_bytes` as distinct from `pooled_bytes`.
-        // Actually, if we want to release memory on OOM, we only care about `idle` buffers.
-        //
-        // Let's assume `total_allocated_bytes` is "allocated via this pool and not yet known to be freed".
-        // Use a better metric? `pooled_memory_usage` might be more accurate for "what we can free".
-        //
-        // Let's stick to tracking what we create. If user drops buffer without recycling, we drift.
-        // Ideally we'd wrap `wgpu::Buffer`. For now, let's just track "pooled" memory + estimated active?
-        //
-        // Actually, `recycle` puts it back. If they don't recycle, it's gone from our control.
-        // So `total_allocated_bytes` increases on create.
-        // When clearing pool, we decrement by the size of cleared buffers.
-        //
-        // Issue: if user drops buffer (no recycle), we never decrement.
-        //
-        // Let's change the defined metric: `pooled_memory_usage`. Only track what is sitting in `idle`.
-        // When we create a buffer, it's "in use". When recycled, it becomes "pooled".
-        //
-        // If we want to track TOTAL GPU usage, `wgpu::GlobalReport` is better.
-        // `GpuBufferPool` should track how much IT is holding.
-
-        self.total_allocated_bytes
-            .fetch_sub(freed_bytes, std::sync::atomic::Ordering::Relaxed);
+        let freed_bytes = lock(&self.idle).clear();
+        // `total_allocated_bytes` counts bytes created and not yet freed through `clear` or
+        // eviction. A buffer dropped without `recycle` stays counted, so the budget errs
+        // toward refusing, never toward overshooting.
+        release(&self.total_allocated_bytes, freed_bytes);
     }
 
     fn take_best_fit(&self, size: u64, usage: wgpu::BufferUsages) -> Option<BufferEntry> {
@@ -404,45 +388,51 @@ impl GpuBufferPool {
             }
         }
 
-        let mut idle = lock(&self.idle);
+        lock(&self.idle).take_best_fit(size, usage)
+    }
+}
 
-        // Only search buffers with matching usage flags
-        let buffers = idle.get_mut(&usage)?;
+/// Subtract `freed` from a byte counter in one atomic step, saturating at zero.
+fn release(counter: &std::sync::atomic::AtomicU64, freed: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    counter.update(Relaxed, Relaxed, |current| {
+        super::buffer_math::release(current, freed)
+    });
+}
 
-        let entry = best_fit_index(buffers, size, None).map(|index| buffers.swap_remove(index));
-        if let Some(entry) = entry.as_ref() {
-            self.idle_bytes
-                .fetch_sub(entry.size, std::sync::atomic::Ordering::Relaxed);
-        }
-        entry
+/// A budget reservation, given back on drop unless forgotten once the allocation succeeds.
+struct Reservation<'a> {
+    counter: &'a std::sync::atomic::AtomicU64,
+    size: u64,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        release(self.counter, self.size);
     }
 }
 
 /// Index of the smallest entry that is at least `size`, optionally restricted to one usage.
 /// The usage filter is needed for the scope-parked list, which is keyed by scope rather than
 /// by usage and so holds mixed usages.
-fn best_fit_index(
-    entries: &[BufferEntry],
+fn best_fit_index<B>(
+    entries: &[BufferEntry<B>],
     size: u64,
     usage: Option<wgpu::BufferUsages>,
 ) -> Option<usize> {
-    let mut best_index = None;
-    let mut best_size = u64::MAX;
+    let mut best = None;
 
     for (index, entry) in entries.iter().enumerate() {
-        if entry.size < size || usage.is_some_and(|u| entry.usage != u) {
+        if usage.is_some_and(|u| entry.usage != u) {
             continue;
         }
-        if entry.size < best_size {
-            best_size = entry.size;
-            best_index = Some(index);
-            if entry.size == size {
-                break;
-            }
+        best = super::buffer_math::choose_fit(best, index, entry.size, size);
+        if entry.size == size {
+            break;
         }
     }
 
-    best_index
+    best.map(|(index, _)| index)
 }
 
 /// Guard returned by [`GpuBufferPool::execution_scope`]. Ending it releases the buffers the
@@ -611,6 +601,53 @@ mod tests {
 
         // Cleanup
         pool.recycle(buf2, 600, wgpu::BufferUsages::STORAGE);
+    }
+
+    /// Racing acquires must never jointly exceed the budget: the check and the add are one step.
+    #[test]
+    fn concurrent_acquires_stay_within_the_budget() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping GPU memory test: no GPU");
+            return;
+        };
+        let pool = GpuBufferPool::new(ctx, Some(4 * 256));
+        let barrier = std::sync::Barrier::new(16);
+        let granted: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    s.spawn(|| {
+                        barrier.wait();
+                        pool.acquire(256, STORAGE, None).ok()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().unwrap())
+                .collect()
+        });
+        assert_eq!(granted.len(), 4, "exactly the budget's worth is granted");
+        assert_eq!(pool.memory_usage(), 4 * 256);
+    }
+
+    /// A buffer wgpu refuses (larger than the device allows) panics inside `create_buffer`;
+    /// once that panic is caught, as the GUI does per file, the reservation must be gone.
+    #[test]
+    fn a_panicking_allocation_gives_its_reservation_back() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping GPU memory test: no GPU");
+            return;
+        };
+        let too_big = ctx.device().limits().max_buffer_size + 4;
+        let pool = GpuBufferPool::new(ctx, Some(u64::MAX));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.acquire(too_big, STORAGE, None)
+        }));
+        if result.is_ok() {
+            eprintln!("Skipping: this backend did not panic on an oversized buffer");
+            return;
+        }
+        assert_eq!(pool.memory_usage(), 0);
     }
 
     // ------------------------------------------------------------------
@@ -879,5 +916,76 @@ mod tests {
             2,
             "ending the scope returns its parked buffers to idle"
         );
+    }
+
+    #[derive(Debug, Clone)]
+    enum IdleOp {
+        Push(bool, u64),
+        Take(bool, u64),
+        Evict(u64),
+        Clear,
+    }
+
+    fn idle_op() -> impl proptest::strategy::Strategy<Value = IdleOp> {
+        use proptest::prelude::*;
+        prop_oneof![
+            4 => (any::<bool>(), 0u64..1000).prop_map(|(u, s)| IdleOp::Push(u, s)),
+            3 => (any::<bool>(), 0u64..1000).prop_map(|(u, s)| IdleOp::Take(u, s)),
+            2 => (0u64..3000).prop_map(IdleOp::Evict),
+            1 => Just(IdleOp::Clear),
+        ]
+    }
+
+    proptest::proptest! {
+        /// Any sequence of idle-list operations, without a GPU, against a plain list model:
+        /// the byte total always equals the sizes held, a take is the smallest sufficient
+        /// buffer of its usage, and eviction frees smallest first down to the ceiling.
+        #[test]
+        fn idle_bytes_always_equal_the_buffers_held(
+            ops in proptest::collection::vec(idle_op(), 0..60),
+        ) {
+            use proptest::prop_assert_eq;
+            let usage = |u: bool| if u { READBACK } else { STORAGE_RW };
+            let mut idle = IdleBuffers::<()>::default();
+            let mut model: Vec<(wgpu::BufferUsages, u64)> = Vec::new();
+            for op in ops {
+                match op {
+                    IdleOp::Push(u, size) => {
+                        idle.push(BufferEntry { buffer: (), size, usage: usage(u) });
+                        model.push((usage(u), size));
+                    }
+                    IdleOp::Take(u, size) => {
+                        let want = model
+                            .iter()
+                            .filter(|&&(m, s)| m == usage(u) && s >= size)
+                            .map(|&(_, s)| s)
+                            .min();
+                        let got = idle.take_best_fit(size, usage(u)).map(|e| e.size);
+                        prop_assert_eq!(got, want);
+                        if let Some(s) = got {
+                            let at = model.iter().position(|&e| e == (usage(u), s)).unwrap();
+                            model.swap_remove(at);
+                        }
+                    }
+                    IdleOp::Evict(cap) => {
+                        let before: u64 = model.iter().map(|e| e.1).sum();
+                        let freed = idle.evict_to(cap);
+                        model.sort_by_key(|e| e.1);
+                        let mut dropped = 0;
+                        while model.iter().map(|e| e.1).sum::<u64>() > cap {
+                            dropped += model.remove(0).1;
+                        }
+                        prop_assert_eq!(freed, dropped);
+                        prop_assert_eq!(before - freed, idle.bytes);
+                    }
+                    IdleOp::Clear => {
+                        let held: u64 = model.drain(..).map(|e| e.1).sum();
+                        prop_assert_eq!(idle.clear(), held);
+                    }
+                }
+                prop_assert_eq!(idle.bytes, model.iter().map(|e| e.1).sum::<u64>());
+                prop_assert_eq!(idle.len(), model.len());
+            }
+        }
     }
 }

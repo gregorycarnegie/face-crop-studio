@@ -1,0 +1,9 @@
+[package]
+name = "fcs-kani-shim"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Stands in for fcs-utils so the production detection types resolve `fcs_utils::point`.
+[lib]
+path = "lib.rs"

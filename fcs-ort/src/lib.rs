@@ -4,6 +4,11 @@
 //! runtime or one discoverable by the platform loader. A candidate must supply API 24;
 //! holding the validated library open keeps its function pointers valid for sessions.
 
+// Share the dependency-free boundary checks with the app without linking its runtime.
+#[path = "../../fcs-core/src/tensor/size.rs"]
+#[allow(dead_code)]
+mod shape_size;
+
 pub mod session;
 pub mod sys;
 

@@ -2,7 +2,7 @@ use super::utils::{ComputeDispatch, UniformCache, buffer_entry, uniform_entry};
 use fcs_utils::create_gpu_pipeline;
 
 use crate::gpu::GpuTensor;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use fcs_utils::gpu::{GpuBufferPool, GpuContext};
 use std::sync::Arc;
@@ -50,10 +50,19 @@ impl Upsample2xPipeline {
             "upsample expects 4D tensor (got {:?})",
             dims
         );
+        anyhow::ensure!(dims[0] == 1, "GPU upsample supports only batch size 1");
+        let height = dims[2]
+            .checked_mul(2)
+            .context("upsample height overflows usize")?;
+        let width = dims[3]
+            .checked_mul(2)
+            .context("upsample width overflows usize")?;
+        let out_h = super::geometry::shader_dim(height).context("upsample height exceeds u32")?;
+        let out_w = super::geometry::shader_dim(width).context("upsample width exceeds u32")?;
         let output = GpuTensor::uninitialized_with_pool(
             context.clone(),
             Some(pool.clone()),
-            [dims[0], dims[1], dims[2] * 2, dims[3] * 2],
+            [dims[0], dims[1], height, width],
             Some("resize2x_output"),
         )?;
         let uniforms = UpsampleUniforms {
@@ -91,8 +100,8 @@ impl Upsample2xPipeline {
             &self.pipeline,
             &bind_group,
             [
-                ((dims[3] * 2) as u32).div_ceil(UPSAMPLE_WORKGROUP_X),
-                ((dims[2] * 2) as u32).div_ceil(UPSAMPLE_WORKGROUP_Y),
+                super::geometry::ceil_div(out_w, UPSAMPLE_WORKGROUP_X),
+                super::geometry::ceil_div(out_h, UPSAMPLE_WORKGROUP_Y),
                 dims[1] as u32,
             ],
         );

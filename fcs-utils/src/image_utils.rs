@@ -148,22 +148,11 @@ fn load_heic_image(path: &Path) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgb8(rgb))
 }
 
-/// Copy `height` rows of `width` RGB pixels out of a buffer whose rows are padded to `stride` bytes.
-///
-/// libheif pads each row, so only the first `width * 3` bytes of every `stride` are pixels. `None`
-/// when the buffer is shorter than that claim, which a crafted file can arrange: slicing it
-/// unchecked panicked.
 #[cfg(any(feature = "heic", test))]
-fn pack_rows(data: &[u8], width: usize, height: usize, stride: usize) -> Option<Vec<u8>> {
-    let row_bytes = width.checked_mul(3)?;
-    (0..height)
-        .map(|row| {
-            let start = row.checked_mul(stride)?;
-            data.get(start..start.checked_add(row_bytes)?)
-        })
-        .collect::<Option<Vec<_>>>()
-        .map(|rows| rows.concat())
-}
+use rows::pack_rows;
+
+#[cfg(any(feature = "heic", test))]
+mod rows;
 
 /// Returns `true` if the given path's extension is in [`SUPPORTED_IMAGE_EXTENSIONS`].
 pub fn is_supported_image_path(path: &Path) -> bool {

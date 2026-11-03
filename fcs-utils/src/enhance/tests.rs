@@ -912,3 +912,69 @@ fn pipeline_skin_smoothing_runs_only_for_a_positive_amount() {
     .to_rgba8();
     assert_ne!(smoothed, untouched, "a positive amount must smooth");
 }
+
+/// Each tone stage, and their composition, never maps a darker level above a lighter one: every
+/// one of the 256 inputs, at parameters on a fine grid reaching past each stage's clamp.
+#[test]
+fn tone_luts_are_monotone_for_every_level() {
+    for step in -300..=300 {
+        let stops = step as f32 / 100.0;
+        let contrast = step as f32 / 100.0 + 1.25;
+        for settings in [
+            EnhancementSettings {
+                exposure_stops: stops,
+                ..Default::default()
+            },
+            EnhancementSettings {
+                brightness: step,
+                ..Default::default()
+            },
+            EnhancementSettings {
+                contrast,
+                ..Default::default()
+            },
+            EnhancementSettings {
+                exposure_stops: stops,
+                brightness: step,
+                contrast,
+                ..Default::default()
+            },
+        ] {
+            if let Some(lut) = tone_lut(&settings) {
+                assert!(lut.windows(2).all(|w| w[0] <= w[1]), "{settings:?}");
+            }
+        }
+    }
+}
+
+proptest::proptest! {
+    /// For any histogram with two or more occupied levels, equalization is monotone, sends the
+    /// darkest occupied level to 0 and the top level to 255; with fewer it is the identity.
+    #[test]
+    fn equalization_lut_is_monotone_and_spans_the_range(
+        // Dense and sparse histograms: about three quarters of the sparse ones occupy at most one
+        // level, so the identity branch is exercised too.
+        counts in proptest::prop_oneof![
+            proptest::collection::vec(
+                proptest::prop_oneof![3 => proptest::strategy::Just(0u32), 1 => 1u32..10_000],
+                256,
+            ),
+            proptest::collection::vec(
+                proptest::prop_oneof![255 => proptest::strategy::Just(0u32), 1 => 1u32..10_000],
+                256,
+            ),
+        ],
+    ) {
+        let hist: [u32; 256] = counts.try_into().unwrap();
+        let total = hist.iter().sum();
+        let lut = build_equalization_lut(&hist, total);
+        let occupied: Vec<usize> = (0..256).filter(|&i| hist[i] > 0).collect();
+        if occupied.len() < 2 {
+            proptest::prop_assert!((0..256).all(|i| lut[i] as usize == i));
+        } else {
+            proptest::prop_assert!(lut.windows(2).all(|w| w[0] <= w[1]));
+            proptest::prop_assert_eq!(lut[occupied[0]], 0);
+            proptest::prop_assert_eq!(lut[255], 255);
+        }
+    }
+}

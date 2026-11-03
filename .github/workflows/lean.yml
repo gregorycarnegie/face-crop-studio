@@ -1,0 +1,45 @@
+name: Lean Verification
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - fcs-core/src/**
+      - fcs-utils/src/**
+      - fcs-ort/src/**
+      - tools/verification/**
+      - .github/workflows/lean.yml
+  pull_request:
+    paths:
+      - fcs-core/src/**
+      - fcs-utils/src/**
+      - fcs-ort/src/**
+      - tools/verification/**
+      - .github/workflows/lean.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crop-geometry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/fcs-lean-pilot/aeneas
+            ~/.cache/fcs-lean-pilot/lean-4.35.0-linux
+            ~/.cache/fcs-lean-pilot/rustup
+            ~/.cache/fcs-lean-pilot/.dependencies-ready
+          key: lean-crop-${{ runner.os }}-${{ hashFiles('tools/verification/setup.sh') }}
+      - name: Install archive support
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+      - name: Set up pinned verification tools
+        run: bash tools/verification/setup.sh
+      - name: Translate production Rust and check proofs
+        run: bash tools/verification/check.sh

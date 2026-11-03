@@ -10,6 +10,7 @@ use crate::{
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
 use imageproc::geometric_transformations::{Border, Interpolation, Projection, warp_into};
+mod copy;
 
 /// Copy the in-bounds source region `(x, y, w, h)` onto the padded canvas at `offset`.
 ///
@@ -34,40 +35,60 @@ fn blit_region(
     let (canvas_w, canvas_h) = canvas.dimensions();
     // The old loop skipped any destination pixel outside the canvas; clipping the extent
     // up front is the same thing without testing it per pixel.
-    let w = src_w.min(canvas_w.saturating_sub(offset_x));
-    let h = src_h.min(canvas_h.saturating_sub(offset_y));
+    let w = copy::clip_extent(src_w, offset_x, canvas_w);
+    let h = copy::clip_extent(src_h, offset_y, canvas_h);
     if w == 0 || h == 0 {
         return;
     }
-    let dst_stride = canvas_w as usize * 4;
 
     match img {
         DynamicImage::ImageRgba8(src) => {
-            let src_stride = src.width() as usize * 4;
             let src_raw = src.as_raw();
             let dst_raw = canvas.as_mut();
-            let len = w as usize * 4;
             for row in 0..h as usize {
-                let s = (src_y as usize + row) * src_stride + src_x as usize * 4;
-                let d = (offset_y as usize + row) * dst_stride + offset_x as usize * 4;
-                dst_raw[d..d + len].copy_from_slice(&src_raw[s..s + len]);
+                let (s, se) = copy::pixel_row(
+                    src_y as usize + row,
+                    src_x as usize,
+                    src.width() as usize,
+                    w as usize,
+                    4,
+                );
+                let (d, de) = copy::pixel_row(
+                    offset_y as usize + row,
+                    offset_x as usize,
+                    canvas_w as usize,
+                    w as usize,
+                    4,
+                );
+                dst_raw[d..de].copy_from_slice(&src_raw[s..se]);
             }
         }
         DynamicImage::ImageRgb8(src) => {
-            let src_stride = src.width() as usize * 3;
             let src_raw = src.as_raw();
             let dst_raw = canvas.as_mut();
             for row in 0..h as usize {
-                let s = (src_y as usize + row) * src_stride + src_x as usize * 3;
-                let d = (offset_y as usize + row) * dst_stride + offset_x as usize * 4;
-                let src_row = &src_raw[s..s + w as usize * 3];
-                let dst_row = &mut dst_raw[d..d + w as usize * 4];
+                let (s, se) = copy::pixel_row(
+                    src_y as usize + row,
+                    src_x as usize,
+                    src.width() as usize,
+                    w as usize,
+                    3,
+                );
+                let (d, de) = copy::pixel_row(
+                    offset_y as usize + row,
+                    offset_x as usize,
+                    canvas_w as usize,
+                    w as usize,
+                    4,
+                );
+                let src_row = &src_raw[s..se];
+                let dst_row = &mut dst_raw[d..de];
                 let (dst_px, _) = dst_row.as_chunks_mut::<4>();
                 let (src_px, _) = src_row.as_chunks::<3>();
                 for (out, rgb) in dst_px.iter_mut().zip(src_px) {
                     // `get_pixel` on an `ImageRgb8` returns an opaque Rgba, so 255 is the
                     // alpha the per-pixel path produced.
-                    *out = [rgb[0], rgb[1], rgb[2], 255];
+                    *out = copy::opaque_rgba(*rgb);
                 }
             }
         }

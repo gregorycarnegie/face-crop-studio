@@ -1,5 +1,10 @@
 use crate::postprocess::{BoundingBox, Detection};
 
+/// Greedy suppression order over indices, free of floating point so Lean can check it.
+// An explicit path, because tools/kani `include!`s this file and would resolve it elsewhere.
+#[path = "nms/greedy.rs"]
+mod greedy;
+
 /// Spatial grid resolution used by the optimized NMS path.
 const NMS_GRID_SIZE: usize = 32;
 
@@ -83,7 +88,13 @@ fn grid_cell_index(offset: f32, cell_d: f32, grid_size: usize) -> usize {
         return 0;
     }
 
-    (offset / cell_d).floor().clamp(0.0, (grid_size - 1) as f32) as usize
+    cell_of(offset / cell_d, grid_size)
+}
+
+/// The cell holding a position measured in cells. Split out so Kani can check it without the
+/// division, which is monotone by IEEE 754's correct rounding.
+fn cell_of(position: f32, grid_size: usize) -> usize {
+    position.floor().clamp(0.0, (grid_size - 1) as f32) as usize
 }
 
 /// Grid resolution for this particular scene, at most [`NMS_GRID_SIZE`].
@@ -210,31 +221,10 @@ pub(crate) fn apply_nms_in_place(detections: &mut Vec<Detection>, threshold: f32
 }
 
 fn apply_nms_naive(detections: &mut Vec<Detection>, threshold: f32) {
-    let len = detections.len();
-    let mut suppressed = vec![false; len];
-    let mut keep = 0;
-
-    for i in 0..len {
-        if suppressed[i] {
-            continue;
-        }
-
-        if keep != i {
-            detections.swap(keep, i);
-            suppressed.swap(keep, i);
-        }
-
-        let reference_bbox = detections[keep].bbox;
-        for j in (keep + 1)..len {
-            if !suppressed[j] && reference_bbox.iou(&detections[j].bbox) > threshold {
-                suppressed[j] = true;
-            }
-        }
-
-        keep += 1;
-    }
-
-    detections.truncate(keep);
+    let suppressed = greedy::greedy_suppression(detections.len(), |i, j| {
+        detections[i].bbox.iou(&detections[j].bbox) > threshold
+    });
+    compact_unsuppressed_detections(detections, &suppressed);
 }
 
 #[cfg(test)]

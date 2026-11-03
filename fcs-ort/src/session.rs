@@ -395,7 +395,12 @@ impl Session {
                 ),
             });
         }
-        let expected: usize = shape.iter().product();
+        let invalid = |message: &str| Error {
+            code: sys::OrtErrorCode::InvalidArgument,
+            message: message.into(),
+        };
+        let expected = crate::shape_size::checked_elements(shape)
+            .ok_or_else(|| invalid("input tensor shape overflows usize"))?;
         if expected != input.len() {
             return Err(Error {
                 code: sys::OrtErrorCode::InvalidArgument,
@@ -407,7 +412,13 @@ impl Session {
         }
 
         let api = self.environment.api();
-        let dims: Vec<i64> = shape.iter().map(|d| *d as i64).collect();
+        let dims: Vec<i64> = shape
+            .iter()
+            .map(|&d| {
+                crate::shape_size::ort_dim(d)
+                    .ok_or_else(|| invalid("input tensor dimension exceeds i64"))
+            })
+            .collect::<Result<_>>()?;
         let input_ptrs: Vec<*const std::ffi::c_char> =
             self.input_names.iter().map(|n| n.as_ptr()).collect();
         let output_ptrs: Vec<*const std::ffi::c_char> =
@@ -465,40 +476,56 @@ impl Session {
     ///
     /// # Safety
     ///
-    /// `value` must be a live f32 tensor produced by `api`.
+    /// `value` must be a live tensor produced by `api`; any element type but f32 is rejected.
     unsafe fn read_tensor(api: *const OrtApi, value: *mut sys::OrtValue) -> Result<OutputTensor> {
         unsafe {
             let mut info = ptr::null_mut();
             check(api, ((*api).GetTensorTypeAndShape)(value, &mut info))?;
 
             let shape = (|| {
+                let mut element = 0;
+                check(api, ((*api).GetTensorElementType)(info, &mut element))?;
                 let mut rank = 0usize;
                 check(api, ((*api).GetDimensionsCount)(info, &mut rank))?;
                 let mut dims = vec![0i64; rank];
                 check(api, ((*api).GetDimensions)(info, dims.as_mut_ptr(), rank))?;
-                Ok(dims)
+                Ok((element, dims))
             })();
             ((*api).ReleaseTensorTypeAndShapeInfo)(info);
-            let dims = shape?;
+            let (element, dims) = shape?;
+            // Reading another element type as f32 would read past ORT's buffer.
+            if element != sys::TENSOR_ELEMENT_FLOAT {
+                return Err(Error {
+                    code: sys::OrtErrorCode::InvalidArgument,
+                    message: format!("output tensor has ONNX element type {element}, not float"),
+                });
+            }
 
             // A negative dimension would mean a symbolic/unresolved shape, which
             // cannot happen for a completed run — but casting it to usize would
             // produce an enormous length and a wild read, so reject it.
             let mut shape = Vec::with_capacity(dims.len());
             for dim in dims {
-                if dim < 0 {
-                    return Err(Error {
-                        code: sys::OrtErrorCode::Fail,
-                        message: format!("output tensor has unresolved dimension {dim}"),
-                    });
-                }
-                shape.push(dim as usize);
+                shape.push(crate::shape_size::signed_dim(dim).ok_or_else(|| Error {
+                    code: sys::OrtErrorCode::Fail,
+                    message: format!("output tensor has an unrepresentable dimension {dim}"),
+                })?);
             }
 
-            let len: usize = shape.iter().product();
+            let invalid = |message: &str| Error {
+                code: sys::OrtErrorCode::Fail,
+                message: message.into(),
+            };
+            let len = crate::shape_size::checked_elements(&shape)
+                .ok_or_else(|| invalid("output tensor shape overflows usize"))?;
+            crate::shape_size::checked_allocation(len, 4)
+                .ok_or_else(|| invalid("output tensor exceeds Rust's slice size limit"))?;
             let mut data = ptr::null_mut();
             check(api, ((*api).GetTensorMutableData)(value, &mut data))?;
             if data.is_null() {
+                if len != 0 {
+                    return Err(invalid("nonempty output tensor has a null data pointer"));
+                }
                 // A zero-element tensor legitimately has no buffer.
                 return Ok(OutputTensor {
                     shape,

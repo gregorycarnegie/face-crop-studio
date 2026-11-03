@@ -30,7 +30,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
-version = "2.3.2"
+version = "2.3.3"
 description = "Face Crop Studio — pure Rust face detection and cropping."
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
@@ -56,7 +56,7 @@ fcs-utils = { path = "fcs-utils" }
 # Error handling and logging
 anyhow = "1.0.104"
 env_logger = "0.11.11"
-log = "0.4.34"
+log = "0.4.35"
 thiserror = "2.0.21"
 
 # CLI and desktop UI
@@ -140,8 +140,8 @@ winresource = "0.1.34"
 
 # Data formats and storage
 base64 = "0.23.1"
-calamine = "0.37.0"
-crc32fast = "1.5.3"
+calamine = "0.38.0"
+crc32fast = "1.5.4"
 csv = "1.4.0"
 parquet = { version = "60.1.0", default-features = false, features = [
     "arrow",
@@ -183,4 +183,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.1.3", default-features = false }
+zip = { version = "9.2.2", default-features = false }

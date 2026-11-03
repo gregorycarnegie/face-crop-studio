@@ -5,7 +5,10 @@
 //! generality — arbitrary dtypes, quantisation, views, lazy shapes — for a
 //! pipeline that only ever moves densely packed f32 through four shapes.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+
+pub(crate) mod layout;
+pub(crate) mod size;
 
 /// A densely packed, row-major f32 tensor of arbitrary rank.
 #[derive(Debug, Clone, PartialEq)]
@@ -17,7 +20,7 @@ pub struct Tensor {
 impl Tensor {
     /// Build a tensor, failing if the data length disagrees with the shape.
     pub fn from_shape(shape: &[usize], data: &[f32]) -> Result<Self> {
-        let expected: usize = shape.iter().product();
+        let expected = size::checked_elements(shape).context("tensor shape overflows usize")?;
         anyhow::ensure!(
             data.len() == expected,
             "shape {shape:?} needs {expected} elements, got {}",
@@ -31,7 +34,7 @@ impl Tensor {
 
     /// Build a tensor from an owned buffer, avoiding a copy.
     pub fn from_vec(shape: &[usize], data: Vec<f32>) -> Result<Self> {
-        let expected: usize = shape.iter().product();
+        let expected = size::checked_elements(shape).context("tensor shape overflows usize")?;
         anyhow::ensure!(
             data.len() == expected,
             "shape {shape:?} needs {expected} elements, got {}",
@@ -85,6 +88,13 @@ impl Tensor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constructors_reject_dimension_product_overflow() {
+        let shape = [usize::MAX, usize::MAX];
+        assert!(Tensor::from_shape(&shape, &[0.0]).is_err());
+        assert!(Tensor::from_vec(&shape, vec![0.0]).is_err());
+    }
 
     #[test]
     fn into_vec_hands_back_the_buffer() {

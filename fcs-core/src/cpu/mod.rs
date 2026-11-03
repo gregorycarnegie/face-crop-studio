@@ -8,5 +8,9 @@
 //!
 //! The topology that drives these ops lives with its model; see [`crate::scrfd::plan`].
 
+pub(crate) mod geometry;
 pub mod nchwc;
+pub(crate) mod partition;
 pub mod tensor;
+pub(crate) mod transform;
+pub(crate) use crate::tensor::{layout, size};

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-11-03
+
+### Fixed
+
+- GPU buffer pools with a memory budget now reserve it atomically. Concurrent
+  allocations could each pass the check and together exceed the budget, and clearing
+  idle buffers during a concurrent recycle could corrupt the idle-byte count.
+- The built-in CPU convolution no longer underflows on a window lying wholly inside the
+  padding, which a very small input with large padding could reach.
+- Tensor, convolution, ONNX initializer and ONNX Runtime shapes whose element or byte
+  counts overflow are now rejected with an error instead of wrapping in release builds.
+
+### Changed
+
+- Integer geometry, sizing, layout and byte-range helpers, greedy NMS selection and the GPU
+  pool budget are proved in Lean (`tools/verification`); IoU, the NMS grid and SCRFD row
+  decoding are checked bit-precisely with Kani (`tools/kani`). Neither is needed to build.
+
 ## [2.3.2] - 2026-10-31
 
 ### Fixed
@@ -2574,7 +2592,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.3...HEAD
+[2.3.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...v2.3.0

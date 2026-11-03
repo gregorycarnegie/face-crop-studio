@@ -6,6 +6,7 @@
 mod encoders;
 mod exif;
 mod metadata;
+mod ranges;
 #[cfg(test)]
 mod tests;
 mod types;

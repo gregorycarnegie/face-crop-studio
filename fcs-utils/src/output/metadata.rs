@@ -55,17 +55,15 @@ pub(super) fn inject_png_metadata(
         return encoded;
     }
     // New chunks go straight after IHDR: signature (8), then IHDR's length, type, data and CRC.
-    // ponytail: `ihdr_len + 20` could wrap on a 32-bit target; the release matrix is 64-bit only.
     let Some(ihdr_len) = encoded
         .get(8..12)
         .map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize)
     else {
         return encoded;
     };
-    let ihdr_end = 8 + 4 + 4 + ihdr_len + 4;
-    if ihdr_end > encoded.len() {
+    let Some((_, _, ihdr_end)) = super::ranges::span(8, 8, ihdr_len, 4, encoded.len()) else {
         return encoded;
-    }
+    };
 
     let mut inserted = exif_chunks.concat();
     if let Some(chunk) = custom_json.and_then(|json| build_png_text_chunk("IronCropper", json)) {
@@ -89,13 +87,14 @@ pub(super) fn build_png_text_chunk(keyword: &str, value: &str) -> Option<Vec<u8>
         return None;
     }
 
-    let mut data = Vec::with_capacity(keyword.len() + value.len() + 1);
+    let (data_length, capacity) = super::ranges::png_text_layout(keyword.len(), value.len())?;
+    let mut data = Vec::with_capacity(data_length);
     data.extend_from_slice(keyword.as_bytes());
     data.push(0);
     data.extend_from_slice(value.as_bytes());
 
-    let length = data.len() as u32;
-    let mut chunk = Vec::with_capacity(12 + data.len());
+    let length = data_length as u32;
+    let mut chunk = Vec::with_capacity(capacity);
     chunk.extend_from_slice(&length.to_be_bytes());
     chunk.extend_from_slice(b"tEXt");
     chunk.extend_from_slice(&data);
@@ -153,11 +152,10 @@ fn build_jpeg_xmp_segment(json: &str) -> Option<Vec<u8>> {
 
     let header = b"http://ns.adobe.com/xap/1.0/\0";
     let payload = [header.as_ref(), packet.as_bytes()].concat();
-    let total_len = payload.len() + 2;
-    if total_len > u16::MAX as usize {
+    let Some(total_len) = super::ranges::jpeg_length(payload.len()) else {
         warn!("XMP payload too large; skipping metadata embed");
         return None;
-    }
+    };
 
     let mut segment = Vec::with_capacity(total_len + 2);
     segment.extend_from_slice(&[0xFF, 0xE1]);

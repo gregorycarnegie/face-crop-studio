@@ -1,0 +1,44 @@
+name: Kani Verification
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - fcs-core/src/postprocess.rs
+      - fcs-core/src/nms.rs
+      - fcs-core/src/nms/**
+      - fcs-core/src/scrfd/decode.rs
+      - fcs-utils/src/point.rs
+      - tools/kani/**
+      - .github/workflows/kani.yml
+  pull_request:
+    paths:
+      - fcs-core/src/postprocess.rs
+      - fcs-core/src/nms.rs
+      - fcs-core/src/nms/**
+      - fcs-core/src/scrfd/decode.rs
+      - fcs-utils/src/point.rs
+      - tools/kani/**
+      - .github/workflows/kani.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  KANI_VERSION: 0.68.0
+
+jobs:
+  floating-point:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # Not cached: `kani setup` links its toolchain into ~/.rustup, which a restored
+      # ~/.kani alone would leave dangling. A fresh install takes a few minutes.
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier --version "$KANI_VERSION"
+          cargo kani setup
+      - name: Check the production f32 harnesses
+        run: bash tools/kani/check.sh
