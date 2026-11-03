@@ -72,12 +72,28 @@ mod tests {
         assert_eq!(jpeg_length(usize::MAX), None);
         assert_eq!(png_text_layout(3, 4), Some((8, 20)));
         assert_eq!(png_text_layout(79, usize::MAX), None);
-        // A chunk length field holds u32::MAX itself, but nothing larger.
+    }
+
+    /// On 64-bit the PNG length field is the binding limit: a chunk holds u32::MAX bytes of
+    /// data, and nothing larger.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn text_chunks_stop_at_the_length_field() {
         let largest = u32::MAX as usize;
         assert_eq!(
             png_text_layout(3, largest - 4),
             Some((largest, largest + 12))
         );
         assert_eq!(png_text_layout(3, largest - 3), None);
+    }
+
+    /// On 32-bit isize::MAX is below u32::MAX, so the allocation limit binds first: a chunk
+    /// totalling exactly isize::MAX bytes is accepted, one byte more is not.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn text_chunks_stop_at_the_allocation_limit() {
+        let fits = isize::MAX as usize;
+        assert_eq!(png_text_layout(3, fits - 16), Some((fits - 12, fits)));
+        assert_eq!(png_text_layout(3, fits - 15), None);
     }
 }

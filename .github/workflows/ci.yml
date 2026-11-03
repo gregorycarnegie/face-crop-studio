@@ -319,6 +319,16 @@ jobs:
       - name: Test docs
         run: cargo test --workspace --all-features --doc
 
+      # Some integer guards (signed_dim's narrowing check, the PNG text chunk's allocation
+      # limit) can only fire where usize is 32 bits, and their boundary tests are
+      # cfg(target_pointer_width = "32"). The Lean crate compiles those production files
+      # with no other dependencies, so it runs them as 32-bit without dav1d or wgpu.
+      - name: Test integer helpers as 32-bit
+        if: runner.os == 'Windows'
+        run: |
+          rustup target add i686-pc-windows-msvc
+          cargo test --manifest-path tools/verification/Cargo.toml --target i686-pc-windows-msvc
+
       # Formatting is platform-independent, so one leg is enough. Pinned to the
       # x86_64 Linux runner specifically, since there are now two Linux legs.
       - name: Format

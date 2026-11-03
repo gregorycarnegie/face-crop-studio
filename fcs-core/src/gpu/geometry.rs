@@ -59,6 +59,8 @@ mod tests {
         assert_eq!(output_dim(4, 0, 0, 1), None);
         assert_eq!(output_dim(4, 0, 1, 0), None);
         assert_eq!(shader_dim(u32::MAX as usize), Some(u32::MAX));
+        // Only a 64-bit usize can name a size past u32::MAX.
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(shader_dim(u32::MAX as usize + 1), None);
         assert_eq!(output_dim(9, 1, 3, 2), Some(5));
         assert_eq!(grouped_channels(12, 8, 4), Some((3, 2)));

@@ -130,11 +130,6 @@ minimum_test_timeout = 120
 #     path, which is correct anywhere. The `+= -> *=` in the same loops hang.
 #     Likewise Row::run and depthwise_with `ox < full -> >`, which skip the
 #     wide tiles and leave those columns to the single-pixel loops after them.
-#   64-bit-only guards, which cannot fire on this host (each `> -> >=` and `==`):
-#     signed_dim `value as u64 > usize::MAX as u64` (no i64 exceeds u64::MAX);
-#     png_text_layout `total > isize::MAX` (total is at most u32::MAX + 12).
-#     Both matter on 32-bit targets. `signed_dim` cannot use `usize::try_from`
-#     instead: Aeneas has no model of it, and the Lean proof translates this file.
 #   ScrfdWeights::load `groups > 1 -> >=` and plan `run`'s `Slot::Data` output
 #     arm, for the shipped topology: no convolution has one output channel, and
 #     all nine outputs are merged class/box/keypoint heads, so always `Part`.
@@ -144,6 +139,15 @@ minimum_test_timeout = 120
 # Not measurable on this host, which is not the same as equivalent:
 #
 #   get_vram_macos (x3): macOS only; neither Windows nor WSL can run it.
+#   32-bit-only guards (each `> -> >=` and `==`): signed_dim's
+#     `value as u64 > usize::MAX as u64` and png_text_layout's
+#     `total > isize::MAX` cannot fire where usize is 64 bits. Their
+#     cfg(target_pointer_width = "32") tests catch all four, checked by hand
+#     (2026-11-03). CI's Windows leg runs them through tools/verification as
+#     i686-pc-windows-msvc. cargo-mutants cannot do it: it will not mutate the
+#     `#[path]` files that crate includes, and dav1d stops fcs-utils building
+#     as 32-bit. `signed_dim` cannot use `usize::try_from` instead: Aeneas has
+#     no model of it, and the Lean proof translates this file.
 #   encode_path (x2 per platform): each variant only compiles on its own OS.
 #     The Windows one is caught here; the unix one is caught in WSL.
 #   dxgi_adapter_vendors, the non-Windows stub (x3), and vulkan_is_safe -> true

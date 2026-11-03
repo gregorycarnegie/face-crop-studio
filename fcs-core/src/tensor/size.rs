@@ -86,10 +86,25 @@ mod tests {
         assert_eq!(signed_dim(-1), None);
         assert_eq!(signed_dim(0), Some(0));
         assert_eq!(ort_dim(17), Some(17));
-        // The largest dimension ORT can name is accepted; one more is not.
-        assert_eq!(ort_dim(i64::MAX as usize), Some(i64::MAX));
-        assert_eq!(ort_dim(i64::MAX as usize + 1), None);
         assert_eq!(raw_f32_elements(12), Some(3));
         assert_eq!(raw_f32_elements(13), None);
+    }
+
+    /// A 64-bit `usize` reaches past i64, so ORT's signed dimension is the binding limit: the
+    /// largest one converts, one more does not.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn ort_dimensions_stop_at_i64_max() {
+        assert_eq!(ort_dim(i64::MAX as usize), Some(i64::MAX));
+        assert_eq!(ort_dim(i64::MAX as usize + 1), None);
+    }
+
+    /// A 32-bit `usize` is narrower than an ONNX dimension, so the narrowing guard binds: the
+    /// largest `usize` converts, one more does not.
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn signed_dimensions_stop_at_the_largest_usize() {
+        assert_eq!(signed_dim(usize::MAX as i64), Some(usize::MAX));
+        assert_eq!(signed_dim(usize::MAX as i64 + 1), None);
     }
 }
