@@ -55,6 +55,11 @@ mod tests {
         assert_eq!(output_dim(1, u32::MAX, 1, 1), None);
         assert_eq!(output_dim(u32::MAX, 1, 1, 1), None);
         assert_eq!(output_dim(1, 0, 3, 1), None);
+        // Either zero alone is rejected, not only both together.
+        assert_eq!(output_dim(4, 0, 0, 1), None);
+        assert_eq!(output_dim(4, 0, 1, 0), None);
+        assert_eq!(shader_dim(u32::MAX as usize), Some(u32::MAX));
+        assert_eq!(shader_dim(u32::MAX as usize + 1), None);
         assert_eq!(output_dim(9, 1, 3, 2), Some(5));
         assert_eq!(grouped_channels(12, 8, 4), Some((3, 2)));
         assert_eq!(grouped_channels(12, 8, 0), None);

@@ -766,11 +766,11 @@ impl<const K: usize, const S: usize> DepthwiseRow<'_, K, S> {
             let left = ox * S;
             for (kx, &tap) in taps.iter().enumerate() {
                 for (p, acc) in acc.iter_mut().enumerate() {
-                    let padded = left + p * S + kx;
-                    if CHECK && !column_inside(padded, self.pad, self.width) {
+                    let offset = p * S + kx;
+                    if CHECK && !column_inside(left + offset, self.pad, self.width) {
                         continue;
                     }
-                    let ix = column_index(left, p * S + kx, self.pad);
+                    let ix = column_index(left, offset, self.pad);
                     debug_assert!(ix < row.len());
                     // SAFETY: border pixels were checked just above; interior ones lie inside
                     // the row by construction of `interior`.

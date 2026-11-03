@@ -22,8 +22,9 @@ pub(crate) fn row_range(
     }
 }
 
-/// Copy RGB pixels while discarding row padding; reject invalid strides, truncated
-/// buffers and unrepresentable output lengths before allocating or copying.
+/// Copy RGB pixels while discarding row padding; reject invalid strides, overflowing sizes and
+/// truncated buffers before allocating or copying. The output is never longer than `data`,
+/// so it always fits an allocation.
 pub(super) fn pack_rows(
     data: &[u8],
     width: usize,
@@ -39,9 +40,6 @@ pub(super) fn pack_rows(
     let Some(length) = row_bytes.checked_mul(height) else {
         return None;
     };
-    if length > isize::MAX as usize {
-        return None;
-    }
     if height == 0 || row_bytes == 0 {
         return Some(Vec::new());
     }
@@ -72,6 +70,12 @@ mod tests {
             Some([&data[0..6], &data[7..13], &data[14..20]].concat())
         );
         assert_eq!(pack_rows(&data, 2, 4, 7), None);
+        // The last row may end exactly at the buffer's end, with no trailing padding.
+        assert_eq!(
+            pack_rows(&data[..20], 2, 3, 7),
+            Some([&data[0..6], &data[7..13], &data[14..20]].concat())
+        );
+        assert_eq!(pack_rows(&data[..19], 2, 3, 7), None);
         assert_eq!(pack_rows(&data, 2, 3, 5), None);
         assert_eq!(pack_rows(&[], usize::MAX, 0, 0), None);
         assert_eq!(pack_rows(&[], 1, usize::MAX, 3), None);

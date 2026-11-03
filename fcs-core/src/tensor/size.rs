@@ -86,6 +86,9 @@ mod tests {
         assert_eq!(signed_dim(-1), None);
         assert_eq!(signed_dim(0), Some(0));
         assert_eq!(ort_dim(17), Some(17));
+        // The largest dimension ORT can name is accepted; one more is not.
+        assert_eq!(ort_dim(i64::MAX as usize), Some(i64::MAX));
+        assert_eq!(ort_dim(i64::MAX as usize + 1), None);
         assert_eq!(raw_f32_elements(12), Some(3));
         assert_eq!(raw_f32_elements(13), None);
     }

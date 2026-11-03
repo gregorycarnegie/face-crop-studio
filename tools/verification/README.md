@@ -74,7 +74,8 @@ The additional proofs establish:
 - **RGB packing:** the loop terminates and concatenates exactly the requested
   pixel slices, with the exact packed length and no stride padding. Valid nonempty
   buffers within the allocation-size bound are accepted. Rust checks reject
-  overlapping strides, truncated buffers, and unrepresentable output lengths.
+  overlapping strides, overflowing sizes and truncated buffers; an accepted output
+  is never longer than its input slice.
 - **Output ownership:** job decoding reconstructs the original index and produces
   valid group/row/chunk coordinates. The batch stays inside a bounded job grid.
   Chunks cover every column without overlap; tile endpoints leave only a tail

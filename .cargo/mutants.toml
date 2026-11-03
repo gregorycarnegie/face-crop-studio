@@ -128,6 +128,13 @@ minimum_test_timeout = 120
 #     identical values twice; Row::run `ox < lo -> <=` and `ox < hi -> >`, and
 #     depthwise_with `ox < lo -> <=`, hand interior columns to the checked
 #     path, which is correct anywhere. The `+= -> *=` in the same loops hang.
+#     Likewise Row::run and depthwise_with `ox < full -> >`, which skip the
+#     wide tiles and leave those columns to the single-pixel loops after them.
+#   64-bit-only guards, which cannot fire on this host (each `> -> >=` and `==`):
+#     signed_dim `value as u64 > usize::MAX as u64` (no i64 exceeds u64::MAX);
+#     png_text_layout `total > isize::MAX` (total is at most u32::MAX + 12).
+#     Both matter on 32-bit targets. `signed_dim` cannot use `usize::try_from`
+#     instead: Aeneas has no model of it, and the Lean proof translates this file.
 #   ScrfdWeights::load `groups > 1 -> >=` and plan `run`'s `Slot::Data` output
 #     arm, for the shipped topology: no convolution has one output channel, and
 #     all nine outputs are merged class/box/keypoint heads, so always `Part`.

@@ -72,5 +72,12 @@ mod tests {
         assert_eq!(jpeg_length(usize::MAX), None);
         assert_eq!(png_text_layout(3, 4), Some((8, 20)));
         assert_eq!(png_text_layout(79, usize::MAX), None);
+        // A chunk length field holds u32::MAX itself, but nothing larger.
+        let largest = u32::MAX as usize;
+        assert_eq!(
+            png_text_layout(3, largest - 4),
+            Some((largest, largest + 12))
+        );
+        assert_eq!(png_text_layout(3, largest - 3), None);
     }
 }
