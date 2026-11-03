@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-11-03
+
 ### Fixed
 
 - GPU buffer pools with a memory budget now reserve it atomically. Concurrent
@@ -2590,7 +2592,8 @@ See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release note
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.3...HEAD
+[2.3.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.2.2...v2.3.0
