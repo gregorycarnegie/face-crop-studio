@@ -282,8 +282,12 @@ impl GpuBufferPool {
             }
         }
 
-        // shortcut: a panic inside create_buffer (wgpu's default error handler) leaves the
-        // reservation counted; release it in a guard if that panic is ever caught and survived.
+        // wgpu's default error handler panics on a failed allocation, and the GUI survives that
+        // per file, so a reservation left behind would shrink the budget for the whole session.
+        let reservation = Reservation {
+            counter: &self.total_allocated_bytes,
+            size,
+        };
         let buffer = self
             .context
             .device()
@@ -293,6 +297,7 @@ impl GpuBufferPool {
                 usage,
                 mapped_at_creation: false,
             });
+        std::mem::forget(reservation);
 
         Ok(buffer)
     }
@@ -393,6 +398,18 @@ fn release(counter: &std::sync::atomic::AtomicU64, freed: u64) {
     counter.update(Relaxed, Relaxed, |current| {
         super::buffer_math::release(current, freed)
     });
+}
+
+/// A budget reservation, given back on drop unless forgotten once the allocation succeeds.
+struct Reservation<'a> {
+    counter: &'a std::sync::atomic::AtomicU64,
+    size: u64,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        release(self.counter, self.size);
+    }
 }
 
 /// Index of the smallest entry that is at least `size`, optionally restricted to one usage.
@@ -611,6 +628,26 @@ mod tests {
         });
         assert_eq!(granted.len(), 4, "exactly the budget's worth is granted");
         assert_eq!(pool.memory_usage(), 4 * 256);
+    }
+
+    /// A buffer wgpu refuses (larger than the device allows) panics inside `create_buffer`;
+    /// once that panic is caught, as the GUI does per file, the reservation must be gone.
+    #[test]
+    fn a_panicking_allocation_gives_its_reservation_back() {
+        let Some(ctx) = test_context() else {
+            eprintln!("Skipping GPU memory test: no GPU");
+            return;
+        };
+        let too_big = ctx.device().limits().max_buffer_size + 4;
+        let pool = GpuBufferPool::new(ctx, Some(u64::MAX));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pool.acquire(too_big, STORAGE, None)
+        }));
+        if result.is_ok() {
+            eprintln!("Skipping: this backend did not panic on an oversized buffer");
+            return;
+        }
+        assert_eq!(pool.memory_usage(), 0);
     }
 
     // ------------------------------------------------------------------

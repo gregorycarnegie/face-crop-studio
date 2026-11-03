@@ -40,7 +40,7 @@ test `concurrent_acquires_stay_within_the_budget` now rejects.
 The pool still returns raw `wgpu::Buffer` objects and cannot observe their
 destruction outside `recycle`. Such a drop leaves its bytes counted, so the
 budget errs toward refusing, never toward overshooting. A panic inside
-`create_buffer` likewise leaves its reservation counted. Idle bytes now live in
+`create_buffer` gives its reservation back through a drop guard. Idle bytes now live in
 `IdleBuffers` beside the lists, under the same lock, and change only through its
 methods. A property test drives random push/take/evict/clear sequences, without a
 GPU, against a list model. It checks that the total always equals the bytes held,
@@ -50,7 +50,9 @@ not translate. Scope parking relies on Rust tests. The best-fit theorem is compo
 transition and a fold applying it are proved; usage filtering and Rust iterator
 wiring also have Rust tests. Device allocation is outside these theorems.
 
-NMS selection is proved over an opaque overlap oracle. The production closure
+NMS selection is proved over an opaque overlap oracle for the naive path, which
+handles fewer than 200 detections. The grid path for larger sets keeps its own
+loop; Rust tests check it against the naive one. The production closure
 compares floating-point IoU against the threshold; Lean sees only its Boolean
 answers, so the theorem holds whatever that arithmetic returns. The floating-point
 side (IoU and the spatial grid's cell lookup) is checked bit-precisely by Kani in

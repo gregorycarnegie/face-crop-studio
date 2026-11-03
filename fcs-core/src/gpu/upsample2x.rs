@@ -51,9 +51,11 @@ impl Upsample2xPipeline {
             dims
         );
         anyhow::ensure!(dims[0] == 1, "GPU upsample supports only batch size 1");
-        let height = crate::tensor::size::checked_elements(&[dims[2], 2])
+        let height = dims[2]
+            .checked_mul(2)
             .context("upsample height overflows usize")?;
-        let width = crate::tensor::size::checked_elements(&[dims[3], 2])
+        let width = dims[3]
+            .checked_mul(2)
             .context("upsample width overflows usize")?;
         let out_h = super::geometry::shader_dim(height).context("upsample height exceeds u32")?;
         let out_w = super::geometry::shader_dim(width).context("upsample width exceeds u32")?;

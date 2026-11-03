@@ -476,21 +476,30 @@ impl Session {
     ///
     /// # Safety
     ///
-    /// `value` must be a live f32 tensor produced by `api`.
+    /// `value` must be a live tensor produced by `api`; any element type but f32 is rejected.
     unsafe fn read_tensor(api: *const OrtApi, value: *mut sys::OrtValue) -> Result<OutputTensor> {
         unsafe {
             let mut info = ptr::null_mut();
             check(api, ((*api).GetTensorTypeAndShape)(value, &mut info))?;
 
             let shape = (|| {
+                let mut element = 0;
+                check(api, ((*api).GetTensorElementType)(info, &mut element))?;
                 let mut rank = 0usize;
                 check(api, ((*api).GetDimensionsCount)(info, &mut rank))?;
                 let mut dims = vec![0i64; rank];
                 check(api, ((*api).GetDimensions)(info, dims.as_mut_ptr(), rank))?;
-                Ok(dims)
+                Ok((element, dims))
             })();
             ((*api).ReleaseTensorTypeAndShapeInfo)(info);
-            let dims = shape?;
+            let (element, dims) = shape?;
+            // Reading another element type as f32 would read past ORT's buffer.
+            if element != sys::TENSOR_ELEMENT_FLOAT {
+                return Err(Error {
+                    code: sys::OrtErrorCode::InvalidArgument,
+                    message: format!("output tensor has ONNX element type {element}, not float"),
+                });
+            }
 
             // A negative dimension would mean a symbolic/unresolved shape, which
             // cannot happen for a completed run — but casting it to usize would

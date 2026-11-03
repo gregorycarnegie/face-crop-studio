@@ -110,8 +110,12 @@ impl OnnxTensor {
 
         let expected = checked_elements(&dims).context("initializer shape overflows usize")?;
         let data = if !proto.raw_data.is_empty() {
-            raw_f32_elements(proto.raw_data.len())
-                .context("initializer has an incomplete float payload")?;
+            raw_f32_elements(proto.raw_data.len()).with_context(|| {
+                format!(
+                    "initializer '{}' has an incomplete float payload",
+                    proto.name
+                )
+            })?;
             let (floats, _) = proto.raw_data.as_chunks::<4>();
             floats
                 .iter()

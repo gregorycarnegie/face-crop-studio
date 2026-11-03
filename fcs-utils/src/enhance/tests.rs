@@ -952,10 +952,18 @@ proptest::proptest! {
     /// darkest occupied level to 0 and the top level to 255; with fewer it is the identity.
     #[test]
     fn equalization_lut_is_monotone_and_spans_the_range(
-        counts in proptest::collection::vec(
-            proptest::prop_oneof![3 => proptest::strategy::Just(0u32), 1 => 1u32..10_000],
-            256,
-        ),
+        // Dense and sparse histograms: about three quarters of the sparse ones occupy at most one
+        // level, so the identity branch is exercised too.
+        counts in proptest::prop_oneof![
+            proptest::collection::vec(
+                proptest::prop_oneof![3 => proptest::strategy::Just(0u32), 1 => 1u32..10_000],
+                256,
+            ),
+            proptest::collection::vec(
+                proptest::prop_oneof![255 => proptest::strategy::Just(0u32), 1 => 1u32..10_000],
+                256,
+            ),
+        ],
     ) {
         let hist: [u32; 256] = counts.try_into().unwrap();
         let total = hist.iter().sum();
