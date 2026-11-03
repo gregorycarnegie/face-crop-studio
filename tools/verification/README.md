@@ -15,7 +15,7 @@ Every check translates those Rust files through Charon and Aeneas, then checks
 `Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`,
 `PartitionProofs.lean`, `GeometryProofs.lean`, `TransformProofs.lean`,
 `GpuProofs.lean`, `ShapeProofs.lean`, `ByteProofs.lean`, `CopyProofs.lean`,
-`HeadProofs.lean`, `BufferProofs.lean`, and `GraphProofs.lean` against the freshly
+`HeadProofs.lean`, `BufferProofs.lean`, `GraphProofs.lean`, and `GreedyProofs.lean` against the freshly
 generated model. Generated files and toolchains stay outside the tracked source tree.
 
 The [proof ledger](PROOF_LEDGER.md) lists the remaining candidates found in the
@@ -24,11 +24,13 @@ proofs now cover blocked-channel extraction and partial lanes, 2x resize mapping
 Rust allocation limits, GPU host geometry/dispatch/narrowing, signed ONNX/ORT
 dimensions and raw payload lengths, metadata byte ranges and length fields, crop
 copy addresses and RGB bytes, hex decoding, merged-head ranges, graph last-reader
-schedules, and buffer-budget/minimum-selection arithmetic.
+schedules, buffer-budget/minimum-selection arithmetic, the buffer budget under
+any interleaving of atomic updates, and greedy NMS selection over any overlap oracle.
 
 These are source-linked component proofs with explicit preconditions. The buffer
 selection proof composes the extracted transition over a fold; it excludes locks
-and device allocation. The graph proof operates on the numeric read-index table
+and device allocation. Floating-point IoU and grid properties are checked with Kani
+in [`tools/kani`](../kani), not here. The graph proof operates on the numeric read-index table
 used by the scheduler. [LIMITS.md](LIMITS.md) records actual translation probes and
 the operations that remain unproved. No proof assumes the external axioms those
 probes generated.

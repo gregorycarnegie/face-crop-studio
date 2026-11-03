@@ -21,7 +21,7 @@ cargo test --locked --target-dir "$cache/rust-target"
 lake -d "$backend" env lean -DwarningAsError=true \
     --root="$build" -o "$build/CropRegion.olean" "$build/CropRegion.lean"
 for proof in Proofs TensorProofs LayoutProofs RowsProofs PartitionProofs GeometryProofs \
-    TransformProofs GpuProofs ShapeProofs ByteProofs CopyProofs HeadProofs BufferProofs GraphProofs; do
+    TransformProofs GpuProofs ShapeProofs ByteProofs CopyProofs HeadProofs BufferProofs GraphProofs GreedyProofs; do
     lake -d "$backend" env lean -DwarningAsError=true \
         -o "$build/$proof.olean" "$root/tools/verification/$proof.lean"
 done

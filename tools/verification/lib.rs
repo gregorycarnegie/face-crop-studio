@@ -49,6 +49,10 @@ pub mod slots;
 #[allow(dead_code)]
 pub mod buffer_math;
 
+#[path = "../../fcs-core/src/nms/greedy.rs"]
+#[allow(dead_code)]
+pub mod greedy;
+
 #[path = "../../fcs-core/src/scrfd/heads.rs"]
 #[allow(dead_code)]
 pub mod heads;

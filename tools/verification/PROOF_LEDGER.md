@@ -23,12 +23,17 @@ convolution proofs are described in README.md.
 | L1 | SCRFD graph liveness | Slots are released only after their final read; inputs/outputs are retained | Proved: GraphProofs, for valid numeric read-index tables |
 | L2 | Merged heads | Channel partitions cover the concatenated heads without overlap | Proved: HeadProofs |
 | B1 | GPU buffer pool | Snapshot budget admission cannot wrap; the selection transition/fold yields a smallest eligible buffer | Proved: BufferProofs; see LIMITS.md for iterator/usage integration |
-| B2 | GPU buffer pool lifecycle | Eviction/accounting and concurrent scope ownership remain consistent | Unproved: locking/device/ownership models are absent; see LIMITS.md |
+| B2 | GPU buffer pool budget | Concurrent reservations and releases never take allocated bytes past the limit, under any interleaving | Proved: BufferProofs (`counter_within_budget`), over atomic `try_update` steps; see LIMITS.md |
+| B3 | GPU buffer pool lifecycle | Idle bytes equal the buffers held; scope parking; buffers dropped without `recycle` | Idle accounting: by construction in `IdleBuffers`, property-tested over random operation sequences. Scope parking: Rust tests. Drops outside `recycle` overcount, which only refuses earlier; closing that needs a self-recycling buffer type (an API change). See LIMITS.md |
 | D1 | Crop pixel copying | Clipped rectangles, row addresses, and RGB byte preservation | Proved: CopyProofs, composed with the existing intersection bounds |
 | D2 | Hex color decoding | Accepted byte pairs decode exactly and invalid bytes are rejected, preserving the existing leading-plus behavior | Proved: ByteProofs |
-| X1 | NMS, IoU, detector decoding, colors/enhancement | Floating-point numerical and selection properties | Unproved: actual floating-point probe fails translation; see LIMITS.md |
+| N1 | NMS selection | For any overlap oracle: no two kept detections overlap, and each suppressed one overlaps an earlier kept one | Proved: GreedyProofs; the production naive NMS calls the proved function |
+| N2 | IoU and NMS spatial grid | IoU is NaN-free, non-negative and positive only on overlap; grid offsets and cell lookup are monotone and in range | Checked by Kani (tools/kani), bit-precise f32; IoU within ±1e18, division monotonicity trusted from IEEE 754 |
+| N3 | SCRFD row decoding and score activation | Decoded boxes and eye landmarks are finite, boxes non-negative for non-negative distances, untrained landmarks absent; sigmoid is a probability, above 0.5 only for positive logits | Checked by Kani (tools/kani) at detector ranges; sigmoid against a stated `exp` contract, its overflow arm by unit test |
+| K1 | CPU colour conversions and tone | HSV/HSL/CMYK round trips within one step; tone LUTs monotone; equalization monotone and spanning 0..255 | Round trips: exhaustive over all 2^24 colours. Tone: exhaustive over the 256 levels on a parameter grid. Equalization: property test |
+| X1 | GPU enhancement passes | Floating-point behavior of the WGSL/CUDA enhancement kernels | Blocked: device code; see X2 |
 | X2 | GPU shaders/CUDA/FFI | Device execution, pointer ownership, and external-library contracts | Unproved: raw-pointer probe fails; external calls become axioms; see LIMITS.md |
-| X3 | Atomic export/mapping import | Filesystem replacement, SQL read-only policy, format decoder behavior | Unproved: file I/O and external engines lack semantic models; see LIMITS.md |
+| X3 | Atomic export/mapping import | Filesystem replacement, SQL read-only policy, format decoder behavior | Out of scope: OS rename and SQLite/decoder behavior are library contracts; read-only SQL is enforced by a read-only open plus an authorizer, both tested; see LIMITS.md |
 
 The completion pass also reviews callers, tests, workflow path filters, and this
 ledger. No new runtime dependency is needed for integer/byte helper proofs.

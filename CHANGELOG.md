@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- GPU buffer pools with a memory budget now reserve it atomically. Concurrent
+  allocations could each pass the check and together exceed the budget, and clearing
+  idle buffers during a concurrent recycle could corrupt the idle-byte count.
+- The built-in CPU convolution no longer underflows on a window lying wholly inside the
+  padding, which a very small input with large padding could reach.
+- Tensor, convolution, ONNX initializer and ONNX Runtime shapes whose element or byte
+  counts overflow are now rejected with an error instead of wrapping in release builds.
+
+### Changed
+
+- Integer geometry, sizing, layout and byte-range helpers, greedy NMS selection and the GPU
+  pool budget are proved in Lean (`tools/verification`); IoU, the NMS grid and SCRFD row
+  decoding are checked bit-precisely with Kani (`tools/kani`). Neither is needed to build.
+
 ## [2.3.2] - 2026-10-31
 
 ### Fixed
