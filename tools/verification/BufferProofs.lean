@@ -90,7 +90,78 @@ theorem exact_fit_is_final (items : List (Usize × U64)) (chosen : Usize × U64)
   intro e he hel
   omega
 
+@[simp, scalar_tac_simps] theorem saturating_u64_sub_val (x y : U64) :
+    (core.num.U64.saturating_sub x y).val = x.val - y.val := by
+  simp only [core.num.U64.saturating_sub, UScalar.saturating_sub, UScalar.val,
+    BitVec.toNat_ofNat, Nat.zero_le, max_eq_right]
+  exact Nat.mod_eq_of_lt (by have := x.hmax; omega)
+
+theorem reserve_spec (current size limit : U64) :
+    buffer_math.reserve current size limit ⦃ result =>
+      match result with
+      | none => limit.val < current.val + size.val
+      | some next => next.val = current.val + size.val ∧ next.val ≤ limit.val ⦄ := by
+  unfold buffer_math.reserve
+  apply WP.spec_bind (budget_fits_spec current size limit)
+  intro fits hfits
+  cases fits
+  · simp_all [WP.spec_ok]
+  · have := limit.hmax
+    step*
+
+theorem release_spec (current freed : U64) :
+    buffer_math.release current freed ⦃ result => result.val = current.val - freed.val ⦄ := by
+  simp [buffer_math.release, WP.spec_ok]
+
+/-- One atomic `fetch_update` on the allocated-bytes counter. A refused reservation leaves it. -/
+inductive CounterOp where
+  | reserve (size : U64)
+  | release (freed : U64)
+
+def applyOp (limit current : U64) : CounterOp → Result U64
+  | .reserve size => do
+    let next ← buffer_math.reserve current size limit
+    ok (next.getD current)
+  | .release freed => buffer_math.release current freed
+
+/-- Updates to one atomic location are totally ordered, so every thread interleaving is a list. -/
+def applyOps (limit current : U64) : List CounterOp → Result U64
+  | [] => ok current
+  | op :: rest => do
+    let next ← applyOp limit current op
+    applyOps limit next rest
+
+theorem apply_op_within_budget (limit current : U64) (op : CounterOp)
+    (h : current.val ≤ limit.val) :
+    applyOp limit current op ⦃ next => next.val ≤ limit.val ⦄ := by
+  cases op with
+  | reserve size =>
+    unfold applyOp
+    apply WP.spec_bind (reserve_spec current size limit)
+    intro result hresult
+    cases result <;> simp_all [WP.spec_ok]
+    omega
+  | release freed =>
+    unfold applyOp
+    apply WP.spec_mono (release_spec current freed)
+    intro next hnext
+    omega
+
+theorem counter_within_budget (limit current : U64) (ops : List CounterOp)
+    (h : current.val ≤ limit.val) :
+    applyOps limit current ops ⦃ final => final.val ≤ limit.val ⦄ := by
+  induction ops generalizing current with
+  | nil => simpa [applyOps, WP.spec_ok] using h
+  | cons op rest ih =>
+    unfold applyOps
+    apply WP.spec_bind (apply_op_within_budget limit current op h)
+    intro next hnext
+    exact ih next hnext
+
 #print axioms budget_fits_spec
+#print axioms reserve_spec
+#print axioms release_spec
+#print axioms counter_within_budget
 #print axioms choose_fit_preserves
 #print axioms best_fit_minimum
 #print axioms exact_fit_is_final
