@@ -50,7 +50,8 @@ suppress. The selection logic is proved separately in Lean (`GreedyProofs.lean`)
 
 ## Run
 
-Linux or WSL, after `cargo install --locked kani-verifier && cargo kani setup`
+CI runs this in `.github/workflows/kani.yml` when the included sources change. Locally,
+on Linux or WSL, after `cargo install --locked kani-verifier && cargo kani setup`
 (about 4 minutes):
 
 ```powershell
