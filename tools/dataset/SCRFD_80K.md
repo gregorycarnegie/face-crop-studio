@@ -74,8 +74,8 @@ what was needed.
 line into `gt_bboxes_ignore`, the pipeline passes it, `scrfd_head` hands it to the assigner --
 and `ATSSAssigner` defaults `ignore_iof_thr` to -1, which skips it. The label file, the loader
 and the pipeline can all be right and every ignore region still trains as background.
-`scrfd_fcs80k_500m.py` sets it to 0.5 on the assigner inside `bbox_head.train_cfg`, which is
-the one the head actually calls.
+`scrfd_fcs80k_500m.py` set it to 0.5 on the assigner inside `bbox_head.train_cfg`, which is
+the one the head actually calls (`train_scrfd.zig --recipe 80k` does the same).
 
 ## The schedule, and what set the speed
 

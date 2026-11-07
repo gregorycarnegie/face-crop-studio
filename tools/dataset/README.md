@@ -196,30 +196,50 @@ matches line by line, and the remaining differences are stb rather than libjpeg 
 cuDNN's default TF32 convolutions. Training does not checkpoint optimiser or schedule state, so a run cannot be
 resumed; it restarts. The shipped model is unchanged.
 
-## Remaining scope
+## Native SCRFD training
 
-Two Python files remain, both SCRFD training configurations consumed by upstream MMDetection:
+`train_scrfd.zig` replaces MMDetection's `tools/train.py` and the two configs it read
+(`scrfd_fcs_500m.py`, `scrfd_fcs80k_500m.py`, retired; recover them from git history to rerun
+the original pipeline). Their settings are its two recipes:
 
-| Current files | Native replacement needed |
-|---|---|
-| `scrfd_fcs_500m.py`, `scrfd_fcs80k_500m.py` | A native SCRFD trainer replacing upstream MMDetection, not a change of config syntax |
+```sh
+zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c --     <openimages> <openimages>/labelv2_train_1988.txt --recipe curve --out work_dirs/curve_1988
+zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c --     <openimages> <openimages>/labelv2_train_all.txt --recipe 80k --out work_dirs/oi80k
+```
 
-`run_curve.sh` must move to the native SCRFD trainer too: it currently invokes the external
-checkout's Python `tools/train.py`. Renaming the two configuration files alone would break it.
+`curve` is the label-count recipe (batch 8, 640 epochs, LR x0.1 at 440 and 544); `80k` is the
+80,000-image run (batch 64, 100 epochs, steps at 69 and 85, ignore regions at IoF 0.5). Both
+use SGD 0.01 with momentum 0.9 and weight decay 5e-4, 1,500 iterations of linear warm-up from
+0.1%, and MMDetection's initialisation. `run_curve.sh` runs the four label-count sizes.
+Checkpoints are MMDetection-shaped (`state_dict`, `meta`) plus the SGD momentum, so
+`export_scrfd.zig` and `eval_eye_error.zig` read them and `--resume` continues a run.
 
-The GPU path the refiner trainer proved (`cuda.zig`, Zig kernels compiled to PTX, finite-
-difference checks) is the foundation for it. What the SCRFD trainer must reproduce:
+It is built from parts each checked against MMDetection itself:
 
-* **Model.** MobileNetV1, PAFPN and the three SCRFD head branches with training-mode
-  BatchNorm (not the folded inference graph `scrfd.zig` builds), depthwise convolutions,
-  nearest upsampling, and its checkpoint names, so `export_scrfd.zig` reads the result.
-* **Targets and losses.** Two anchors per location at strides 8/16/32, ATSS assignment with
-  top-k 9 (ignore IoF 0.5 in the 80k recipe), Quality Focal Loss, DIoU box loss, Smooth L1
-  keypoint loss with unlabelled landmarks ignored.
-* **Data.** Square cropping with the recipe's crop choices, resize to 640, flips that swap eye
-  identity, photometric distortion, every real face box and the ignore regions.
-* **Schedules.** The label-count recipe (SGD 0.01, warm-up, steps at 55/68 of 80 x 8 epochs)
-  and the 80k run's 100 epochs with drops at 69/85.
-* **Acceptance.** Assignments, masks, losses and one optimiser step compared with MMDetection
-  on fixed batches; then a full run scored with `eval_eye_error.zig` and `detector_bench.zig`
-  on both corpora against the shipped model's figures.
+| Part | Check | Result |
+|---|---|---|
+| `scrfd_targets.zig` (anchors, ATSS) | 300 random cases, with and without ignore IoF | identical to mmdet on CUDA, all 5.04 M anchors |
+| `scrfd_augment.zig` (crop, resize, flip, photometric) | mmdet's transforms fed the same draws and pixels | boxes and keypoints identical; images within float rounding |
+| `scrfd_net.zig` forward | `scrfd.zig`'s CPU reference, real checkpoint, 640 | 4.8e-6 |
+| `scrfd_net.zig` backward | torch autograd on mmdet's model (`--dump-grads`) | 161 gradients within 8e-6 |
+| losses (QFL, DIoU, keypoints) | mmdet's `forward_train` on a real batch (`--dump-loss`) | losses within 1.4e-6, gradients median 1.7e-4 |
+
+The acceptance run reproduced `curve_1988` (1,988 eye labels, the curve recipe) end to end in
+4.9 hours on an RTX 4090, against about 6.5 hours for MMDetection. Its final losses matched
+the Python run's (box 0.315 against 0.313, classification 0.476 against 0.464). Both final
+checkpoints scored by `eval_eye_error.zig` on the held-out test set:
+
+| Threshold | Native: recall / FP per image / angle | MMDetection: recall / FP per image / angle |
+|---|---|---|
+| 0.1 | 93.6% / 2.38 / 5.54 deg | 93.5% / 2.30 / 5.45 deg |
+| 0.2 | 88.6% / 0.37 / 5.37 deg | 89.8% / 0.40 / 5.30 deg |
+| 0.3 | 79.6% / 0.08 / 5.14 deg | 81.4% / 0.09 / 5.13 deg |
+
+The native model's scores sit slightly lower at a given threshold, trading 1-2 points of recall
+for proportionally fewer false positives, the same operating curve within what one seed per
+side can resolve; median eye error is slightly better (0.066 against 0.068 of box width at
+0.2). The 80k recipe runs and fits at batch 64, but a full 80k run has not been repeated
+natively. The shipped model is unchanged.
+
+With this, `tools/dataset/` contains no Python: every tool, exporter, evaluator and trainer is
+Zig, and training runs on the NVIDIA driver alone.

@@ -1,5 +1,9 @@
 # Running SCRFD's training code on current hardware
 
+> **Historical.** SCRFD now trains natively with `train_scrfd.zig` (see [README.md](README.md)),
+> which reproduced the `curve_1988` run without Python, mmcv or this environment. This records how
+> the original MMDetection runs were made; the configs it copies were retired and are in git history.
+
 SCRFD's code is MIT and still the right thing to train, but it was pinned to mmcv 1.2/1.3 and
 PyTorch 1.x, and an RTX 4090 is Ada (sm_89), which needs CUDA 11.8 or newer. So the pinned
 stack cannot run on this GPU at all, whatever else is true. This is the combination that does
