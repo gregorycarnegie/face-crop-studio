@@ -23,7 +23,7 @@ mod heads;
 /// Running the network without ONNX Runtime, on the built-in CPU graph.
 pub mod plan;
 mod slots;
-/// The generated step table; see `tools/dataset/scrfd_topology.py`.
+/// The generated step table; see `tools/dataset/scrfd_topology.zig`.
 pub mod topology;
 
 use std::path::Path;

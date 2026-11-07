@@ -15,6 +15,7 @@ has not checked against torch.
 """
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,7 +23,6 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stamp_model_metadata import stamp  # same directory by design
 from train_eye_refiner import Refiner  # same directory by design
 
 #: Names the Rust side depends on; see `fcs-core/src/eye_refiner.rs`.
@@ -64,7 +64,10 @@ def main() -> None:
         opset_version=OPSET,
         dynamic_axes={INPUT_NAME: {0: "batch"}, OUTPUT_NAME: {0: "batch"}},
     )
-    stamp(args.out, "eye_refiner")  # credit travels with the file; verified below like the rest
+    subprocess.run([
+        "zig", "run", str(Path(__file__).resolve().with_name("stamp_model_metadata.zig")),
+        "--", "eye_refiner", args.out,
+    ], check=True)  # credit travels with the file; verified below like the rest
 
     # An export that does not reproduce the checkpoint is worse than no export, because it
     # looks like a model. Check before anyone can use the file.

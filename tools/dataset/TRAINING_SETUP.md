@@ -31,6 +31,11 @@ both ship Python 3.14, for which **no CUDA PyTorch wheels exist at all**.
 
 ## Setup
 
+Install Zig **0.17.0** on PATH in this training environment as well as on the host. Both
+exporters call `stamp_model_metadata.zig` before output verification. The remaining native
+training migration is tracked in [README.md](README.md); the Python pipeline below is still
+required until that replacement passes parity checks.
+
 ```sh
 # uv, for a standalone 3.11 that the distro does not offer
 curl -LsSf https://astral.sh/uv/install.sh | sh

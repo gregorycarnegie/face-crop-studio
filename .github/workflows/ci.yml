@@ -72,6 +72,12 @@ jobs:
           version: 0.17.0
       - name: Check embedded CUDA Rust artifacts
         run: zig run tools/cuda/build.zig -- --check
+      - name: Test native dataset model tools
+        run: |
+          zig test tools/dataset/onnx.zig
+          zig test tools/dataset/scrfd_topology.zig
+          zig test tools/dataset/stamp_model_metadata.zig
+          zig test tools/dataset/checkpoint.zig
 
   models:
     name: Prepare Models
