@@ -16,3 +16,10 @@ bias `[0.25, 0.5, -0.75, 1.25]`, independently checked in PyTorch. It includes i
 validation/test statistics and an epoch, and contains no trained weights. Native export CI
 uses it to exercise checkpoint import, BatchNorm folding, dynamic batches, the final layer's
 negative output, model provenance and the actual ONNX Runtime C API on every native platform.
+
+`scrfd.pt` is a synthetic SCRFD-500M checkpoint with the real model's 285 parameter names and
+shapes and no trained weights. Every float tensor is an overlapping-stride view (all strides 1)
+into one of two shared storages of 1,024 values -- signed values at 0.05 scale, so activations
+stay in a realistic range, and positive values in [0.5, 1) for running variances and BatchNorm
+scales -- which keeps the file at 39 KB while values still vary along every axis. CI exports it
+through ONNX Runtime and regenerates `fcs-core/src/scrfd/topology.rs` from the export.

@@ -28,9 +28,8 @@ protobuf framing, not ONNX operator semantics. The exporters still verify output
 checkpoint after stamping; the standalone stamper expects an already valid ONNX model.
 The `produced_by` metadata continues to name the exporters that actually produced the model.
 
-The remaining Python SCRFD exporter invokes the Zig stamper, so **Zig 0.17.0 must also be on
-PATH in the training environment**, including WSL. A Windows-only installation does not put
-`zig` on WSL's PATH. A stamping failure stops the export before it can be declared verified.
+Both exporters are Zig now and stamp the model in-process before verifying it, so the training
+environment needs no Zig of its own: export from the host, pointing at the checkpoint.
 Re-stamping retains the existing `produced_by` field; a new exporter sets its own provenance.
 
 ## Native checkpoint reader
@@ -124,16 +123,40 @@ the committed files (apart from the generator's own name), with the same image s
 pixel-identical `test_pattern.png`; the JPEGs differ by 0.67 levels on average, the gap between
 two encoders.
 
+## Native SCRFD export, detection and evaluation
+
+`export_scrfd.zig` replaces the Python exporter and needs neither torch nor mmdet. `scrfd.zig`
+reads the architecture out of the checkpoint (channels, groups and block counts from the tensor
+shapes; the wiring is mmdet's MobileNetV1 + PAFPN + SCRFDHead) and runs an independent forward
+pass with BatchNorm unfolded. The exporter writes that program as an opset-11 graph, folds each
+BatchNorm in float32 as numpy did, keeps every weight's checkpoint name, and refuses to write
+unless ONNX Runtime matches the unfolded forward pass (default tolerance `1e-4`).
+
+```sh
+zig run -O ReleaseFast -lc tools/dataset/export_scrfd.zig -- epoch_100.pth scrfd.onnx
+zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c -- epoch_100.pth <images> out.json
+zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c -- epoch_100.pth <openimages> --thresh 0.02
+```
+
+Exported from `work_dirs/oi80k/epoch_100.pth`, all 120 weights are bit-identical to the shipped
+`scrfd80k_500m_640.onnx` and ONNX Runtime gives identical outputs; the official checker
+passes. `scrfd_detect.zig` and `eval_eye_error.zig` run that in-memory export through
+`Detector`; against the Python originals (torch on CUDA) they found the same 189 faces on 150
+COCO images and matched the full eye-error sweep to within 0.1 points, three to eight times
+faster without a GPU. The difference is stb decoding, as above.
+
+CI exports the synthetic `testdata/scrfd.pt` and checks that `scrfd_topology.zig` regenerates
+the committed `fcs-core/src/scrfd/topology.rs` from it, which pins the graph's wiring and weight
+names to the plan the Rust engines run.
+
 ## Remaining scope
 
-Six Python files remain. None of the training or inference replacements below is complete.
+Three Python files remain. None of the training or inference replacements below is complete.
 Keep the existing working tools until their native replacements pass the listed checks.
 
 | Current files | Native replacement needed |
 |---|---|
-| `scrfd_detect.py`, `eval_eye_error.py` | Checkpoint loading, SCRFD forward/decode/NMS, threshold sweep and ground-truth scoring |
 | `train_eye_refiner.py` | Native forward/backward, augmentation, optimiser/schedule, validation selection and checkpoint I/O |
-| `export_scrfd.py` | Native SCRFD checkpoint graph/weight export and independent inference parity |
 | `scrfd_fcs_500m.py`, `scrfd_fcs80k_500m.py` | Native SCRFD recipes and training entry point, replacing upstream MMDetection rather than just changing config syntax |
 
 `run_curve.sh` must move to the native SCRFD trainer too: it currently invokes the external

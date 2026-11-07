@@ -31,11 +31,11 @@ both ship Python 3.14, for which **no CUDA PyTorch wheels exist at all**.
 
 ## Setup
 
-Install Zig **0.17.0** on PATH in this training environment as well as on the host. The SCRFD
-exporter calls `stamp_model_metadata.zig`; the eye-refiner exporter is now
-`export_eye_refiner.zig` and needs a native ONNX Runtime library for verification. Commands and
-the remaining native training migration are tracked in [README.md](README.md); the Python
-training pipeline below is still required until its replacement passes parity checks.
+Exporting, detecting and evaluating no longer need this environment: `export_scrfd.zig`,
+`export_eye_refiner.zig`, `scrfd_detect.zig` and `eval_eye_error.zig` read the checkpoints
+directly and need only Zig 0.17.0 and an ONNX Runtime library, on the host. Commands and the
+remaining native training migration are tracked in [README.md](README.md); the Python training
+pipeline below is still required until its replacement passes parity checks.
 
 ```sh
 # uv, for a standalone 3.11 that the distro does not offer
@@ -123,7 +123,7 @@ cd insightface && git sparse-checkout set detection/scrfd
     tensor`. The base config evaluates every 80 epochs, so a run dies *at* epoch 80 having
     trained perfectly well up to it. The 80,000-image run did exactly that, 16 hours in,
     because the launch script omitted the flag this document already prescribed below. Nothing
-    here needs that hook: `eval_eye_error.py` scores checkpoints through its own decoding.
+    here needs that hook: `eval_eye_error.zig` scores checkpoints through its own decoding.
     Recovery is cheap if `checkpoint_config.interval` is set, since the checkpoint is written
     before the hook runs -- `--resume-from work_dirs/<run>/epoch_80.pth --no-validate` picks up
     at 81 with the schedule intact. Patching `mmdet/core/post_processing/bbox_nms.py` would fix
@@ -143,11 +143,15 @@ cd <scrfd>
 
 ## Measuring a trained model
 
-`eval_eye_error.py <checkpoint.pth> <data_dir> --thresh 0.02` reports detection recall and
-eye-point error against `face_keypoints_test.json`. Three things about it are worth knowing
-before reading any number it prints.
+`eval_eye_error.zig <checkpoint.pth> <data_dir> --thresh 0.02` reports detection recall and
+eye-point error against `face_keypoints_test.json` (run it with
+`zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c -- ...`
+and `ORT_DYLIB_PATH` set; it needs neither torch nor a GPU). Three things about it are worth
+knowing before reading any number it prints.
 
-**It reads the checkpoint directly, not an ONNX export.** `tools/scrfd2onnx.py` fails under
+**It reads the checkpoint directly.** The Zig port builds the checkpoint's graph in memory with
+`export_scrfd.zig` and runs it on ONNX Runtime. The Python original read it through mmdet,
+because `tools/scrfd2onnx.py` fails under
 torch 2.x: its tracer rejects the numpy arrays mmdet's input builder passes through, with
 `Only tuples, lists and Variables are supported as JIT inputs`. It also expects
 `tests/data/t1.jpg`, which a sparse checkout does not fetch. Since the keypoint decoding in

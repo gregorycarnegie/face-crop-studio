@@ -3,7 +3,7 @@
 //!   zig run -O ReleaseFast tools/dataset/compare_detectors.zig -- <a.json> <b.json> <out.html>
 //!       [--label-a YuNet] [--label-b SCRFD] [--count 60] [--min-side 24]
 //!
-//! Both files are `fcs-cli --json` shaped (YuNet writes it; `scrfd_detect.py` writes it for a
+//! Both files are `fcs-cli --json` shaped (YuNet writes it; `scrfd_detect.zig` writes it for a
 //! checkpoint). Boxes are matched at IoU >= 0.5, and the counts that come back are: found by both,
 //! found only by A, found only by B.
 //!

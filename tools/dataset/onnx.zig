@@ -112,6 +112,121 @@ pub fn putBytes(out: *std.ArrayList(u8), gpa: Allocator, tag: u32, data: []const
     try out.appendSlice(gpa, data);
 }
 
+// ── Writing graphs (the exporters) ─────────────────────────────────────────────
+
+/// AttributeProto INTS.
+pub fn attrInts(gpa: Allocator, name: []const u8, values: []const i64) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try putBytes(&out, gpa, 1, name);
+    for (values) |v| try putInt(&out, gpa, 8, @bitCast(v));
+    try putInt(&out, gpa, 20, 7);
+    return out.toOwnedSlice(gpa);
+}
+
+/// AttributeProto INT.
+pub fn attrInt(gpa: Allocator, name: []const u8, value: i64) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try putBytes(&out, gpa, 1, name);
+    try putInt(&out, gpa, 3, @bitCast(value));
+    try putInt(&out, gpa, 20, 2);
+    return out.toOwnedSlice(gpa);
+}
+
+/// AttributeProto STRING.
+pub fn attrString(gpa: Allocator, name: []const u8, value: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try putBytes(&out, gpa, 1, name);
+    try putBytes(&out, gpa, 4, value);
+    try putInt(&out, gpa, 20, 3);
+    return out.toOwnedSlice(gpa);
+}
+
+/// Append a NodeProto with one output to a GraphProto.
+pub fn putNode(gpa: Allocator, graph: *std.ArrayList(u8), op: []const u8, inputs: []const []const u8, output: []const u8, attrs: []const []const u8) !void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    for (inputs) |input| try putBytes(&out, gpa, 1, input);
+    try putBytes(&out, gpa, 2, output);
+    try putBytes(&out, gpa, 4, op);
+    for (attrs) |attr| try putBytes(&out, gpa, 5, attr);
+    try putBytes(graph, gpa, 1, out.items);
+}
+
+/// Append a float32 initializer (raw little-endian data); non-finite values are refused.
+pub fn putTensor(gpa: Allocator, graph: *std.ArrayList(u8), name: []const u8, shape: []const usize, values: []const f32) !void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    var count: usize = 1;
+    for (shape) |dim| {
+        count = std.math.mul(usize, count, dim) catch return error.InvalidParameterShape;
+        try putInt(&out, gpa, 1, dim);
+    }
+    if (count != values.len) return error.InvalidParameterShape;
+    try putInt(&out, gpa, 2, 1);
+    try putBytes(&out, gpa, 8, name);
+    const raw = try gpa.alloc(u8, try std.math.mul(usize, values.len, 4));
+    defer gpa.free(raw);
+    for (values, 0..) |v, i| {
+        if (!std.math.isFinite(v)) return error.NonFiniteParameter;
+        std.mem.writeInt(u32, raw[i * 4 ..][0..4], @bitCast(v), .little);
+    }
+    try putBytes(&out, gpa, 9, raw);
+    try putBytes(graph, gpa, 5, out.items);
+}
+
+/// Append an int64 initializer, e.g. a Reshape target.
+pub fn putTensorI64(gpa: Allocator, graph: *std.ArrayList(u8), name: []const u8, values: []const i64) !void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    try putInt(&out, gpa, 1, values.len);
+    try putInt(&out, gpa, 2, 7);
+    try putBytes(&out, gpa, 8, name);
+    const raw = try gpa.alloc(u8, values.len * 8);
+    defer gpa.free(raw);
+    for (values, 0..) |v, i| std.mem.writeInt(i64, raw[i * 8 ..][0..8], v, .little);
+    try putBytes(&out, gpa, 9, raw);
+    try putBytes(graph, gpa, 5, out.items);
+}
+
+/// A float32 ValueInfoProto; with `batch`, the first dimension is that symbolic name.
+pub fn valueInfo(gpa: Allocator, name: []const u8, batch: ?[]const u8, dims: []const u64) ![]const u8 {
+    var shape: std.ArrayList(u8) = .empty;
+    if (batch) |symbol| {
+        var axis: std.ArrayList(u8) = .empty;
+        defer axis.deinit(gpa);
+        try putBytes(&axis, gpa, 2, symbol);
+        try putBytes(&shape, gpa, 1, axis.items);
+    }
+    for (dims) |dim| {
+        var axis: std.ArrayList(u8) = .empty;
+        defer axis.deinit(gpa);
+        try putInt(&axis, gpa, 1, dim);
+        try putBytes(&shape, gpa, 1, axis.items);
+    }
+    var tensor_type: std.ArrayList(u8) = .empty;
+    try putInt(&tensor_type, gpa, 1, 1);
+    try putBytes(&tensor_type, gpa, 2, shape.items);
+    var type_proto: std.ArrayList(u8) = .empty;
+    try putBytes(&type_proto, gpa, 1, tensor_type.items);
+    var out: std.ArrayList(u8) = .empty;
+    try putBytes(&out, gpa, 1, name);
+    try putBytes(&out, gpa, 2, type_proto.items);
+    return out.toOwnedSlice(gpa);
+}
+
+/// A ModelProto around a finished graph.
+pub fn model(gpa: Allocator, ir_version: u64, opset: u64, producer: []const u8, producer_version: []const u8, graph: []const u8) ![]const u8 {
+    var opset_import: std.ArrayList(u8) = .empty;
+    try putInt(&opset_import, gpa, 2, opset);
+    var out: std.ArrayList(u8) = .empty;
+    try putInt(&out, gpa, 1, ir_version);
+    try putBytes(&out, gpa, 2, producer);
+    try putBytes(&out, gpa, 3, producer_version);
+    try putBytes(&out, gpa, 7, graph);
+    try putBytes(&out, gpa, 8, opset_import.items);
+    return out.toOwnedSlice(gpa);
+}
+
 test "protobuf rejects truncated and overflowing fields and preserves unknown fields" {
     var r: Reader = .{ .data = &.{ 0x0a, 3, 1 } };
     try std.testing.expectError(error.InvalidProtobuf, r.next());

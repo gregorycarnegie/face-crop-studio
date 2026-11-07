@@ -87,6 +87,10 @@ jobs:
           zig test -lc tools/dataset/eval_refiner_vs_yunet.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/refiner_contact_sheet.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c
+          zig test tools/dataset/scrfd.zig
+          zig test tools/dataset/export_scrfd.zig
+          zig test -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c
 
   models:
     name: Prepare Models
@@ -269,7 +273,7 @@ jobs:
         with:
           version: 0.17.0
 
-      - name: Verify native refiner export
+      - name: Verify native model exports
         shell: bash
         run: |
           set -euo pipefail
@@ -277,6 +281,8 @@ jobs:
           if [ "$RUNNER_OS" != "Windows" ]; then link_args=(-lc); fi
           zig run -O ReleaseFast "${link_args[@]}" tools/dataset/export_eye_refiner.zig -- \
             tools/dataset/testdata/refiner.pt "$RUNNER_TEMP/verified-refiner.onnx"
+          zig run -O ReleaseFast "${link_args[@]}" tools/dataset/export_scrfd.zig -- \
+            tools/dataset/testdata/scrfd.pt "$RUNNER_TEMP/verified-scrfd.onnx"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

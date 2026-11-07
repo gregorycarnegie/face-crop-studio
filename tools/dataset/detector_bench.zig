@@ -35,6 +35,7 @@ const json = std.json;
 const u = @import("util.zig");
 const img = @import("image.zig");
 const ort = @import("ort.zig");
+const detector = @import("scrfd_detect.zig");
 
 const SIZE = 640;
 const FLOOR: f32 = 0.02; // proposal floor, as in October
@@ -62,7 +63,8 @@ const SHA256 = [_][2][]const u8{
 
 const Det = struct { box: [4]f64, score: f64, eyes: [4]f64, refined: ?[4]f64 = null };
 const ByImage = std.StringArrayHashMapUnmanaged([]const Det);
-const Row = [15]f32; // box, score, five points
+const Row = detector.Row; // box, score, five points
+const nms = detector.nms;
 
 fn fail(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.print(fmt ++ "\n", args);
@@ -214,35 +216,6 @@ fn refine(gpa: std.mem.Allocator, model: *Model, image: img.Image, box: [4]f32) 
     var out: [4]f64 = undefined;
     for (&out, 0..) |*o, i| o.* = (@as(f64, eyes.data[i] * 112) - 56) / scale + (if (i % 2 == 0) cx else cy);
     return out;
-}
-
-/// The SCRFD wrapper's own NMS, kept identical so scores are comparable with upstream.
-fn nms(gpa: std.mem.Allocator, rows: []const Row) ![]usize {
-    var order: std.ArrayList(usize) = .empty;
-    for (0..rows.len) |i| try order.append(gpa, rows.len - 1 - i);
-    std.sort.block(usize, order.items, rows, struct {
-        fn higher(r: []const Row, a: usize, b: usize) bool {
-            return r[a][4] > r[b][4];
-        }
-    }.higher);
-    var keep: std.ArrayList(usize) = .empty;
-    var next: std.ArrayList(usize) = .empty;
-    while (order.items.len > 0) {
-        const i = order.items[0];
-        try keep.append(gpa, i);
-        const a = rows[i];
-        const area_i = (a[2] - a[0] + 1) * (a[3] - a[1] + 1);
-        next.clearRetainingCapacity();
-        for (order.items[1..]) |j| {
-            const b = rows[j];
-            const w = @max(0, @min(a[2], b[2]) - @max(a[0], b[0]) + 1);
-            const h = @max(0, @min(a[3], b[3]) - @max(a[1], b[1]) + 1);
-            const area_j = (b[2] - b[0] + 1) * (b[3] - b[1] + 1);
-            if ((w * h) / (area_i + area_j - w * h) <= @as(f32, 0.4)) try next.append(gpa, j);
-        }
-        std.mem.swap(std.ArrayList(usize), &order, &next);
-    }
-    return keep.toOwnedSlice(gpa);
 }
 
 fn writeDets(w: *Io.Writer, out: ByImage) !void {
@@ -892,16 +865,6 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "oi") and p.len == 5) return scoreOi(ctx, p[1], p[2], p[3], p[4]);
     if (std.mem.eql(u8, command, "coco") and p.len == 4) return scoreCoco(ctx, p[1], p[2], p[3]);
     fail("usage: detector_bench fetch <annotations.zip> <out_dir> [--negatives 2000] | oi <labels> <images> <models> <cache> | coco <data> <models> <cache> [--ort path]", .{});
-}
-
-test "NMS keeps the best box and drops heavy overlaps only" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-    var rows: [3]Row = @splat(@splat(0));
-    rows[0][0..5].* = .{ 0, 0, 10, 10, 0.5 };
-    rows[1][0..5].* = .{ 1, 1, 11, 11, 0.9 }; // overlaps 0 heavily, higher score
-    rows[2][0..5].* = .{ 50, 50, 60, 60, 0.7 };
-    try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, try nms(arena.allocator(), &rows));
 }
 
 test "budget thresholds sit one float32 step above the first score over budget" {

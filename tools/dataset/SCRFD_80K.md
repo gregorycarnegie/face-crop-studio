@@ -107,7 +107,7 @@ raised, simply started nothing in four minutes.
 Open Images is home turf for this model and away turf for YuNet, so the margin above is partly
 that. The check is a corpus neither has seen: 1,239 photographs in `Downloads\VinaSkyy`, no
 labels, so `compare_detectors.zig` matches the two models at IoU 0.5 and a human judges every
-disagreement as a crop (`scrfd_detect.py` writes the checkpoint's detections in `fcs-cli --json`
+disagreement as a crop (`scrfd_detect.zig` writes the checkpoint's detections in `fcs-cli --json`
 shape first).
 
 At the 0.4 threshold matched on Open Images FP/image, SCRFD found 1,323 faces to YuNet's 1,129:
@@ -156,7 +156,9 @@ Scoped 20 September 2026, by reading the engines rather than estimating.
 arrays. The model traces fine when handed a plain tensor, so `export_scrfd.py` wraps
 `feature_test` -- extract features, run the head, return the raw per-stride tensors -- and
 exports that. No NMS in the graph, which is the part a tracer chokes on anyway.
-`scrfd80k_500m_640.onnx`, 2.5 MB, matches torch to **3.8e-06**.
+`scrfd80k_500m_640.onnx`, 2.5 MB, matches torch to **3.8e-06**. (Since November 2026
+`export_scrfd.zig` writes the graph itself, without torch; from the same checkpoint it
+reproduces all 120 weights of the shipped model bit for bit, and identical outputs.)
 
 Two traps in verifying it, both of which first looked like a broken export. Under
 `torch.onnx.is_in_onnx_export()` the head switches to the deployment layout, so each
