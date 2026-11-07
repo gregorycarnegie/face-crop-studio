@@ -244,6 +244,81 @@ pub const Net = struct {
     }
 };
 
+/// One positive anchor's targets; the layout of `gpu/scrfd_kernels.zig`'s `Positive`.
+pub const Positive = extern struct {
+    image: u32,
+    level: u32,
+    cell: u32,
+    anchor: u32,
+    box: [4]f32,
+    kps: [10]f32,
+    kps_weight: f32,
+    _pad: u32 = 0,
+};
+comptime {
+    std.debug.assert(@sizeOf(Positive) == 80);
+}
+
+pub const Losses = struct { cls: f64, box: f64, kps: f64 };
+
+const slots = 1024; // gpu/scrfd_kernels.zig
+const level_offsets = [3]u32{ 0, 12800, 16000 }; // scrfd_targets.zig at 640
+const anchors_per_image = 16800;
+
+/// The loss's device-side inputs, grown as batches need.
+pub const LossBuffers = struct {
+    label_weight: cuda.Buffer(u8),
+    positives: cuda.Buffer(Positive),
+    stats: Buf,
+    kernels: struct { qfl_negative: cuda.Function, positives_cls: cuda.Function, positives_box_kps: cuda.Function },
+
+    pub fn init(dev: *const cuda.Device, batch: usize) !LossBuffers {
+        return .{
+            .label_weight = try dev.alloc(u8, batch * anchors_per_image),
+            .positives = try dev.alloc(Positive, batch * 1024),
+            .stats = try dev.alloc(f32, slots + 4),
+            .kernels = .{ .qfl_negative = try dev.function("qfl_negative"), .positives_cls = try dev.function("positives_cls"), .positives_box_kps = try dev.function("positives_box_kps") },
+        };
+    }
+};
+
+/// SCRFDHead.loss for the last training forward pass: writes the head outputs' gradients
+/// (call `zeroGrads` first, `backward` after) and returns the three loss terms.
+/// `label_weight` is per image and anchor; `samples` is the sum over images of max(positives, 1).
+pub fn loss(self: *Net, lb: *LossBuffers, n: u32, label_weight: []const u8, positives: []const Positive, samples: f32) !Losses {
+    if (self.size != 640) return error.LossNeeds640;
+    const d = self.dev;
+    if (positives.len > lb.positives.len) {
+        d.free(lb.positives);
+        lb.positives = try d.alloc(Positive, positives.len * 2);
+    }
+    try d.upload(u8, lb.label_weight, label_weight);
+    try d.upload(Positive, lb.positives, positives);
+    try d.zero(lb.stats);
+    const inv = 1 / samples;
+    const count: u32 = @intCast(positives.len);
+    const k = lb.kernels;
+    for (self.model.heads, 0..) |head, level| {
+        const side: u32 = @intCast(self.size / self.model.scale[head[0]]);
+        try d.launch(k.qfl_negative, n * 2 * side * side, .{ n, side, side, level_offsets[level], @as(u32, anchors_per_image), self.out[head[0]], self.grad[head[0]], lb.label_weight, inv, lb.stats });
+    }
+    for (self.model.heads, 0..) |head, level| {
+        const side: u32 = @intCast(self.size / self.model.scale[head[0]]);
+        const stride: f32 = @floatFromInt(self.model.scale[head[0]]);
+        try d.launch(k.positives_cls, count, .{ count, lb.positives, @as(u32, @intCast(level)), side, side, stride, self.out[head[0]], self.out[head[1]], self.grad[head[0]], inv, lb.stats });
+    }
+    for (self.model.heads, 0..) |head, level| {
+        const side: u32 = @intCast(self.size / self.model.scale[head[0]]);
+        const stride: f32 = @floatFromInt(self.model.scale[head[0]]);
+        try d.launch(k.positives_box_kps, count, .{ count, lb.positives, @as(u32, @intCast(level)), side, side, stride, self.out[head[0]], self.out[head[1]], self.out[head[2]], self.grad[head[1]], self.grad[head[2]], lb.stats });
+    }
+    var stats: [slots + 4]f32 = undefined;
+    try d.download(f32, &stats, lb.stats);
+    var cls: f64 = stats[slots];
+    for (stats[0..slots]) |s| cls += s;
+    return .{ .cls = cls, .box = stats[slots + 1], .kps = stats[slots + 2] };
+}
+
 /// The BatchNorm beside a convolution, by mmdet's naming: `X.0` -> `X.1`, `X.3` -> `X.4`
 /// (MobileNetV1 blocks), `X.conv` -> `X.bn` (ConvModule).
 pub fn bnName(gpa: std.mem.Allocator, conv: []const u8) ![]const u8 {

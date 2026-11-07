@@ -13,6 +13,9 @@ const ck = @import("checkpoint.zig");
 const cuda = @import("cuda.zig");
 const net = @import("scrfd.zig");
 const gpu = @import("scrfd_net.zig");
+const img = @import("image.zig");
+const aug = @import("scrfd_augment.zig");
+const targets = @import("scrfd_targets.zig");
 
 fn selfCheck(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkpoint: []const u8) !void {
     const model = try net.Scrfd.fromCheckpoint(gpa, try ck.load(gpa, io, checkpoint));
@@ -80,12 +83,101 @@ fn dumpGrads(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkp
     std.debug.print("wrote {d} parameter gradients to {s}\n", .{ m.params.items.len, dir });
 }
 
+/// Convert one image's targets into the GPU's positives.
+pub fn gpuPositives(gpa: std.mem.Allocator, out: *std.ArrayList(gpu.Positive), image: u32, positives: []const targets.Positive) !void {
+    for (positives) |p| {
+        var level: u32 = 0;
+        var offset: u32 = 0;
+        while (level < 2 and p.anchor >= offset + targets.level_counts[level]) : (level += 1) offset += @intCast(targets.level_counts[level]);
+        const local = p.anchor - offset;
+        try out.append(gpa, .{ .image = image, .level = level, .cell = local / 2, .anchor = local % 2, .box = p.box, .kps = p.kps, .kps_weight = p.kps_weight });
+    }
+}
+
+fn withEyes(entries: []const aug.Entry, skip: usize) aug.Entry {
+    var seen: usize = 0;
+    for (entries) |e| for (e.faces) |f| if (f.kps[0][2] > 0) {
+        if (seen == skip) return e;
+        seen += 1;
+        break;
+    };
+    return entries[0];
+}
+
+/// A real batch (augmented images, ATSS targets), its losses and every gradient, for comparison
+/// with mmdet's `forward_train` on the same tensor and annotations.
+fn dumpLoss(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkpoint: []const u8, data: []const u8, dir: []const u8) !void {
+    const model = try net.Scrfd.fromCheckpoint(gpa, try ck.load(gpa, io, checkpoint));
+    const n = 2;
+    var m = try gpu.Net.init(gpa, dev, model, n, targets.size);
+    var lb = try gpu.LossBuffers.init(dev, n);
+    const entries = try aug.parseLabels(gpa, try u.readFile(gpa, io, try std.fs.path.join(gpa, &.{ data, "labelv2_train_all.txt" })));
+    const all = comptime targets.anchors();
+    var prng: std.Random.DefaultPrng = .init(8);
+    const plane = targets.size * targets.size;
+    const input = try gpa.alloc(f32, n * 3 * plane);
+    const label_weight = try gpa.alloc(u8, n * targets.anchor_count);
+    var positives: std.ArrayList(gpu.Positive) = .empty;
+    var samples: f32 = 0;
+    var ann_json: std.Io.Writer.Allocating = .init(gpa);
+    try ann_json.writer.writeAll("[");
+    for (0..n) |b| {
+        const e = withEyes(entries, b * 7); // a spread of images that carry eye labels
+        const src = try aug.fromRgb8(gpa, try img.load(gpa, io, try std.fs.path.join(gpa, &.{ data, "images", e.name }), .apply_exif));
+        const faces = try gpa.dupe(targets.Face, e.faces);
+        const im, const ann = try aug.apply(gpa, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), e));
+        aug.normalise(im, input[b * 3 * plane ..][0 .. 3 * plane]);
+        const tg = try targets.targets(gpa, &all, ann.faces, ann.ignores, 0.5);
+        @memcpy(label_weight[b * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
+        try gpuPositives(gpa, &positives, @intCast(b), tg.positives);
+        samples += @floatFromInt(@max(tg.positives.len, 1));
+        if (b > 0) try ann_json.writer.writeAll(",");
+        try ann_json.writer.writeAll("{\"faces\":[");
+        for (ann.faces, 0..) |f, k| {
+            if (k > 0) try ann_json.writer.writeAll(",");
+            try ann_json.writer.print("[{d},{d},{d},{d}", .{ f.box[0], f.box[1], f.box[2], f.box[3] });
+            for (f.kps) |kp| try ann_json.writer.print(",{d},{d},{d}", .{ kp[0], kp[1], kp[2] });
+            try ann_json.writer.writeAll("]");
+        }
+        try ann_json.writer.writeAll("],\"ignores\":[");
+        for (ann.ignores, 0..) |g, k| {
+            if (k > 0) try ann_json.writer.writeAll(",");
+            try ann_json.writer.print("[{d},{d},{d},{d}]", .{ g[0], g[1], g[2], g[3] });
+        }
+        try ann_json.writer.print("],\"positives\":{d}}}", .{tg.positives.len});
+    }
+    try ann_json.writer.writeAll("]");
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/annotations.json", .{dir}), ann_json.written());
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/input.bin", .{dir}), std.mem.sliceAsBytes(input));
+    try dev.upload(f32, m.out[0], input);
+    try m.forward(n, true);
+    try m.zeroGrads();
+    const l = try gpu.loss(&m, &lb, n, label_weight, positives.items, samples);
+    try m.backward(n);
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/losses.json", .{dir}), try std.fmt.allocPrint(gpa, "{{\"cls\":{d},\"box\":{d},\"kps\":{d},\"positives\":{d}}}", .{ l.cls, l.box, l.kps, positives.items.len }));
+    var index: std.Io.Writer.Allocating = .init(gpa);
+    var blob: std.ArrayList(u8) = .empty;
+    try index.writer.writeAll("{");
+    for (m.params.items, 0..) |p, i| {
+        const host = try gpa.alloc(f32, p.grad.len);
+        try dev.download(f32, host, p.grad);
+        if (i > 0) try index.writer.writeAll(",");
+        try index.writer.print("\"{s}\":[{d},{d}]", .{ p.name, blob.items.len / 4, host.len });
+        try blob.appendSlice(gpa, std.mem.sliceAsBytes(host));
+    }
+    try index.writer.writeAll("}");
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.json", .{dir}), index.written());
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.bin", .{dir}), blob.items);
+    std.debug.print("losses: cls {d:.6} box {d:.6} kps {d:.6} over {d} positives\n", .{ l.cls, l.box, l.kps, positives.items.len });
+}
+
 pub fn main(init: std.process.Init) !void {
     const gpa = init.arena.allocator();
     const args = try init.minimal.args.toSlice(gpa);
     var dev = try cuda.Device.open(gpa, gpu.ptx);
     if (args.len == 3 and std.mem.eql(u8, args[1], "--check")) return selfCheck(gpa, init.io, &dev, args[2]);
     if (args.len == 4 and std.mem.eql(u8, args[1], "--dump-grads")) return dumpGrads(gpa, init.io, &dev, args[2], args[3]);
+    if (args.len == 5 and std.mem.eql(u8, args[1], "--dump-loss")) return dumpLoss(gpa, init.io, &dev, args[2], args[3], args[4]);
     std.debug.print("usage: train_scrfd --check <checkpoint.pth> | --dump-grads <checkpoint.pth> <dir>\n", .{});
     return error.Usage;
 }

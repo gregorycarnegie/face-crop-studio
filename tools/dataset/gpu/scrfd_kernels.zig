@@ -235,3 +235,174 @@ export fn sgd(count: u32, p: [*]f32, g: [*]const f32, buf: [*]f32, lr: f32, mome
     buf[i] = if (first != 0) d else momentum * buf[i] + d;
     p[i] -= lr * buf[i];
 }
+
+// ── Losses (SCRFDHead.loss, use_kps, no DFL) ──────────────────────────────────
+
+/// One positive anchor's targets, mirrored by `scrfd_net.Positive`.
+pub const Positive = extern struct {
+    image: u32,
+    level: u32,
+    cell: u32, // y * W + x within its level
+    anchor: u32, // 0 or 1 at that location
+    box: [4]f32, // target box, pixels
+    kps: [10]f32, // target keypoints, pixels
+    kps_weight: f32,
+    _pad: u32 = 0,
+};
+
+/// Loss accumulators: `slots` partial sums of the negative classification loss, then the
+/// positive classification, box and keypoint sums and the sum of positive scores.
+pub const slots = 1024;
+pub const stat_pos_cls = slots;
+pub const stat_box = slots + 1;
+pub const stat_kps = slots + 2;
+pub const stat_weight = slots + 3;
+
+fn sigmoid(x: f32) f32 {
+    return 1 / (1 + exp(-x));
+}
+
+/// binary_cross_entropy_with_logits(x, t), the stable form.
+fn bce(x: f32, t: f32) f32 {
+    return @max(x, 0) - x * t + log(1 + exp(-@abs(x)));
+}
+
+/// Quality Focal Loss for every anchor of one level as a negative (target score 0), weighted
+/// by its label weight (0 for ignored anchors) over `samples`; overwrites the class gradient.
+/// `cls` is the level's (n, 2, H, W) logit map; `label_weight` is per image and global anchor.
+export fn qfl_negative(n: u32, h: u32, w: u32, level_offset: u32, anchors: u32, cls: [*]const f32, grad: [*]f32, label_weight: [*]const u8, inv_samples: f32, stats: [*]f32) callconv(.kernel) void {
+    const i = index();
+    if (i >= n * 2 * h * w) return;
+    const x = i % w;
+    const y = (i / w) % h;
+    const a = (i / (w * h)) % 2;
+    const b = i / (w * h * 2);
+    const lw: f32 = @floatFromInt(label_weight[b * anchors + level_offset + (y * w + x) * 2 + a]);
+    const logit = cls[i];
+    const s = sigmoid(logit);
+    const sp = log(1 + exp(-@abs(logit))) + @max(logit, 0); // softplus = BCE(x, 0)
+    grad[i] = lw * inv_samples * (s * s * s + 2 * s * s * (1 - s) * sp);
+    add(&stats[i % slots], lw * inv_samples * sp * s * s);
+}
+
+const Decoded = struct { cls_at: u32, map: u32, centre: [2]f32, pred: [4]f32, target: [4]f32 };
+
+fn decode(p: Positive, h: u32, w: u32, stride: f32, reg: [*]const f32) Decoded {
+    const plane = h * w;
+    const cx: f32 = @floatFromInt(p.cell % w);
+    const cy: f32 = @floatFromInt(p.cell / w);
+    const reg_at = (p.image * 8 + p.anchor * 4) * plane + p.cell;
+    const d = [4]f32{ reg[reg_at], reg[reg_at + plane], reg[reg_at + 2 * plane], reg[reg_at + 3 * plane] };
+    return .{
+        .cls_at = (p.image * 2 + p.anchor) * plane + p.cell,
+        .map = reg_at,
+        .centre = .{ cx, cy },
+        .pred = .{ cx - d[0], cy - d[1], cx + d[2], cy + d[3] },
+        .target = .{ p.box[0] / stride, p.box[1] / stride, p.box[2] / stride, p.box[3] / stride },
+    };
+}
+
+/// bbox_overlaps(is_aligned, eps 1e-6).
+fn iou(a: [4]f32, b: [4]f32) f32 {
+    const ww = @max(@min(a[2], b[2]) - @max(a[0], b[0]), 0);
+    const hh = @max(@min(a[3], b[3]) - @max(a[1], b[1]), 0);
+    const inter = ww * hh;
+    const un = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter;
+    return inter / @max(un, 1e-6);
+}
+
+/// Pass 1 over one level's positives: Quality Focal Loss with the IoU of the (detached)
+/// decoded box as target, overwriting the class gradient, and each positive's score (detached
+/// sigmoid) into the normaliser the box and keypoint losses divide by.
+export fn positives_cls(count: u32, positives: [*]const Positive, level: u32, h: u32, w: u32, stride: f32, cls: [*]const f32, reg: [*]const f32, cls_grad: [*]f32, inv_samples: f32, stats: [*]f32) callconv(.kernel) void {
+    const i = index();
+    if (i >= count or positives[i].level != level) return;
+    const dcd = decode(positives[i], h, w, stride, reg);
+    const t = iou(dcd.pred, dcd.target);
+    const logit = cls[dcd.cls_at];
+    const s = sigmoid(logit);
+    const loss = bce(logit, t);
+    const gap = t - s;
+    cls_grad[dcd.cls_at] = inv_samples * ((s - t) * gap * gap - 2 * loss * gap * s * (1 - s));
+    // The negative pass already counted this anchor as a negative; QFL replaces that term.
+    const negative = (log(1 + exp(-@abs(logit))) + @max(logit, 0)) * s * s;
+    add(&stats[stat_pos_cls], inv_samples * (loss * gap * gap - negative));
+    add(&stats[stat_weight], s);
+}
+
+/// DIoU loss (eps 1e-6) and its gradient with respect to the predicted box corners.
+fn diou(p: [4]f32, g: [4]f32, grad: *[4]f32) f32 {
+    const e: f32 = 1e-6;
+    const ow = @min(p[2], g[2]) - @max(p[0], g[0]);
+    const oh = @min(p[3], g[3]) - @max(p[1], g[1]);
+    const iw = @max(ow, 0);
+    const ih = @max(oh, 0);
+    const overlap = iw * ih;
+    const pw = p[2] - p[0];
+    const ph = p[3] - p[1];
+    const un = pw * ph + (g[2] - g[0]) * (g[3] - g[1]) - overlap + e;
+    const cw = @max(@max(p[2], g[2]) - @min(p[0], g[0]), 0);
+    const ch = @max(@max(p[3], g[3]) - @min(p[1], g[1]), 0);
+    const c2 = cw * cw + ch * ch + e;
+    const dx = (g[0] + g[2]) - (p[0] + p[2]);
+    const dy = (g[1] + g[3]) - (p[1] + p[3]);
+    const rho2 = dx * dx / 4 + dy * dy / 4;
+    // Overlap and enclosure edges move with whichever side binds the max/min.
+    const d_ow = [4]f32{ if (ow > 0 and p[0] > g[0]) -1 else 0, 0, if (ow > 0 and p[2] < g[2]) 1 else 0, 0 };
+    const d_oh = [4]f32{ 0, if (oh > 0 and p[1] > g[1]) -1 else 0, 0, if (oh > 0 and p[3] < g[3]) 1 else 0 };
+    const d_ap = [4]f32{ -ph, -pw, ph, pw };
+    const d_cw = [4]f32{ if (p[0] < g[0]) -1 else 0, 0, if (p[2] > g[2]) 1 else 0, 0 };
+    const d_ch = [4]f32{ 0, if (p[1] < g[1]) -1 else 0, 0, if (p[3] > g[3]) 1 else 0 };
+    const d_rho = [4]f32{ -dx / 2, -dy / 2, -dx / 2, -dy / 2 };
+    for (0..4) |k| {
+        const d_overlap = d_ow[k] * ih + iw * d_oh[k];
+        const d_union = d_ap[k] - d_overlap;
+        const d_iou = (d_overlap * un - overlap * d_union) / (un * un);
+        const d_c2 = 2 * cw * d_cw[k] + 2 * ch * d_ch[k];
+        grad[k] = -d_iou + (d_rho[k] * c2 - rho2 * d_c2) / (c2 * c2);
+    }
+    return 1 - (overlap / un - rho2 / c2);
+}
+
+fn smoothL1(diff: f32, beta: f32, grad: *f32) f32 {
+    const a = @abs(diff);
+    if (a < beta) {
+        grad.* = diff / beta;
+        return 0.5 * a * a / beta;
+    }
+    grad.* = if (diff > 0) 1 else -1;
+    return a - 0.5 * beta;
+}
+
+/// Pass 2: DIoU (weight 2) and keypoint smooth-L1 (beta 1/9, weight 0.1) losses, each weighted
+/// by the positive's score and divided by the summed scores from pass 1; writes the box and
+/// keypoint gradients.
+export fn positives_box_kps(count: u32, positives: [*]const Positive, level: u32, h: u32, w: u32, stride: f32, cls: [*]const f32, reg: [*]const f32, kps: [*]const f32, reg_grad: [*]f32, kps_grad: [*]f32, stats: [*]f32) callconv(.kernel) void {
+    const i = index();
+    if (i >= count or positives[i].level != level) return;
+    const p = positives[i];
+    const avg = stats[stat_weight];
+    if (!(avg > 0)) return;
+    const dcd = decode(p, h, w, stride, reg);
+    const s = sigmoid(cls[dcd.cls_at]);
+    var g: [4]f32 = undefined;
+    const box_loss = diou(dcd.pred, dcd.target, &g);
+    const k_box = 2 * s / avg;
+    const plane = h * w;
+    // pred corners: x1 = cx - d0, y1 = cy - d1, x2 = cx + d2, y2 = cy + d3.
+    reg_grad[dcd.map] = -g[0] * k_box;
+    reg_grad[dcd.map + plane] = -g[1] * k_box;
+    reg_grad[dcd.map + 2 * plane] = g[2] * k_box;
+    reg_grad[dcd.map + 3 * plane] = g[3] * k_box;
+    add(&stats[stat_box], box_loss * k_box);
+    const kps_at = (p.image * 20 + p.anchor * 10) * plane + p.cell;
+    const k_kps = 0.1 * p.kps_weight * s / avg;
+    var kps_loss: f32 = 0;
+    for (0..10) |j| {
+        const target = p.kps[j] / stride - dcd.centre[j % 2];
+        var gj: f32 = undefined;
+        kps_loss += smoothL1(kps[kps_at + j * plane] - target, 1.0 / 9.0, &gj);
+        kps_grad[kps_at + j * plane] = gj * k_kps;
+    }
+    add(&stats[stat_kps], kps_loss * k_kps);
+}
