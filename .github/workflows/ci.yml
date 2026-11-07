@@ -95,6 +95,7 @@ jobs:
           zig test tools/dataset/scrfd_targets.zig
           zig test -lc tools/dataset/scrfd_augment.zig tools/dataset/vendor/stb.c
           zig test tools/dataset/scrfd_net.zig
+          zig test -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c
       - name: Check the committed PTX matches its Zig kernels
         run: |
           zig build-obj -target nvptx64-cuda -mcpu=sm_80 -O ReleaseFast tools/dataset/gpu/refiner_kernels.zig \
