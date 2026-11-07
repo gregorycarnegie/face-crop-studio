@@ -177,19 +177,23 @@ matching, and that `export_eye_refiner.zig` exports and verifies; the checkpoint
 reference (agreement 7e-8), training-mode gradients of every layer type against central finite
 differences (36 of 36), and the loss gradient. A 300-epoch run takes 9.3 minutes on an RTX 4090.
 
-Three native seeds against the PyTorch run behind the shipped model, on the test set with ground-truth boxes (the
+Three native seeds against two PyTorch runs, on the test set with ground-truth boxes (the
 checkpoint each run selected on validation):
 
 | Run | Validation pick | Test angle median | Within 5 deg |
 |---|---|---|---|
 | PyTorch, shipped model | 1.20 deg, epoch 280 | 1.39 deg | -- |
+| PyTorch, seed 1 | 1.22 deg, epoch 280 | 1.41 deg | 87.0% |
 | Zig, seed 0 | 1.31 deg, epoch 290 | 1.51 deg | 87.6% |
 | Zig, seed 1 | 1.34 deg, epoch 300 | 1.49 deg | 86.3% |
 | Zig, seed 2 | 1.29 deg, epoch 270 | 1.40 deg | 88.5% |
 
 On the paired YuNet-box comparison that the project reports, the Zig seed-0 checkpoint scores
 1.24 deg median (92.1% within 5 deg, closer than YuNet on 78.8% of faces) against the shipped
-model's 1.17 deg. Training does not checkpoint optimiser or schedule state, so a run cannot be
+model's 1.17 deg. So the native trainer lands about 0.07 deg behind PyTorch on the test set
+(0.1 deg on validation), consistently across seeds. The cause is not identified: the recipe
+matches line by line, and the remaining differences are stb rather than libjpeg decoding and
+cuDNN's default TF32 convolutions. Training does not checkpoint optimiser or schedule state, so a run cannot be
 resumed; it restarts. The shipped model is unchanged.
 
 ## Remaining scope

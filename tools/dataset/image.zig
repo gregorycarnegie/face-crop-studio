@@ -224,6 +224,54 @@ pub fn resizeLinear(gpa: Allocator, src: Image, width: usize, height: usize) !Im
     return out;
 }
 
+/// `cv2.resize` of a float32 3-channel HWC image, INTER_LINEAR: OpenCV's float path, whose
+/// weights stay floating point (no 11-bit quantisation).
+pub fn resizeLinearF32(gpa: Allocator, src: []const f32, sw: usize, sh: usize, dw: usize, dh: usize) ![]f32 {
+    if (sw == 0 or sh == 0 or dw == 0 or dh == 0 or src.len != sw * sh * 3) return error.EmptyImage;
+    if (sw == dw and sh == dh) return gpa.dupe(f32, src);
+    const scale_x = 1 / (@as(f64, @floatFromInt(dw)) / @as(f64, @floatFromInt(sw)));
+    const scale_y = 1 / (@as(f64, @floatFromInt(dh)) / @as(f64, @floatFromInt(sh)));
+    const Weights = struct { first: usize, second: usize, a0: f32, a1: f32 };
+    const taps = struct {
+        fn make(g: Allocator, n: usize, d: usize, scale: f64) ![]Weights {
+            const out = try g.alloc(Weights, d);
+            for (out, 0..) |*t, i| {
+                var f: f32 = @floatCast((@as(f64, @floatFromInt(i)) + 0.5) * scale - 0.5);
+                var s: i64 = @intFromFloat(@floor(f));
+                f -= @floatFromInt(s);
+                if (s < 0) {
+                    f = 0;
+                    s = 0;
+                }
+                if (s >= @as(i64, @intCast(n)) - 1) {
+                    f = 0;
+                    s = @as(i64, @intCast(n)) - 1;
+                }
+                const first: usize = @intCast(s);
+                t.* = .{ .first = first, .second = @min(first + 1, n - 1), .a0 = 1 - f, .a1 = f };
+            }
+            return out;
+        }
+    }.make;
+    const xs = try taps(gpa, sw, dw, scale_x);
+    defer gpa.free(xs);
+    const ys = try taps(gpa, sh, dh, scale_y);
+    defer gpa.free(ys);
+    const out = try gpa.alloc(f32, dw * dh * 3);
+    const rows = try gpa.alloc(f32, dw * 3 * 2);
+    defer gpa.free(rows);
+    for (ys, 0..) |ty, y| {
+        for ([_]usize{ ty.first, ty.second }, 0..) |sy, k| {
+            const line = src[sy * sw * 3 ..][0 .. sw * 3];
+            for (xs, 0..) |tx, x| for (0..3) |c| {
+                rows[k * dw * 3 + x * 3 + c] = line[tx.first * 3 + c] * tx.a0 + line[tx.second * 3 + c] * tx.a1;
+            };
+        }
+        for (out[y * dw * 3 ..][0 .. dw * 3], rows[0 .. dw * 3], rows[dw * 3 ..]) |*d, r0, r1| d.* = r0 * ty.a0 + r1 * ty.a1;
+    }
+    return out;
+}
+
 const AreaTap = struct { dst: usize, src: usize, alpha: f32 };
 
 /// `computeResizeAreaTab`: each destination cell's overlap with the source cells it covers.
