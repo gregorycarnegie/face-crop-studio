@@ -54,6 +54,23 @@ fn selfCheck(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkp
     std.debug.print("FORWARD CHECK PASSED on {s}\n", .{dev.deviceName()});
 }
 
+/// Every parameter's gradient: grads.json maps each name to [offset, count] in grads.bin.
+fn writeGrads(gpa: std.mem.Allocator, io: std.Io, m: *gpu.Net, dir: []const u8) !void {
+    var index: std.Io.Writer.Allocating = .init(gpa);
+    var blob: std.ArrayList(u8) = .empty;
+    try index.writer.writeAll("{");
+    for (m.params.items, 0..) |p, i| {
+        const host = try gpa.alloc(f32, p.grad.len);
+        try m.dev.download(f32, host, p.grad);
+        if (i > 0) try index.writer.writeAll(",");
+        try index.writer.print("\"{s}\":[{d},{d}]", .{ p.name, blob.items.len / 4, host.len });
+        try blob.appendSlice(gpa, std.mem.sliceAsBytes(host));
+    }
+    try index.writer.writeAll("}");
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.json", .{dir}), index.written());
+    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.bin", .{dir}), blob.items);
+}
+
 /// loss = sum over the nine raw head maps of map * w, at 128x128 with batch 2: d(loss)/d(map) = w.
 fn dumpGrads(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkpoint: []const u8, dir: []const u8) !void {
     const model = try net.Scrfd.fromCheckpoint(gpa, try ck.load(gpa, io, checkpoint));
@@ -76,19 +93,7 @@ fn dumpGrads(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkp
         try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/w{d}.bin", .{ dir, kind * 3 + level }), std.mem.sliceAsBytes(w));
     };
     try m.backward(n);
-    var index: std.Io.Writer.Allocating = .init(gpa);
-    var blob: std.ArrayList(u8) = .empty;
-    try index.writer.writeAll("{");
-    for (m.params.items, 0..) |p, i| {
-        const host = try gpa.alloc(f32, p.grad.len);
-        try dev.download(f32, host, p.grad);
-        if (i > 0) try index.writer.writeAll(",");
-        try index.writer.print("\"{s}\":[{d},{d}]", .{ p.name, blob.items.len / 4, host.len });
-        try blob.appendSlice(gpa, std.mem.sliceAsBytes(host));
-    }
-    try index.writer.writeAll("}");
-    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.json", .{dir}), index.written());
-    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.bin", .{dir}), blob.items);
+    try writeGrads(gpa, io, &m, dir);
     std.debug.print("wrote {d} parameter gradients to {s}\n", .{ m.params.items.len, dir });
 }
 
@@ -132,9 +137,9 @@ fn dumpLoss(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkpo
     try ann_json.writer.writeAll("[");
     for (0..n) |b| {
         const e = withEyes(entries, b * 7); // a spread of images that carry eye labels
-        const src = try aug.fromRgb8(gpa, try img.load(gpa, io, try std.fs.path.join(gpa, &.{ data, "images", e.name }), .apply_exif));
+        const src = try aug.fromRgb8(gpa, try img.load(gpa, io, try std.fs.path.join(gpa, &.{ data, "images", e.name }), .as_stored));
         const faces = try gpa.dupe(targets.Face, e.faces);
-        const im, const ann = try aug.apply(gpa, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), e));
+        const im, const ann = try aug.apply(gpa, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces));
         aug.normalise(im, input[b * 3 * plane ..][0 .. 3 * plane]);
         const tg = try targets.targets(gpa, &all, ann.faces, ann.ignores, 0.5);
         @memcpy(label_weight[b * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
@@ -164,19 +169,7 @@ fn dumpLoss(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkpo
     const l = try gpu.loss(&m, &lb, n, label_weight, positives.items, samples);
     try m.backward(n);
     try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/losses.json", .{dir}), try std.fmt.allocPrint(gpa, "{{\"cls\":{d},\"box\":{d},\"kps\":{d},\"positives\":{d}}}", .{ l.cls, l.box, l.kps, positives.items.len }));
-    var index: std.Io.Writer.Allocating = .init(gpa);
-    var blob: std.ArrayList(u8) = .empty;
-    try index.writer.writeAll("{");
-    for (m.params.items, 0..) |p, i| {
-        const host = try gpa.alloc(f32, p.grad.len);
-        try dev.download(f32, host, p.grad);
-        if (i > 0) try index.writer.writeAll(",");
-        try index.writer.print("\"{s}\":[{d},{d}]", .{ p.name, blob.items.len / 4, host.len });
-        try blob.appendSlice(gpa, std.mem.sliceAsBytes(host));
-    }
-    try index.writer.writeAll("}");
-    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.json", .{dir}), index.written());
-    try u.writeFile(io, try std.fmt.allocPrint(gpa, "{s}/grads.bin", .{dir}), blob.items);
+    try writeGrads(gpa, io, &m, dir);
     std.debug.print("losses: cls {d:.6} box {d:.6} kps {d:.6} over {d} positives\n", .{ l.cls, l.box, l.kps, positives.items.len });
 }
 
@@ -330,20 +323,21 @@ fn prepWorker(job: *Prep) void {
         const e = job.entries[job.order[slot]];
         var prng: std.Random.DefaultPrng = .init(job.seed ^ (@as(u64, slot) *% 0x9E3779B97F4A7C15));
         const done = blk: {
-            const decoded = img.load(g, job.io, std.fs.path.join(g, &.{ job.images, e.name }) catch break :blk false, .apply_exif) catch |err| {
+            const decoded = img.load(g, job.io, std.fs.path.join(g, &.{ job.images, e.name }) catch break :blk false, .as_stored) catch |err| {
                 std.debug.print("cannot read {s}: {s}\n", .{ e.name, @errorName(err) });
                 break :blk false;
             };
             const src = aug.fromRgb8(g, decoded) catch break :blk false;
             const faces = g.dupe(targets.Face, e.faces) catch break :blk false;
-            const im, const ann = aug.apply(g, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), e)) catch break :blk false;
+            const im, const ann = aug.apply(g, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces)) catch break :blk false;
             aug.normalise(im, job.batch.input[slot * 3 * plane ..][0 .. 3 * plane]);
             const tg = targets.targets(g, &all, ann.faces, ann.ignores, job.ignore_iof) catch break :blk false;
             @memcpy(job.batch.label_weight[slot * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
             var list: std.ArrayList(gpu.Positive) = .empty;
             gpuPositives(std.heap.smp_allocator, &list, @intCast(slot), tg.positives) catch break :blk false;
+            const owned = list.toOwnedSlice(std.heap.smp_allocator) catch break :blk false;
             std.heap.smp_allocator.free(job.batch.positives[slot]);
-            job.batch.positives[slot] = list.toOwnedSlice(std.heap.smp_allocator) catch break :blk false;
+            job.batch.positives[slot] = owned;
             job.batch.counts[slot] = tg.positives.len;
             break :blk true;
         };
@@ -356,6 +350,7 @@ fn prepWorker(job: *Prep) void {
 
 fn prepare(job: *Prep, workers: usize) !void {
     var threads: [64]std.Thread = undefined;
+    if (workers == 0) return error.NoWorkers;
     const count = @min(threads.len, workers);
     for (threads[0..count]) |*t| t.* = try std.Thread.spawn(.{}, prepWorker, .{job});
     for (threads[0..count]) |t| t.join();
@@ -379,7 +374,9 @@ const Options = struct {
     max_iters: ?usize = null,
 };
 
-fn saveCheckpoint(gpa: std.mem.Allocator, io: std.Io, path: []const u8, m: *gpu.Net, epoch: usize, iter: usize) !void {
+/// `epoch` is the number of complete epochs; `partial` marks a stop inside the next one, which
+/// `--resume` refuses (it restarts at epoch boundaries).
+fn saveCheckpoint(gpa: std.mem.Allocator, io: std.Io, path: []const u8, m: *gpu.Net, epoch: usize, iter: usize, partial: bool) !void {
     var momentum: std.ArrayList(ck.OutEntry) = .empty;
     for (m.params.items) |p| {
         const host = try gpa.alloc(f32, p.momentum.len);
@@ -391,6 +388,7 @@ fn saveCheckpoint(gpa: std.mem.Allocator, io: std.Io, path: []const u8, m: *gpu.
             .{ .key = "epoch", .value = .{ .int = @intCast(epoch) } },
             .{ .key = "iter", .value = .{ .int = @intCast(iter) } },
             .{ .key = "trained_by", .value = .{ .string = "tools/dataset/train_scrfd.zig" } },
+            .{ .key = "partial_epoch", .value = .{ .int = @intFromBool(partial) } },
         } } },
         .{ .key = "state_dict", .value = .{ .dict = try m.stateDict(gpa) } },
         // SGD momentum per parameter, so a run can resume where it stopped (not read by mmdet).
@@ -417,6 +415,7 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
     var lb = try gpu.LossBuffers.init(dev, n);
     if (o.resume_from != null) {
         const meta = checkpoint.dict.get("meta").?.dict;
+        if (meta.get("partial_epoch")) |p| if (p == .integer and p.integer != 0) return error.CheckpointStoppedMidEpoch;
         start_epoch = @intCast(meta.get("epoch").?.integer);
         iter = @intCast(meta.get("iter").?.integer);
         m.batches = @intCast(iter);
@@ -432,18 +431,21 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
 
     var batches = [2]Batch{ try allocBatch(gpa, n), try allocBatch(gpa, n) };
     const order = try gpa.alloc(usize, per_epoch * n);
-    var shuffler: std.Random.DefaultPrng = .init(o.seed +% 17);
     const started = std.Io.Timestamp.now(io, .awake);
     var sums = [3]f64{ 0, 0, 0 };
     var logged: usize = 0;
     var first_step = o.resume_from == null;
     for (start_epoch..o.recipe.epochs) |epoch| {
         // Shuffle, padding the last batch with random repeats (as mmdet's GroupSampler pads).
+        // Seeded per epoch, so a resumed run shuffles as the uninterrupted one would have.
+        var shuffler: std.Random.DefaultPrng = .init(o.seed +% 17 +% epoch *% 0x9E3779B97F4A7C15);
         for (order[0..entries.len], 0..) |*v, i| v.* = i;
         shuffler.random().shuffle(usize, order[0..entries.len]);
         for (order[entries.len..]) |*v| v.* = shuffler.random().uintLessThan(usize, entries.len);
-        var pending: ?std.Thread = null;
         var jobs: [2]Prep = undefined;
+        var pending: ?std.Thread = null;
+        // On any early return the prefetch thread still points into `jobs` and `batches`.
+        defer if (pending) |t| t.join();
         jobs[0] = .{ .io = io, .images = images, .entries = entries, .order = order[0..n], .seed = o.seed *% 1000003 +% epoch *% 7919, .ignore_iof = o.recipe.ignore_iof, .batch = &batches[0] };
         try prepare(&jobs[0], o.workers);
         for (0..per_epoch) |k| {
@@ -491,15 +493,15 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
                 logged = 0;
             }
             if (o.max_iters) |limit| if (iter >= limit) {
-                if (pending) |t| t.join();
-                try saveCheckpoint(gpa, io, try std.fs.path.join(gpa, &.{ o.out, "latest.pth" }), &m, epoch, iter);
+                const complete = k + 1 == per_epoch;
+                try saveCheckpoint(gpa, io, try std.fs.path.join(gpa, &.{ o.out, "latest.pth" }), &m, if (complete) epoch + 1 else epoch, iter, !complete);
                 return;
             };
         }
         if ((epoch + 1) % o.recipe.interval == 0 or epoch + 1 == o.recipe.epochs) {
             const path = try std.fmt.allocPrint(gpa, "{s}{c}epoch_{d}.pth", .{ o.out, std.fs.path.sep, epoch + 1 });
-            try saveCheckpoint(gpa, io, path, &m, epoch + 1, iter);
-            try saveCheckpoint(gpa, io, try std.fs.path.join(gpa, &.{ o.out, "latest.pth" }), &m, epoch + 1, iter);
+            try saveCheckpoint(gpa, io, path, &m, epoch + 1, iter, false);
+            try cwd.copyFile(path, cwd, try std.fs.path.join(gpa, &.{ o.out, "latest.pth" }), io, .{});
             try w.print("saved {s}\n", .{path});
             try w.flush();
         }
@@ -541,6 +543,7 @@ pub fn main(init: std.process.Init) !void {
     o.labels = positional.items[1];
     if (epochs) |e| o.recipe.epochs = e;
     if (batch) |b| o.recipe.batch = b;
+    if (o.recipe.batch == 0 or o.workers == 0) return error.BatchAndWorkersMustBePositive;
     return train(gpa, init.io, &dev, o);
 }
 

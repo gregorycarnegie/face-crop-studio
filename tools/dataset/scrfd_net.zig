@@ -81,6 +81,8 @@ pub const Net = struct {
                 else => continue,
             };
             const c = s.conv;
+            // bn_relu fuses the two, and the convolutions without BatchNorm are linear.
+            if ((c.bn != null) != c.relu) return error.UnsupportedLayer;
             const side = size / model.scale[id];
             const weight = try self.param(gpa, try std.fmt.allocPrint(gpa, "{s}.weight", .{c.name}), &.{ c.out, c.in_per_group, c.kernel, c.kernel }, c.weight);
             const bias = if (c.bias) |b| try self.param(gpa, try std.fmt.allocPrint(gpa, "{s}.bias", .{c.name}), &.{c.out}, b) else null;
@@ -262,8 +264,9 @@ comptime {
 pub const Losses = struct { cls: f64, box: f64, kps: f64 };
 
 const slots = 1024; // gpu/scrfd_kernels.zig
-const level_offsets = [3]u32{ 0, 12800, 16000 }; // scrfd_targets.zig at 640
-const anchors_per_image = 16800;
+const targets = @import("scrfd_targets.zig");
+const level_offsets = [3]u32{ 0, targets.level_counts[0], targets.level_counts[0] + targets.level_counts[1] };
+const anchors_per_image = targets.anchor_count;
 
 /// The loss's device-side inputs, grown as batches need.
 pub const LossBuffers = struct {

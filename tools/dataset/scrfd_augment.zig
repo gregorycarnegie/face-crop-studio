@@ -289,8 +289,10 @@ pub fn normalise(im: Image, out: []f32) void {
 
 pub const Draws = struct { patch: Patch, flip: bool, photo: Photo };
 
-pub fn draw(r: std.Random, e: Entry) Draws {
-    return .{ .patch = drawPatch(r, e.width, e.height, e.faces), .flip = r.float(f64) < 0.5, .photo = drawPhoto(r) };
+/// Draws for an image as decoded: the crop is sized from its pixels, as MMDetection sizes it
+/// from `img.shape`, not from the label header.
+pub fn draw(r: std.Random, im: Image, faces: []const t.Face) Draws {
+    return .{ .patch = drawPatch(r, im.width, im.height, faces), .flip = r.float(f64) < 0.5, .photo = drawPhoto(r) };
 }
 
 /// The whole pipeline after decoding: crop, resize, flip, photometric. Returns the 640x640
