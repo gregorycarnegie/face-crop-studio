@@ -183,4 +183,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.2.2", default-features = false }
+zip = { version = "9.4.1", default-features = false }
