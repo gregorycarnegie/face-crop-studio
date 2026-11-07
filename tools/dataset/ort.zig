@@ -63,39 +63,13 @@ const ApiBase = extern struct {
     version: *const fn () callconv(cc) [*:0]const u8,
 };
 
-extern "kernel32" fn LoadLibraryW([*:0]const u16) callconv(.winapi) ?*anyopaque;
-extern "kernel32" fn GetProcAddress(*anyopaque, [*:0]const u8) callconv(.winapi) ?*anyopaque;
-extern "kernel32" fn FreeLibrary(*anyopaque) callconv(.winapi) c_int;
+const Library = @import("dynlib.zig").Library;
 
-const Library = struct {
-    handle: if (builtin.os.tag == .windows) *anyopaque else std.DynLib,
-
-    fn open(gpa: Allocator, path: []const u8) !Library {
-        if (builtin.os.tag == .windows) {
-            const wide = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, path);
-            defer gpa.free(wide);
-            return .{ .handle = LoadLibraryW(wide) orelse return error.RuntimeNotFound };
-        } else {
-            if (!builtin.link_libc) @compileError("ONNX Runtime requires libc: add -lc to the Zig command");
-            return .{ .handle = try std.DynLib.open(path) };
-        }
-    }
-
-    fn base(self: *Library) !*const ApiBase {
-        const Entry = *const fn () callconv(cc) ?*const ApiBase;
-        const entry: Entry = if (builtin.os.tag == .windows)
-            @ptrCast(GetProcAddress(self.handle, "OrtGetApiBase") orelse return error.MissingOrtApi)
-        else
-            self.handle.lookup(Entry, "OrtGetApiBase") orelse return error.MissingOrtApi;
-        return entry() orelse error.MissingOrtApi;
-    }
-
-    fn close(self: *Library) void {
-        if (builtin.os.tag == .windows) {
-            _ = FreeLibrary(self.handle);
-        } else self.handle.close();
-    }
-};
+fn apiBase(library: *Library) !*const ApiBase {
+    const Entry = *const fn () callconv(cc) ?*const ApiBase;
+    const entry = library.lookup(Entry, "OrtGetApiBase") orelse return error.MissingOrtApi;
+    return entry() orelse error.MissingOrtApi;
+}
 
 pub const Output = struct { shape: []const i64, data: []const f32 };
 
@@ -107,9 +81,9 @@ pub const Oracle = struct {
     memory: *MemoryInfo,
 
     pub fn open(gpa: Allocator, path: []const u8, model: []const u8) !Oracle {
-        var library = try Library.open(gpa, path);
+        var library = Library.open(gpa, path) catch return error.RuntimeNotFound;
         errdefer library.close();
-        const base = try library.base();
+        const base = try apiBase(&library);
         const api = base.get_api(24) orelse return error.RuntimeApiTooOld;
         var env: ?*Env = null;
         try api.check(api.create_env(2, "fcs-dataset", &env));

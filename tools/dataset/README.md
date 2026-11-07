@@ -149,71 +149,73 @@ CI exports the synthetic `testdata/scrfd.pt` and checks that `scrfd_topology.zig
 the committed `fcs-core/src/scrfd/topology.rs` from it, which pins the graph's wiring and weight
 names to the plan the Rust engines run.
 
+## Native eye-refiner training on the GPU
+
+`train_eye_refiner.zig` replaces the PyTorch trainer. The network runs on an NVIDIA GPU through
+the driver alone: `cuda.zig` loads `nvcuda.dll` / `libcuda.so.1` at run time, and the kernels
+are Zig (`gpu/refiner_kernels.zig`), compiled by Zig's own NVPTX backend to the committed
+`gpu/refiner_kernels.ptx`, which the driver JIT-compiles for the GPU present (compute
+capability 8.0+). No CUDA toolkit, cuDNN, Python or torch. CI regenerates the PTX from the Zig
+source and fails if the committed file differs.
+
+```sh
+zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c -- --check
+zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c -- <openimages> --out eye_refiner.pt
+```
+
+The recipe is the PyTorch original's: the same image-level validation split (Python's
+`random.Random(1234).shuffle` reproduced, giving the same 1,684 / 304 / 1,562 faces), the same
+augmentation, smooth-L1 points plus 0.5 x (1 - cos) angle loss, training-mode BatchNorm with
+PyTorch's momentum and unbiased running variance, PyTorch's default initialisation, AdamW under
+OneCycleLR with its momentum cycling, selection on validation and one look at the test set.
+Crops are cut on the CPU with OpenCV's warpAffine arithmetic (`image.zig`), in parallel.
+It writes a PyTorch ZIP checkpoint (`checkpoint.save`) that `torch.load` reads with every key
+matching, and that `export_eye_refiner.zig` exports and verifies; the checkpoint records
+`trained_by`, which the export carries into its provenance.
+
+`--check` verifies the GPU network without data: eval-mode output against `refiner.zig`'s CPU
+reference (agreement 7e-8), training-mode gradients of every layer type against central finite
+differences (36 of 36), and the loss gradient. A 300-epoch run takes 9.3 minutes on an RTX 4090.
+
+Three native seeds against the PyTorch run behind the shipped model, on the test set with ground-truth boxes (the
+checkpoint each run selected on validation):
+
+| Run | Validation pick | Test angle median | Within 5 deg |
+|---|---|---|---|
+| PyTorch, shipped model | 1.20 deg, epoch 280 | 1.39 deg | -- |
+| Zig, seed 0 | 1.31 deg, epoch 290 | 1.51 deg | 87.6% |
+| Zig, seed 1 | 1.34 deg, epoch 300 | 1.49 deg | 86.3% |
+| Zig, seed 2 | 1.29 deg, epoch 270 | 1.40 deg | 88.5% |
+
+On the paired YuNet-box comparison that the project reports, the Zig seed-0 checkpoint scores
+1.24 deg median (92.1% within 5 deg, closer than YuNet on 78.8% of faces) against the shipped
+model's 1.17 deg. Training does not checkpoint optimiser or schedule state, so a run cannot be
+resumed; it restarts. The shipped model is unchanged.
+
 ## Remaining scope
 
-Three Python files remain. None of the training or inference replacements below is complete.
-Keep the existing working tools until their native replacements pass the listed checks.
+Two Python files remain, both SCRFD training configurations consumed by upstream MMDetection:
 
 | Current files | Native replacement needed |
 |---|---|
-| `train_eye_refiner.py` | Native forward/backward, augmentation, optimiser/schedule, validation selection and checkpoint I/O |
-| `scrfd_fcs_500m.py`, `scrfd_fcs80k_500m.py` | Native SCRFD recipes and training entry point, replacing upstream MMDetection rather than just changing config syntax |
+| `scrfd_fcs_500m.py`, `scrfd_fcs80k_500m.py` | A native SCRFD trainer replacing upstream MMDetection, not a change of config syntax |
 
 `run_curve.sh` must move to the native SCRFD trainer too: it currently invokes the external
 checkout's Python `tools/train.py`. Renaming the two configuration files alone would break it.
 
-## Training implementation and acceptance checks
+The GPU path the refiner trainer proved (`cuda.zig`, Zig kernels compiled to PTX, finite-
+difference checks) is the foundation for it. What the SCRFD trainer must reproduce:
 
-Use Zig for the data pipeline, model definitions, losses, scheduling, checkpoint selection and
-CLI. The smallest route to retaining CUDA training is LibTorch behind a narrow C ABI bridge:
-LibTorch is a C++ API, so Zig's C interop does not directly translate its classes. The C++
-bridge should provide tensor/autograd/device operations; it must not launch a Python process.
-This is a proposed backend, not an installed or implemented dependency of these tools.
-
-A native C++ probe against the existing WSL LibTorch and `eye_refiner_val.pt` found that
-`torch::pickle_load` fails inside its unpickler (`Expected GenericDict but got None`). The
-native reader above bypasses that API and resolves reading the legacy checkpoint data.
-Restoring those values into a native training backend, saving new checkpoints and proving
-save/resume equivalence remain to be implemented.
-
-ONNX Runtime's inference C API is suitable for the benchmark and export checks. It does not
-by itself replace the existing PyTorch/MMDetection training recipe. Its training API would
-need training graphs and an equivalent gradient/optimiser pipeline as well.
-
-Implement and verify these contracts before removing the remaining Python:
-
-1. **Native backend and legacy checkpoints.** Pin the native libraries and compiler. Prove CPU
-   and CUDA forward/backward with a finite-difference gradient check and a parameter update.
-   The existing `.pt`/`.pth` tensor dictionaries and provenance can now be loaded and verified
-   without Python via `checkpoint.zig`; next, restore them into the native tensor backend.
-   Save atomically and prove save/resume equivalence, including optimiser and schedule state.
-   Do not silently accept only a new format and strand the recorded checkpoints.
-2. **Images and refiner training.** Preserve the 112-pixel RGB normalisation, five pairs of
-   Conv/BatchNorm/ReLU blocks, two linear layers, affine geometry, eye order on mirroring,
-   rotation/brightness augmentation, Smooth L1 beta 0.02, cosine angle loss, AdamW and OneCycleLR.
-   Reuse `util.zig`'s Python-compatible RNG where the existing image split depends on it.
-   Split by image with seed 1234; choose checkpoints only on held-out training images; score
-   the test split once, using the selected checkpoint. Compare crops, forward outputs, loss
-   terms and gradients with saved reference inputs before running a real training smoke test.
-3. **Native SCRFD training.** Reproduce MobileNetV1, PAFPN and the three SCRFD head branches,
-   including training BatchNorm rather than training the already folded inference graph.
-   Preserve two anchors per location at strides 8/16/32, Quality Focal Loss, DIoU box loss,
-   Smooth L1 keypoint loss, ignored unlabelled landmarks, ATSS top-k 9 and ignore IoF 0.5 for
-   the 80k recipe. Retain square cropping, photometric augmentation, all real face boxes and
-   ignore regions. Preserve both schedules: the label-count recipe and the 80k run's
-   100 epochs with LR drops at 69/85. Compare assignments, masks, losses and one optimiser
-   step on fixed batches; then check loss decreases on actual data on the target GPU.
-4. **Exports and evaluators.** Keep named weights while materialising aliases and folding
-   BatchNorm; keep SCRFD's nine deployment outputs and the refiner's dynamic batch axis.
-   Preserve both model licences and the checkpoint's selection provenance. Run independent
-   ONNX inference checks at the existing tolerances (`1e-4` SCRFD, `1e-5` refiner, batch > 1).
-   Match the old evaluation counts, IoU tie rules, inclusive-pixel NMS, frozen thresholds,
-   FP budgets, eye-angle conventions and paired sample selection on fixed detection caches.
-   Keep codec/orientation handling, fixture licence checks and the contact sheet's synthetic
-   rotation-sign check. Update commands in `TRAINING_SETUP.md`, `run_curve.sh` and the result
-   documents only when the replacement command actually works.
-
-The migration is complete when every row has a working native command, all callers use it,
-and a clean training/export/evaluation run needs no Python interpreter or Python packages.
-The original model reports remain historical evidence; a new training run is not assumed to
-reproduce their headline accuracy just because its architecture matches.
+* **Model.** MobileNetV1, PAFPN and the three SCRFD head branches with training-mode
+  BatchNorm (not the folded inference graph `scrfd.zig` builds), depthwise convolutions,
+  nearest upsampling, and its checkpoint names, so `export_scrfd.zig` reads the result.
+* **Targets and losses.** Two anchors per location at strides 8/16/32, ATSS assignment with
+  top-k 9 (ignore IoF 0.5 in the 80k recipe), Quality Focal Loss, DIoU box loss, Smooth L1
+  keypoint loss with unlabelled landmarks ignored.
+* **Data.** Square cropping with the recipe's crop choices, resize to 640, flips that swap eye
+  identity, photometric distortion, every real face box and the ignore regions.
+* **Schedules.** The label-count recipe (SGD 0.01, warm-up, steps at 55/68 of 80 x 8 epochs)
+  and the 80k run's 100 epochs with drops at 69/85.
+* **Acceptance.** Assignments, masks, losses and one optimiser step compared with MMDetection
+  on fixed batches; then a full run scored with `eval_eye_error.zig` and `detector_bench.zig`
+  on both corpora against the shipped model's figures.

@@ -130,7 +130,8 @@ training noise, not an effect of eye labels.
 
 The curve showed that 3,550 eye labels over 2,482 images cannot train a detector to beat YuNet.
 It does not follow that they cannot solve the task those labels were collected for. Detection
-was never the weakness -- the eye *line* was -- so `train_eye_refiner.py` attacks that alone:
+was never the weakness -- the eye *line* was -- so `train_eye_refiner.py` (now
+`train_eye_refiner.zig`) attacks that alone:
 given a face box, where are the two eyes. No detection, no anchors, 1.5 M parameters, a few
 minutes to train on the same 1,988 pairs.
 

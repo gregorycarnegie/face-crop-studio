@@ -123,7 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// every predicted eye without failing anything.
 ///
 /// So this runs a real photograph through the shipping path and compares against the same
-/// image and box run through `train_eye_refiner.py`'s own preprocessing:
+/// image and box run through the PyTorch trainer's own preprocessing (`train_eye_refiner.py`,
+/// since replaced by `train_eye_refiner.zig`, which cuts crops the same way):
 ///
 /// ```text
 /// eyes in image coords: 920.4756 767.1260  1184.2014 696.8716

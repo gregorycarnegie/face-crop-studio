@@ -10,7 +10,14 @@ const ort = @import("ort.zig");
 const metadata = @import("stamp_model_metadata.zig");
 const Allocator = std.mem.Allocator;
 
-pub fn buildOnnx(gpa: Allocator, model: net.Refiner) ![]const u8 {
+/// Which trainer made a checkpoint: `train_eye_refiner.zig` records itself; older checkpoints
+/// came from the PyTorch trainer it replaced.
+pub fn trainedBy(checkpoint: ck.Value) []const u8 {
+    if (checkpoint == .dict) if (checkpoint.dict.get("trained_by")) |v| if (v == .string) return v.string;
+    return "tools/dataset/train_eye_refiner.py";
+}
+
+pub fn buildOnnx(gpa: Allocator, model: net.Refiner, trained_by: []const u8) ![]const u8 {
     var graph: std.ArrayList(u8) = .empty;
     try pb.putBytes(&graph, gpa, 2, "Face Crop Studio eye refiner");
     var input: []const u8 = "crop";
@@ -48,7 +55,7 @@ pub fn buildOnnx(gpa: Allocator, model: net.Refiner) ![]const u8 {
     try pb.putBytes(&graph, gpa, 11, try pb.valueInfo(gpa, "crop", "batch", &.{ 3, net.size, net.size }));
     try pb.putBytes(&graph, gpa, 12, try pb.valueInfo(gpa, "eyes", "batch", &.{4}));
     const out = try pb.model(gpa, 7, 12, "Zig ONNX exporter", builtin.zig_version_string, graph.items);
-    return metadata.stampExport(gpa, out, .eye_refiner, "tools/dataset/train_eye_refiner.py, exported by export_eye_refiner.zig");
+    return metadata.stampExport(gpa, out, .eye_refiner, try std.fmt.allocPrint(gpa, "{s}, exported by export_eye_refiner.zig", .{trained_by}));
 }
 
 fn verify(gpa: Allocator, model: net.Refiner, data: []const u8, runtime: []const u8, tolerance: f64) !f64 {
@@ -109,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
         try ck.report(&text.writer, value);
         std.debug.print("{s}: {s}\n", .{ key, text.written() });
     };
-    const data = try buildOnnx(gpa, model);
+    const data = try buildOnnx(gpa, model, trainedBy(checkpoint));
     _ = try verify(gpa, model, data, runtime, tolerance);
     const output_path = destination orelse args[2];
     const permissions = if (destination != null) (try cwd.statFile(init.io, output_path, .{})).permissions else std.Io.File.Permissions.default_file;

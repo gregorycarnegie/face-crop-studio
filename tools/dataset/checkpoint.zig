@@ -409,6 +409,160 @@ pub fn load(gpa: Allocator, io: std.Io, path: []const u8) !Value {
     return root;
 }
 
+// ── Writing ───────────────────────────────────────────────────────────────────
+
+/// A value `save` can write: the part of torch.save's output a training checkpoint uses.
+pub const Out = union(enum) {
+    int: i64,
+    float: f64,
+    string: []const u8,
+    dict: []const OutEntry,
+    /// A contiguous tensor; `data` holds its little-endian elements.
+    tensor: struct { dtype: Dtype, shape: []const usize, data: []const u8 },
+};
+pub const OutEntry = struct { key: []const u8, value: Out };
+
+const Writer = struct {
+    gpa: Allocator,
+    pickle: std.ArrayList(u8) = .empty,
+    storages: std.ArrayList([]const u8) = .empty,
+
+    fn op(self: *Writer, bytes: []const u8) !void {
+        try self.pickle.appendSlice(self.gpa, bytes);
+    }
+
+    fn int(self: *Writer, v: i64) !void {
+        if (v >= 0 and v < 256) return self.op(&.{ 'K', @intCast(v) });
+        if (v >= 0 and v < 65536) {
+            try self.op("M");
+            return self.op(&std.mem.toBytes(std.mem.nativeToLittle(u16, @intCast(v))));
+        }
+        if (std.math.cast(i32, v)) |small| {
+            try self.op("J");
+            return self.op(&std.mem.toBytes(std.mem.nativeToLittle(i32, small)));
+        }
+        try self.op(&.{ 0x8a, 8 });
+        try self.op(&std.mem.toBytes(std.mem.nativeToLittle(i64, v)));
+    }
+
+    fn string(self: *Writer, s: []const u8) !void {
+        try self.op("X");
+        try self.op(&std.mem.toBytes(std.mem.nativeToLittle(u32, @intCast(s.len))));
+        try self.op(s);
+    }
+
+    fn tuple(self: *Writer, values: []const usize) !void {
+        if (values.len == 0) return self.op(")");
+        try self.op("(");
+        for (values) |v| try self.int(@intCast(v));
+        try self.op("t");
+    }
+
+    fn value(self: *Writer, v: Out) anyerror!void {
+        switch (v) {
+            .int => |n| try self.int(n),
+            .float => |f| {
+                try self.op("G");
+                try self.op(&std.mem.toBytes(std.mem.nativeToBig(u64, @bitCast(f))));
+            },
+            .string => |s| try self.string(s),
+            .dict => |entries| {
+                try self.op("}");
+                if (entries.len == 0) return;
+                try self.op("(");
+                for (entries) |e| {
+                    try self.string(e.key);
+                    try self.value(e.value);
+                }
+                try self.op("u");
+            },
+            .tensor => |t| {
+                const count = try elementCount(t.shape);
+                if (t.data.len != count * t.dtype.size()) return error.InvalidTensor;
+                const key = try std.fmt.allocPrint(self.gpa, "{d}", .{self.storages.items.len});
+                try self.storages.append(self.gpa, t.data);
+                try self.op("ctorch._utils\n_rebuild_tensor_v2\n(");
+                try self.op("(");
+                try self.string("storage");
+                try self.op(if (t.dtype == .float32) "ctorch\nFloatStorage\n" else "ctorch\nLongStorage\n");
+                try self.string(key);
+                try self.string("cpu");
+                try self.int(@intCast(count));
+                try self.op("tQ");
+                try self.int(0);
+                try self.tuple(t.shape);
+                const strides = try self.gpa.alloc(usize, t.shape.len);
+                var step: usize = 1;
+                var i = t.shape.len;
+                while (i > 0) {
+                    i -= 1;
+                    strides[i] = step;
+                    step *= t.shape[i];
+                }
+                try self.tuple(strides);
+                try self.op(&.{0x89}); // requires_grad=False
+                try self.op("ccollections\nOrderedDict\n)RtR");
+            },
+        }
+    }
+};
+
+/// Write `root` as a PyTorch ZIP checkpoint (`torch.load` and `load` both read it), replacing
+/// `path` atomically. Allocate with an arena.
+pub fn save(gpa: Allocator, io: std.Io, path: []const u8, root: []const OutEntry) !void {
+    var w: Writer = .{ .gpa = gpa };
+    try w.op(&.{ 0x80, 2 });
+    try w.value(.{ .dict = root });
+    try w.op(".");
+    var members: std.ArrayList(struct { name: []const u8, data: []const u8 }) = .empty;
+    try members.append(gpa, .{ .name = "archive/data.pkl", .data = w.pickle.items });
+    try members.append(gpa, .{ .name = "archive/byteorder", .data = "little" });
+    for (w.storages.items, 0..) |data, i| try members.append(gpa, .{ .name = try std.fmt.allocPrint(gpa, "archive/data/{d}", .{i}), .data = data });
+    try members.append(gpa, .{ .name = "archive/version", .data = "3\n" });
+
+    // A stored (uncompressed) ZIP, as torch.save writes.
+    var zip: std.ArrayList(u8) = .empty;
+    var central: std.ArrayList(u8) = .empty;
+    for (members.items) |m| {
+        const offset: u32 = @intCast(zip.items.len);
+        const crc = std.hash.Crc32.hash(m.data);
+        const size: u32 = std.math.cast(u32, m.data.len) orelse return error.CheckpointTooLarge;
+        const name_len: u16 = @intCast(m.name.len);
+        inline for (.{ &zip, &central }, .{ 0x04034b50, 0x02014b50 }) |out, signature| {
+            try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, signature)));
+            if (signature == 0x02014b50) try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, 20))); // made by
+            for ([_]u16{ 20, 0, 0, 0, 0 }) |v| try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, v))); // version, flags, method, time, date
+            for ([_]u32{ crc, size, size }) |v| try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, v)));
+            try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, name_len)));
+            try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, 0))); // extra
+            if (signature == 0x02014b50) {
+                for ([_]u16{ 0, 0, 0 }) |v| try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, v))); // comment, disk, internal attrs
+                try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, 0))); // external attrs
+                try out.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, offset)));
+            }
+            try out.appendSlice(gpa, m.name);
+        }
+        try zip.appendSlice(gpa, m.data);
+    }
+    const central_offset: u32 = @intCast(zip.items.len);
+    try zip.appendSlice(gpa, central.items);
+    try zip.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, 0x06054b50)));
+    const count: u16 = @intCast(members.items.len);
+    for ([_]u16{ 0, 0, count, count }) |v| try zip.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, v)));
+    try zip.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, @intCast(central.items.len))));
+    try zip.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u32, central_offset)));
+    try zip.appendSlice(gpa, &std.mem.toBytes(std.mem.nativeToLittle(u16, 0)));
+
+    const cwd = std.Io.Dir.cwd();
+    var file = try cwd.createFileAtomic(io, path, .{ .replace = true });
+    defer file.deinit(io);
+    var buffer: [4096]u8 = undefined;
+    var writer = file.file.writer(io, &buffer);
+    try writer.interface.writeAll(zip.items);
+    try writer.flush();
+    try file.replace(io);
+}
+
 /// Tagged JSON preserves integer dictionary keys, tuples, tensor views and state_dict attributes.
 pub fn report(w: *std.Io.Writer, value: Value) !void {
     var budget: usize = 64 * 1024 * 1024;
@@ -606,4 +760,39 @@ test "non-finite scalar metadata still produces valid tagged JSON" {
         try report(&out.writer, .{ .float = case.value });
         try std.testing.expectEqualStrings(case.expected, out.written());
     }
+}
+
+test "saved checkpoints load back: nested dicts, scalars, strings and both tensor dtypes" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(gpa, ".zig-cache/tmp/{s}/saved.pt", .{&tmp.sub_path});
+    const weights = [_]f32{ 1.5, -2, 0.25, 8, 0, -0.5 };
+    const steps = [_]i64{123456789012};
+    try save(gpa, std.testing.io, path, &.{
+        .{ .key = "model", .value = .{ .dict = &.{
+            .{ .key = "w", .value = .{ .tensor = .{ .dtype = .float32, .shape = &.{ 2, 3 }, .data = std.mem.sliceAsBytes(&weights) } } },
+            .{ .key = "n", .value = .{ .tensor = .{ .dtype = .int64, .shape = &.{}, .data = std.mem.sliceAsBytes(&steps) } } },
+        } } },
+        .{ .key = "size", .value = .{ .int = 112 } },
+        .{ .key = "big", .value = .{ .int = -70000 } },
+        .{ .key = "stats", .value = .{ .dict = &.{.{ .key = "angle_median", .value = .{ .float = 1.25 } }} } },
+        .{ .key = "note", .value = .{ .string = "zig" } },
+        .{ .key = "empty", .value = .{ .dict = &.{} } },
+    });
+    const root = try load(gpa, std.testing.io, path);
+    const model = root.dict.get("model").?.dict;
+    const w = model.get("w").?.tensor;
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, w.shape);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 1 }, w.strides);
+    try std.testing.expectEqualSlices(f32, &weights, try w.floats(gpa));
+    try std.testing.expectEqual(@as(usize, 0), model.get("n").?.tensor.shape.len);
+    try std.testing.expectEqual(@as(i64, 123456789012), std.mem.readInt(i64, model.get("n").?.tensor.storage.bytes[0..8], .little));
+    try std.testing.expectEqual(@as(i64, 112), root.dict.get("size").?.integer);
+    try std.testing.expectEqual(@as(i64, -70000), root.dict.get("big").?.integer);
+    try std.testing.expectEqual(@as(f64, 1.25), root.dict.get("stats").?.dict.get("angle_median").?.float);
+    try std.testing.expectEqualStrings("zig", root.dict.get("note").?.string);
+    try std.testing.expectEqual(@as(usize, 0), root.dict.get("empty").?.dict.items.items.len);
 }

@@ -31,11 +31,12 @@ both ship Python 3.14, for which **no CUDA PyTorch wheels exist at all**.
 
 ## Setup
 
-Exporting, detecting and evaluating no longer need this environment: `export_scrfd.zig`,
-`export_eye_refiner.zig`, `scrfd_detect.zig` and `eval_eye_error.zig` read the checkpoints
-directly and need only Zig 0.17.0 and an ONNX Runtime library, on the host. Commands and the
-remaining native training migration are tracked in [README.md](README.md); the Python training
-pipeline below is still required until its replacement passes parity checks.
+Only SCRFD training still needs this environment. The eye refiner trains natively on the host
+GPU with `train_eye_refiner.zig` (Zig 0.17.0 and the NVIDIA driver), and exporting, detecting
+and evaluating (`export_scrfd.zig`, `export_eye_refiner.zig`, `scrfd_detect.zig`,
+`eval_eye_error.zig`) read the checkpoints directly with an ONNX Runtime library. Commands and
+the remaining native training migration are tracked in [README.md](README.md); the MMDetection
+pipeline below is still required for SCRFD until its replacement passes parity checks.
 
 ```sh
 # uv, for a standalone 3.11 that the distro does not offer

@@ -71,8 +71,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("usage: refiner_contact_sheet <detections.json> <eye_refiner.pt> <out.html> [--count 40] [--min-box 80] [--ort path]\n", .{});
         return error.Usage;
     }
-    const model = try net.Refiner.fromCheckpoint(gpa, try ck.load(gpa, io, positional.items[1]));
-    var oracle = try ort.Oracle.open(gpa, runtime, try exporter.buildOnnx(gpa, model));
+    const state = try ck.load(gpa, io, positional.items[1]);
+    const model = try net.Refiner.fromCheckpoint(gpa, state);
+    var oracle = try ort.Oracle.open(gpa, runtime, try exporter.buildOnnx(gpa, model, exporter.trainedBy(state)));
     defer oracle.close();
 
     var rows: std.ArrayList(Row) = .empty;

@@ -2,7 +2,7 @@
 //!
 //!   zig run -O ReleaseFast -lc tools/dataset/eval_refiner_vs_yunet.zig tools/dataset/vendor/stb.c -- <data_dir> <eye_refiner.pt> [detections.json] [--ort path]
 //!
-//! `train_eye_refiner.py` scores itself against ground-truth boxes, which measures the refiner in
+//! `train_eye_refiner.zig` scores itself against ground-truth boxes, which measures the refiner in
 //! isolation. This measures what would actually ship: YuNet detects a face, the refiner re-reads
 //! the eyes from YuNet's box, and the result is compared against YuNet's own landmarks on exactly
 //! the same faces. A paired comparison, so neither side gets an easier set of faces than the
@@ -101,7 +101,7 @@ pub fn main(init: std.process.Init) !void {
 
     const state = try ck.load(gpa, io, positional.items[1]);
     const model = try net.Refiner.fromCheckpoint(gpa, state);
-    var oracle = try ort.Oracle.open(gpa, runtime, try exporter.buildOnnx(gpa, model));
+    var oracle = try ort.Oracle.open(gpa, runtime, try exporter.buildOnnx(gpa, model, exporter.trainedBy(state)));
     defer oracle.close();
     var out: u.Stdout = undefined;
     out.init(io);

@@ -91,6 +91,12 @@ jobs:
           zig test tools/dataset/export_scrfd.zig
           zig test -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c
+      - name: Check the committed refiner PTX matches its Zig kernels
+        run: |
+          zig build-obj -target nvptx64-cuda -mcpu=sm_80 -O ReleaseFast tools/dataset/gpu/refiner_kernels.zig \
+            -fno-emit-bin -femit-asm=tools/dataset/gpu/refiner_kernels.ptx
+          git diff --exit-code -- tools/dataset/gpu/refiner_kernels.ptx
 
   models:
     name: Prepare Models
