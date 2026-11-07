@@ -106,7 +106,7 @@ raised, simply started nothing in four minutes.
 
 Open Images is home turf for this model and away turf for YuNet, so the margin above is partly
 that. The check is a corpus neither has seen: 1,239 photographs in `Downloads\VinaSkyy`, no
-labels, so `compare_detectors.py` matches the two models at IoU 0.5 and a human judges every
+labels, so `compare_detectors.zig` matches the two models at IoU 0.5 and a human judges every
 disagreement as a crop (`scrfd_detect.py` writes the checkpoint's detections in `fcs-cli --json`
 shape first).
 

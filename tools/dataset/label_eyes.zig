@@ -127,55 +127,6 @@ fn writeFace(w: *Io.Writer, f: Face) !void {
     try w.writeAll("]}");
 }
 
-/// Python's `json.dumps` for a parsed value (default separators, ASCII-only output).
-fn dump(w: *Io.Writer, v: json.Value) !void {
-    switch (v) {
-        .null => try w.writeAll("null"),
-        .bool => |b| try w.writeAll(if (b) "true" else "false"),
-        .integer => |n| try w.print("{d}", .{n}),
-        .float => |f| try u.pyFloat(w, f),
-        .number_string => |s| try w.writeAll(s),
-        .string => |s| try dumpString(w, s),
-        .array => |a| {
-            try w.writeAll("[");
-            for (a.items, 0..) |item, i| {
-                if (i > 0) try w.writeAll(", ");
-                try dump(w, item);
-            }
-            try w.writeAll("]");
-        },
-        .object => |o| {
-            try w.writeAll("{");
-            for (o.keys(), o.values(), 0..) |k, val, i| {
-                if (i > 0) try w.writeAll(", ");
-                try dumpString(w, k);
-                try w.writeAll(": ");
-                try dump(w, val);
-            }
-            try w.writeAll("}");
-        },
-    }
-}
-
-fn dumpString(w: *Io.Writer, s: []const u8) !void {
-    try w.writeAll("\"");
-    var view = std.unicode.Utf8View.init(s) catch return w.writeAll("\"");
-    var it = view.iterator();
-    while (it.nextCodepoint()) |cp| switch (cp) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        0x20...0x21, 0x23...0x5b, 0x5d...0x7e => try w.writeAll(&.{@intCast(cp)}),
-        else => if (cp >= 0x10000) {
-            const c = cp - 0x10000;
-            try w.print("\\u{x:0>4}\\u{x:0>4}", .{ 0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF) });
-        } else try w.print("\\u{x:0>4}", .{cp}),
-    };
-    try w.writeAll("\"");
-}
-
 /// One image's bytes, downloading and caching it when it is not on disk yet.
 fn fetchImage(state: *State, gpa: std.mem.Allocator, stem: []const u8) ?[]u8 {
     const path = std.fmt.allocPrint(gpa, "{s}/images/{s}.jpg", .{ state.data, stem }) catch return null;
@@ -285,7 +236,7 @@ fn handle(state: *State, gpa: std.mem.Allocator, request: *std.http.Server.Reque
             const image = if (rec.get("image")) |v| (if (v == .string) v.string else "") else "";
             try rec.put(arena, "split", .{ .string = state.splits.get(image) orelse "unknown" });
             var line: Io.Writer.Allocating = .init(arena);
-            try dump(&line.writer, .{ .object = rec });
+            try u.dump(&line.writer, .{ .object = rec });
             try appendLabel(state, gpa, line.written());
             return respondText(request, .ok, "ok");
         },

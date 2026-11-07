@@ -28,9 +28,10 @@ protobuf framing, not ONNX operator semantics. The exporters still verify output
 checkpoint after stamping; the standalone stamper expects an already valid ONNX model.
 The `produced_by` metadata continues to name the exporters that actually produced the model.
 
-Both Python exporters now invoke the Zig stamper, so **Zig 0.17.0 must also be on PATH in the
-training environment**, including WSL. A Windows-only installation does not put `zig` on WSL's
-PATH. A stamping failure stops the export before it can be declared verified.
+The remaining Python SCRFD exporter invokes the Zig stamper, so **Zig 0.17.0 must also be on
+PATH in the training environment**, including WSL. A Windows-only installation does not put
+`zig` on WSL's PATH. A stamping failure stops the export before it can be declared verified.
+Re-stamping retains the existing `produced_by` field; a new exporter sets its own provenance.
 
 ## Native checkpoint reader
 
@@ -60,20 +61,79 @@ Python globals fail explicitly. ZIP CRCs and tensor extents are checked; JSON re
 depth and size limits to bound expansion through pickle aliases. This is a checkpoint data
 reader, not a general Python pickle interpreter or a native training engine.
 
+## Native eye-refiner export
+
+`export_eye_refiner.zig` replaces the Python exporter. It loads the legacy checkpoint, exports
+the graph itself, and checks ONNX Runtime against independent, unfused checkpoint inference
+on a batch of three crops before atomically replacing the output. Missing runtimes, invalid
+parameters, non-finite outputs and tolerance failures leave an existing output untouched.
+It prints checkpoint selection statistics and retains the CC BY 4.0 attribution.
+
+```sh
+# Unix: link libc for the platform's dynamic loader. On Windows, omit -lc.
+zig run -O ReleaseFast -lc tools/dataset/export_eye_refiner.zig -- eye_refiner_val.pt out.onnx
+zig test tools/dataset/refiner.zig
+zig test tools/dataset/ort.zig
+zig test tools/dataset/export_eye_refiner.zig
+```
+
+Set `ORT_DYLIB_PATH` to an ONNX Runtime library, as for the Rust parity tests, or pass
+`--ort <library>`. The native oracle requires API 24 or newer. Neither Python packages nor
+LibTorch are needed. `--tolerance` retains the default `1e-5` maximum absolute error.
+The supported model is the existing 112-pixel, width-32 architecture; incompatible checkpoints
+fail explicitly. The exporter fixes the initializer names consumed by the Rust refiner,
+retains the dynamic batch axis, and records `export_eye_refiner.zig` as the actual exporter.
+
+The validation-selected real checkpoint passed the official ONNX checker and independent
+PyTorch comparisons at batches 1, 3 and 5 (maximum error `1.79e-7`). CI exports the synthetic
+`testdata/refiner.pt` on every native platform using the downloaded ONNX Runtime, without
+Python. This does not regenerate or replace the shipped model or its published checksums.
+
+## Images and the detector benchmark
+
+`image.zig` decodes and encodes with stb (`vendor/`, public domain, pinned in `vendor/stb.c`)
+and reimplements OpenCV's fixed-point `resize` (INTER_LINEAR, INTER_AREA) and `warpAffine`.
+Tools that use it link the C file:
+
+```sh
+zig run -O ReleaseFast -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c -- coco <data> <models> <cache>
+zig test -lc tools/dataset/image.zig tools/dataset/vendor/stb.c
+```
+
+Against `cv2` 4.10 on Open Images photographs, given the same pixels: letterbox resizing,
+halving, INTER_AREA and `warpAffine` are bit-identical; upscaling differs by one level on 0.02%
+of values. Decoding is where the two differ: stb and libjpeg disagree on about 11% of values,
+by up to 28 levels at sharp colour edges. EXIF orientation is applied as `cv2.imread` does.
+
+`detector_bench.zig` replaces `detector_bench.py`. Re-scoring the existing COCO and Open Images
+caches reproduces the Python tables character for character. Fresh detection on 150 COCO
+images left every count above the frozen thresholds unchanged: no detection crossed a
+threshold, scores moved by about 3e-4 and coordinates by about 0.1% of the box width.
+
+`eval_refiner_vs_yunet.zig` and `refiner_contact_sheet.zig` replace their Python versions. They
+run the checkpoint through the graph `export_eye_refiner.zig` builds, on ONNX Runtime, so torch
+and a GPU are no longer needed. Against the Python versions on `eye_refiner_val.pt` and the
+Open Images corpus: the paired comparison matches on all 1,382 faces in every share and count,
+with the refiner's median angle error 1.17 against 1.18 degrees; the contact sheet picks the
+same 10,880 faces and the same 40 worst pairs (one adjacent near-tie swapped), and its tiles
+look identical.
+
+`make_accuracy_fixtures.zig` replaces its Python version. Rebuilt into a scratch folder, it
+chose the committed 60 images and wrote `ground_truth.json` and `ATTRIBUTION.md` identical to
+the committed files (apart from the generator's own name), with the same image sizes and a
+pixel-identical `test_pattern.png`; the JPEGs differ by 0.67 levels on average, the gap between
+two encoders.
+
 ## Remaining scope
 
-Twelve Python files remain. None of the training or inference replacements below is complete.
+Six Python files remain. None of the training or inference replacements below is complete.
 Keep the existing working tools until their native replacements pass the listed checks.
 
 | Current files | Native replacement needed |
 |---|---|
-| `compare_detectors.py` | JSON matching, image crops and self-contained disagreement HTML |
-| `make_accuracy_fixtures.py` | Deterministic SHA-256 selection, image resizing, scaled boxes and attribution |
 | `scrfd_detect.py`, `eval_eye_error.py` | Checkpoint loading, SCRFD forward/decode/NMS, threshold sweep and ground-truth scoring |
-| `eval_refiner_vs_yunet.py`, `refiner_contact_sheet.py` | Checkpoint loading, paired refiner inference, affine crops and rotation checks |
-| `detector_bench.py` | Model checksum verification, ONNX inference for three detectors, licensed COCO fetching, caches and both scoring protocols |
 | `train_eye_refiner.py` | Native forward/backward, augmentation, optimiser/schedule, validation selection and checkpoint I/O |
-| `export_eye_refiner.py`, `export_scrfd.py` | Native checkpoint loading, ONNX graph/weight export and independent inference parity |
+| `export_scrfd.py` | Native SCRFD checkpoint graph/weight export and independent inference parity |
 | `scrfd_fcs_500m.py`, `scrfd_fcs80k_500m.py` | Native SCRFD recipes and training entry point, replacing upstream MMDetection rather than just changing config syntax |
 
 `run_curve.sh` must move to the native SCRFD trainer too: it currently invokes the external

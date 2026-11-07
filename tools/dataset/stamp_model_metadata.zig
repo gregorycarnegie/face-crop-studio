@@ -53,6 +53,15 @@ fn info(model: Model) Info {
 const keys = [_][]const u8{ "title", "author", "source", "license", "license_url", "attribution", "training_data", "produced_by" };
 
 pub fn stamp(gpa: Allocator, data: []const u8, model: Model) ![]const u8 {
+    var r: pb.Reader = .{ .data = data };
+    while (try r.next()) |f| if (f.tag == 14) {
+        const prop = try f.bytes();
+        if (std.mem.eql(u8, try pb.string(prop, 1), "produced_by")) return stampExport(gpa, data, model, try pb.string(prop, 2));
+    };
+    return stampExport(gpa, data, model, info(model).produced_by);
+}
+
+pub fn stampExport(gpa: Allocator, data: []const u8, model: Model, produced_by: []const u8) ![]const u8 {
     const meta = info(model);
     const graph = try (try pb.field(data, 7) orelse return error.MissingGraph).bytes();
     if (graph.len == 0 or (try pb.field(data, 1)) == null or (try pb.field(data, 8)) == null) return error.InvalidModel;
@@ -87,7 +96,7 @@ pub fn stamp(gpa: Allocator, data: []const u8, model: Model) ![]const u8 {
     try pb.putBytes(&out, gpa, 3, version);
     try pb.putInt(&out, gpa, 5, meta.version);
     try pb.putBytes(&out, gpa, 6, doc);
-    const values = [_][]const u8{ meta.title, author, repo, "CC-BY-4.0", license_url, credit, meta.training_data, meta.produced_by };
+    const values = [_][]const u8{ meta.title, author, repo, "CC-BY-4.0", license_url, credit, meta.training_data, produced_by };
     for (keys, values) |key, value| {
         var prop: std.ArrayList(u8) = .empty;
         defer prop.deinit(gpa);
@@ -152,6 +161,9 @@ test "stamping preserves graph, unknown fields, custom metadata and exporter; re
     try std.testing.expect(found_custom);
     try std.testing.expectEqualSlices(u8, first, try stamp(gpa, first, .scrfd));
     try std.testing.expectEqual(@as(u64, 1), try (try pb.field(try stamp(gpa, model.items, .eye_refiner), 5)).?.int());
+    const native = try stampExport(gpa, model.items, .eye_refiner, "export_eye_refiner.zig");
+    try std.testing.expectEqualStrings("export_eye_refiner.zig", try pb.string(try (try pb.field(native, 14)).?.bytes(), 2));
+    try std.testing.expectEqualSlices(u8, native, try stamp(gpa, native, .eye_refiner));
 }
 
 test "malformed input and models without graphs fail before writing" {

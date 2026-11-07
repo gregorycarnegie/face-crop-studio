@@ -11,7 +11,7 @@ or sensitive information; prefer synthetic or cleared data.
   with their face boxes in `ground_truth.json`, plus a synthetic `test_pattern.png`.
   `fcs-core/tests/detection_accuracy.rs` scores the detector against those boxes, and
   the CLI tests use them as ordinary inputs. They are a fixed sample of the held-out
-  set behind `docs/MODEL_COMPARISON.md`; `tools/dataset/make_accuracy_fixtures.py`
+  set behind `docs/MODEL_COMPARISON.md`; `tools/dataset/make_accuracy_fixtures.zig`
   rebuilds them (see below). This folder used to hold local photographs with no
   licence to redistribute, which is why it was git-ignored and CI never ran the tests
   that needed it.
@@ -37,12 +37,16 @@ or sensitive information; prefer synthetic or cleared data.
 Only commit images you are licensed to redistribute. The set is a rule, not a
 hand-picked selection: the held-out images ordered by the SHA-256 of their file
 name, the eight in `fixtures/oracle/` skipped, the first 60 taken. To rebuild it
-(for example after the held-out labels change), run this in the SCRFD venv from
-the repository root, then re-measure the bounds in `detection_accuracy.rs`:
+(for example after the held-out labels change), run this from the repository root,
+then re-measure the bounds in `detection_accuracy.rs`:
 
 ```bash
-/home/grego/work/scrfd-venv/bin/python tools/dataset/make_accuracy_fixtures.py     /mnt/c/Users/grego/Downloads/face-data/openimages fixtures/images
+zig run -O ReleaseFast -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c -- \n    C:/Users/grego/Downloads/face-data/openimages fixtures/images
 ```
+
+It selects the same images and writes the same boxes and attribution as the Python
+version that made the committed set, but its JPEG encoder (stb) is not libjpeg, so
+the re-encoded images differ slightly (0.67 levels on average).
 
 Any other images you want to test with locally can go anywhere under `fixtures/`
 outside the tracked folders; git ignores them.

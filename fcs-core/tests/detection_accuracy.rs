@@ -7,7 +7,7 @@
 //!
 //! The fixtures are 60 Open Images photographs (145 faces) sampled from the held-out set behind
 //! `docs/MODEL_COMPARISON.md`, all CC BY 2.0 and attributed in `fixtures/images/ATTRIBUTION.md`;
-//! `tools/dataset/make_accuracy_fixtures.py` rebuilds them. Scoring follows that benchmark:
+//! `tools/dataset/make_accuracy_fixtures.zig` rebuilds them. Scoring follows that benchmark:
 //! one-to-one, score-ordered matching at IoU >= 0.5, and an unmatched detection that overlaps a
 //! group-of or depiction region at IoU > 0.3 is not counted against the detector.
 //!

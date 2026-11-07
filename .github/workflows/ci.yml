@@ -78,6 +78,15 @@ jobs:
           zig test tools/dataset/scrfd_topology.zig
           zig test tools/dataset/stamp_model_metadata.zig
           zig test tools/dataset/checkpoint.zig
+          zig test tools/dataset/refiner.zig
+          zig test tools/dataset/ort.zig
+          zig test tools/dataset/export_eye_refiner.zig
+          zig test tools/dataset/compare_detectors.zig
+          zig test -lc tools/dataset/image.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/eval_refiner_vs_yunet.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/refiner_contact_sheet.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c
 
   models:
     name: Prepare Models
@@ -256,6 +265,19 @@ jobs:
           echo "ORT_DYLIB_PATH=$Lib" >> "$GITHUB_ENV"
 
       # ── Toolchain ────────────────────────────────────────────────────────
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Verify native refiner export
+        shell: bash
+        run: |
+          set -euo pipefail
+          link_args=()
+          if [ "$RUNNER_OS" != "Windows" ]; then link_args=(-lc); fi
+          zig run -O ReleaseFast "${link_args[@]}" tools/dataset/export_eye_refiner.zig -- \
+            tools/dataset/testdata/refiner.pt "$RUNNER_TEMP/verified-refiner.onnx"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -211,7 +211,7 @@ found in the original photographs.
   but starts from the wrong place. The test shows the refiner responds correctly to rotation on
   a corpus it never saw; it cannot show that its absolute placement is right there. Only labels
   on those images, or a human looking at aligned crops, can settle that.
-  `refiner_contact_sheet.py` builds the latter: aligned crops from each model side by side,
+  `refiner_contact_sheet.py` (now `refiner_contact_sheet.zig`) builds the latter: aligned crops from each model side by side,
   ordered by disagreement so the worst cases come first rather than being buried.
 
   **Settled by inspection, 18 September 2026.** On the corrected sheet -- the 40 faces of 1,096
@@ -234,8 +234,9 @@ plausibly-rotated face -- not a blank image, not an exception, just a portrait a
 angle -- and every *number* in this document was unaffected, because the evaluation scripts
 compare eye-line angles arithmetically and never render a crop. Only the one artefact meant
 for human judgement was wrong, which is precisely the artefact with no automated check
-behind it. `refiner_contact_sheet.py` now runs `_self_check` before it renders anything: a
-synthetic eye line at a known tilt must come out level.
+behind it. The Python sheet then ran `_self_check` before rendering anything: a synthetic eye
+line at a known tilt must come out level. In the Zig port that check is a test of
+`image.rotationMatrix` ("levels the eye line") in `image.zig`, which CI runs.
 
 ### And a second one, in the export
 
@@ -251,9 +252,10 @@ about five pixels apart on a 500-pixel face. It surfaced only because the Rust p
 was checked against the *checkpoint* rather than against the exported file, which made the two
 disagree for a reason that had nothing to do with the code under test.
 
-The fix is `export_eye_refiner.py`: the export is a committed script, it prints the provenance
+The fix was a committed export script (now `export_eye_refiner.zig`): it prints the provenance
 the checkpoint carries (`val_stats`, `test_stats`, epoch), and it refuses to leave behind a
-file it has not verified against torch. The shipped model reports
+file it has not verified against independent checkpoint inference. The shipped model, exported
+by the earlier Python version and verified against torch, reports
 `val_stats 1.197 deg, test_stats 1.386 deg, epoch 280` and matches torch to 8.9e-08.
 
 Both traps share a shape worth naming: the artefact that ends a measurement chain -- a

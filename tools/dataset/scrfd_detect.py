@@ -3,7 +3,7 @@
   scrfd_detect.py <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--config ...]
 
 So a checkpoint can be compared against YuNet on a corpus neither model was trained on, using
-the same tooling: `fcs-cli --json` writes this shape, and `compare_detectors.py` reads it.
+the same tooling: `fcs-cli --json` writes this shape, and `compare_detectors.zig` reads it.
 
 The decoding is `eval_eye_error.py`'s `Detector`, imported rather than repeated -- it reads the
 PyTorch checkpoint directly because SCRFD's own `tools/scrfd2onnx.py` fails under torch 2.x.
