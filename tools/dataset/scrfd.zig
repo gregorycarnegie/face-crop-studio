@@ -258,7 +258,7 @@ fn convolve(gpa: Allocator, c: Conv, x: []const f32, side: usize) ![]f32 {
 }
 
 /// (A*C, H, W) to (H*W*A, C), optionally sigmoided.
-fn deploy(gpa: Allocator, map: []const f32, side: usize, per: usize, sigmoid: bool) ![]f32 {
+pub fn deploy(gpa: Allocator, map: []const f32, side: usize, per: usize, sigmoid: bool) ![]f32 {
     const plane = side * side;
     const out = try gpa.alloc(f32, map.len);
     for (0..plane) |p| for (0..anchors) |a| for (0..per) |c| {
