@@ -368,3 +368,73 @@ pub fn padRight(w: *Io.Writer, s: []const u8, width: usize) !void {
     try w.writeAll(s);
     if (s.len < width) try w.splatByteAll(' ', width - s.len);
 }
+
+/// Python's `json.dumps` for a parsed value (default separators, ASCII-only output).
+pub fn dump(w: *Io.Writer, v: json.Value) !void {
+    switch (v) {
+        .null => try w.writeAll("null"),
+        .bool => |b| try w.writeAll(if (b) "true" else "false"),
+        .integer => |n| try w.print("{d}", .{n}),
+        .float => |f| try pyFloat(w, f),
+        .number_string => |s| try w.writeAll(s),
+        .string => |s| try dumpString(w, s),
+        .array => |a| {
+            try w.writeAll("[");
+            for (a.items, 0..) |item, i| {
+                if (i > 0) try w.writeAll(", ");
+                try dump(w, item);
+            }
+            try w.writeAll("]");
+        },
+        .object => |o| {
+            try w.writeAll("{");
+            for (o.keys(), o.values(), 0..) |k, val, i| {
+                if (i > 0) try w.writeAll(", ");
+                try dumpString(w, k);
+                try w.writeAll(": ");
+                try dump(w, val);
+            }
+            try w.writeAll("}");
+        },
+    }
+}
+
+pub fn dumpString(w: *Io.Writer, s: []const u8) !void {
+    try w.writeAll("\"");
+    var view = std.unicode.Utf8View.init(s) catch return w.writeAll("\"");
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| switch (cp) {
+        '"' => try w.writeAll("\\\""),
+        '\\' => try w.writeAll("\\\\"),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
+        '\t' => try w.writeAll("\\t"),
+        0x20...0x21, 0x23...0x5b, 0x5d...0x7e => try w.writeAll(&.{@intCast(cp)}),
+        else => if (cp >= 0x10000) {
+            const c = cp - 0x10000;
+            try w.print("\\u{x:0>4}\\u{x:0>4}", .{ 0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF) });
+        } else try w.print("\\u{x:0>4}", .{cp}),
+    };
+    try w.writeAll("\"");
+}
+
+pub fn baseName(path: []const u8) []const u8 {
+    const i = std.mem.findLastAny(u8, path, "/\\") orelse return path;
+    return path[i + 1 ..];
+}
+
+/// A Windows path from the JSON, opened wherever this runs (WSL included).
+pub fn toLocal(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
+    const p = try gpa.dupe(u8, path);
+    std.mem.replaceScalar(u8, p, '\\', '/');
+    const q = if (std.mem.startsWith(u8, p, "//?/")) p[4..] else p;
+    if (@import("builtin").os.tag != .windows and q.len >= 3 and std.ascii.isAlphabetic(q[0]) and q[1] == ':' and q[2] == '/')
+        return std.fmt.allocPrint(gpa, "/mnt/{c}/{s}", .{ std.ascii.toLower(q[0]), q[3..] });
+    return q;
+}
+
+/// Basename without extension, for a path recorded on Windows and possibly read on Linux.
+pub fn stemOf(path: []const u8) []const u8 {
+    const base = baseName(path);
+    return base[0 .. std.mem.findScalarLast(u8, base, '.') orelse base.len];
+}

@@ -4,7 +4,7 @@
 [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/). Each was downscaled so its longer
 side is 640 px and re-encoded as JPEG (quality 85), which also removed its
 metadata. `ground_truth.json` holds the Open Images face boxes, scaled to match.
-`test_pattern.png` is a synthetic gradient made by `tools/dataset/make_accuracy_fixtures.py`.
+`test_pattern.png` is a synthetic gradient made by `tools/dataset/make_accuracy_fixtures.zig`.
 
 | File | Title | Author | Source |
 |---|---|---|---|

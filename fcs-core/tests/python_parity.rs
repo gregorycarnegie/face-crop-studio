@@ -4,7 +4,8 @@
 //! The ONNX Runtime parity tests compare raw tensors, while this also checks preprocessing,
 //! box decoding, the two eye landmarks, and suppression on real photographs.
 //!
-//! The reference is `tools/dataset/scrfd_detect.py`: the same checkpoint
+//! The reference was made by `tools/dataset/scrfd_detect.py` (retired; see
+//! `fixtures/oracle/ATTRIBUTION.md` for recovering it): the same checkpoint
 //! (`work_dirs/oi80k/epoch_100.pth`), run through torch on CUDA in WSL, decoded by the numpy
 //! reference in `eval_eye_error.py`. This side runs the exported ONNX through the built-in engines and
 //! `fcs_core::scrfd`. Agreement therefore covers the whole chain at once: the top-left

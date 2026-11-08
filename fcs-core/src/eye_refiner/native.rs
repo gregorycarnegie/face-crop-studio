@@ -1,4 +1,4 @@
-//! The fixed graph exported by `tools/dataset/export_eye_refiner.py`.
+//! The fixed graph exported by `tools/dataset/export_eye_refiner.zig`.
 //!
 //! Conv/ReLU run on the detector's channel-blocked CPU kernels; the first reads the NCHW crop
 //! directly. GlobalAveragePool averages each channel; Flatten then changes only the shape. The
@@ -19,7 +19,7 @@ use crate::{
 use super::SIZE;
 
 // ponytail: this is the shipped export's topology, not a general ONNX interpreter.
-// Re-exporting with different names/topology requires updating this table and parity checks.
+// The native exporter keeps these names; a topology change also needs parity checks here.
 const LAYERS: [(&str, &str, usize, usize, usize); 12] = [
     ("onnx::Conv_101", "onnx::Conv_102", 32, 3, 3),
     ("onnx::Conv_104", "onnx::Conv_105", 32, 32, 3),

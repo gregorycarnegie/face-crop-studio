@@ -3,31 +3,26 @@
 # out how many the landmark head actually needs. Every run sees every image and every box;
 # only the number of faces whose eye points are supervised changes (see subsample_labels.zig).
 #
-# Roughly 7 hours per run, so about a day in total. Launch it detached and poll the logs:
+# Natively, with train_scrfd.zig's curve recipe (MMDetection's scrfd_fcs_500m.py settings) on
+# the host's NVIDIA GPU: about 3.8 hours per run on an RTX 4090, so an afternoon and an evening.
+# Run from the repository root with Zig 0.17 on PATH (Git Bash on Windows, or Linux):
 #
-#   chmod +x run_curve.sh
-#   setsid nohup ./run_curve.sh > /home/grego/work/curve_all.log 2>&1 < /dev/null &
-#   tail -f /home/grego/work/curve_1988.log
+#   ./tools/dataset/run_curve.sh /c/Users/grego/Downloads/face-data/openimages work_dirs
 #
-# Each size writes its own work_dir, so checkpoints never collide, and its own log.
+# Each size writes its own directory and log, so checkpoints never collide.
 set -u
 
-SCRFD=/home/grego/work/insightface/detection/scrfd
-PY=/home/grego/work/scrfd-venv/bin/python
-DATA=/mnt/c/Users/grego/Downloads/face-data/openimages
-CONFIG=configs/scrfd/scrfd_fcs_500m.py
-
-cd "$SCRFD" || exit 1
+DATA=${1:?usage: run_curve.sh <openimages_dir> [out_root]}
+OUT=${2:-work_dirs}
+mkdir -p "$OUT"
 
 for N in 400 800 1600 1988; do
     echo "=== size ${N}: starting $(date -Is)"
-    env PYTHONPATH="$SCRFD" "$PY" tools/train.py "$CONFIG" \
-        --no-validate \
-        --work-dir "${SCRFD}/work_dirs/curve_${N}" \
-        --cfg-options "data.train.ann_file=${DATA}/labelv2_train_${N}.txt" \
-        > "/home/grego/work/curve_${N}.log" 2>&1
+    zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c -- \
+        "$DATA" "${DATA}/labelv2_train_${N}.txt" --recipe curve --out "${OUT}/curve_${N}" \
+        > "${OUT}/curve_${N}.log" 2>&1
     status=$?
-    last=$(grep -E 'Epoch \[[0-9]+\]\[[0-9]+/' "/home/grego/work/curve_${N}.log" | tail -1)
+    last=$(grep '^epoch' "${OUT}/curve_${N}.log" | tail -1)
     echo "=== size ${N}: finished $(date -Is), exit ${status}"
     echo "    last iteration: ${last:-none logged}"
 done

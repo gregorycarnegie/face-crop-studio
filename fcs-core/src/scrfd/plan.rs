@@ -143,7 +143,7 @@ impl ScrfdWeights {
     /// Read every weight the topology names out of an exported model.
     ///
     /// Fails with the missing name rather than a shape error twenty layers later, which is the
-    /// symptom of an export whose names moved -- the reason `export_scrfd.py` folds BatchNorm
+    /// symptom of an export whose names moved -- the reason `export_scrfd.zig` folds BatchNorm
     /// itself instead of letting torch rename everything.
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let mut names = Vec::new();

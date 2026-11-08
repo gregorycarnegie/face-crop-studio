@@ -3,7 +3,7 @@
 //!   zig run tools/dataset/baseline_yunet_angle.zig -- <data_dir> [detections.json]
 //!
 //! Reads face_keypoints_test.json and a detection dump from `fcs-cli --json` (default
-//! det_0.8.json), matches them the same way `eval_eye_error.py` does, and reports the same
+//! det_0.8.json), matches them the same way `eval_eye_error.zig` does, and reports the same
 //! metrics. Without this, the numbers from a trained model are uninterpretable: nobody knows
 //! whether 6 degrees of eye-line error is good or bad until the shipping detector is measured on
 //! identical faces with identical matching.

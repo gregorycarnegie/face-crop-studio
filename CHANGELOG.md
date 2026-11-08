@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The dataset tooling in `tools/dataset/` is now entirely Zig 0.17. Python, PyTorch, OpenCV and
+  MMDetection are no longer needed to train, export or evaluate the models. Each port was
+  checked against the tool it replaced; the parity results are in `tools/dataset/README.md`.
+  - The eye refiner and SCRFD detector train natively on an NVIDIA GPU through the driver
+    alone (`train_eye_refiner.zig`, `train_scrfd.zig`), with kernels written in Zig and
+    compiled to PTX. The SCRFD trainer reproduces MMDetection's label-count recipe, and its
+    `curve_1988` run scores like the original.
+  - Both exporters build their ONNX graphs from the checkpoint without torch. Exported from
+    the same checkpoint, the SCRFD graph's weights are bit-identical to the shipped model's.
+  - The benchmark, evaluation and contact-sheet tools decode images with vendored
+    public-domain stb and reproduce OpenCV's resize and warp arithmetic.
+- Updated zip.
+
+The shipped models and the application are unchanged.
+
 ## [2.3.3] - 2026-11-03
 
 ### Fixed

@@ -31,7 +31,7 @@ const SIZE: usize = 112;
 
 /// How much the box is expanded before cropping.
 ///
-/// Load-bearing, and not a free parameter: `tools/dataset/train_eye_refiner.py` builds every
+/// Load-bearing, and not a free parameter: `tools/dataset/train_eye_refiner.zig` builds every
 /// evaluation crop as `max(w, h) * 1.25` about the box centre. Feeding a differently-framed
 /// crop presents the model with a face at a scale it never trained on, which degrades the
 /// output quietly rather than failing.
@@ -156,8 +156,8 @@ fn eye_points(values: &[f32]) -> Option<[(f32, f32); 2]> {
 
 /// The square crop the network sees, and the mapping back out of it.
 ///
-/// This reproduces the affine `train_eye_refiner.py` builds with
-/// `cv2.getRotationMatrix2D(centre, 0, size / side)` followed by a translation putting the
+/// This reproduces the affine the trainer builds (`train_eye_refiner.zig`, as the PyTorch original
+/// did) with `cv2.getRotationMatrix2D(centre, 0, size / side)` followed by a translation putting the
 /// box centre at the crop centre. Written out rather than composed from a matrix type
 /// because at zero rotation it is two scales and two offsets, and the inverse is what the
 /// sampler and the output mapping both need.

@@ -1,5 +1,9 @@
 # Running SCRFD's training code on current hardware
 
+> **Historical.** SCRFD now trains natively with `train_scrfd.zig` (see [README.md](README.md)),
+> which reproduced the `curve_1988` run without Python, mmcv or this environment. This records how
+> the original MMDetection runs were made; the configs it copies were retired and are in git history.
+
 SCRFD's code is MIT and still the right thing to train, but it was pinned to mmcv 1.2/1.3 and
 PyTorch 1.x, and an RTX 4090 is Ada (sm_89), which needs CUDA 11.8 or newer. So the pinned
 stack cannot run on this GPU at all, whatever else is true. This is the combination that does
@@ -30,6 +34,13 @@ cp310-cp313, `mmcv_full` 1.7.2 only for cp38-cp311, and Ubuntu 26.04 and this Wi
 both ship Python 3.14, for which **no CUDA PyTorch wheels exist at all**.
 
 ## Setup
+
+Only SCRFD training still needs this environment. The eye refiner trains natively on the host
+GPU with `train_eye_refiner.zig` (Zig 0.17.0 and the NVIDIA driver), and exporting, detecting
+and evaluating (`export_scrfd.zig`, `export_eye_refiner.zig`, `scrfd_detect.zig`,
+`eval_eye_error.zig`) read the checkpoints directly with an ONNX Runtime library. Commands and
+the remaining native training migration are tracked in [README.md](README.md); the MMDetection
+pipeline below is still required for SCRFD until its replacement passes parity checks.
 
 ```sh
 # uv, for a standalone 3.11 that the distro does not offer
@@ -117,7 +128,7 @@ cd insightface && git sparse-checkout set detection/scrfd
     tensor`. The base config evaluates every 80 epochs, so a run dies *at* epoch 80 having
     trained perfectly well up to it. The 80,000-image run did exactly that, 16 hours in,
     because the launch script omitted the flag this document already prescribed below. Nothing
-    here needs that hook: `eval_eye_error.py` scores checkpoints through its own decoding.
+    here needs that hook: `eval_eye_error.zig` scores checkpoints through its own decoding.
     Recovery is cheap if `checkpoint_config.interval` is set, since the checkpoint is written
     before the hook runs -- `--resume-from work_dirs/<run>/epoch_80.pth --no-validate` picks up
     at 81 with the schedule intact. Patching `mmdet/core/post_processing/bbox_nms.py` would fix
@@ -137,11 +148,15 @@ cd <scrfd>
 
 ## Measuring a trained model
 
-`eval_eye_error.py <checkpoint.pth> <data_dir> --thresh 0.02` reports detection recall and
-eye-point error against `face_keypoints_test.json`. Three things about it are worth knowing
-before reading any number it prints.
+`eval_eye_error.zig <checkpoint.pth> <data_dir> --thresh 0.02` reports detection recall and
+eye-point error against `face_keypoints_test.json` (run it with
+`zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c -- ...`
+and `ORT_DYLIB_PATH` set; it needs neither torch nor a GPU). Three things about it are worth
+knowing before reading any number it prints.
 
-**It reads the checkpoint directly, not an ONNX export.** `tools/scrfd2onnx.py` fails under
+**It reads the checkpoint directly.** The Zig port builds the checkpoint's graph in memory with
+`export_scrfd.zig` and runs it on ONNX Runtime. The Python original read it through mmdet,
+because `tools/scrfd2onnx.py` fails under
 torch 2.x: its tracer rejects the numpy arrays mmdet's input builder passes through, with
 `Only tuples, lists and Variables are supported as JIT inputs`. It also expects
 `tests/data/t1.jpg`, which a sparse checkout does not fetch. Since the keypoint decoding in

@@ -23,7 +23,7 @@ credit, link the licence, and say whether you changed them. Credit them as:
 > Face Crop Studio eye refiner by Face Crop Studio Contributors,
 > https://github.com/gregorycarnegie/face-crop-studio, licensed under CC BY 4.0
 
-The same line travels inside each file: `tools/dataset/stamp_model_metadata.py` writes it to
+The same line travels inside each file: `tools/dataset/stamp_model_metadata.zig` writes it to
 the ONNX metadata as `attribution`, alongside `source`, `license`, `author`, `training_data`
 and a description of the inputs and outputs. Netron shows these on opening the file, and ONNX
 Runtime returns them from `get_modelmeta()`. Both exporters stamp before they verify, so a new

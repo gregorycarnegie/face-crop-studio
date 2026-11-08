@@ -5,3 +5,6 @@
 
 # Fuzz seeds are exact bytes, including malformed signatures and encodings.
 /fuzz/seeds/** -text
+
+# Generated PTX is embedded byte for byte by the trainers and diffed by CI after regeneration.
+*.ptx text eol=lf

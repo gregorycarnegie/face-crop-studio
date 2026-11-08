@@ -12,7 +12,7 @@
 //! academic research only". [`ScrfdDetector::load`] still returns `None` when the model file
 //! itself is absent, and then detection cannot run at all.
 //!
-//! The graph is exported by `tools/dataset/export_scrfd.py` and emits nine raw tensors, three
+//! The graph is exported by `tools/dataset/export_scrfd.zig` and emits nine raw tensors, three
 //! per stride: class scores already sigmoided, box distances, and keypoint distances, both in
 //! units of the stride. No NMS inside the graph, so the decoding below is the whole of it.
 
@@ -23,7 +23,7 @@ mod heads;
 /// Running the network without ONNX Runtime, on the built-in CPU graph.
 pub mod plan;
 mod slots;
-/// The generated step table; see `tools/dataset/scrfd_topology.py`.
+/// The generated step table; see `tools/dataset/scrfd_topology.zig`.
 pub mod topology;
 
 use std::path::Path;

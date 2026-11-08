@@ -29,7 +29,7 @@ six and a half hours each. The answer is in "What the curve says" at the end.
 >
 > `oi_to_labelv2.zig` now writes every Open Images box (`labelv2_{train,test}_all.txt`), with
 > group-of boxes, depictions and unboxed YuNet detections as ignore regions, and the 80,000-image
-> run (`scrfd_fcs80k_500m.py`) trains and is scored on those.
+> run (`scrfd_fcs80k_500m.py`, now `train_scrfd.zig --recipe 80k`) trains and is scored on those.
 >
 > That run is done, and it settles the question this document could not: 86.0% of all faces at
 > 0.11 FP/image against YuNet's 71.6% at 0.14. See `SCRFD_80K.md`.
@@ -130,7 +130,8 @@ training noise, not an effect of eye labels.
 
 The curve showed that 3,550 eye labels over 2,482 images cannot train a detector to beat YuNet.
 It does not follow that they cannot solve the task those labels were collected for. Detection
-was never the weakness -- the eye *line* was -- so `train_eye_refiner.py` attacks that alone:
+was never the weakness -- the eye *line* was -- so `train_eye_refiner.py` (now
+`train_eye_refiner.zig`) attacks that alone:
 given a face box, where are the two eyes. No detection, no anchors, 1.5 M parameters, a few
 minutes to train on the same 1,988 pairs.
 
@@ -211,7 +212,7 @@ found in the original photographs.
   but starts from the wrong place. The test shows the refiner responds correctly to rotation on
   a corpus it never saw; it cannot show that its absolute placement is right there. Only labels
   on those images, or a human looking at aligned crops, can settle that.
-  `refiner_contact_sheet.py` builds the latter: aligned crops from each model side by side,
+  `refiner_contact_sheet.py` (now `refiner_contact_sheet.zig`) builds the latter: aligned crops from each model side by side,
   ordered by disagreement so the worst cases come first rather than being buried.
 
   **Settled by inspection, 18 September 2026.** On the corrected sheet -- the 40 faces of 1,096
@@ -234,8 +235,9 @@ plausibly-rotated face -- not a blank image, not an exception, just a portrait a
 angle -- and every *number* in this document was unaffected, because the evaluation scripts
 compare eye-line angles arithmetically and never render a crop. Only the one artefact meant
 for human judgement was wrong, which is precisely the artefact with no automated check
-behind it. `refiner_contact_sheet.py` now runs `_self_check` before it renders anything: a
-synthetic eye line at a known tilt must come out level.
+behind it. The Python sheet then ran `_self_check` before rendering anything: a synthetic eye
+line at a known tilt must come out level. In the Zig port that check is a test of
+`image.rotationMatrix` ("levels the eye line") in `image.zig`, which CI runs.
 
 ### And a second one, in the export
 
@@ -251,9 +253,10 @@ about five pixels apart on a 500-pixel face. It surfaced only because the Rust p
 was checked against the *checkpoint* rather than against the exported file, which made the two
 disagree for a reason that had nothing to do with the code under test.
 
-The fix is `export_eye_refiner.py`: the export is a committed script, it prints the provenance
+The fix was a committed export script (now `export_eye_refiner.zig`): it prints the provenance
 the checkpoint carries (`val_stats`, `test_stats`, epoch), and it refuses to leave behind a
-file it has not verified against torch. The shipped model reports
+file it has not verified against independent checkpoint inference. The shipped model, exported
+by the earlier Python version and verified against torch, reports
 `val_stats 1.197 deg, test_stats 1.386 deg, epoch 280` and matches torch to 8.9e-08.
 
 Both traps share a shape worth naming: the artefact that ends a measurement chain -- a

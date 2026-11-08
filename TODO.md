@@ -22,7 +22,7 @@ face-free scenes.
 
 - [ ] Retrain with face-free hard negatives: Open Images photographs with no person label,
   which cost nothing to label, kept out of the COCO evaluation. Re-score with
-  `tools/dataset/detector_bench.py` on both corpora; a fix has to hold Open Images recall.
+  `tools/dataset/detector_bench.zig` on both corpora; a fix has to hold Open Images recall.
 - [ ] Recheck the eye refiner off-domain: 2.03° median on COCO against 1.18° on Open Images.
   Work out how much of that is COCO's coarser eye labels before training anything.
 

@@ -36,8 +36,11 @@ choice reproducible rather than a matter of taste.
 ## Regenerating the reference
 
 `torch_epoch100.json` is the output of the Python implementation these images are compared
-against. It is **not** produced by this codebase — that is the entire point. From WSL, with the
-training environment described in `tools/dataset/TRAINING_SETUP.md`:
+against. It is **not** produced by this codebase — that is the entire point. So it must not be
+regenerated with `scrfd_detect.zig`, which runs the same graph the Rust engines do. The torch
+script was retired from the tree in November 2026; recover `tools/dataset/scrfd_detect.py` and
+`eval_eye_error.py` from git history (`git show 6168d34:tools/dataset/scrfd_detect.py`) and run
+them from WSL, with the training environment described in `tools/dataset/TRAINING_SETUP.md`:
 
 ```bash
 cd /home/grego/work/insightface/detection/scrfd

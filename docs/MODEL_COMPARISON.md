@@ -72,7 +72,7 @@ The eye refiner took a median 1.49 ms per face, including the crop. This is addi
 
 SCRFD-80k trained only on Open Images; RetinaFace and the public SCRFD trained on WIDER FACE. None of them trained on COCO, so on COCO none of them has a home-domain advantage. The thresholds are October's, unchanged, so they were fixed before COCO was scored.
 
-`tools/dataset/detector_bench.py` produced every figure here and can reproduce them. Before it was used on COCO, it re-ran the October Open Images comparison above: every budget came within 0.4 points of October's figures, and RetinaFace matched exactly. The model files' SHA-256 hashes match those listed below.
+`tools/dataset/detector_bench.py` produced every figure here. Its Zig port, `detector_bench.zig`, re-scores the same detection caches to identical tables and can reproduce them. Before it was used on COCO, it re-ran the October Open Images comparison above: every budget came within 0.4 points of October's figures, and RetinaFace matched exactly. The model files' SHA-256 hashes match those listed below.
 
 ### Conditions
 
@@ -155,7 +155,7 @@ The RetinaFace benchmark implementation was checked against the upstream methods
 images; box matching, suppression and the mismatch-budget cutoff also passed self-checks.
 
 The October timing figures come from a local run that is not in the repository. The detection and eye-alignment figures, on both corpora, can be reproduced with
-[`detector_bench.py`](../tools/dataset/detector_bench.py). The repository's [dataset tools](../tools/dataset/) and
+[`detector_bench.zig`](../tools/dataset/detector_bench.zig). The repository's [dataset tools](../tools/dataset/) and
 [training notes](../tools/dataset/SCRFD_80K.md) describe the held-out data and annotation format.
 Timing results here use ONNX Runtime to compare weights under equal conditions; see the
 [engine measurements](ENGINE_SPEED.md) for the separate historical Rust/WGSL runtime study.
