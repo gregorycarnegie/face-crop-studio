@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.4] - 2026-11-08
+
 ### Changed
 
 - The dataset tooling in `tools/dataset/` is now entirely Zig 0.17. Python, PyTorch, OpenCV and
@@ -20,9 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the same checkpoint, the SCRFD graph's weights are bit-identical to the shipped model's.
   - The benchmark, evaluation and contact-sheet tools decode images with vendored
     public-domain stb and reproduce OpenCV's resize and warp arithmetic.
-- Updated zip.
+- The architecture diagrams in `docs/diagrams/` show the opt-in CUDA engine, the WESL kernels
+  and `tools/`, and their SVGs carry real text instead of rasterised labels.
+- Updated rfd to 0.18.0 and zip to 9.4.2.
 
-The shipped models and the application are unchanged.
+The shipped models and the application's behaviour are unchanged.
 
 ## [2.3.3] - 2026-11-03
 
@@ -2608,7 +2612,8 @@ First public release. Windows release binaries (`fcs-cli.exe`, `fcs-gui.exe`).
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.3...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.4...HEAD
+[2.3.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.0...v2.3.1
