@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0025c587018d53d07698bda0ce2e086f4897feb45b5e47700e9bd0f529fd5664 # equal-size buffers of two usages; eviction picked by HashMap order (v2.3.4 release run)
+cc e539e6a159d446ef9f507eab1cc826247a9e9576a8b3872e3366db29feae5e90 # shrinks to ops = [Evict(2522), Clear, Clear, Take(false, 699), Evict(363), Push(false, 952), Clear, Push(true, 46), Clear, Push(false, 791), Take(true, 169), Push(true, 354), Push(true, 296), Push(true, 271), Evict(2135), Push(true, 172), Push(true, 791), Evict(976), Take(false, 549), Evict(31), Evict(2911), Take(false, 448), Push(false, 886), Push(false, 780), Push(true, 323), Evict(44), Evict(2709), Evict(1717), Push(false, 628), Push(true, 658), Take(false, 980), Take(true, 966), Push(false, 227), Take(false, 507), Take(true, 726), Push(false, 756), Evict(2471), Evict(2026), Take(false, 140), Push(false, 684), Clear, Push(true, 510), Take(true, 226), Clear, Take(false, 888), Push(false, 320), Evict(1756), Push(true, 853), Push(true, 73)]

@@ -78,7 +78,9 @@ impl<B> IdleBuffers<B> {
                         .enumerate()
                         .map(move |(i, e)| (*usage, i, e.size))
                 })
-                .min_by_key(|&(_, _, size)| size)
+                // Ties across usages break on the usage bits, so the order never depends on
+                // HashMap iteration.
+                .min_by_key(|&(usage, _, size)| (size, usage.bits()))
                 .map(|(usage, index, _)| (usage, index))
             else {
                 break;
@@ -970,7 +972,7 @@ mod tests {
                     IdleOp::Evict(cap) => {
                         let before: u64 = model.iter().map(|e| e.1).sum();
                         let freed = idle.evict_to(cap);
-                        model.sort_by_key(|e| e.1);
+                        model.sort_by_key(|e| (e.1, e.0.bits()));
                         let mut dropped = 0;
                         while model.iter().map(|e| e.1).sum::<u64>() > cap {
                             dropped += model.remove(0).1;
