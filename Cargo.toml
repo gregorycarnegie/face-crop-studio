@@ -67,7 +67,7 @@ egui = "0.37.0"
 egui_extras = "0.37.0"
 # Test-only harness that drives a real egui app. Kept in lockstep with egui.
 egui_kittest = "0.37.0"
-rfd = "0.17.2"
+rfd = "0.18.0"
 # Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
 # APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
 # ours, because a create event fires before the file finishes being written.
@@ -183,4 +183,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.4.1", default-features = false }
+zip = { version = "9.4.2", default-features = false }
