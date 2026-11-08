@@ -7,6 +7,7 @@ GPU accelerated face detection and cropping software built in Rust.
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
 ![WESL](https://img.shields.io/badge/WESL-GPU%20Compute-blue?logo=webgpu)
+[![Lean](https://img.shields.io/badge/Lean-Formal%20Proofs-blue)](tools/verification/README.md)
 [![CUDA](https://img.shields.io/badge/CUDA-Experimental-76B900?logo=nvidia)](docs/CUDA.md)
 [![SCRFD-80k](https://img.shields.io/badge/SCRFD-80k-purple)](tools/dataset/SCRFD_80K.md)
 ![License](https://img.shields.io/badge/code-MIT%20OR%20Apache--2.0-green)
@@ -75,7 +76,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 </p>
 
 <p align="center">
-  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, letterbox it, run SCRFD on WGSL or the built-in CPU graph, decode and suppress detections, optionally refine the eyes on the CPU, and crop faces" width="900"/></a><br/>
+  <a href="docs/diagrams/detection-pipeline.drawio"><img src="docs/diagrams/detection-pipeline.drawio.svg" alt="Per-image detection and crop pipeline: load and orient the image, letterbox it, run SCRFD on WESL, the built-in CPU graph or opt-in experimental CUDA, decode and suppress detections, optionally refine the eyes on the CPU, and crop faces" width="900"/></a><br/>
   <sub><strong>Detection pipeline</strong> - per-image flow from image load through preprocessing, inference, postprocessing, and per-face cropping.</sub>
 </p>
 

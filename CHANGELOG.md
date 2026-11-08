@@ -2574,7 +2574,6 @@ index,path,error,faces_detected
 ## [1.0.0] - 2026-02-15
 
 First public release. Windows release binaries (`fcs-cli.exe`, `fcs-gui.exe`).
-See [docs/releases/v1.0.0.md](docs/releases/v1.0.0.md) for the full release notes.
 
 ### Added
 

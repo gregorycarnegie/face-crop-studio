@@ -1,84 +1,160 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="drawio" version="30.2.4">
+<mxfile host="drawio" version="32.6.10">
   <diagram name="Workspace architecture">
     <mxGraphModel grid="1" gridSize="10" guides="1" page="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
-        <mxCell id="gui" value="&lt;b&gt;fcs-gui&lt;/b&gt;&lt;br&gt;Desktop app · eframe / egui&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;app · core/ · interaction/ · rendering/ · ui/&lt;br&gt;clipboard (arboard) · file dialogs (rfd)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="gui" value="&lt;b&gt;fcs-gui&lt;/b&gt;&lt;br&gt;Desktop app · eframe / egui&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;app/ (clipboard · dialogs · history · input · webcam) · core/ · interaction/ · rendering/ · ui/&lt;br&gt;clipboard (arboard) · file dialogs (rfd) · CUDA opt-in warning&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="160" y="60" width="560" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="cli" value="&lt;b&gt;fcs-cli&lt;/b&gt;&lt;br&gt;Command line · clap&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;workflow · watch mode (notify) · webcam&lt;br&gt;benchmark · annotate · output paths&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="cli" value="&lt;b&gt;fcs-cli&lt;/b&gt;&lt;br&gt;Command line · clap&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;workflow · watch mode (notify) · webcam benchmark · annotate&lt;br&gt;output paths · GPU setup (--no-gpu · --experimental-cuda)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="900" y="60" width="560" height="130" as="geometry" />
         </mxCell>
 
-        <mxCell id="mapping" value="&lt;b&gt;fcs-mapping&lt;/b&gt;&lt;br&gt;Batch mapping tables&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;source path → output name&lt;br&gt;CSV · Excel (calamine)&lt;br&gt;Parquet · SQLite (rusqlite)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="mapping" value="&lt;b&gt;fcs-mapping&lt;/b&gt;&lt;br&gt;Batch mapping tables&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;source path → output name&lt;br&gt;CSV · Excel (calamine)&lt;br&gt;Parquet · SQLite (rusqlite)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="160" y="280" width="300" height="200" as="geometry" />
         </mxCell>
 
-        <mxCell id="core" value="fcs-core — face detection and cropping pipeline" style="swimlane;startSize=30;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=13;collapsible=0;" vertex="1" parent="1">
-          <mxGeometry x="520" y="280" width="660" height="380" as="geometry" />
+        <mxCell id="core" value="fcs-core — face detection and cropping pipeline" style="swimlane;startSize=30;html=1;convertToSvg=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=13;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="520" y="280" width="660" height="390" as="geometry" />
         </mxCell>
-        <mxCell id="pre" value="&lt;b&gt;scrfd.rs&lt;/b&gt;&lt;br&gt;ScrfdDetector&lt;br&gt;letterbox · decode&lt;br&gt;engine picked at load" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="pre" value="&lt;b&gt;scrfd.rs&lt;/b&gt;&lt;br&gt;ScrfdDetector&lt;br&gt;letterbox · normalise · decode&lt;br&gt;engine picked at load" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="20" y="50" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="model" value="&lt;b&gt;two engines, one network&lt;/b&gt;&lt;br&gt;built-in CPU graph&lt;br&gt;(cpu/ ? scrfd/plan.rs)&lt;br&gt;WGSL GPU graph&lt;br&gt;(gpu/ ? scrfd/gpu.rs)&lt;br&gt;66 steps from scrfd/topology.rs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
-          <mxGeometry x="235" y="50" width="190" height="170" as="geometry" />
+        <mxCell id="onnx" value="&lt;b&gt;onnx/&lt;/b&gt;&lt;br&gt;ONNX initializer parsing&lt;br&gt;(prost) · weights by name" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="20" y="180" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="post" value="&lt;b&gt;postprocess.rs · nms.rs&lt;/b&gt;&lt;br&gt;detection types&lt;br&gt;non-max suppression" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+        <mxCell id="engines" value="one 66-step network, three engines" style="swimlane;startSize=26;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontStyle=1;fontSize=11;collapsible=0;" vertex="1" parent="core">
+          <mxGeometry x="235" y="50" width="190" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="eng_cpu" value="&lt;b&gt;built-in CPU graph&lt;/b&gt;&lt;br&gt;cpu/ → scrfd/plan.rs" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=10;" vertex="1" parent="engines">
+          <mxGeometry x="10" y="34" width="170" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="eng_gpu" value="&lt;b&gt;WESL GPU graph&lt;/b&gt;&lt;br&gt;gpu/ → scrfd/gpu.rs" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=10;" vertex="1" parent="engines">
+          <mxGeometry x="10" y="94" width="170" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="eng_cuda" value="&lt;b&gt;CUDA Rust&lt;/b&gt;&lt;br&gt;cuda/ · Windows · Linux" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#fff8ee;strokeColor=#d79b00;fontSize=10;" vertex="1" parent="engines">
+          <mxGeometry x="10" y="154" width="170" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="post" value="&lt;b&gt;postprocess.rs · nms.rs&lt;/b&gt;&lt;br&gt;detection types&lt;br&gt;non-max suppression" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
           <mxGeometry x="450" y="50" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="crop" value="&lt;b&gt;cropper.rs · face_cropper.rs&lt;/b&gt;&lt;br&gt;crop region · padding&lt;br&gt;eye-line alignment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
-          <mxGeometry x="450" y="170" width="190" height="90" as="geometry" />
+        <mxCell id="crop" value="&lt;b&gt;cropper.rs · face_cropper.rs&lt;/b&gt;&lt;br&gt;crop region · padding&lt;br&gt;eye-line alignment" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="450" y="180" width="190" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="onnx" value="&lt;b&gt;onnx/&lt;/b&gt;&lt;br&gt;ONNX initializer parsing&lt;br&gt;(prost) · weights by name" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
-          <mxGeometry x="20" y="170" width="190" height="90" as="geometry" />
-        </mxCell>
-        <mxCell id="misc" value="&lt;b&gt;face_detector.rs&lt;/b&gt; ? FaceDetector facade ? &lt;b&gt;eye_refiner.rs&lt;/b&gt; (built-in CPU graph) ? presets ? tensor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
-          <mxGeometry x="20" y="290" width="620" height="60" as="geometry" />
+        <mxCell id="misc" value="&lt;b&gt;face_detector.rs&lt;/b&gt; · FaceDetector facade · &lt;b&gt;eye_refiner.rs&lt;/b&gt; (built-in CPU graph) · presets · tensor" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=11;" vertex="1" parent="core">
+          <mxGeometry x="20" y="300" width="620" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="models" value="&lt;b&gt;models/*.onnx&lt;/b&gt;&lt;br&gt;SCRFD-80k 500M, 640 · eye refiner" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1240" y="280" width="300" height="100" as="geometry" />
+        <mxCell id="models" value="&lt;b&gt;models/*.onnx&lt;/b&gt;&lt;br&gt;SCRFD-80k 500M, 640 · eye refiner" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="280" width="300" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="ort" value="&lt;b&gt;fcs-ort&lt;/b&gt; ? development only&lt;br&gt;ONNX Runtime parity oracle&lt;br&gt;tests and benchmarks&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;libloading ? validates API ? 1.24&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="1">
-          <mxGeometry x="1240" y="460" width="300" height="200" as="geometry" />
+        <mxCell id="tools" value="&lt;b&gt;tools/&lt;/b&gt; — not workspace members, not needed to build&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;cuda/ — kernels.rs → build.zig → PTX, committed to fcs-utils&lt;br&gt;dataset/ (Zig) — train, export_scrfd · export_eye_refiner,&lt;br&gt;scrfd_topology.zig → fcs-core scrfd/topology.rs&lt;br&gt;verification/ (Lean) · kani/ · safety/ · verify_package.zig&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="250" width="320" height="160" as="geometry" />
         </mxCell>
-        <mxCell id="dll" value="&lt;b&gt;ONNX Runtime library&lt;/b&gt;&lt;br&gt;ORT_DYLIB_PATH&lt;br&gt;tests / benchmarks only&lt;br&gt;not bundled in releases" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1660" y="500" width="260" height="120" as="geometry" />
+        <mxCell id="ort" value="&lt;b&gt;fcs-ort&lt;/b&gt; · development only&lt;br&gt;ONNX Runtime parity oracle&lt;br&gt;tests and benchmarks&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;libloading · validates API ≥ 1.24&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="1280" y="460" width="300" height="200" as="geometry" />
         </mxCell>
-
-        <mxCell id="utils" value="&lt;b&gt;fcs-utils&lt;/b&gt; — image I/O, enhancement, crop shapes, export, GPU helpers&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;image_utils (image · mozjpeg · fast_image_resize) · enhance/ · shape/ (tiny-skia) · output/ (EXIF · XMP · PNG · ravif) · quality · config · telemetry&lt;br&gt;gpu/ — shared GpuContext · buffer pool · blur · bilateral · pixel adjust · histogram · shape mask · red-eye · profiler&lt;br&gt;optional features: webcam (nokhwa) · raw (imagepipe) · heic (libheif)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
-          <mxGeometry x="160" y="760" width="1380" height="180" as="geometry" />
-        </mxCell>
-
-        <mxCell id="sources" value="&lt;b&gt;Mapping files&lt;/b&gt;&lt;br&gt;.csv · .xlsx · .parquet · .db" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="160" y="1040" width="300" height="100" as="geometry" />
-        </mxCell>
-        <mxCell id="gpudrv" value="&lt;b&gt;GPU driver via wgpu&lt;/b&gt;&lt;br&gt;DX12 · Vulkan · Metal" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="620" y="1040" width="360" height="100" as="geometry" />
-        </mxCell>
-        <mxCell id="codecs" value="&lt;b&gt;Native codecs&lt;/b&gt;&lt;br&gt;libjpeg-turbo (mozjpeg) · dav1d · libheif" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="1060" y="1040" width="360" height="100" as="geometry" />
-        </mxCell>
-        <mxCell id="legend" value="&lt;b&gt;Legend&lt;/b&gt;&lt;br&gt;solid arrow — crate dependency (Cargo)&lt;br&gt;dashed arrow — runtime, file or system input&lt;br&gt;dashed box — outside the workspace" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
-          <mxGeometry x="1500" y="1040" width="380" height="100" as="geometry" />
+        <mxCell id="dll" value="&lt;b&gt;ONNX Runtime library&lt;/b&gt;&lt;br&gt;ORT_DYLIB_PATH&lt;br&gt;tests / benchmarks only&lt;br&gt;not bundled in releases" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="500" width="280" height="120" as="geometry" />
         </mxCell>
 
-        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.1333;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="core">
+        <mxCell id="utils" value="&lt;b&gt;fcs-utils&lt;/b&gt; — image I/O, enhancement, crop shapes, export, GPU helpers&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;image_utils (image · mozjpeg · fast_image_resize) · enhance/ · shape/ (tiny-skia) · output/ (EXIF · XMP · PNG · ravif) · quality · config · telemetry&lt;br&gt;gpu/ — shared GpuContext · buffer pool · WESL kernels: blur · bilateral · pixel adjust · histogram · shape mask · red-eye · profiler&lt;br&gt;cuda/ — experimental CUDA runtime (cudarc) · embedded PTX for Windows and Linux · CUDA enhancement and shape mask, CPU fallback&lt;br&gt;optional features, enabled by both front ends: webcam (nokhwa) · raw (imagepipe) · heic (libheif)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="160" y="760" width="1420" height="190" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sources" value="&lt;b&gt;Mapping files&lt;/b&gt;&lt;br&gt;.csv · .xlsx · .parquet · .db" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="160" y="1050" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="gpudrv" value="&lt;b&gt;GPU driver via wgpu&lt;/b&gt;&lt;br&gt;DX12 · Vulkan · Metal" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="560" y="1050" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="cudadrv" value="&lt;b&gt;NVIDIA driver&lt;/b&gt;&lt;br&gt;CUDA driver API · no toolkit&lt;br&gt;Windows · Linux" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="940" y="1050" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="codecs" value="&lt;b&gt;Native codecs&lt;/b&gt;&lt;br&gt;libjpeg-turbo (mozjpeg) · dav1d · libheif" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="1050" width="320" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend" value="Legend" style="rounded=0;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#ffffff;strokeColor=#666666;verticalAlign=top;align=left;spacingLeft=10;fontStyle=1;fontSize=12;container=1;pointerEvents=0;collapsible=0;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="1000" width="300" height="246" as="geometry" />
+        </mxCell>
+        <mxCell id="lg1" value="" style="rounded=0;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="30" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg1t" value="front end (binary crate)" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="28" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg2" value="" style="rounded=0;html=1;convertToSvg=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="54" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg2t" value="detection and cropping library" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="52" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg3" value="" style="rounded=0;html=1;convertToSvg=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="78" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg3t" value="shared foundation library" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="76" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg4" value="" style="rounded=0;html=1;convertToSvg=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="102" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg4t" value="input-mapping library" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="100" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg5" value="" style="rounded=0;html=1;convertToSvg=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="126" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg5t" value="development-only crate" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="124" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg6" value="" style="rounded=0;html=1;convertToSvg=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="150" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg6t" value="outside the workspace build" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="148" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg7" value="" style="rounded=0;html=1;convertToSvg=1;dashed=1;fillColor=#fff8ee;strokeColor=#d79b00;" vertex="1" parent="legend">
+          <mxGeometry x="10" y="174" width="30" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="lg7t" value="experimental, opt-in" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="172" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg8" value="" style="html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=6;strokeColor=#333333;" edge="1" parent="legend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="10" y="206" as="sourcePoint" />
+            <mxPoint x="40" y="206" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lg8t" value="Cargo dependency" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="196" width="240" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="lg9" value="" style="html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=6;dashed=1;strokeColor=#666666;" edge="1" parent="legend">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="10" y="230" as="sourcePoint" />
+            <mxPoint x="40" y="230" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lg9t" value="runtime, file, system or build input" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+          <mxGeometry x="50" y="220" width="240" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.1333;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="core">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.4667;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="mapping">
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.4667;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="mapping">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5893;exitY=1;exitDx=0;exitDy=0;entryX=0.2391;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="utils">
+        <mxCell id="e3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=0.5893;exitY=1;exitDx=0;exitDy=0;entryX=0.2324;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gui" target="utils">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.7879;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="core">
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.7879;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="core">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="mapping">
+        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="mapping">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="1180" y="20" />
@@ -87,51 +163,72 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="utils">
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cli" target="utils">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="1960" y="125" />
-              <mxPoint x="1960" y="850" />
+              <mxPoint x="2080" y="125" />
+              <mxPoint x="2080" y="855" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="e7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="utils">
+        <mxCell id="e7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.4859;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="utils">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="e8" value="dev only" style="dashed=1;fontSize=11;labelBackgroundColor=#ffffff;edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.679;exitDx=0;exitDy=0;entryX=0;entryY=0.39;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="ort">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e8" value="dev only" style="dashed=1;fontSize=11;labelBackgroundColor=none;edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#333333;exitX=1;exitY=0.6667;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="ort">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint y="-12" as="offset" />
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e9" value="weights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.1316;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="models">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e9" value="weights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=1;exitY=0.1282;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="core" target="models">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint y="-12" as="offset" />
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e10" value="tests / benchmarks load" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ort" target="dll">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e14" value="exports" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="tools" target="models">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint y="-12" as="offset" />
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e11" value="reads" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="mapping" target="sources">
+        <mxCell id="e10" value="loads in tests" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ort" target="dll">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint y="-12" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="reads" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="mapping" target="sources">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="80" y="440" />
-              <mxPoint x="80" y="1090" />
+              <mxPoint x="80" y="1100" />
             </Array>
+            <mxPoint x="24" as="offset" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="e12" value="compute + upload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.4638;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="gpudrv">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e12" value="compute + upload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=0.3873;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="gpudrv">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="56" as="offset" />
+          </mxGeometry>
         </mxCell>
-        <mxCell id="e13" value="decode + encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=#ffffff;exitX=0.7826;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="codecs">
-          <mxGeometry relative="1" as="geometry" />
+        <mxCell id="e15" value="load PTX + launch" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=0.6549;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="cudadrv">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="56" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="decode + encode" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;dashed=1;strokeColor=#666666;fontSize=11;labelBackgroundColor=none;exitX=0.9296;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="utils" target="codecs">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="54" as="offset" />
+          </mxGeometry>
         </mxCell>
 
-        <mxCell id="i1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.2647;entryDx=0;entryDy=0;" edge="1" parent="core" source="pre" target="model">
+        <mxCell id="i1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.2045;entryDx=0;entryDy=0;" edge="1" parent="core" source="pre" target="engines">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="i2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.2647;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="core" source="model" target="post">
+        <mxCell id="i2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#d79b00;exitX=1;exitY=0.2045;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="core" source="engines" target="post">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="i3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="core" source="post" target="crop">
+        <mxCell id="i3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#d79b00;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="core" source="post" target="crop">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="i4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.97;entryDx=0;entryDy=0;" edge="1" parent="core" source="onnx" target="model">
+        <mxCell id="i4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;convertToSvg=1;endArrow=block;endFill=1;endSize=8;strokeColor=#d79b00;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.7955;entryDx=0;entryDy=0;" edge="1" parent="core" source="onnx" target="engines">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
       </root>
