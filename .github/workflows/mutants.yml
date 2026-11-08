@@ -45,10 +45,15 @@ jobs:
 
       # The models are gitignored, and without them the strict tests fail rather than skip.
       - name: Download models
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p models
-          curl -fsSL -o models/eye_refiner.onnx "$EYE_REFINER_URL"
-          curl -fsSL -o models/scrfd80k_500m_640.onnx "$SCRFD_URL"
+          # Through the API rather than the public download URL: on 2026-11-08 GitHub's edge
+          # kept serving a cached 504 for the SCRFD asset's URL while the API copy was fine.
+          for url in "$EYE_REFINER_URL" "$SCRFD_URL"; do
+            gh release download "$(basename "$(dirname "$url")")" --repo "$GITHUB_REPOSITORY" --pattern "$(basename "$url")" --dir models --clobber
+          done
 
       - name: Verify model checksums
         uses: ./.github/actions/verify-models
