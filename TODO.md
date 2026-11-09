@@ -20,11 +20,15 @@ tomatoes, plates, wheels). At equal false-positive rates it finds the fewest fac
 three. Every one of its 80,000 training photographs contains faces, so it has seen almost no
 face-free scenes.
 
-- [ ] Retrain with face-free hard negatives: Open Images photographs with no person label,
-  which cost nothing to label, kept out of the COCO evaluation. Re-score with
-  `tools/dataset/detector_bench.zig` on both corpora; a fix has to hold Open Images recall.
-- [ ] Recheck the eye refiner off-domain: 2.03° median on COCO against 1.18° on Open Images.
-  Work out how much of that is COCO's coarser eye labels before training anything.
+- [ ] Retrain with face-free hard negatives, without losing large faces. A first attempt
+  (November 2026: 20,000 Open Images photographs with Person, Human face or Human head verified
+  absent, mined by `tools/dataset/oi_negatives.zig`) cut COCO's false positives on no-person
+  photographs from 0.030 to 0.005 per image and raised recall at equal false-positive rates by
+  4-9 points. But on faces at least 45% of the image width its Open Images recall fell from 78.9%
+  to 57.3%, and five of the six bundled sample portraits dropped below 0.5, so it was not shipped.
+  Most of its hard negatives were frame-filling animal and plush-toy close-ups. Next: keep the
+  negatives whose detections are smaller, or balance them with large positives. Re-score with
+  `detector_bench.zig` on both corpora; a fix has to hold every face-size band, not only the totals.
 
 ## CUDA kernel optimisation
 

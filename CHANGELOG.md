@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `docs/MODEL_COMPARISON.md` now explains why the eye refiner's median error rises from 1.18° on
+  Open Images to 2.03° on COCO. It is not the refiner: at equal face size its own noise, measured
+  without labels, is no higher on COCO. About 45% of the rise is COCO's smaller faces and the
+  rest is its coarser eye labels. The 1.18° is also partly a home-labeller advantage, since the
+  refiner trained on clicks from the same person who clicked the test eyes.
+  `detector_bench.zig` prints the split for both corpora, by eye separation.
+- `detector_bench.zig` also reports Open Images recall by face size, scores a retrained detector
+  in SCRFD-80k's place (`--candidate`), and runs RetinaFace alone over a file list (`retina`).
+  The size table exists because a retrain held the overall recall figures within a point while
+  losing a quarter of the faces at least 45% of the image width. The shipped detector is
+  unchanged.
+
 ## [2.3.4] - 2026-11-08
 
 ### Changed

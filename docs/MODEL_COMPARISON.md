@@ -120,7 +120,23 @@ On the 5,948 faces that all three detectors found at their October thresholds, w
 | SCRFD-80k + eye refiner | **2.03°** | **5.99°** | **85.4%** | **0.075** |
 | RetinaFace + eye refiner | 2.04° | 5.93° | 85.4% | 0.074 |
 
-On COCO the refiner is still the most accurate pipeline. But its median error is 2.03° here against 1.18° on Open Images, the domain it trained on. COCO's eye points come from body-keypoint labelling rather than careful clicks, so some of that rise is label noise. That noise affects every pipeline here, so it does not change the comparison.
+On COCO the refiner is still the most accurate pipeline. But its median error is 2.03° here against 1.18° on Open Images, the domain it trained on.
+
+**That rise is the faces and the labels, not the refiner** (8 November 2026). `detector_bench.zig` splits each pipeline's eye-line error by eye separation and separates label noise from prediction noise. The refiner, RetinaFace's landmarks and the public SCRFD's landmarks each predict the same eye line. The difference between two predictions contains no label, so the three pairwise differences solve for each predictor's own noise (a "three-cornered hat"). What is left of a predictor's error against the labels belongs to the labels.
+
+| Eye separation | Refiner vs labels, Open Images | Refiner vs labels, COCO | RetinaFace vs labels, OI → COCO | Refiner's own noise, OI → COCO |
+|---|---:|---:|---:|---:|
+| 16–32 px | 1.78° | 3.45° | 4.16° → 3.99° | 3.10° → 2.22° |
+| 32–64 px | 1.68° | 2.42° | 2.51° → 2.81° | 1.91° → 1.49° |
+| 64–128 px | 1.62° | 1.85° | 2.09° → 2.55° | 1.80° → 1.80° |
+
+Robust standard deviations (1.4826 × MAD), so a median absolute error is about two-thirds of each figure.
+
+- **Face size explains about 45% of the gap.** Two-thirds of the COCO faces have eyes 16–32 px apart, against a fifth on Open Images. Re-weighted to Open Images' size mix, the COCO median falls from about 2.0° to 1.6°.
+- **The labels explain the rest.** At equal face size, the refiner's own noise, measured without any labels, is no higher on COCO in any band. Against the labels it loses 0.23° on 64–128 px faces, where RetinaFace, at home on neither corpus, loses 0.46°. COCO's body-keypoint eyes carry about 2.6–3.5° of noise on 16–32 px faces and about 2° on larger ones.
+- **The 1.18° on Open Images is partly a home-labeller advantage.** The refiner trained on clicks from the person who clicked the test eyes, and there its error against the labels is *smaller* than its own noise. That only happens when its errors and the labels' errors are correlated. That correlation breaks the hat's independence assumption, so the "own noise" figures are approximate; the cross-corpus comparison holds because the same three predictors sit on both sides.
+
+So the refiner needs no off-domain retraining. Away from home, at Open Images' face sizes, it measures about 1.6° median against COCO's coarser labels; that is an upper bound, since those labels contribute to it.
 
 ## Limits and interpretation
 

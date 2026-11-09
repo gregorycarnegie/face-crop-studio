@@ -3,6 +3,10 @@
 //!   zig run -O ReleaseFast -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c -- fetch <annotations_trainval2017.zip> <out_dir> [--negatives 2000]
 //!   zig run ... -- oi <labelv2_test_all.txt> <images_dir> <models_dir> <cache_dir>
 //!   zig run ... -- coco <out_dir from fetch> <models_dir> <cache_dir>
+//!   zig run ... -- retina <names.txt> <images_dir> <models_dir> <out.json>   (RetinaFace only; see `retinaOnly`)
+//!
+//! `--candidate model.onnx` scores a retrained detector in SCRFD-80k's place, everything else held
+//! fixed. Use a fresh cache dir holding copies of the other two models' JSON (see `Ctx`).
 //!
 //! docs/MODEL_COMPARISON.md compared SCRFD-80k, RetinaFace R34 and the public SCRFD-500M on held-out
 //! Open Images -- the domain SCRFD-80k was trained on, which can favour it. COCO is the second
@@ -21,6 +25,11 @@
 //!
 //! Thresholds are the October ones, frozen before COCO was scored. The mismatch-budget table that
 //! follows them selects thresholds on COCO itself and is descriptive only.
+//!
+//! Both `oi` and `coco` end with an eye-line noise table: the refiner's, RetinaFace's and the public
+//! SCRFD's signed eye-line errors, split by eye separation into label noise and each predictor's own
+//! (the three-cornered hat; see `labelNoise`). It is how MODEL_COMPARISON.md separates COCO's
+//! coarser eye labels from the refiner's own error off its home domain.
 //!
 //! Models (models_dir): scrfd80k_500m_640.onnx, eye_refiner.onnx, retinaface_r34.onnx and
 //! scrfd_500m.onnx, the last two from huggingface.co/yakhyo/uniface-weights; their SHA-256 are in
@@ -88,6 +97,13 @@ const Model = struct {
             if (std.mem.eql(u8, e[0], file)) break e[1];
         } else unreachable;
         if (!std.mem.eql(u8, &hex, want)) fail("{s}: sha256 {s} is not the model MODEL_COMPARISON.md measured", .{ file, &hex });
+        const names = try ort.graphNames(gpa, data);
+        return .{ .oracle = try ort.Oracle.open(gpa, runtime, data), .input = names.inputs[0], .outputs = names.outputs };
+    }
+
+    /// A candidate model, which by definition has no recorded SHA-256 to check.
+    fn unchecked(gpa: std.mem.Allocator, io: Io, runtime: []const u8, path: []const u8) !Model {
+        const data = try u.readFile(gpa, io, path);
         const names = try ort.graphNames(gpa, data);
         return .{ .oracle = try ort.Oracle.open(gpa, runtime, data), .input = names.inputs[0], .outputs = names.outputs };
     }
@@ -273,7 +289,10 @@ fn readDets(gpa: std.mem.Allocator, io: Io, path: []const u8) !ByImage {
     return out;
 }
 
-const Ctx = struct { gpa: std.mem.Allocator, io: Io, runtime: []const u8, out: *u.Stdout };
+/// `candidate`: an ONNX file scored in SCRFD-80k's place (`--candidate`), unchecked by SHA-256 --
+/// a retrained detector measured with everything else held fixed. Give it its own cache dir, with
+/// the other models' JSON copied in, or the shipped model's cached detections are read instead.
+const Ctx = struct { gpa: std.mem.Allocator, io: Io, runtime: []const u8, out: *u.Stdout, candidate: ?[]const u8 = null };
 
 /// Every model over every image at the proposal floor, cached; refined eyes for the two
 /// detectors the crop pipeline was measured with, above their frozen thresholds.
@@ -281,7 +300,7 @@ fn detectAll(ctx: Ctx, names: []const []const u8, images_dir: []const u8, models
     const gpa = ctx.gpa;
     try Io.Dir.cwd().createDirPath(ctx.io, cache);
     var results: [MODELS.len]ByImage = undefined;
-    for (MODELS, &results) |spec, *result| {
+    for (MODELS, &results, 0..) |spec, *result, m| {
         const label = try gpa.dupe(u8, spec.label);
         std.mem.replaceScalar(u8, label, ' ', '_');
         const path = try std.fmt.allocPrint(gpa, "{s}{c}{s}.json", .{ cache, std.fs.path.sep, label });
@@ -289,7 +308,7 @@ fn detectAll(ctx: Ctx, names: []const []const u8, images_dir: []const u8, models
             result.* = try readDets(gpa, ctx.io, path);
             continue;
         } else |_| {}
-        var model = try Model.open(gpa, ctx.io, ctx.runtime, models_dir, spec.file);
+        var model = if (m == 0 and ctx.candidate != null) try Model.unchecked(gpa, ctx.io, ctx.runtime, ctx.candidate.?) else try Model.open(gpa, ctx.io, ctx.runtime, models_dir, spec.file);
         if (spec.kind == .retinaface) model.priors = try retinaPriors(gpa);
         var refiner = try Model.open(gpa, ctx.io, ctx.runtime, models_dir, "eye_refiner.onnx");
         var out: ByImage = .empty;
@@ -328,6 +347,48 @@ fn detectAll(ctx: Ctx, names: []const []const u8, images_dir: []const u8, models
     return results;
 }
 
+/// RetinaFace alone over the named files, as a check for real human faces: it fires on them and
+/// rarely on the animals and objects SCRFD-80k mistakes for faces (0.006 per no-person COCO
+/// image at its October threshold). `oi_negatives.zig`'s mining step uses it to veto pool images.
+fn retinaOnly(ctx: Ctx, list: []const u8, images_dir: []const u8, models_dir: []const u8, out_path: []const u8) !void {
+    const gpa = ctx.gpa;
+    var names: std.ArrayList([]const u8) = .empty;
+    var it = lines(try u.readFile(gpa, ctx.io, list));
+    while (it.next()) |raw| {
+        const name = std.mem.trim(u8, raw, " \t\r");
+        if (name.len > 0) try names.append(gpa, name);
+    }
+    var model = try Model.open(gpa, ctx.io, ctx.runtime, models_dir, "retinaface_r34.onnx");
+    model.priors = try retinaPriors(gpa);
+    var out: ByImage = .empty;
+    for (names.items, 1..) |name, index| {
+        var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+        defer arena.deinit();
+        const tmp = arena.allocator();
+        const image = img.load(tmp, ctx.io, try std.fs.path.join(tmp, &.{ images_dir, name }), .apply_exif) catch continue;
+        const canvas, const scale = try letterbox(tmp, image);
+        const rows = try retinaface(tmp, &model, canvas);
+        const s: f32 = @floatCast(scale);
+        for (rows) |*r| for (0..15) |c| if (c != 4) {
+            r[c] /= s;
+        };
+        const kept = try nms(tmp, rows);
+        const dets = try gpa.alloc(Det, kept.len);
+        for (dets, kept) |*d, k| {
+            const r = rows[k];
+            d.* = .{ .box = .{ r[0], r[1], r[2], r[3] }, .score = r[4], .eyes = .{ r[5], r[6], r[7], r[8] } };
+        }
+        try out.put(gpa, try gpa.dupe(u8, name), dets);
+        if (index % 500 == 0 or index == names.items.len) {
+            try ctx.out.w().print("  RetinaFace: {d}/{d}\n", .{ index, names.items.len });
+            try ctx.out.w().flush();
+        }
+    }
+    var text: Io.Writer.Allocating = .init(gpa);
+    try writeDets(&text.writer, out);
+    try u.writeFile(ctx.io, out_path, text.written());
+}
+
 // ── Scoring ───────────────────────────────────────────────────────────────────
 
 fn iou(a: [4]f64, b: [4]f64) f64 {
@@ -364,8 +425,97 @@ fn angleError(truth: [2][2]f64, pred: [2][2]f64) f64 {
     return @min(difference, 360 - difference);
 }
 
+/// Prediction's eye-line tilt minus the label's, in degrees, wrapped to [-180, 180].
+fn signedAngle(truth: [2][2]f64, pred: [2][2]f64) f64 {
+    const d = (eyeAngle(pred[0], pred[1]) - eyeAngle(truth[0], truth[1])) * (180.0 / std.math.pi);
+    return d - 360 * @round(d / 360);
+}
+
 fn dist(a: [2]f64, b: [2]f64) f64 {
     return std.math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+/// (1.4826 MAD)^2: a variance the heavy tails of eye-line error cannot drag around.
+fn robustVar(gpa: std.mem.Allocator, xs: []const f64) !f64 {
+    const m = try u.median(gpa, xs);
+    const deviations = try gpa.alloc(f64, xs.len);
+    for (deviations, xs) |*d, x| d.* = @abs(x - m);
+    const sd = 1.482602218505602 * try u.median(gpa, deviations);
+    return sd * sd;
+}
+
+/// One face's signed eye-line residuals against its label: the eye refiner on SCRFD-80k's box,
+/// RetinaFace's raw landmarks, the public SCRFD's raw landmarks. `sep` is the labelled eye
+/// separation in source pixels.
+const Residuals = struct { sep: f64, r: f64, f: f64, s: f64 };
+const SEP_LO = [_]f64{ 16, 32, 64, 128 };
+
+/// Standard deviations, in R, F, S order: each residual against the label, each predictor's own
+/// noise from the three-cornered hat, and the label noise each residual implies.
+const Noise = struct { against: [3]f64, own: [3]f64, label: [3]f64 };
+
+fn hat(gpa: std.mem.Allocator, rows: []const Residuals) !Noise {
+    const n = rows.len;
+    var series: [6][]f64 = undefined;
+    for (&series) |*s| s.* = try gpa.alloc(f64, n);
+    for (rows, 0..) |row, i| {
+        series[0][i] = row.r;
+        series[1][i] = row.f;
+        series[2][i] = row.s;
+        series[3][i] = row.r - row.f;
+        series[4][i] = row.r - row.s;
+        series[5][i] = row.f - row.s;
+    }
+    var v: [6]f64 = undefined;
+    for (&v, series) |*x, s| x.* = try robustVar(gpa, s);
+    const own = [3]f64{ (v[3] + v[4] - v[5]) / 2, (v[3] + v[5] - v[4]) / 2, (v[4] + v[5] - v[3]) / 2 };
+    var out: Noise = undefined;
+    for (0..3) |k| {
+        out.against[k] = @sqrt(v[k]);
+        out.own[k] = @sqrt(@max(own[k], 0));
+        out.label[k] = @sqrt(@max(v[k] - own[k], 0));
+    }
+    return out;
+}
+
+/// How much of the eye-line error is the label's rather than the prediction's. A residual is
+/// prediction noise plus label noise; the difference of two predictors' residuals has no label
+/// in it. With three predictors whose errors are independent, the pairwise differences solve for
+/// each predictor's own noise (the "three-cornered hat"), and whatever is left of a predictor's
+/// residual against the label is the label's. Bands are by labelled eye separation, so faces of
+/// similar detail are compared across corpora.
+fn labelNoise(gpa: std.mem.Allocator, w: *Io.Writer, rows: []const Residuals) !void {
+    try w.writeAll("\nEye-line noise, degrees (robust SD), by labelled eye separation in source pixels:\n");
+    try u.padRight(w, "separation", 11);
+    for ([_][]const u8{ "faces", "R-label", "F-label", "S-label", "R own", "F own", "S own", "label|R", "label|F", "label|S" }) |h| {
+        try w.writeAll(" ");
+        try u.padLeft(w, h, 7);
+    }
+    try w.writeAll("\n");
+    for (0..SEP_LO.len + 1) |band| {
+        var picked: std.ArrayList(Residuals) = .empty;
+        for (rows) |row| {
+            const keep = if (band == SEP_LO.len) true else row.sep >= SEP_LO[band] and (band + 1 == SEP_LO.len or row.sep < SEP_LO[band + 1]);
+            if (keep) try picked.append(gpa, row);
+        }
+        const name = if (band == SEP_LO.len) "all" else if (band + 1 == SEP_LO.len) try std.fmt.allocPrint(gpa, "{d}+", .{SEP_LO[band]}) else try std.fmt.allocPrint(gpa, "{d}-{d}", .{ SEP_LO[band], SEP_LO[band + 1] });
+        try u.padRight(w, name, 11);
+        try w.writeAll(" ");
+        try u.padLeft(w, try std.fmt.allocPrint(gpa, "{d}", .{picked.items.len}), 7);
+        if (picked.items.len < 30) {
+            try w.writeAll("  (too few)\n");
+            continue;
+        }
+        const e = try hat(gpa, picked.items);
+        for (e.against ++ e.own ++ e.label) |x| {
+            try w.writeAll(" ");
+            try col(gpa, w, x, 7, 2, false);
+        }
+        try w.writeAll("\n");
+    }
+    try w.writeAll("  R: eye refiner on SCRFD-80k's box. F: RetinaFace raw. S: public SCRFD raw.\n");
+    try w.writeAll("  own: noise from the predictors' disagreements alone, labels unused (needs independent errors).\n");
+    try w.writeAll("  label|X: what X's residual leaves for the label; the three should agree if the model holds.\n");
 }
 
 /// `f"{v:>{width}.{n}f}"` and `f"{v:>{width}.{n}%}"`.
@@ -388,7 +538,10 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
     const gpa = ctx.gpa;
     var images: std.ArrayList([]const u8) = .empty;
     var faces: std.StringHashMapUnmanaged(std.ArrayList([4]f64)) = .empty;
+    // Clicked eyes, subject's right first, aligned with `faces`; null where none were clicked.
+    var eyes: std.StringHashMapUnmanaged(std.ArrayList(?[2][2]f64)) = .empty;
     var ignore: std.StringHashMapUnmanaged(std.ArrayList([4]f64)) = .empty;
+    var widths: std.StringHashMapUnmanaged(f64) = .empty; // image width, for face size as a fraction
     var name: []const u8 = "";
     var it = lines(try u.readFile(gpa, ctx.io, labels_path));
     while (it.next()) |raw| {
@@ -397,8 +550,10 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
             var words = std.mem.tokenizeAny(u8, line, " \t");
             _ = words.next();
             name = words.next() orelse return error.BadLabels;
+            try widths.put(gpa, name, try std.fmt.parseFloat(f64, words.next() orelse return error.BadLabels));
             try images.append(gpa, name);
             try faces.put(gpa, name, .empty);
+            try eyes.put(gpa, name, .empty);
             try ignore.put(gpa, name, .empty);
         } else if (std.mem.trim(u8, line, " \t").len > 0) {
             var values: std.ArrayList(f64) = .empty;
@@ -407,6 +562,11 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
             if (values.items.len < 4) return error.BadLabels;
             const box = values.items[0..4].*;
             try (if (values.items.len > 5) faces else ignore).getPtr(name).?.append(gpa, box);
+            if (values.items.len > 5) {
+                const v = values.items;
+                const clicked = v.len >= 10 and v[6] == 1 and v[9] == 1;
+                try eyes.getPtr(name).?.append(gpa, if (clicked) .{ .{ v[4], v[5] }, .{ v[7], v[8] } } else null);
+            }
         }
     }
 
@@ -428,13 +588,18 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
         try reprCol(gpa, w, b, 8);
     }
     try w.writeAll("\n");
-    for (MODELS, results) |spec, by_image| {
+    // The detection each labelled face was matched to, per model, aligned with `faces`.
+    var hits: [MODELS.len]std.StringHashMapUnmanaged([]?Det) = @splat(.empty);
+    for (MODELS, results, 0..) |spec, by_image, m| {
         var matched: std.ArrayList(f64) = .empty;
         var unmatched: std.ArrayList(f64) = .empty;
         for (images.items) |n| {
             const truths = faces.get(n).?.items;
             const taken = try gpa.alloc(bool, truths.len);
             @memset(taken, false);
+            const slots = try gpa.alloc(?Det, truths.len);
+            @memset(slots, null);
+            try hits[m].put(gpa, n, slots);
             for (by_image.get(n) orelse &.{}) |det| {
                 var best: ?usize = null;
                 var best_iou: f64 = 0.5;
@@ -447,6 +612,7 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
                 }
                 if (best) |b| {
                     taken[b] = true;
+                    slots[b] = det;
                     try matched.append(gpa, det.score);
                 } else {
                     const hit = for (ignore.get(n).?.items) |region| {
@@ -467,6 +633,59 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
         try w.writeAll("\n");
     }
     try w.writeAll("  recall at each unmatched-detections-per-image budget; October: SCRFD-80k 0.4851, 76.9% at 0.1\n");
+
+    // By face size. A total can hide a whole band: a retrain with face-free negatives held the
+    // budgets above within a point while its recall on faces >= 45% of the image width fell
+    // from 80% to 59%, and those are the portraits this application crops.
+    const size_lo = [_]f64{ 0, 0.1, 0.2, 0.3, 0.45 };
+    try w.writeAll("\nRecall at the frozen thresholds, by face width as a fraction of image width:\n");
+    try u.padRight(w, "model", 20);
+    for (size_lo, 0..) |lo, b| {
+        try w.writeAll(" ");
+        try u.padLeft(w, if (b + 1 == size_lo.len) try std.fmt.allocPrint(gpa, ">={d}", .{lo}) else try std.fmt.allocPrint(gpa, "{d}-{d}", .{ lo, size_lo[b + 1] }), 9);
+    }
+    try w.writeAll("\n");
+    for (MODELS, 0..) |spec, m| {
+        var pool: [size_lo.len]usize = @splat(0);
+        var found: [size_lo.len]usize = @splat(0);
+        for (images.items) |n| for (faces.get(n).?.items, 0..) |truth, i| {
+            const frac = (truth[2] - truth[0]) / widths.get(n).?;
+            var b: usize = 0;
+            while (b + 1 < size_lo.len and frac >= size_lo[b + 1]) b += 1;
+            pool[b] += 1;
+            if (hits[m].get(n).?[i]) |d| found[b] += @intFromBool(d.score >= spec.frozen);
+        };
+        try u.padRight(w, spec.label, 20);
+        for (pool, found) |p, f| {
+            try w.writeAll(" ");
+            try col(gpa, w, if (p > 0) @as(f64, @floatFromInt(f)) / @as(f64, @floatFromInt(p)) else 0, 9, 1, true);
+        }
+        try w.writeAll("\n");
+    }
+
+    // Clicked faces all three found at their frozen thresholds, as COCO's eye-line table pairs them.
+    var residuals: std.ArrayList(Residuals) = .empty;
+    for (images.items) |n| {
+        for (eyes.get(n).?.items, 0..) |clicked, i| {
+            const truth = clicked orelse continue;
+            const all = for (MODELS, 0..) |spec, m| {
+                const d = hits[m].get(n).?[i] orelse break false;
+                if (!(d.score >= spec.frozen)) break false;
+            } else true;
+            if (!all) continue;
+            const refined = hits[0].get(n).?[i].?.refined orelse return error.MissingRefinedEyes;
+            const retina = hits[1].get(n).?[i].?.eyes;
+            const public = hits[2].get(n).?[i].?.eyes;
+            try residuals.append(gpa, .{
+                .sep = dist(truth[0], truth[1]),
+                .r = signedAngle(truth, .{ .{ refined[0], refined[1] }, .{ refined[2], refined[3] } }),
+                .f = signedAngle(truth, .{ .{ retina[0], retina[1] }, .{ retina[2], retina[3] } }),
+                .s = signedAngle(truth, .{ .{ public[0], public[1] }, .{ public[2], public[3] } }),
+            });
+        }
+    }
+    try w.print("\nClicked faces found by all three at their frozen thresholds: {d}\n", .{residuals.items.len});
+    try labelNoise(gpa, w, residuals.items);
     try w.flush();
 }
 
@@ -677,6 +896,21 @@ fn scoreCoco(ctx: Ctx, data: []const u8, models_dir: []const u8, cache: []const 
         try col(gpa, w, try u.median(gpa, distances), 9, 3, false);
         try w.writeAll("\n");
     }
+
+    const residuals = try gpa.alloc(Residuals, paired.items.len);
+    for (residuals, paired.items) |*r, f| {
+        const truth = [2][2]f64{ f.right, f.left };
+        const refined = found[0].get(.{ .file = f.file, .index = f.index }).?.refined.?;
+        const retina = found[1].get(.{ .file = f.file, .index = f.index }).?.eyes;
+        const public = found[2].get(.{ .file = f.file, .index = f.index }).?.eyes;
+        r.* = .{
+            .sep = f.iod,
+            .r = signedAngle(truth, .{ .{ refined[0], refined[1] }, .{ refined[2], refined[3] } }),
+            .f = signedAngle(truth, .{ .{ retina[0], retina[1] }, .{ retina[2], retina[3] } }),
+            .s = signedAngle(truth, .{ .{ public[0], public[1] }, .{ public[2], public[3] } }),
+        };
+    }
+    try labelNoise(gpa, w, residuals);
     try w.flush();
 }
 
@@ -846,11 +1080,15 @@ pub fn main(init: std.process.Init) !void {
     var positional: std.ArrayList([]const u8) = .empty;
     var runtime = ort.runtimePath(init.environ_map);
     var negatives: usize = 2000;
+    var candidate: ?[]const u8 = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--ort") and i + 1 < args.len) {
             i += 1;
             runtime = args[i];
+        } else if (std.mem.eql(u8, args[i], "--candidate") and i + 1 < args.len) {
+            i += 1;
+            candidate = args[i];
         } else if (std.mem.eql(u8, args[i], "--negatives") and i + 1 < args.len) {
             i += 1;
             negatives = try std.fmt.parseInt(usize, args[i], 10);
@@ -859,12 +1097,32 @@ pub fn main(init: std.process.Init) !void {
     const p = positional.items;
     var out: u.Stdout = undefined;
     out.init(init.io);
-    const ctx: Ctx = .{ .gpa = gpa, .io = init.io, .runtime = runtime, .out = &out };
+    const ctx: Ctx = .{ .gpa = gpa, .io = init.io, .runtime = runtime, .out = &out, .candidate = candidate };
     const command = if (p.len > 0) p[0] else "";
     if (std.mem.eql(u8, command, "fetch") and p.len == 3) return fetch(ctx, p[1], p[2], negatives);
     if (std.mem.eql(u8, command, "oi") and p.len == 5) return scoreOi(ctx, p[1], p[2], p[3], p[4]);
     if (std.mem.eql(u8, command, "coco") and p.len == 4) return scoreCoco(ctx, p[1], p[2], p[3]);
-    fail("usage: detector_bench fetch <annotations.zip> <out_dir> [--negatives 2000] | oi <labels> <images> <models> <cache> | coco <data> <models> <cache> [--ort path]", .{});
+    if (std.mem.eql(u8, command, "retina") and p.len == 5) return retinaOnly(ctx, p[1], p[2], p[3], p[4]);
+    fail("usage: detector_bench fetch <annotations.zip> <out_dir> [--negatives 2000] | oi <labels> <images> <models> <cache> | coco <data> <models> <cache> | retina <names.txt> <images> <models> <out.json> [--ort path] [--candidate model.onnx]", .{});
+}
+
+test "the three-cornered hat separates label noise from each predictor's" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    try std.testing.expectApproxEqAbs(@as(f64, -2), signedAngle(.{ .{ 0, 0 }, .{ 10, 0 } }, .{ .{ 0, 0 }, .{ 10, -std.math.tan(std.math.degreesToRadians(2.0)) * 10 } }), 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 2), signedAngle(.{ .{ 0, 0 }, .{ -10, 1e-9 } }, .{ .{ 0, 0 }, .{ -10, -std.math.tan(std.math.degreesToRadians(2.0)) * 10 } }), 1e-6); // across the wrap
+    // Label noise 1.0; predictors 0.5, 2.0 and 1.5, all independent and Gaussian.
+    var prng: std.Random.DefaultPrng = .init(11);
+    const r = prng.random();
+    const rows = try gpa.alloc(Residuals, 40_000);
+    for (rows) |*row| {
+        const label = r.floatNorm(f64);
+        row.* = .{ .sep = 50, .r = 0.5 * r.floatNorm(f64) - label, .f = 2.0 * r.floatNorm(f64) - label, .s = 1.5 * r.floatNorm(f64) - label };
+    }
+    const e = try hat(gpa, rows);
+    for (e.own, [3]f64{ 0.5, 2.0, 1.5 }) |got, want| try std.testing.expectApproxEqAbs(want, got, 0.06);
+    for (e.label) |got| try std.testing.expectApproxEqAbs(@as(f64, 1.0), got, 0.06);
 }
 
 test "budget thresholds sit one float32 step above the first score over budget" {
