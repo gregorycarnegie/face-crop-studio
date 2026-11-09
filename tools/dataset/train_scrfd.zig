@@ -4,7 +4,8 @@
 //!
 //! `curve` is `scrfd_fcs_500m.py` (the label-count curve: batch 8, 640 epochs, LR steps at
 //! 440/544); `80k` is `scrfd_fcs80k_500m.py` (batch 64, 100 epochs, steps at 69/85, ignore
-//! regions at IoF 0.5). Both: SGD 0.01, momentum 0.9, weight decay 5e-4, 1,500 iterations of
+//! regions at IoF 0.5). `--negatives` adds face-free images (headers only, `aug.parseNegatives`)
+//! that train every anchor as background; neither recipe has any. Both: SGD 0.01, momentum 0.9, weight decay 5e-4, 1,500 iterations of
 //! linear warm-up from 0.1%, MMDetection's initialisation. Data goes through `scrfd_augment.zig`
 //! and `scrfd_targets.zig` on CPU threads, prefetched while the GPU trains (`scrfd_net.zig`).
 //! Checkpoints are MMDetection-shaped (`state_dict`, `meta`) plus the SGD momentum, so
@@ -366,6 +367,8 @@ fn allocBatch(gpa: std.mem.Allocator, n: usize) !Batch {
 const Options = struct {
     data: []const u8,
     labels: []const u8,
+    /// Face-free images trained as pure background (`aug.parseNegatives`), from the same images dir.
+    negatives: ?[]const u8 = null,
     out: []const u8,
     recipe: Recipe,
     resume_from: ?[]const u8 = null,
@@ -399,7 +402,9 @@ fn saveCheckpoint(gpa: std.mem.Allocator, io: std.Io, path: []const u8, m: *gpu.
 fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, o.out);
-    const entries = try aug.parseLabels(gpa, try u.readFile(gpa, io, o.labels));
+    const faces = try aug.parseLabels(gpa, try u.readFile(gpa, io, o.labels));
+    const negatives = if (o.negatives) |path| try aug.parseNegatives(gpa, try u.readFile(gpa, io, path)) else &.{};
+    const entries = try std.mem.concat(gpa, aug.Entry, &.{ faces, negatives });
     const images = try std.fs.path.join(gpa, &.{ o.data, "images" });
     var start_epoch: usize = 0;
     var iter: usize = 0;
@@ -426,7 +431,7 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
     var out: u.Stdout = undefined;
     out.init(io);
     const w = out.w();
-    try w.print("{d} training images, batch {d}, {d} iterations per epoch, epochs {d}..{d}, on {s}\n", .{ entries.len, n, per_epoch, start_epoch + 1, o.recipe.epochs, dev.deviceName() });
+    try w.print("{d} training images ({d} face-free), batch {d}, {d} iterations per epoch, epochs {d}..{d}, on {s}\n", .{ entries.len, negatives.len, n, per_epoch, start_epoch + 1, o.recipe.epochs, dev.deviceName() });
     try w.flush();
 
     var batches = [2]Batch{ try allocBatch(gpa, n), try allocBatch(gpa, n) };
@@ -527,13 +532,13 @@ pub fn main(init: std.process.Init) !void {
             const v = args[i];
             if (std.mem.eql(u8, arg, "--recipe")) {
                 o.recipe = if (std.mem.eql(u8, v, "80k")) recipes.@"80k" else if (std.mem.eql(u8, v, "curve")) recipes.curve else return error.UnknownRecipe;
-            } else if (std.mem.eql(u8, arg, "--out")) o.out = v else if (std.mem.eql(u8, arg, "--resume")) o.resume_from = v else if (std.mem.eql(u8, arg, "--seed")) o.seed = try std.fmt.parseInt(u64, v, 10) else if (std.mem.eql(u8, arg, "--workers")) o.workers = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--epochs")) epochs = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--batch")) batch = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--max-iters")) o.max_iters = try std.fmt.parseInt(usize, v, 10) else return error.UnknownOption;
+            } else if (std.mem.eql(u8, arg, "--out")) o.out = v else if (std.mem.eql(u8, arg, "--negatives")) o.negatives = v else if (std.mem.eql(u8, arg, "--resume")) o.resume_from = v else if (std.mem.eql(u8, arg, "--seed")) o.seed = try std.fmt.parseInt(u64, v, 10) else if (std.mem.eql(u8, arg, "--workers")) o.workers = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--epochs")) epochs = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--batch")) batch = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--max-iters")) o.max_iters = try std.fmt.parseInt(usize, v, 10) else return error.UnknownOption;
         } else try positional.append(gpa, arg);
     }
     if (positional.items.len != 2) {
         std.debug.print(
             \\usage: train_scrfd <openimages_dir> <labelv2.txt> [--recipe curve|80k] [--out dir] [--epochs N] [--batch N]
-            \\                   [--resume checkpoint.pth] [--seed 0] [--workers 16] [--max-iters N]
+            \\                   [--negatives face_free.txt] [--resume checkpoint.pth] [--seed 0] [--workers 16] [--max-iters N]
             \\       train_scrfd --check <checkpoint.pth> | --dump-grads <checkpoint.pth> <dir> | --dump-loss <checkpoint.pth> <openimages_dir> <dir>
             \\
         , .{});

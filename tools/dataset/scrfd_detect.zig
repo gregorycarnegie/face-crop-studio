@@ -1,6 +1,9 @@
 //! Run a trained SCRFD checkpoint over a folder, writing fcs-cli's detection JSON format.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c -- <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--ort path]
+//!   zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c -- <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--list names.txt] [--ort path]
+//!
+//! `--list` limits the run to the named files of `image_dir`. Each record also carries the decoded
+//! image's `width` and `height` (EXIF orientation applied), which fcs-cli's own records lack.
 //!
 //! So a checkpoint can be compared against YuNet on a corpus neither model was trained on, using
 //! the same tooling: `fcs-cli --json` writes this shape, and `compare_detectors.zig` reads it.
@@ -133,16 +136,17 @@ pub fn main(init: std.process.Init) !void {
     var positional: std.ArrayList([]const u8) = .empty;
     var thresh: f64 = 0.4;
     var runtime = ort.runtimePath(init.environ_map);
+    var list: ?[]const u8 = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.startsWith(u8, arg, "--") and i + 1 < args.len) {
             i += 1;
-            if (std.mem.eql(u8, arg, "--thresh")) thresh = try std.fmt.parseFloat(f64, args[i]) else if (std.mem.eql(u8, arg, "--ort")) runtime = args[i] else return error.UnknownOption;
+            if (std.mem.eql(u8, arg, "--thresh")) thresh = try std.fmt.parseFloat(f64, args[i]) else if (std.mem.eql(u8, arg, "--ort")) runtime = args[i] else if (std.mem.eql(u8, arg, "--list")) list = args[i] else return error.UnknownOption;
         } else try positional.append(gpa, arg);
     }
     if (positional.items.len != 3) {
-        std.debug.print("usage: scrfd_detect <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--ort path]\n", .{});
+        std.debug.print("usage: scrfd_detect <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--list names.txt] [--ort path]\n", .{});
         return error.Usage;
     }
     const dir_path = positional.items[1];
@@ -150,7 +154,14 @@ pub fn main(init: std.process.Init) !void {
     defer detector.close();
 
     var paths: std.ArrayList([]const u8) = .empty;
-    {
+    if (list) |names| {
+        // Only these files of image_dir, one name per line: a shared folder needn't be split up.
+        var lines = std.mem.splitScalar(u8, try u.readFile(gpa, io, names), '\n');
+        while (lines.next()) |raw| {
+            const name = std.mem.trim(u8, raw, " \t\r");
+            if (name.len > 0) try paths.append(gpa, try std.fs.path.join(gpa, &.{ dir_path, name }));
+        }
+    } else {
         var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
         defer dir.close(io);
         var it = dir.iterate();
@@ -186,7 +197,7 @@ pub fn main(init: std.process.Init) !void {
         if (records > 0) try w.writeAll(", ");
         try w.writeAll("{\"image\": ");
         try u.dumpString(w, path);
-        try w.writeAll(", \"detections\": [");
+        try w.print(", \"width\": {d}, \"height\": {d}, \"detections\": [", .{ frame.width, frame.height });
         for (dets, 0..) |d, k| {
             if (k > 0) try w.writeAll(", ");
             const x1: f64 = d[0];

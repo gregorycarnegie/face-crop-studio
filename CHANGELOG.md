@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The size table exists because a retrain held the overall recall figures within a point while
   losing a quarter of the faces at least 45% of the image width. The shipped detector is
   unchanged.
+- The SCRFD trainer takes face-free images (`train_scrfd.zig --negatives`), trained as pure
+  background, and `oi_negatives.zig` picks them: Open Images photographs where a human verified
+  Person, Human face or Human head absent. A missing person label is not enough; in a random
+  sample of those images about half the detector's hits were real people.
 
 ## [2.3.4] - 2026-11-08
 

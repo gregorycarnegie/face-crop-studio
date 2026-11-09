@@ -71,6 +71,26 @@ pub fn parseLabels(gpa: Allocator, text: []const u8) ![]Entry {
     return entries.toOwnedSlice(gpa);
 }
 
+/// Face-free images for `train_scrfd --negatives`: "# name w h" headers and nothing else. They
+/// come in through their own file because `parseLabels` drops empty images, as MMDetection's
+/// dataset does, and its recipes must stay as they are. A face line here is an error rather than
+/// a positive slipping in by mistake.
+pub fn parseNegatives(gpa: Allocator, text: []const u8) ![]Entry {
+    var entries: std.ArrayList(Entry) = .empty;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        if (!std.mem.startsWith(u8, line, "#")) return error.NegativeHasFaces;
+        var words = std.mem.tokenizeAny(u8, line[1..], " \t");
+        const name = words.next() orelse return error.BadLabels;
+        const width = try std.fmt.parseInt(usize, words.next() orelse return error.BadLabels, 10);
+        const height = try std.fmt.parseInt(usize, words.next() orelse return error.BadLabels, 10);
+        try entries.append(gpa, .{ .name = name, .width = width, .height = height, .faces = &.{}, .ignores = &.{} });
+    }
+    return entries.toOwnedSlice(gpa);
+}
+
 pub fn fromRgb8(gpa: Allocator, src: img.Image) !Image {
     const pixels = try gpa.alloc(f32, src.pixels.len);
     for (pixels, src.pixels) |*d, s| d.* = @floatFromInt(s);
@@ -316,6 +336,17 @@ test "labelv2 parsing: keypoint weights, ignore regions, empty images dropped" {
     try std.testing.expectEqual(@as(f32, 1), entries[0].faces[0].kps[1][2]);
     try std.testing.expectEqual(@as(f32, 0), entries[0].faces[0].kps[2][2]);
     try std.testing.expectEqualStrings("b.jpg", entries[1].name);
+}
+
+test "negatives keep their empty images and refuse face lines" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const entries = try parseNegatives(arena.allocator(), "# clock.jpg 640 480\r\n\n# dog.jpg 1024 768\n");
+    try std.testing.expectEqual(@as(usize, 2), entries.len);
+    try std.testing.expectEqualStrings("dog.jpg", entries[1].name);
+    try std.testing.expectEqual(@as(usize, 768), entries[1].height);
+    try std.testing.expectEqual(@as(usize, 0), entries[0].faces.len);
+    try std.testing.expectError(error.NegativeHasFaces, parseNegatives(arena.allocator(), "# a.jpg 1 1\n1 1 3 3 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1\n"));
 }
 
 test "HSV round trip is the identity on in-range colours" {

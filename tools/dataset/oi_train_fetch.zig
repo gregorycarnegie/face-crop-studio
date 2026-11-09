@@ -26,12 +26,12 @@ const std = @import("std");
 const Io = std.Io;
 const u = @import("util.zig");
 
-const MIRROR = "https://open-images-dataset.s3.amazonaws.com/train/{s}.jpg";
+pub const MIRROR = "https://open-images-dataset.s3.amazonaws.com/train/{s}.jpg";
 const SEED = 20260919;
 const MIN_WIDTH = 0.05;
-const FIELDS = [_][]const u8{ "ImageID", "License", "Author", "AuthorProfileURL", "OriginalLandingURL" };
+pub const FIELDS = [_][]const u8{ "ImageID", "License", "Author", "AuthorProfileURL", "OriginalLandingURL" };
 
-const StrSet = std.StringHashMapUnmanaged(void);
+pub const StrSet = std.StringHashMapUnmanaged(void);
 
 fn croppableImages(gpa: std.mem.Allocator, io: Io, path: []const u8) !StrSet {
     var keep: StrSet = .empty;
@@ -68,7 +68,7 @@ fn csvField(w: *Io.Writer, s: []const u8) !void {
     try w.writeAll("\"");
 }
 
-fn writeManifest(gpa: std.mem.Allocator, io: Io, path: []const u8, rows: []const []const []const u8) !void {
+pub fn writeManifest(gpa: std.mem.Allocator, io: Io, path: []const u8, rows: []const []const []const u8) !void {
     var out: Io.Writer.Allocating = .init(gpa);
     const w = &out.writer;
     for (FIELDS, 0..) |f, i| {
@@ -86,7 +86,7 @@ fn writeManifest(gpa: std.mem.Allocator, io: Io, path: []const u8, rows: []const
     try u.writeFile(io, path, out.written());
 }
 
-const Job = struct {
+pub const Job = struct {
     io: Io,
     chosen: []const []const u8,
     dest: []const u8,
@@ -119,7 +119,7 @@ fn fetchOne(job: *Job, client: *std.http.Client, image: []const u8) ?[]const u8 
     return null;
 }
 
-fn worker(job: *Job) void {
+pub fn worker(job: *Job) void {
     var client: std.http.Client = .{ .allocator = std.heap.smp_allocator, .io = job.io };
     defer client.deinit();
     while (true) {
