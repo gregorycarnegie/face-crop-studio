@@ -26,9 +26,15 @@ face-free scenes.
   photographs from 0.030 to 0.005 per image and raised recall at equal false-positive rates by
   4-9 points. But on faces at least 45% of the image width its Open Images recall fell from 78.9%
   to 57.3%, and five of the six bundled sample portraits dropped below 0.5, so it was not shipped.
-  Most of its hard negatives were frame-filling animal and plush-toy close-ups. Next: keep the
-  negatives whose detections are smaller, or balance them with large positives. Re-score with
-  `detector_bench.zig` on both corpora; a fix has to hold every face-size band, not only the totals.
+  Most of its hard negatives were frame-filling animal and plush-toy close-ups. A balanced second
+  design (15% of those, plus 7,514 extra large-face photographs) kept the false-positive fix but
+  still failed the gates in a short controlled experiment, and short fine-tunes turned out unable
+  to reproduce the large-face loss at all. Full record: `tools/dataset/HARD_NEGATIVES.md`.
+- [ ] Before more negative-data work, find out why large faces are fragile: score attempt 1's
+  model with large faces shrunk into a bigger canvas (scale handling vs face semantics), look at
+  `RandomSquareCrop`'s face-size distribution for positives against negatives, and compare a
+  larger SCRFD variant or a wider stride-32 head. The goal is a detector that tells human faces
+  from face-like objects at every scale, not one that learns which sizes are likely real.
 
 ## CUDA kernel optimisation
 

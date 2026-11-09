@@ -2,6 +2,7 @@
 //!
 //!   zig run -O ReleaseSafe tools/dataset/oi_negatives.zig -- <openimages_dir> [--pool 100000] [--workers 8] [--select-only]
 //!   zig run -O ReleaseSafe tools/dataset/oi_negatives.zig -- pick <openimages_dir> <scrfd.json> <retina.json> [--count 20000]
+//!       [--frame-keep 1.0] [--frame-width 0.3] [--tag name]   (see `PickOptions`)
 //!
 //! Keep `--workers` low: Zig's HTTP client resolves the host itself for every connection, and 48
 //! workers flooded a home router's DNS until name resolution failed for the whole network.
@@ -107,9 +108,21 @@ const VETO: f64 = 0.9; // RetinaFace score that marks a probable real face
 const HARD: f64 = 0.3; // SCRFD-80k score that makes an image a hard negative
 const REVIEW = 400; // highest-scoring hits shown for review
 
-const Mined = struct { name: []const u8, width: i64, height: i64, best: f64, hits: std.json.Value };
+const Mined = struct { name: []const u8, width: i64, height: i64, best: f64, hits: std.json.Value, frame_filling: bool };
 
-fn pick(gpa: std.mem.Allocator, io: Io, w: *Io.Writer, dir: []const u8, scrfd_path: []const u8, retina_path: []const u8, count: usize) !void {
+/// `frame_keep`: the fraction of *frame-filling* hard negatives kept -- those whose widest hit at
+/// HARD or more spans `frame_width` of the image or more. The first retrain kept all of them
+/// (6,672 of 15,224 hard negatives, mostly animal and plush-toy close-ups) and lost a quarter of
+/// its recall on large real faces; 1.0 reproduces that pick. `tag` names the output files.
+const PickOptions = struct { count: usize = 20_000, frame_keep: f64 = 1.0, frame_width: f64 = 0.3, tag: ?[]const u8 = null };
+
+fn tagged(gpa: std.mem.Allocator, dir: []const u8, stem: []const u8, ext: []const u8, tag: ?[]const u8) ![]const u8 {
+    const name = if (tag) |t| try std.fmt.allocPrint(gpa, "{s}_{s}{s}", .{ stem, t, ext }) else try std.fmt.allocPrint(gpa, "{s}{s}", .{ stem, ext });
+    return std.fs.path.join(gpa, &.{ dir, name });
+}
+
+fn pick(gpa: std.mem.Allocator, io: Io, w: *Io.Writer, dir: []const u8, scrfd_path: []const u8, retina_path: []const u8, opt: PickOptions) !void {
+    const count = opt.count;
     // RetinaFace: {name: [{box, score, eyes}, ...]} over the images SCRFD fired on.
     const retina = (try u.readJson(gpa, io, retina_path)).object;
     var vetoed: fetch.StrSet = .empty;
@@ -138,9 +151,15 @@ fn pick(gpa: std.mem.Allocator, io: Io, w: *Io.Writer, dir: []const u8, scrfd_pa
         const name = std.fs.path.basename(u.str(u.field(r, "image")));
         if (vetoed.contains(name)) continue;
         const dets = u.field(r, "detections");
+        const width = u.field(r, "width").integer;
         var best: f64 = 0;
-        for (dets.array.items) |d| best = @max(best, u.num(u.field(d, "score")));
-        const m: Mined = .{ .name = name, .width = u.field(r, "width").integer, .height = u.field(r, "height").integer, .best = best, .hits = dets };
+        var widest: f64 = 0; // widest hit at HARD or more, as a fraction of the image width
+        for (dets.array.items) |d| {
+            const score = u.num(u.field(d, "score"));
+            best = @max(best, score);
+            if (score >= HARD) widest = @max(widest, u.num(u.field(d, "bbox").array.items[2]) / @as(f64, @floatFromInt(width)));
+        }
+        const m: Mined = .{ .name = name, .width = width, .height = u.field(r, "height").integer, .best = best, .hits = dets, .frame_filling = widest >= opt.frame_width };
         if (best >= HARD) {
             if (!retina.contains(name)) unchecked += 1; // a hard negative RetinaFace never saw
             try hard.append(gpa, m);
@@ -160,15 +179,28 @@ fn pick(gpa: std.mem.Allocator, io: Io, w: *Io.Writer, dir: []const u8, scrfd_pa
     var rng = u.PyRandom.init(SEED);
     rng.shuffle(Mined, hard.items);
     rng.shuffle(Mined, easy.items);
-    const n_hard = @min(hard.items.len, count);
+    // Split the shuffled hard negatives, keeping order, and thin out the frame-filling ones.
+    var kept_hard: std.ArrayList(Mined) = .empty;
+    var frames: usize = 0;
+    for (hard.items) |m| frames += @intFromBool(m.frame_filling);
+    const frames_kept: usize = @intFromFloat(@floor(opt.frame_keep * @as(f64, @floatFromInt(frames))));
+    var taken: usize = 0;
+    for (hard.items) |m| {
+        if (m.frame_filling) {
+            if (taken == frames_kept) continue;
+            taken += 1;
+        }
+        try kept_hard.append(gpa, m);
+    }
+    const n_hard = @min(kept_hard.items.len, count);
     const n_easy = @min(easy.items.len, count - n_hard);
-    try w.print("vetoed by RetinaFace >= {d}: {d}; hard (SCRFD >= {d}): {d}; easy: {d}; picked {d} hard + {d} easy\n", .{ VETO, vetoed.count(), HARD, hard.items.len, easy.items.len, n_hard, n_easy });
+    try w.print("vetoed by RetinaFace >= {d}: {d}; hard (SCRFD >= {d}): {d}, {d} frame-filling (>= {d} of the width), {d} of those kept; easy: {d}; picked {d} hard + {d} easy\n", .{ VETO, vetoed.count(), HARD, hard.items.len, frames, opt.frame_width, frames_kept, easy.items.len, n_hard, n_easy });
 
-    const chosen = try std.mem.concat(gpa, Mined, &.{ hard.items[0..n_hard], easy.items[0..n_easy] });
+    const chosen = try std.mem.concat(gpa, Mined, &.{ kept_hard.items[0..n_hard], easy.items[0..n_easy] });
     std.mem.sort(Mined, chosen, {}, byName);
     var labels: Io.Writer.Allocating = .init(gpa);
     for (chosen) |m| try labels.writer.print("# {s} {d} {d}\n", .{ m.name, m.width, m.height });
-    try u.writeFile(io, try std.fs.path.join(gpa, &.{ dir, "labelv2_negatives.txt" }), labels.written());
+    try u.writeFile(io, try tagged(gpa, dir, "labelv2_negatives", ".txt", opt.tag), labels.written());
 
     var wanted: fetch.StrSet = .empty;
     for (chosen) |m| try wanted.put(gpa, m.name[0 .. std.mem.findScalarLast(u8, m.name, '.') orelse m.name.len], {});
@@ -176,7 +208,7 @@ fn pick(gpa: std.mem.Allocator, io: Io, w: *Io.Writer, dir: []const u8, scrfd_pa
     var rows: std.ArrayList([]const []const u8) = .empty;
     for (pool.rows) |r| if (wanted.contains(r[0])) try rows.append(gpa, r);
     if (rows.items.len != chosen.len) return error.ManifestMismatch;
-    try fetch.writeManifest(gpa, io, try std.fs.path.join(gpa, &.{ dir, "negatives_manifest.csv" }), rows.items);
+    try fetch.writeManifest(gpa, io, try tagged(gpa, dir, "negatives_manifest", ".csv", opt.tag), rows.items);
 
     // The highest-scoring hits left in, as fcs-cli records, for compare_detectors to show.
     const Hit = struct { m: *const Mined, d: std.json.Value };
@@ -207,8 +239,8 @@ fn pick(gpa: std.mem.Allocator, io: Io, w: *Io.Writer, dir: []const u8, scrfd_pa
     }
     try review.writer.writeAll("]");
     try none.writer.writeAll("]");
-    try u.writeFile(io, try std.fs.path.join(gpa, &.{ dir, "negatives_review.json" }), review.written());
-    try u.writeFile(io, try std.fs.path.join(gpa, &.{ dir, "negatives_review_none.json" }), none.written());
+    try u.writeFile(io, try tagged(gpa, dir, "negatives_review", ".json", opt.tag), review.written());
+    try u.writeFile(io, try tagged(gpa, dir, "negatives_review_none", ".json", opt.tag), none.written());
     try w.print("wrote labelv2_negatives.txt and negatives_manifest.csv ({d} images); {d} of {d} hits >= {d} in negatives_review.json, lowest score {d:.3}\n", .{ chosen.len, shown.len, hits.items.len, HARD, if (shown.len > 0) u.num(u.field(shown[shown.len - 1].d, "score")) else 0 });
     try w.flush();
 }
@@ -218,11 +250,16 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const args = try init.minimal.args.toSlice(gpa);
     if (args.len >= 5 and std.mem.eql(u8, args[1], "pick")) {
-        var count: usize = 20_000;
-        if (args.len == 7 and std.mem.eql(u8, args[5], "--count")) count = try std.fmt.parseInt(usize, args[6], 10) else if (args.len != 5) return error.Usage;
+        var opt: PickOptions = .{};
+        var k: usize = 5;
+        while (k + 1 < args.len) : (k += 2) {
+            const v = args[k + 1];
+            if (std.mem.eql(u8, args[k], "--count")) opt.count = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, args[k], "--frame-keep")) opt.frame_keep = try std.fmt.parseFloat(f64, v) else if (std.mem.eql(u8, args[k], "--frame-width")) opt.frame_width = try std.fmt.parseFloat(f64, v) else if (std.mem.eql(u8, args[k], "--tag")) opt.tag = v else return error.Usage;
+        }
+        if (k != args.len) return error.Usage;
         var so: u.Stdout = undefined;
         so.init(io);
-        return pick(gpa, io, so.w(), args[2], args[3], args[4], count);
+        return pick(gpa, io, so.w(), args[2], args[3], args[4], opt);
     }
     var data: ?[]const u8 = null;
     var pool_size: usize = 100_000;

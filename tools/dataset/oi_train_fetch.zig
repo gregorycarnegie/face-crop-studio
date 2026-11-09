@@ -1,6 +1,12 @@
 //! Pick N Open Images train images with croppable faces, record their credits, download them.
 //!
-//!   zig run -O ReleaseSafe tools/dataset/oi_train_fetch.zig -- <openimages_dir> [--count 80000] [--workers 32] [--select-only]
+//!   zig run -O ReleaseSafe tools/dataset/oi_train_fetch.zig -- <openimages_dir> [--count 80000] [--workers 8] [--select-only] [--large 0.45]
+//!
+//! `--large F` instead picks every train image *not already in* `train_manifest.csv` with a
+//! croppable face at least F of the image width, under the same rules, into
+//! `train_large_manifest.csv`. Only 3,876 of the 80,000 hold a face that large, and a retrain with
+//! face-free negatives, most of them frame-filling animal and toy close-ups, lost a quarter of
+//! its recall on large faces; these balance them with real ones.
 //!
 //! Why 80,000: that is about 164,000 croppable faces, the scale of WIDER FACE (159k), which is
 //! what SCRFD and YuNet were trained on. The label-count curve (CURVE_RESULTS.md) found images,
@@ -33,13 +39,13 @@ pub const FIELDS = [_][]const u8{ "ImageID", "License", "Author", "AuthorProfile
 
 pub const StrSet = std.StringHashMapUnmanaged(void);
 
-fn croppableImages(gpa: std.mem.Allocator, io: Io, path: []const u8) !StrSet {
+fn croppableImages(gpa: std.mem.Allocator, io: Io, path: []const u8, min_width: f64) !StrSet {
     var keep: StrSet = .empty;
     const csv = try u.Csv.load(gpa, io, path);
     const c_id, const c_group, const c_dep, const c_x0, const c_x1 = .{ csv.col("ImageID"), csv.col("IsGroupOf"), csv.col("IsDepiction"), csv.col("XMin"), csv.col("XMax") };
     for (csv.rows) |r| {
         if (!std.mem.eql(u8, r[c_group], "0") or !std.mem.eql(u8, r[c_dep], "0")) continue;
-        if (try std.fmt.parseFloat(f64, r[c_x1]) - try std.fmt.parseFloat(f64, r[c_x0]) >= MIN_WIDTH) try keep.put(gpa, r[c_id], {});
+        if (try std.fmt.parseFloat(f64, r[c_x1]) - try std.fmt.parseFloat(f64, r[c_x0]) >= min_width) try keep.put(gpa, r[c_id], {});
     }
     return keep;
 }
@@ -148,6 +154,7 @@ pub fn main(init: std.process.Init) !void {
     var count: usize = 80_000;
     var workers: usize = 32;
     var select_only = false;
+    var large: ?f64 = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--count") and i + 1 < args.len) {
@@ -156,6 +163,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, args[i], "--workers") and i + 1 < args.len) {
             i += 1;
             workers = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, args[i], "--large") and i + 1 < args.len) {
+            i += 1;
+            large = try std.fmt.parseFloat(f64, args[i]);
         } else if (std.mem.eql(u8, args[i], "--select-only")) {
             select_only = true;
         } else data = args[i];
@@ -165,8 +175,15 @@ pub fn main(init: std.process.Init) !void {
     so.init(io);
     const w = so.w();
 
-    const candidates = try croppableImages(gpa, io, try std.fs.path.join(gpa, &.{ dir, "faces-oidv6-train-annotations-bbox.csv" }));
-    const required = try labelledImages(gpa, io, try std.fs.path.join(gpa, &.{ dir, "labelv2_train.txt" }));
+    const candidates = try croppableImages(gpa, io, try std.fs.path.join(gpa, &.{ dir, "faces-oidv6-train-annotations-bbox.csv" }), large orelse MIN_WIDTH);
+    // --large adds to the 80k set: none of its images again, and nothing is required.
+    var existing: StrSet = .empty;
+    if (large != null) {
+        const m = try u.Csv.load(gpa, io, try std.fs.path.join(gpa, &.{ dir, "train_manifest.csv" }));
+        const c = m.col("ImageID");
+        for (m.rows) |r| try existing.put(gpa, r[c], {});
+    }
+    const required: StrSet = if (large != null) .empty else try labelledImages(gpa, io, try std.fs.path.join(gpa, &.{ dir, "labelv2_train.txt" }));
     try w.print("train images with a croppable face: {d}; required (eye-labelled): {d}\n", .{ candidates.count(), required.count() });
     try w.flush();
 
@@ -177,6 +194,7 @@ pub fn main(init: std.process.Init) !void {
     for (FIELDS, 0..) |f, k| cols[k] = ic.col(f);
     for (ic.rows) |r| {
         const image = r[cols[0]];
+        if (existing.contains(image)) continue;
         if (required.contains(image) or (candidates.contains(image) and std.mem.eql(u8, r[c_rot], "0.0"))) {
             const picked = try gpa.alloc([]const u8, FIELDS.len);
             for (cols, 0..) |c, k| picked[k] = r[c];
@@ -205,7 +223,7 @@ pub fn main(init: std.process.Init) !void {
     try chosen.appendSlice(gpa, pool.items[0..@min(pool.items.len, count -| req_keys.items.len)]);
     try w.print("eligible pool {d}; chosen {d}\n", .{ pool.items.len + required.count(), chosen.items.len });
 
-    const manifest = try std.fs.path.join(gpa, &.{ dir, "train_manifest.csv" });
+    const manifest = try std.fs.path.join(gpa, &.{ dir, if (large != null) "train_large_manifest.csv" else "train_manifest.csv" });
     var manifest_rows: std.ArrayList([]const []const u8) = .empty;
     for (chosen.items) |image| try manifest_rows.append(gpa, rows.get(image).?);
     try writeManifest(gpa, io, manifest, manifest_rows.items);

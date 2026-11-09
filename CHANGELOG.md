@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   background, and `oi_negatives.zig` picks them: Open Images photographs where a human verified
   Person, Human face or Human head absent. A missing person label is not enough; in a random
   sample of those images about half the detector's hits were real people.
+- Two hard-negative retrains cut COCO's false positives on no-person photographs from 0.030 to
+  0.004-0.007 per image but lost large faces, so the shipped detector is unchanged.
+  `tools/dataset/HARD_NEGATIVES.md` records both, and that short fine-tunes cannot show the
+  large-face loss. The trainer gains `--init`, `--lr` and `--steps` for such fine-tunes,
+  `oi_train_fetch --large` adds photographs with large faces, and `oi_negatives pick` can keep only
+  a fraction of the frame-filling negatives.
 
 ## [2.3.4] - 2026-11-08
 

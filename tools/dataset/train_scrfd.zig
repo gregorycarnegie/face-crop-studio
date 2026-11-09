@@ -5,7 +5,9 @@
 //! `curve` is `scrfd_fcs_500m.py` (the label-count curve: batch 8, 640 epochs, LR steps at
 //! 440/544); `80k` is `scrfd_fcs80k_500m.py` (batch 64, 100 epochs, steps at 69/85, ignore
 //! regions at IoF 0.5). `--negatives` adds face-free images (headers only, `aug.parseNegatives`)
-//! that train every anchor as background; neither recipe has any. Both: SGD 0.01, momentum 0.9, weight decay 5e-4, 1,500 iterations of
+//! that train every anchor as background; neither recipe has any. `--init` starts from a checkpoint's weights
+//! with a fresh optimiser and schedule (a fine-tune, unlike `--resume`); `--lr` and `--steps` set
+//! its base rate and the two epochs the rate drops tenfold. Both: SGD 0.01, momentum 0.9, weight decay 5e-4, 1,500 iterations of
 //! linear warm-up from 0.1%, MMDetection's initialisation. Data goes through `scrfd_augment.zig`
 //! and `scrfd_targets.zig` on CPU threads, prefetched while the GPU trains (`scrfd_net.zig`).
 //! Checkpoints are MMDetection-shaped (`state_dict`, `meta`) plus the SGD momentum, so
@@ -272,20 +274,19 @@ fn initialState(gpa: std.mem.Allocator, seed: u64) ![]const ck.OutEntry {
 
 // ── Training ──────────────────────────────────────────────────────────────────
 
-const Recipe = struct { batch: usize, epochs: usize, steps: [2]usize, ignore_iof: f32, interval: usize };
+const Recipe = struct { batch: usize, epochs: usize, steps: [2]usize, ignore_iof: f32, interval: usize, lr: f64 = 0.01 };
 /// `scrfd_fcs_500m.py` (the label-count curve) and `scrfd_fcs80k_500m.py`.
 const recipes = .{
     .curve = Recipe{ .batch = 8, .epochs = 640, .steps = .{ 440, 544 }, .ignore_iof = -1, .interval = 80 },
     .@"80k" = Recipe{ .batch = 64, .epochs = 100, .steps = .{ 69, 85 }, .ignore_iof = 0.5, .interval = 10 },
 };
-const base_lr = 0.01;
 const warmup_iters = 1500;
 const warmup_ratio = 0.001;
 
 /// mmcv's step policy with linear warm-up: x0.1 at each step epoch, ramped over the first
-/// 1,500 iterations from 0.1% of the rate.
-fn learningRate(epoch: usize, iter: usize, steps: [2]usize) f64 {
-    var lr: f64 = base_lr;
+/// 1,500 iterations from 0.1% of the rate. Both recipes start at 0.01.
+fn learningRate(base: f64, epoch: usize, iter: usize, steps: [2]usize) f64 {
+    var lr: f64 = base;
     for (steps) |s| if (epoch >= s) {
         lr *= 0.1;
     };
@@ -372,6 +373,8 @@ const Options = struct {
     out: []const u8,
     recipe: Recipe,
     resume_from: ?[]const u8 = null,
+    /// Start from these weights with a fresh optimiser and schedule (`--init`), unlike `--resume`.
+    init_from: ?[]const u8 = null,
     seed: u64 = 0,
     workers: usize = 16,
     max_iters: ?usize = null,
@@ -408,7 +411,7 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
     const images = try std.fs.path.join(gpa, &.{ o.data, "images" });
     var start_epoch: usize = 0;
     var iter: usize = 0;
-    const source = if (o.resume_from) |path| path else blk: {
+    const source = if (o.resume_from) |path| path else if (o.init_from) |path| path else blk: {
         const path = try std.fs.path.join(gpa, &.{ o.out, "init.pth" });
         try ck.save(gpa, io, path, &.{ .{ .key = "meta", .value = .{ .dict = &.{} } }, .{ .key = "state_dict", .value = .{ .dict = try initialState(gpa, o.seed) } } });
         break :blk path;
@@ -473,7 +476,7 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
             try m.zeroGrads();
             const l = try gpu.loss(&m, &lb, @intCast(n), b.label_weight, positives.items, samples);
             try m.backward(@intCast(n));
-            try m.sgd(learningRate(epoch, iter, o.recipe.steps), 0.9, 5e-4, first_step);
+            try m.sgd(learningRate(o.recipe.lr, epoch, iter, o.recipe.steps), 0.9, 5e-4, first_step);
             first_step = false;
             iter += 1;
             sums[0] += l.cls;
@@ -492,7 +495,7 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
             if (iter % 50 == 0 or k + 1 == per_epoch) {
                 const secs = @as(f64, @floatFromInt(started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds)) / std.time.ns_per_s;
                 const f: f64 = @floatFromInt(logged);
-                try w.print("epoch {d} [{d}/{d}] iter {d}  lr {e:.3}  loss_cls {d:.4}  loss_bbox {d:.4}  loss_kps {d:.4}  {d:.1} img/s\n", .{ epoch + 1, k + 1, per_epoch, iter, learningRate(epoch, iter, o.recipe.steps), sums[0] / f, sums[1] / f, sums[2] / f, @as(f64, @floatFromInt((iter - start_epoch * per_epoch) * n)) / secs });
+                try w.print("epoch {d} [{d}/{d}] iter {d}  lr {e:.3}  loss_cls {d:.4}  loss_bbox {d:.4}  loss_kps {d:.4}  {d:.1} img/s\n", .{ epoch + 1, k + 1, per_epoch, iter, learningRate(o.recipe.lr, epoch, iter, o.recipe.steps), sums[0] / f, sums[1] / f, sums[2] / f, @as(f64, @floatFromInt((iter - start_epoch * per_epoch) * n)) / secs });
                 try w.flush();
                 sums = .{ 0, 0, 0 };
                 logged = 0;
@@ -524,6 +527,8 @@ pub fn main(init: std.process.Init) !void {
     var o: Options = .{ .data = "", .labels = "", .out = "work_dirs/scrfd", .recipe = recipes.curve };
     var epochs: ?usize = null;
     var batch: ?usize = null;
+    var lr: ?f64 = null;
+    var steps: ?[2]usize = null;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -532,13 +537,13 @@ pub fn main(init: std.process.Init) !void {
             const v = args[i];
             if (std.mem.eql(u8, arg, "--recipe")) {
                 o.recipe = if (std.mem.eql(u8, v, "80k")) recipes.@"80k" else if (std.mem.eql(u8, v, "curve")) recipes.curve else return error.UnknownRecipe;
-            } else if (std.mem.eql(u8, arg, "--out")) o.out = v else if (std.mem.eql(u8, arg, "--negatives")) o.negatives = v else if (std.mem.eql(u8, arg, "--resume")) o.resume_from = v else if (std.mem.eql(u8, arg, "--seed")) o.seed = try std.fmt.parseInt(u64, v, 10) else if (std.mem.eql(u8, arg, "--workers")) o.workers = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--epochs")) epochs = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--batch")) batch = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--max-iters")) o.max_iters = try std.fmt.parseInt(usize, v, 10) else return error.UnknownOption;
+            } else if (std.mem.eql(u8, arg, "--out")) o.out = v else if (std.mem.eql(u8, arg, "--negatives")) o.negatives = v else if (std.mem.eql(u8, arg, "--resume")) o.resume_from = v else if (std.mem.eql(u8, arg, "--init")) o.init_from = v else if (std.mem.eql(u8, arg, "--lr")) lr = try std.fmt.parseFloat(f64, v) else if (std.mem.eql(u8, arg, "--steps")) steps = .{ try std.fmt.parseInt(usize, v[0 .. std.mem.findScalar(u8, v, ',') orelse return error.StepsNeedTwo], 10), try std.fmt.parseInt(usize, v[(std.mem.findScalar(u8, v, ',') orelse return error.StepsNeedTwo) + 1 ..], 10) } else if (std.mem.eql(u8, arg, "--seed")) o.seed = try std.fmt.parseInt(u64, v, 10) else if (std.mem.eql(u8, arg, "--workers")) o.workers = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--epochs")) epochs = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--batch")) batch = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--max-iters")) o.max_iters = try std.fmt.parseInt(usize, v, 10) else return error.UnknownOption;
         } else try positional.append(gpa, arg);
     }
     if (positional.items.len != 2) {
         std.debug.print(
             \\usage: train_scrfd <openimages_dir> <labelv2.txt> [--recipe curve|80k] [--out dir] [--epochs N] [--batch N]
-            \\                   [--negatives face_free.txt] [--resume checkpoint.pth] [--seed 0] [--workers 16] [--max-iters N]
+            \\                   [--negatives face_free.txt] [--resume checkpoint.pth | --init checkpoint.pth] [--lr 0.01] [--steps a,b] [--seed 0] [--workers 16] [--max-iters N]
             \\       train_scrfd --check <checkpoint.pth> | --dump-grads <checkpoint.pth> <dir> | --dump-loss <checkpoint.pth> <openimages_dir> <dir>
             \\
         , .{});
@@ -548,16 +553,19 @@ pub fn main(init: std.process.Init) !void {
     o.labels = positional.items[1];
     if (epochs) |e| o.recipe.epochs = e;
     if (batch) |b| o.recipe.batch = b;
+    if (lr) |r| o.recipe.lr = r;
+    if (steps) |st| o.recipe.steps = st;
+    if (o.resume_from != null and o.init_from != null) return error.ResumeOrInitNotBoth;
     if (o.recipe.batch == 0 or o.workers == 0) return error.BatchAndWorkersMustBePositive;
     return train(gpa, init.io, &dev, o);
 }
 
 test "the learning rate warms up linearly from 0.1% and steps down tenfold" {
-    try std.testing.expectApproxEqRel(@as(f64, 1e-5), learningRate(0, 0, .{ 440, 544 }), 1e-12);
-    try std.testing.expectApproxEqRel(@as(f64, 0.01 * (1 - 0.5 * 0.999)), learningRate(0, 750, .{ 440, 544 }), 1e-12);
-    try std.testing.expectEqual(@as(f64, 0.01), learningRate(3, 5000, .{ 440, 544 }));
-    try std.testing.expectApproxEqRel(@as(f64, 1e-3), learningRate(440, 99999, .{ 440, 544 }), 1e-12);
-    try std.testing.expectApproxEqRel(@as(f64, 1e-4), learningRate(600, 99999, .{ 440, 544 }), 1e-12);
+    try std.testing.expectApproxEqRel(@as(f64, 1e-5), learningRate(0.01, 0, 0, .{ 440, 544 }), 1e-12);
+    try std.testing.expectApproxEqRel(@as(f64, 0.01 * (1 - 0.5 * 0.999)), learningRate(0.01, 0, 750, .{ 440, 544 }), 1e-12);
+    try std.testing.expectEqual(@as(f64, 0.01), learningRate(0.01, 3, 5000, .{ 440, 544 }));
+    try std.testing.expectApproxEqRel(@as(f64, 1e-3), learningRate(0.01, 440, 99999, .{ 440, 544 }), 1e-12);
+    try std.testing.expectApproxEqRel(@as(f64, 1e-4), learningRate(0.01, 600, 99999, .{ 440, 544 }), 1e-12);
 }
 
 test "the initial state builds the exporter's architecture" {

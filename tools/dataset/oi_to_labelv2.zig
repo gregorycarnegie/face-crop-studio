@@ -1,6 +1,6 @@
 //! Write SCRFD labelv2 files that box *every* face Open Images drew, not just the clicked ones.
 //!
-//!   zig run -O ReleaseFast tools/dataset/oi_to_labelv2.zig -- <openimages_dir> train [--detections det.json] [--out file]
+//!   zig run -O ReleaseFast tools/dataset/oi_to_labelv2.zig -- <openimages_dir> train [--detections det.json] [--manifest train_manifest.csv] [--out file]
 //!   zig run -O ReleaseFast tools/dataset/oi_to_labelv2.zig -- <openimages_dir> test  [--out file]
 //!
 //! Why this exists: `to_labelv2` builds from the eye-labelling JSON, which holds one entry per
@@ -104,11 +104,15 @@ pub fn main(init: std.process.Init) !void {
     var split: ?[]const u8 = null;
     var detections_path: ?[]const u8 = null;
     var out_arg: ?[]const u8 = null;
+    var manifest: []const u8 = "train_manifest.csv";
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--detections") and i + 1 < argv.len) {
             i += 1;
             detections_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--manifest") and i + 1 < argv.len) {
+            i += 1;
+            manifest = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--out") and i + 1 < argv.len) {
             i += 1;
             out_arg = argv[i];
@@ -140,7 +144,7 @@ pub fn main(init: std.process.Init) !void {
     const clicked = try oldLines(gpa, io, try std.fs.path.join(gpa, &.{ dir, if (is_train) "labelv2_train.txt" else "labelv2_test.txt" }));
     var images: std.ArrayList([]const u8) = .empty;
     if (is_train) {
-        const m = try u.Csv.load(gpa, io, try std.fs.path.join(gpa, &.{ dir, "train_manifest.csv" }));
+        const m = try u.Csv.load(gpa, io, try std.fs.path.join(gpa, &.{ dir, manifest }));
         const c = m.col("ImageID");
         for (m.rows) |r| try images.append(gpa, r[c]);
     } else { // the existing test images
