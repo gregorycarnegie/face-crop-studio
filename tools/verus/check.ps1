@@ -67,3 +67,5 @@ try {
     $env:RUSTUP_HOME = $previousRustupHome
     $env:RUSTUP_TOOLCHAIN = $previousToolchain
 }
+# The expected mutant failure must not become the calling CI shell's exit code.
+exit 0
