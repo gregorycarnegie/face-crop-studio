@@ -7,6 +7,8 @@ pub(crate) mod geometry;
 pub(crate) mod layout;
 #[path = "../../../fcs-core/src/cpu/nchwc.rs"]
 pub mod nchwc;
+#[path = "../../../fcs-core/src/cpu/output.rs"]
+mod output;
 #[path = "../../../fcs-core/src/cpu/partition.rs"]
 pub(crate) mod partition;
 #[path = "../../../fcs-core/src/tensor/size.rs"]

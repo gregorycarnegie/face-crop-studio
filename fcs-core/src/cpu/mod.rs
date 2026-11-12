@@ -10,6 +10,7 @@
 
 pub(crate) mod geometry;
 pub mod nchwc;
+mod output;
 pub(crate) mod partition;
 pub mod tensor;
 pub(crate) mod transform;

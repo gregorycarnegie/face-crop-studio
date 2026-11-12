@@ -22,6 +22,7 @@ use super::geometry::{
     column_index, column_inside, input_index, interior, output_dim, tap_offset, tap_rows,
     weight_index,
 };
+use super::output::write_upsampled_row;
 use super::partition::{chunk_span, decode_job, row_base, tile_end};
 use super::size::{checked_allocation, checked_elements};
 use super::tensor::Tensor;
@@ -831,9 +832,7 @@ pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
                 .for_each(|(r, out_row)| {
                     let (start, end) = upsample_row(r, w);
                     let in_row = &input.data[start..end];
-                    for (x, o) in out_row.iter_mut().enumerate() {
-                        o.write(in_row[x / 2]);
-                    }
+                    write_upsampled_row(in_row, out_row);
                 });
         })
     };

@@ -1,0 +1,40 @@
+name: Verus Output Initialization
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - fcs-core/src/cpu/**
+      - tools/safety/**
+      - tools/verus/**
+      - .github/workflows/verus.yml
+  pull_request:
+    paths:
+      - fcs-core/src/cpu/**
+      - tools/safety/**
+      - tools/verus/**
+      - .github/workflows/verus.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  output-row:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: cache/verus
+          key: verus-windows-${{ hashFiles('tools/verus/setup.ps1') }}
+      - name: Set up pinned Verus and isolated Rust toolchain
+        shell: pwsh
+        run: ./tools/verus/setup.ps1
+      - name: Verify production writer and reject a missed write
+        shell: pwsh
+        run: ./tools/verus/check.ps1
+      - name: Exercise production CPU kernels
+        shell: pwsh
+        run: cargo test --locked --manifest-path tools/safety/Cargo.toml --release miri_cpu_buffers

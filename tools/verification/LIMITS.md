@@ -19,6 +19,12 @@ versions pinned in setup.sh. Their results were:
 
 No production proof imports these probes or assumes their external axioms.
 
+The separate [Verus pilot](../verus/README.md) verifies the actual
+`MaybeUninit<T>` writes in the CPU 2x-upsample row helper: every output slot is
+initialized with the correct source value, for a correctly sized row. It does
+not verify raw-pointer ownership, Rayon, arena allocation/reuse, or the final
+vector conversion; the raw-pointer limitation below still applies.
+
 Consequently, IEEE floating-point detection/color arithmetic, raw-pointer
 ownership, GPU/CUDA execution, buffer drop tracking, atomic filesystem
 replacement, and SQL/format-library enforcement remain **unproved**. Establishing
