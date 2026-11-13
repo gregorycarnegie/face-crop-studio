@@ -100,7 +100,7 @@ pub use image_utils::{
 use log::LevelFilter;
 pub use output::{
     ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, OverwritePolicy, PngCompression,
-    append_suffix_to_filename, save_dynamic_image,
+    append_suffix_to_filename, mapped_output_path, sanitize_relative_path, save_dynamic_image,
 };
 pub use quality::{Quality, QualityFilter, estimate_sharpness, laplacian_variance};
 pub use shape::{

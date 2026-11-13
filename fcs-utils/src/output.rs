@@ -13,7 +13,10 @@ mod types;
 mod writer;
 
 pub use types::{ImageFormatHint, MetadataContext, OutputOptions, PngCompression};
-pub use writer::{OutputClaims, OverwritePolicy, append_suffix_to_filename, save_dynamic_image};
+pub use writer::{
+    OutputClaims, OverwritePolicy, append_suffix_to_filename, mapped_output_path,
+    sanitize_relative_path, save_dynamic_image,
+};
 
 #[cfg(test)]
 use {

@@ -38,3 +38,5 @@ CanvasTools 1.0 CanvasTools.qml
 IconButton 1.0 IconButton.qml
 ActivityLog 1.0 ActivityLog.qml
 ChoiceDialog 1.0 ChoiceDialog.qml
+AppComboBox 1.0 AppComboBox.qml
+MappingTab 1.0 MappingTab.qml

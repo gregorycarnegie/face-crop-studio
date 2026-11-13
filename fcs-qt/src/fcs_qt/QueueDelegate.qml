@@ -12,6 +12,8 @@ ItemDelegate {
     required property string error
     required property int faces
     required property int selected
+    // The output name a mapping file gives this photo, or empty.
+    required property string mapped
     readonly property bool current: ListView.isCurrentItem
     signal removeRequested
 
@@ -92,7 +94,8 @@ ItemDelegate {
                 text: control.status === "queued" ? qsTr("Finding faces…")
                     : control.status === "failed" ? qsTr("Couldn't read this file")
                     : control.faces === 0 ? qsTr("No faces found")
-                    : control.faces === 1 ? qsTr("1 face") : qsTr("%1 faces").arg(control.faces)
+                    : (control.faces === 1 ? qsTr("1 face") : qsTr("%1 faces").arg(control.faces))
+                      + (control.mapped !== "" ? qsTr(" · as %1").arg(control.mapped) : "")
                 color: control.status === "failed" ? Theme.red : Theme.ink3
                 font.pixelSize: Theme.caption
             }

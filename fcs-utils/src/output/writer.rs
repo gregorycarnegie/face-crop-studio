@@ -12,7 +12,10 @@ use crate::config::MetadataMode;
 use anyhow::{Context, Result};
 use image::DynamicImage;
 use log::debug;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// Save an image using the provided options and metadata context.
 ///
@@ -129,6 +132,39 @@ pub fn append_suffix_to_filename(name: &str, suffix: &str) -> String {
     }
 }
 
+/// Where a face goes when a mapping file names its photo's output: `{name}.{ext}` inside
+/// `output_dir`, or `{name}_faceN.{ext}` when the photo exports more than one face. The name
+/// may carry folders; anything that would leave `output_dir` (a root, `..`) is dropped.
+pub fn mapped_output_path(
+    output_dir: &Path,
+    override_target: &Path,
+    ext: &str,
+    face_index: usize,
+    multi_face: bool,
+) -> PathBuf {
+    let safe_target = sanitize_relative_path(override_target);
+    let parent = safe_target.parent().unwrap_or_else(|| Path::new(""));
+    let stem = safe_target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("output");
+    let stem = if multi_face {
+        format!("{stem}_face{}", face_index + 1)
+    } else {
+        stem.to_string()
+    };
+    output_dir.join(parent).join(format!("{stem}.{ext}"))
+}
+
+/// `path` with only its plain components, so joining it to a folder cannot leave the folder.
+pub fn sanitize_relative_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    path.components()
+        .filter(|component| matches!(component, Component::Normal(_)))
+        .collect()
+}
+
 /// What to do when an export's file name already exists on disk from before the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OverwritePolicy {
@@ -204,5 +240,33 @@ impl OutputClaims {
             );
         }
         candidate
+    }
+}
+
+#[cfg(test)]
+mod mapped_path_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn mapped_names_stay_inside_the_folder_and_number_several_faces() {
+        let out = Path::new("out");
+        assert_eq!(
+            mapped_output_path(out, Path::new("alice/smith.jpg"), "png", 0, false),
+            Path::new("out/alice/smith.png")
+        );
+        assert_eq!(
+            mapped_output_path(out, Path::new("smith"), "png", 1, true),
+            Path::new("out/smith_face2.png")
+        );
+        // A name trying to climb out, or rooted elsewhere, lands inside `out`.
+        assert_eq!(
+            mapped_output_path(out, Path::new("../../evil"), "jpg", 0, false),
+            Path::new("out/evil.jpg")
+        );
+        assert_eq!(
+            sanitize_relative_path(Path::new("/abs/./x/../y")),
+            Path::new("abs/x/y")
+        );
     }
 }

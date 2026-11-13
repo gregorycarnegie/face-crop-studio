@@ -245,6 +245,7 @@ pub fn export_photo(
     image: &DynamicImage,
     source: &Path,
     faces: &[(usize, Face)],
+    mapped: Option<&str>,
     settings: &AppSettings,
     out_dir: &Path,
     claims: &OutputClaims,
@@ -271,9 +272,13 @@ pub fn export_photo(
             result.skipped += 1;
             continue;
         }
-        let suffix = filter.suffix_for(crop.quality).unwrap_or("");
+        let naming = Naming {
+            mapped,
+            multi_face: faces.len() > 1,
+            suffix: filter.suffix_for(crop.quality).unwrap_or(""),
+        };
         match save_face(
-            &crop, source, face, *index, settings, out_dir, claims, suffix,
+            &crop, source, face, *index, &naming, settings, out_dir, claims,
         ) {
             Ok(_) => result.exported += 1,
             Err(err) => {
@@ -289,21 +294,41 @@ pub fn export_photo(
     result
 }
 
-/// Where face `index` of `source` is saved: `{stem}_face_NN{suffix}.{ext}`, fcs-gui's naming.
+/// How an exported face is named.
+pub struct Naming<'a> {
+    /// The output name a mapping file gave the photo, if any.
+    pub mapped: Option<&'a str>,
+    /// Whether the photo exports more than one face, so a mapped name needs numbering.
+    pub multi_face: bool,
+    /// A quality suffix such as `_highq`, or empty.
+    pub suffix: &'a str,
+}
+
+/// Where face `index` of `source` is saved: `{stem}_face_NN{suffix}.{ext}` by default, or the
+/// mapped name (`{name}` or `{name}_faceN`, without a quality suffix), both as fcs-gui does.
 pub fn face_path(
     source: &Path,
     index: usize,
-    suffix: &str,
+    naming: &Naming,
     settings: &AppSettings,
     out_dir: &Path,
 ) -> PathBuf {
+    let ext = settings.crop.output_format.extension();
+    if let Some(mapped) = naming.mapped {
+        return fcs_utils::mapped_output_path(
+            out_dir,
+            Path::new(mapped),
+            ext,
+            index,
+            naming.multi_face,
+        );
+    }
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("face");
-    let ext = settings.crop.output_format.extension();
     let name = format!("{stem}_face_{:02}.{ext}", index + 1);
-    out_dir.join(append_suffix_to_filename(&name, suffix))
+    out_dir.join(append_suffix_to_filename(&name, naming.suffix))
 }
 
 /// Save one finished crop; `claims` decides whether an existing file is replaced or kept.
@@ -313,12 +338,16 @@ fn save_face(
     source: &Path,
     face: &Face,
     index: usize,
+    naming: &Naming,
     settings: &AppSettings,
     out_dir: &Path,
     claims: &OutputClaims,
-    suffix: &str,
 ) -> Result<PathBuf> {
-    let path = claims.claim(face_path(source, index, suffix, settings, out_dir), source);
+    let path = claims.claim(face_path(source, index, naming, settings, out_dir), source);
+    if let Some(parent) = path.parent() {
+        // A mapped name may put the crop in a subfolder.
+        std::fs::create_dir_all(parent)?;
+    }
     save_dynamic_image(
         &crop.image,
         &path,
@@ -420,6 +449,7 @@ mod tests {
                 &detected.image,
                 &source,
                 faces,
+                None,
                 settings,
                 &out,
                 &claims,

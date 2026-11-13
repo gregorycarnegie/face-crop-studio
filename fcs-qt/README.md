@@ -39,11 +39,15 @@ pipeline and settings file.
     quality suffixes in names. They judge the finished crop, as the CLI does.
   - The detection confidence floor; changing it finds the faces in every photo again.
   - An optional CSV or JSON report beside the crops, in fcs-gui's columns.
+- Mapping files: a CSV, Excel, Parquet or SQLite table (opened from the Mapping tab, or
+  dropped on the window) names each photo's crops. Its photo and name columns are guessed
+  from the headers and can be changed. Rows match photos by file name, then by stem, exact
+  case first, as in fcs-gui, and the tab shows how many matched.
 - Photos can be removed from the queue one at a time, or all at once with a confirmation.
   An Activity tab logs what happened: detections, failures, exports, reports.
 - Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).
 
-Not ported yet: mapping files, webcam, watch folders.
+Not ported yet: webcam, watch folders.
 
 Settings reach QML as one JSON object (`Studio.settings`, the serialized `AppSettings`), and
 every control writes through one slot, `Studio.update(patch)`, which merges the patch, checks

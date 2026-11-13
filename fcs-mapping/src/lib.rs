@@ -137,3 +137,85 @@ fn to_preview(format: MappingFormat, table: MappingTable) -> MappingPreview {
         rows: table.rows,
     }
 }
+
+/// The mapped output name for each of `paths`, or `None` where no row matches.
+///
+/// A row matches by file name, else by stem (so a row may leave the extension off). Each tries
+/// the exact spelling before ignoring case: Windows and macOS treat `Photo.JPG` and `photo.jpg`
+/// as one file, and spreadsheet exports recase names. The first row wins within a tier.
+pub fn match_entries<'a, 'p>(
+    entries: &'a [MappingEntry],
+    paths: impl IntoIterator<Item = &'p Path>,
+) -> Vec<Option<&'a str>> {
+    let mut index = std::collections::HashMap::new();
+    for entry in entries {
+        let keys = match_keys(Path::new(&entry.source_path));
+        for (tier, key) in keys.into_iter().enumerate() {
+            if let Some(key) = key {
+                index
+                    .entry((tier, key))
+                    .or_insert(entry.output_name.as_str());
+            }
+        }
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            match_keys(path)
+                .into_iter()
+                .enumerate()
+                .find_map(|(tier, key)| index.get(&(tier, key?)).copied())
+        })
+        .collect()
+}
+
+/// Lookup keys, most specific first: name, name ignoring case, stem, stem ignoring case.
+fn match_keys(path: &Path) -> [Option<String>; 4] {
+    let name = path.file_name().and_then(|s| s.to_str());
+    let stem = path.file_stem().and_then(|s| s.to_str());
+    [
+        name.map(str::to_owned),
+        name.map(str::to_lowercase),
+        stem.map(str::to_owned),
+        stem.map(str::to_lowercase),
+    ]
+}
+
+#[cfg(test)]
+mod match_tests {
+    use super::*;
+
+    #[test]
+    fn mapping_matches_by_name_then_stem_preferring_the_exact_spelling() {
+        let entry = |source: &str, output: &str| MappingEntry {
+            source_path: source.into(),
+            output_name: output.into(),
+        };
+        let entries = [
+            // A spreadsheet export recased this one; the file on disk is lower case.
+            entry("shoots/FaceCropOTBreak_1.jpg", "recased"),
+            // Same stem, other extension: must not beat a name match listed later.
+            entry("photo.png", "other-extension"),
+            entry("PHOTO.JPG", "photo-folded"),
+            entry("photo.jpg", "photo-exact"),
+            entry("no-extension", "by-stem"),
+        ];
+        let queue = [
+            "in/facecropotbreak_1.jpg",
+            "in/photo.jpg",
+            "in/Photo.jpg",
+            "in/NO-EXTENSION.webp",
+            "in/unlisted.jpg",
+        ];
+        assert_eq!(
+            match_entries(&entries, queue.iter().map(Path::new)),
+            [
+                Some("recased"),
+                Some("photo-exact"),
+                Some("photo-folded"),
+                Some("by-stem"),
+                None
+            ]
+        );
+    }
+}

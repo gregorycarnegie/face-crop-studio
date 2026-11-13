@@ -10,6 +10,7 @@ use crate::{
     pipeline::{self, Detected, Engine, Face, PhotoExport, Turn},
 };
 use fcs_core::BoundingBox;
+use fcs_mapping::{ColumnSelector, MappingFormat, MappingReadOptions};
 use fcs_utils::{
     CropShape, OutputClaims, OverwritePolicy,
     config::{AppSettings, DetectionSettings, default_settings_path},
@@ -46,7 +47,30 @@ struct Entry {
     size: (u32, u32),
     faces: Vec<Face>,
     selected: Vec<bool>,
+    /// The output name a mapping file gives this photo.
+    mapped: Option<String>,
 }
+
+/// A loaded mapping file: which table, which columns, and what it matched.
+struct MappingFile {
+    path: PathBuf,
+    format: MappingFormat,
+    options: MappingReadOptions,
+    sheets: Vec<String>,
+    tables: Vec<String>,
+    columns: Vec<String>,
+    preview: Vec<Vec<String>>,
+    total: usize,
+    source: usize,
+    output: usize,
+}
+
+/// Rows of a mapping file shown in the sidebar.
+const MAPPING_PREVIEW_ROWS: usize = 12;
+/// Extensions read as mapping files rather than photos when dropped or opened.
+const MAPPING_EXTENSIONS: &[&str] = &[
+    "csv", "tsv", "xlsx", "xls", "xlsm", "ods", "parquet", "pq", "db", "sqlite", "sqlite3",
+];
 
 struct DetectJob {
     uid: u64,
@@ -62,6 +86,7 @@ struct ExportJob {
     turn: Turn,
     detected: usize,
     faces: Vec<(usize, Face)>,
+    mapped: Option<String>,
 }
 
 /// One photo's line in the export report: fcs-gui's columns, so the reports compare.
@@ -134,6 +159,9 @@ pub struct Studio {
     exporting: bool,
     export_progress: f64,
     log: Vec<Value>,
+    mapping: Option<MappingFile>,
+    /// `mapping`, as the sidebar shows it.
+    mapping_json: Value,
 }
 
 impl Default for Studio {
@@ -204,6 +232,8 @@ impl Default for Studio {
             exporting: false,
             export_progress: 0.0,
             log: Vec::new(),
+            mapping: None,
+            mapping_json: json!({ "loaded": false }),
         };
         studio.sync_settings();
         studio
@@ -264,6 +294,7 @@ impl Studio {
         Notify = export_changed
     );
     qproperty!("log", Member = log, Notify = log_changed);
+    qproperty!("mapping", Member = mapping_json, Notify = mapping_changed);
 
     #[qsignal(qml_name = "engineChanged")]
     fn engine_changed(&mut self);
@@ -279,6 +310,8 @@ impl Studio {
     fn export_changed(&mut self);
     #[qsignal(qml_name = "logChanged")]
     fn log_changed(&mut self);
+    #[qsignal(qml_name = "mappingChanged")]
+    fn mapping_changed(&mut self);
     /// A transient message; `url` is a folder to offer opening, or empty.
     #[qsignal]
     fn toast(&mut self, message: String, url: String);
@@ -512,7 +545,12 @@ impl Studio {
                 count += suffixes
                     .iter()
                     .filter(|suffix| {
-                        pipeline::face_path(&job.path, *index, suffix, &self.settings, &out_dir)
+                        let naming = pipeline::Naming {
+                            mapped: job.mapped.as_deref(),
+                            multi_face: job.faces.len() > 1,
+                            suffix,
+                        };
+                        pipeline::face_path(&job.path, *index, &naming, &self.settings, &out_dir)
                             .exists()
                     })
                     .count() as i32;
@@ -566,7 +604,14 @@ impl Studio {
                 let (result, error) = match image {
                     Ok(image) => (
                         pipeline::export_photo(
-                            &engine, &image, &job.path, &job.faces, &settings, &out_dir, &claims,
+                            &engine,
+                            &image,
+                            &job.path,
+                            &job.faces,
+                            job.mapped.as_deref(),
+                            &settings,
+                            &out_dir,
+                            &claims,
                         ),
                         None,
                     ),
@@ -607,6 +652,54 @@ impl Studio {
             handle.invoke_mut(move |studio| studio.export_finished(totals, report, folder_url));
         });
     }
+
+    /// Read a mapping file (CSV, Excel, Parquet or SQLite) whose rows name exported faces.
+    #[qslot(qml_name = "loadMapping")]
+    fn load_mapping(&mut self, url: String) {
+        self.open_mapping(pipeline::url_to_path(&url));
+    }
+
+    /// Read another sheet of the open workbook.
+    #[qslot(qml_name = "setMappingSheet")]
+    fn set_mapping_sheet(&mut self, sheet: String) {
+        if let Some(mapping) = &mut self.mapping {
+            mapping.options.sheet_name = Some(sheet);
+            self.refresh_mapping(true);
+        }
+    }
+
+    /// Read another table of the open database.
+    #[qslot(qml_name = "setMappingTable")]
+    fn set_mapping_table(&mut self, table: String) {
+        if let Some(mapping) = &mut self.mapping {
+            mapping.options.sql_table = Some(table);
+            self.refresh_mapping(true);
+        }
+    }
+
+    /// Choose which columns hold the photo and its output name.
+    #[qslot(qml_name = "setMappingColumns")]
+    fn set_mapping_columns(&mut self, source: i32, output: i32) {
+        if let Some(mapping) = &mut self.mapping {
+            let last = mapping.columns.len().saturating_sub(1);
+            mapping.source = (source.max(0) as usize).min(last);
+            mapping.output = (output.max(0) as usize).min(last);
+            self.apply_mapping();
+        }
+    }
+
+    #[qslot(qml_name = "clearMapping")]
+    fn clear_mapping(&mut self) {
+        if self.mapping.take().is_some() {
+            self.note(
+                "info",
+                "Mapping cleared: exports use their usual names".into(),
+            );
+        }
+        self.entries.iter_mut().for_each(|e| e.mapped = None);
+        self.publish_mapping(None);
+        self.publish_queue();
+    }
 }
 
 impl Studio {
@@ -625,11 +718,16 @@ impl Studio {
                 paths.extend(found);
             } else if is_supported_image_path(&path) {
                 paths.push(path);
+            } else if is_mapping_file(&path) {
+                // A spreadsheet dropped with the photos names their exports.
+                self.open_mapping(path);
             }
         }
         paths.retain(|p| !self.entries.iter().any(|e| &e.path == p));
         if paths.is_empty() {
-            self.toast("No new supported photos there".into(), String::new());
+            if self.mapping.is_none() {
+                self.toast("No new supported photos there".into(), String::new());
+            }
             return;
         }
         self.note("info", format!("Added {}", photos(paths.len())));
@@ -643,6 +741,7 @@ impl Studio {
                 size: (0, 0),
                 faces: Vec::new(),
                 selected: Vec::new(),
+                mapped: None,
             };
             self.next_uid += 1;
             self.send_detection(&entry);
@@ -653,7 +752,132 @@ impl Studio {
             self.current = 0;
             self.publish_image();
         }
+        if self.mapping.is_some() {
+            // The new photos may be in the open mapping.
+            self.apply_mapping();
+        }
         self.publish_queue();
+    }
+
+    fn open_mapping(&mut self, path: PathBuf) {
+        let format = fcs_mapping::detect_format(&path);
+        let options = MappingReadOptions {
+            preview_rows: MAPPING_PREVIEW_ROWS,
+            ..MappingReadOptions::default()
+        };
+        let catalog = match fcs_mapping::inspect_mapping_sources(&path, &options) {
+            Ok(catalog) => catalog,
+            Err(err) => return self.mapping_failed(&path, err),
+        };
+        let options = MappingReadOptions {
+            sheet_name: catalog.sheets.first().cloned(),
+            sql_table: catalog.sql_tables.first().cloned(),
+            ..options
+        };
+        self.mapping = Some(MappingFile {
+            path,
+            format,
+            options,
+            sheets: catalog.sheets,
+            tables: catalog.sql_tables,
+            columns: Vec::new(),
+            preview: Vec::new(),
+            total: 0,
+            source: 0,
+            output: 0,
+        });
+        self.refresh_mapping(true);
+    }
+
+    /// Re-read the preview (another sheet or table, or a new file), guess the columns when
+    /// `guess` is set, then apply.
+    fn refresh_mapping(&mut self, guess: bool) {
+        let Some(mapping) = &mut self.mapping else {
+            return;
+        };
+        let preview = match fcs_mapping::load_mapping_preview(&mapping.path, &mapping.options) {
+            Ok(preview) => preview,
+            Err(err) => {
+                let path = mapping.path.clone();
+                return self.mapping_failed(&path, err);
+            }
+        };
+        mapping.columns = preview.columns;
+        mapping.preview = preview.rows;
+        mapping.total = preview.total_rows;
+        if guess {
+            let (source, output) = guess_mapping_columns(&mapping.columns);
+            mapping.source = source;
+            mapping.output = output;
+        }
+        self.apply_mapping();
+    }
+
+    /// Give every queued photo the output name its mapping row holds, or none.
+    fn apply_mapping(&mut self) {
+        let Some(mapping) = &self.mapping else {
+            return;
+        };
+        let entries = fcs_mapping::load_mapping_entries(
+            &mapping.path,
+            &mapping.options,
+            &ColumnSelector::Index(mapping.source),
+            &ColumnSelector::Index(mapping.output),
+        );
+        let entries = match entries {
+            Ok(entries) => entries,
+            Err(err) => {
+                let path = mapping.path.clone();
+                return self.mapping_failed(&path, err);
+            }
+        };
+        let names: Vec<Option<String>> =
+            fcs_mapping::match_entries(&entries, self.entries.iter().map(|e| e.path.as_path()))
+                .into_iter()
+                .map(|name| name.map(str::to_owned))
+                .collect();
+        for (entry, name) in self.entries.iter_mut().zip(names) {
+            entry.mapped = name;
+        }
+        let matched = self.entries.iter().filter(|e| e.mapped.is_some()).count();
+        let file = file_name(&mapping.path);
+        let summary = format!(
+            "{file}: {matched} of {} matched",
+            photos(self.entries.len())
+        );
+        self.note("info", summary);
+        self.publish_mapping(Some(matched));
+        self.publish_queue();
+    }
+
+    fn mapping_failed(&mut self, path: &Path, err: anyhow::Error) {
+        let message = format!("Couldn't read {}: {err:#}", file_name(path));
+        warn!("{message}");
+        self.note("error", message.clone());
+        self.toast(message, String::new());
+    }
+
+    fn publish_mapping(&mut self, matched: Option<usize>) {
+        self.mapping_json = match &self.mapping {
+            None => json!({ "loaded": false }),
+            Some(m) => json!({
+                "loaded": true,
+                "file": file_name(&m.path),
+                "format": m.format.display_name(),
+                "sheets": m.sheets,
+                "sheet": m.options.sheet_name,
+                "tables": m.tables,
+                "table": m.options.sql_table,
+                "columns": m.columns,
+                "preview": m.preview,
+                "rows": m.total,
+                "source": m.source,
+                "output": m.output,
+                "matched": matched.unwrap_or(0),
+                "photos": self.entries.len(),
+            }),
+        };
+        self.mapping_changed();
     }
 
     fn engine_loaded(&mut self, engine: Result<Engine, String>) {
@@ -910,6 +1134,7 @@ impl Studio {
                 path: e.path.clone(),
                 turn: e.turn,
                 detected: e.faces.len(),
+                mapped: e.mapped.clone(),
                 faces: e
                     .faces
                     .iter()
@@ -988,6 +1213,7 @@ impl Studio {
                     "error": error,
                     "faces": e.faces.len(),
                     "selected": e.selected.iter().filter(|s| **s).count(),
+                    "mapped": e.mapped.clone().unwrap_or_default(),
                 })
             })
             .collect();
@@ -1271,6 +1497,32 @@ fn merge(base: &mut Value, patch: Value) {
     }
 }
 
+fn is_mapping_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| MAPPING_EXTENSIONS.iter().any(|m| e.eq_ignore_ascii_case(m)))
+}
+
+/// Which columns probably hold the photo and its output name, by their headers; else the
+/// first two.
+fn guess_mapping_columns(columns: &[String]) -> (usize, usize) {
+    let find = |words: &[&str], skip: Option<usize>| {
+        columns.iter().enumerate().position(|(i, name)| {
+            let name = name.to_lowercase();
+            Some(i) != skip && words.iter().any(|w| name.contains(w))
+        })
+    };
+    let source = find(
+        &["file", "path", "image", "photo", "picture", "source"],
+        None,
+    )
+    .unwrap_or(0);
+    let output = find(&["output", "name", "target", "rename", "id"], Some(source))
+        .unwrap_or(if source == 0 { 1 } else { 0 })
+        .min(columns.len().saturating_sub(1));
+    (source, output)
+}
+
 fn thumb_key(uid: u64, rev: u32) -> String {
     format!("thumb/{uid}.{rev}")
 }
@@ -1379,6 +1631,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mapping_columns_are_guessed_from_their_headers() {
+        let cols = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            guess_mapping_columns(&cols(&["Employee ID", "Photo file"])),
+            (1, 0)
+        );
+        assert_eq!(
+            guess_mapping_columns(&cols(&["filename", "output name"])),
+            (0, 1)
+        );
+        // Nothing recognisable: the first two columns, in order.
+        assert_eq!(guess_mapping_columns(&cols(&["a", "b", "c"])), (0, 1));
+        // One column only: both point at it rather than past the end.
+        assert_eq!(guess_mapping_columns(&cols(&["only"])), (0, 0));
     }
 
     #[test]

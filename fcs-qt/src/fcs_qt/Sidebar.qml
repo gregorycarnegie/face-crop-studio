@@ -49,6 +49,7 @@ Rectangle {
             value: UiState.sidebarTab
             options: [
                 { value: "photos", label: queueModel.count > 0 ? qsTr("Photos · %1").arg(queueModel.count) : qsTr("Photos") },
+                { value: "mapping", label: qsTr("Mapping") },
                 { value: "activity", label: qsTr("Activity") }
             ]
             onActivated: value => UiState.sidebarTab = value
@@ -57,7 +58,7 @@ Rectangle {
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: UiState.sidebarTab === "activity" ? 1 : 0
+            currentIndex: ["photos", "mapping", "activity"].indexOf(UiState.sidebarTab)
 
             ColumnLayout {
                 spacing: 0
@@ -140,6 +141,7 @@ Rectangle {
                 }
             }
 
+            MappingTab {}
             ActivityLog {}
         }
     }
