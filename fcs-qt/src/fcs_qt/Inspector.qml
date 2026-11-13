@@ -8,6 +8,8 @@ Rectangle {
 
     signal exportRequested
 
+    readonly property var crop: Studio.settings.crop
+
     color: Theme.bg1
 
     Rectangle {
@@ -23,87 +25,29 @@ Rectangle {
         anchors.leftMargin: 1
         spacing: 0
 
-        ColumnLayout {
+        Segmented {
             Layout.fillWidth: true
             Layout.margins: Theme.pad
-            spacing: 22
+            Layout.bottomMargin: 4
+            value: UiState.inspectorTab
+            options: [
+                { value: "crop", label: qsTr("Crop") },
+                { value: "shape", label: qsTr("Shape") },
+                { value: "enhance", label: qsTr("Enhance") },
+                { value: "output", label: qsTr("Output") }
+            ]
+            onActivated: value => UiState.inspectorTab = value
+        }
 
-            Section {
-                Layout.fillWidth: true
-                title: qsTr("Output size")
-                detail: qsTr("%1 × %2 px").arg(Studio.outputWidth).arg(Studio.outputHeight)
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: ["crop", "shape", "enhance", "output"].indexOf(UiState.inspectorTab)
 
-                GridLayout {
-                    Layout.fillWidth: true
-                    columns: 2
-                    rowSpacing: 8
-                    columnSpacing: 8
-
-                    Repeater {
-                        model: Studio.presets
-                        delegate: PresetCard {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            onClicked: Studio.setPreset(modelData.name)
-                        }
-                    }
-                }
-            }
-
-            Section {
-                Layout.fillWidth: true
-                title: qsTr("Face size")
-                detail: qsTr("%1% of height").arg(Math.round(faceSlider.value))
-
-                ValueSlider {
-                    id: faceSlider
-                    Layout.fillWidth: true
-                    from: 30
-                    to: 90
-                    stepSize: 1
-                    Accessible.name: qsTr("Face size")
-                    onMoved: Studio.setFaceHeight(value)
-                }
-                // Follows presets without fighting the user's drag.
-                Binding {
-                    target: faceSlider
-                    property: "value"
-                    value: Studio.faceHeight
-                    when: !faceSlider.pressed
-                }
-            }
-
-            Section {
-                Layout.fillWidth: true
-                title: qsTr("Shape")
-
-                Segmented {
-                    Layout.fillWidth: true
-                    value: Studio.shape
-                    options: [
-                        { value: "rectangle", label: qsTr("Square"), glyph: "rectangle" },
-                        { value: "rounded", label: qsTr("Rounded"), glyph: "rounded" },
-                        { value: "ellipse", label: qsTr("Oval"), glyph: "ellipse" }
-                    ]
-                    onActivated: value => Studio.setShape(value)
-                }
-            }
-
-            Section {
-                Layout.fillWidth: true
-                title: qsTr("Format")
-
-                Segmented {
-                    Layout.fillWidth: true
-                    value: Studio.format
-                    options: [
-                        { value: "png", label: "PNG" },
-                        { value: "jpg", label: "JPEG" },
-                        { value: "webp", label: "WebP" }
-                    ]
-                    onActivated: value => Studio.setFormat(value)
-                }
-            }
+            CropTab {}
+            ShapeTab {}
+            EnhanceTab {}
+            OutputTab {}
         }
 
         Rectangle {
@@ -114,35 +58,34 @@ Rectangle {
 
         Section {
             Layout.fillWidth: true
-            Layout.fillHeight: true
             Layout.margins: Theme.pad
             Layout.bottomMargin: 0
             title: qsTr("Preview")
-            detail: Studio.previews.length > 0 ? qsTr("as exported") : ""
+            detail: qsTr("%1 × %2 px").arg(root.crop.output_width).arg(root.crop.output_height)
 
-            GridView {
-                id: grid
+            ListView {
+                id: strip
 
-                readonly property real aspect: Studio.outputHeight / Math.max(1, Studio.outputWidth)
+                readonly property real aspect: root.crop.output_height / Math.max(1, root.crop.output_width)
 
                 Layout.fillWidth: true
-                Layout.fillHeight: true
+                Layout.preferredHeight: 196
+                orientation: ListView.Horizontal
+                spacing: 8
                 clip: true
-                cellWidth: width / 2
-                cellHeight: Math.min(cellWidth * aspect, 280) + 30
                 model: Studio.previews
                 boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar {}
+                ScrollBar.horizontal: ScrollBar {}
 
                 delegate: PreviewCard {
-                    width: grid.cellWidth - 8
-                    height: grid.cellHeight - 8
+                    height: strip.height - 12
+                    width: Math.min(strip.width, (height - 36) / strip.aspect + 16)
                 }
 
                 Text {
                     anchors.centerIn: parent
                     width: parent.width - 32
-                    visible: grid.count === 0
+                    visible: strip.count === 0
                     text: Studio.faces.length === 0 ? qsTr("Previews of the selected faces appear here.")
                                                     : qsTr("Select a face on the photo to preview it.")
                     horizontalAlignment: Text.AlignHCenter
@@ -158,7 +101,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pad
             Layout.rightMargin: Theme.pad
-            Layout.topMargin: 12
+            Layout.topMargin: 4
             visible: Studio.selectedTotal > 0
             text: photos === 1 ? qsTr("Selected faces from 1 photo") : qsTr("Selected faces from %1 photos").arg(photos)
             horizontalAlignment: Text.AlignHCenter

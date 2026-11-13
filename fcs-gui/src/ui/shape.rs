@@ -42,43 +42,7 @@ fn shape_variant(shape: &CropShape) -> ShapeVariant {
 }
 
 fn default_for_variant(variant: ShapeVariant) -> CropShape {
-    match variant {
-        ShapeVariant::Rectangle => CropShape::Rectangle,
-        ShapeVariant::RoundedRect => CropShape::RoundedRectangle { radius_pct: 0.12 },
-        ShapeVariant::ChamferRect => CropShape::ChamferedRectangle { size_pct: 0.12 },
-        ShapeVariant::Ellipse => CropShape::Ellipse,
-        ShapeVariant::PolygonSharp => CropShape::Polygon {
-            sides: 6,
-            rotation_deg: 0.0,
-            corner_style: PolygonCornerStyle::Sharp,
-        },
-        ShapeVariant::PolygonRounded => CropShape::Polygon {
-            sides: 6,
-            rotation_deg: 0.0,
-            corner_style: PolygonCornerStyle::Rounded { radius_pct: 0.1 },
-        },
-        ShapeVariant::PolygonChamfered => CropShape::Polygon {
-            sides: 6,
-            rotation_deg: 0.0,
-            corner_style: PolygonCornerStyle::Chamfered { size_pct: 0.1 },
-        },
-        ShapeVariant::PolygonBezier => CropShape::Polygon {
-            sides: 6,
-            rotation_deg: 0.0,
-            corner_style: PolygonCornerStyle::Bezier { tension: 0.5 },
-        },
-        ShapeVariant::Star => CropShape::Star {
-            points: 5,
-            inner_radius_pct: 0.5,
-            rotation_deg: 0.0,
-        },
-        ShapeVariant::KochPolygon => CropShape::KochPolygon {
-            sides: 3,
-            rotation_deg: 0.0,
-            iterations: 3,
-        },
-        ShapeVariant::KochRectangle => CropShape::KochRectangle { iterations: 3 },
-    }
+    catalogue_entry(variant).1
 }
 
 fn polygon_corner_radius_max(sides: u32) -> f32 {
@@ -102,9 +66,13 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
         .selected_text(variant_label(variant))
         .width(ui.available_width())
         .show_ui(ui, |ui| {
-            for (label, target) in ALL_VARIANTS {
-                if ui.selectable_label(variant == *target, *label).clicked() && variant != *target {
-                    variant = *target;
+            for target in ALL_VARIANTS {
+                if ui
+                    .selectable_label(variant == target, variant_label(target))
+                    .clicked()
+                    && variant != target
+                {
+                    variant = target;
                     variant_changed = true;
                 }
             }
@@ -310,34 +278,32 @@ pub fn shape_controls(ui: &mut Ui, app: &mut App2) -> bool {
 }
 
 fn variant_label(v: ShapeVariant) -> &'static str {
-    match v {
-        ShapeVariant::Rectangle => "Rectangle",
-        ShapeVariant::RoundedRect => "Rounded rectangle",
-        ShapeVariant::ChamferRect => "Chamfered rectangle",
-        ShapeVariant::Ellipse => "Ellipse",
-        ShapeVariant::PolygonSharp => "Polygon",
-        ShapeVariant::PolygonRounded => "Polygon (rounded)",
-        ShapeVariant::PolygonChamfered => "Polygon (chamfered)",
-        ShapeVariant::PolygonBezier => "Polygon (bezier)",
-        ShapeVariant::Star => "Star",
-        ShapeVariant::KochPolygon => "Koch polygon",
-        ShapeVariant::KochRectangle => "Koch rectangle",
-    }
+    catalogue_entry(v).0
 }
 
-const ALL_VARIANTS: &[(&str, ShapeVariant)] = &[
-    ("Rectangle", ShapeVariant::Rectangle),
-    ("Rounded rectangle", ShapeVariant::RoundedRect),
-    ("Chamfered rectangle", ShapeVariant::ChamferRect),
-    ("Ellipse", ShapeVariant::Ellipse),
-    ("Polygon", ShapeVariant::PolygonSharp),
-    ("Polygon (rounded)", ShapeVariant::PolygonRounded),
-    ("Polygon (chamfered)", ShapeVariant::PolygonChamfered),
-    ("Polygon (bezier)", ShapeVariant::PolygonBezier),
-    ("Star", ShapeVariant::Star),
-    ("Koch polygon", ShapeVariant::KochPolygon),
-    ("Koch rectangle", ShapeVariant::KochRectangle),
+/// The picker's variants, in the order of [`fcs_utils::shape_catalogue`], which holds their
+/// labels and starting shapes (shared with the other front ends).
+const ALL_VARIANTS: [ShapeVariant; 11] = [
+    ShapeVariant::Rectangle,
+    ShapeVariant::RoundedRect,
+    ShapeVariant::ChamferRect,
+    ShapeVariant::Ellipse,
+    ShapeVariant::PolygonSharp,
+    ShapeVariant::PolygonRounded,
+    ShapeVariant::PolygonChamfered,
+    ShapeVariant::PolygonBezier,
+    ShapeVariant::Star,
+    ShapeVariant::KochPolygon,
+    ShapeVariant::KochRectangle,
 ];
+
+fn catalogue_entry(variant: ShapeVariant) -> (&'static str, CropShape) {
+    let index = ALL_VARIANTS
+        .iter()
+        .position(|v| *v == variant)
+        .expect("every variant is listed");
+    fcs_utils::shape_catalogue().swap_remove(index)
+}
 
 #[cfg(test)]
 mod tests {
@@ -352,30 +318,28 @@ mod tests {
     /// arm added to one function but not the other.
     #[test]
     fn every_variant_round_trips_through_its_default_shape() {
-        for (_, variant) in ALL_VARIANTS {
+        for variant in ALL_VARIANTS {
             assert_eq!(
-                shape_variant(&default_for_variant(*variant)),
-                *variant,
+                shape_variant(&default_for_variant(variant)),
+                variant,
                 "{variant:?} did not round-trip",
             );
         }
     }
 
     #[test]
-    fn the_dropdown_list_and_the_label_function_agree() {
-        // Two hand-maintained lists of the same eleven names; they drift the
-        // moment a variant is renamed in one and not the other.
-        for (label, variant) in ALL_VARIANTS {
-            assert_eq!(variant_label(*variant), *label);
-        }
+    fn every_catalogue_entry_has_a_variant() {
+        // The variants index the shared catalogue; one list longer than the other means a
+        // shape added on one side only.
+        assert_eq!(ALL_VARIANTS.len(), fcs_utils::shape_catalogue().len());
     }
 
     #[test]
     fn the_dropdown_lists_each_variant_exactly_once() {
         let mut seen: Vec<ShapeVariant> = Vec::new();
-        for (_, variant) in ALL_VARIANTS {
-            assert!(!seen.contains(variant), "{variant:?} listed twice");
-            seen.push(*variant);
+        for variant in ALL_VARIANTS {
+            assert!(!seen.contains(&variant), "{variant:?} listed twice");
+            seen.push(variant);
         }
         assert_eq!(
             seen.len(),

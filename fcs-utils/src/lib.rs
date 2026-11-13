@@ -105,7 +105,7 @@ pub use output::{
 pub use quality::{Quality, QualityFilter, estimate_sharpness, laplacian_variance};
 pub use shape::{
     CropShape, PolygonCornerStyle, apply_shape_mask, apply_shape_mask_dynamic,
-    outline_points_for_rect,
+    outline_points_for_rect, shape_catalogue,
 };
 use std::path::{Path, PathBuf};
 pub use telemetry::{

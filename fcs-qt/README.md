@@ -15,14 +15,26 @@ pipeline and settings file.
   refiner as fcs-gui. The queue updates row by row.
 - The photo shows its faces as boxes. Click a box (or focus it and press Space) to include or
   skip that face. All / None act on the current photo.
-- Presets, face size, shape (square, rounded, oval) and format (PNG, JPEG, WebP). Previews
-  are rendered through the real export path, so they show exactly what export writes.
+- The inspector has four tabs, as fcs-gui's settings do:
+  - **Crop**: presets or a custom width and height, face size, position (center, thirds, or
+    custom X/Y offsets), eye-line align, padding colour, crop overlay, EXIF orientation.
+  - **Shape**: all eleven crop shapes, drawn from their real outlines, with their parameters,
+    plus vignette.
+  - **Enhance**: auto colour, red-eye removal, background blur, exposure, brightness,
+    contrast, saturation, sharpness, skin smoothing.
+  - **Output**: PNG, JPEG (with quality), WebP or AVIF.
+- Each face's crop is outlined on the photo in the chosen shape. Previews are rendered
+  through the real export path, so they show exactly what export writes.
 - Export writes the selected faces of every photo to a folder, as `{stem}_face_NN.{ext}`. An
   existing file is never replaced; the new one gets a `(2)` suffix.
 - Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).
 
-Not ported: manual box editing, enhancement controls, mapping files, webcam, history/undo,
-quality automation, watch folders.
+Not ported yet: manual box editing, undo, batch and output options (overwrite choice, quality
+automation, reports), mapping files, webcam, watch folders.
+
+Settings reach QML as one JSON object (`Studio.settings`, the serialized `AppSettings`), and
+every control writes through one slot, `Studio.update(patch)`, which merges the patch, checks
+it still deserializes, saves and re-renders. A new setting needs no Rust changes.
 
 ## Build and run
 

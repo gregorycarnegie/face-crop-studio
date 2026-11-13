@@ -2,6 +2,7 @@ module fcs_qt
 prefer :/qt/qml/fcs_qt/
 singleton Theme 1.0 Theme.qml
 singleton Icons 1.0 Icons.qml
+singleton UiState 1.0 UiState.qml
 Main 1.0 Main.qml
 AppButton 1.0 AppButton.qml
 AppHeader 1.0 AppHeader.qml
@@ -22,3 +23,14 @@ Spinner 1.0 Spinner.qml
 StatusPill 1.0 StatusPill.qml
 Toast 1.0 Toast.qml
 ValueSlider 1.0 ValueSlider.qml
+ColorRow 1.0 ColorRow.qml
+CropOverlay 1.0 CropOverlay.qml
+CropTab 1.0 CropTab.qml
+EnhanceTab 1.0 EnhanceTab.qml
+InspectorPage 1.0 InspectorPage.qml
+NumberField 1.0 NumberField.qml
+OutputTab 1.0 OutputTab.qml
+ShapeChip 1.0 ShapeChip.qml
+ShapeTab 1.0 ShapeTab.qml
+SliderRow 1.0 SliderRow.qml
+ToggleRow 1.0 ToggleRow.qml

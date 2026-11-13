@@ -28,7 +28,10 @@ if (-not $CargoArgs) { $CargoArgs = @('run') }
 # does under `cargo run`. Cargo would then read only the workspace's .cargo/config.toml, so
 # fcs-qt's own target dir and test environment are passed here instead.
 $env:LIBHEIF_PLUGIN_PATH = "$PSScriptRoot\target\libheif-plugins"  # for tests; see process_env
-$command, $rest = $CargoArgs
+$command = $CargoArgs[0]
+# Always an array: with one extra argument a destructured $rest is a string, and @rest would
+# then splat it character by character.
+$rest = @($CargoArgs | Select-Object -Skip 1)
 Push-Location "$PSScriptRoot\.."
 try {
     # --manifest-path right after the subcommand, so it never lands after a `--`.

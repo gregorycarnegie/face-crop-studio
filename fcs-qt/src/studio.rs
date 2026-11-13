@@ -6,9 +6,9 @@ use crate::{
     pipeline::{self, Detected, Engine, Face},
 };
 use fcs_utils::{
-    CropShape, ImageFormatHint, OutputClaims, OverwritePolicy,
+    CropShape, OutputClaims, OverwritePolicy,
     config::{AppSettings, default_settings_path},
-    is_supported_image_path, load_image,
+    is_supported_image_path, outline_points_for_rect,
 };
 use image::{DynamicImage, RgbImage, RgbaImage};
 use log::warn;
@@ -36,7 +36,8 @@ struct Entry {
     selected: Vec<bool>,
 }
 
-type DetectJob = (usize, PathBuf);
+/// Entry id, source path, and whether to apply EXIF orientation.
+type DetectJob = (usize, PathBuf, bool);
 
 /// Canvas copies kept in memory: up to ~12 MB each at 2048 px, so a few photos back and forth
 /// switch instantly without holding a whole batch.
@@ -75,12 +76,11 @@ pub struct Studio {
     previews: Vec<Value>,
     presets: Vec<Value>,
     image_filter: String,
-    preset: String,
-    output_width: i32,
-    output_height: i32,
-    face_height: f64,
-    shape: String,
-    format: String,
+    shapes: Vec<Value>,
+    /// `settings`, serialized: QML binds to `Studio.settings.crop.face_height_pct` and the like.
+    settings_json: Value,
+    /// The crop shape's outline for the current output size, in fractions of the crop.
+    shape_outline: Vec<Value>,
     exporting: bool,
     export_progress: f64,
 }
@@ -134,12 +134,14 @@ impl Default for Studio {
                     .collect::<Vec<_>>()
                     .join(" ")
             ),
-            preset: String::new(),
-            output_width: 0,
-            output_height: 0,
-            face_height: 0.0,
-            shape: String::new(),
-            format: String::new(),
+            shapes: fcs_utils::shape_catalogue()
+                .into_iter()
+                .map(|(label, shape)| {
+                    json!({ "label": label, "outline": outline(&shape, 1.0, 1.0), "shape": shape })
+                })
+                .collect(),
+            settings_json: Value::Null,
+            shape_outline: Vec::new(),
             exporting: false,
             export_progress: 0.0,
         };
@@ -176,24 +178,17 @@ impl Studio {
     qproperty!("previews", Member = previews, Notify = previews_changed);
     qproperty!("presets", Member = presets, Constant);
     qproperty!("imageFilter", Member = image_filter, Constant);
-    qproperty!("preset", Member = preset, Notify = settings_changed);
+    qproperty!("shapes", Member = shapes, Constant);
     qproperty!(
-        "outputWidth",
-        Member = output_width,
+        "settings",
+        Member = settings_json,
         Notify = settings_changed
     );
     qproperty!(
-        "outputHeight",
-        Member = output_height,
+        "shapeOutline",
+        Member = shape_outline,
         Notify = settings_changed
     );
-    qproperty!(
-        "faceHeight",
-        Member = face_height,
-        Notify = settings_changed
-    );
-    qproperty!("shape", Member = shape, Notify = settings_changed);
-    qproperty!("format", Member = format, Notify = settings_changed);
     qproperty!("exporting", Member = exporting, Notify = export_changed);
     qproperty!(
         "exportProgress",
@@ -277,28 +272,31 @@ impl Studio {
         self.settings_edited();
     }
 
-    #[qslot(qml_name = "setFaceHeight")]
-    fn set_face_height(&mut self, pct: f64) {
-        self.settings.crop.face_height_pct = pct as f32;
-        self.settings_edited();
-    }
-
-    #[qslot(qml_name = "setShape")]
-    fn set_shape(&mut self, name: String) {
-        self.settings.crop.shape = match name.as_str() {
-            "rounded" => CropShape::RoundedRectangle { radius_pct: 0.12 },
-            "ellipse" => CropShape::Ellipse,
-            _ => CropShape::Rectangle,
+    /// Change any settings: `patch` is merged into the serialized `AppSettings`, so
+    /// `{"crop": {"face_height_pct": 60}}` changes one field and keeps the rest.
+    #[qslot]
+    fn update(&mut self, patch: Value) {
+        let mut value = match serde_json::to_value(&self.settings) {
+            Ok(value) => value,
+            Err(err) => return warn!("Failed to serialize settings: {err}"),
         };
-        self.settings_edited();
+        merge(&mut value, patch);
+        match serde_json::from_value::<AppSettings>(value) {
+            Ok(settings) => {
+                self.settings = settings;
+                self.settings_edited();
+            }
+            Err(err) => {
+                warn!("Rejected a settings change: {err}");
+                self.toast(format!("Couldn't apply that setting: {err}"), String::new());
+            }
+        }
     }
 
-    #[qslot(qml_name = "setFormat")]
-    fn set_format(&mut self, ext: String) {
-        if let Some(format) = ImageFormatHint::from_extension(&ext) {
-            self.settings.crop.output_format = format;
-            self.settings_edited();
-        }
+    #[qslot(qml_name = "restoreEnhance")]
+    fn restore_enhance(&mut self) {
+        self.settings.enhance = Default::default();
+        self.settings_edited();
     }
 
     /// Save every selected face of every finished photo into `folder_url`.
@@ -344,7 +342,7 @@ impl Studio {
             for (id, path, faces) in jobs {
                 let image = match &current {
                     Some((current_id, image)) if *current_id == id => Ok(image.clone()),
-                    _ => load_image(&path).map(Arc::new),
+                    _ => pipeline::load(&path, settings.crop.auto_orient_exif).map(Arc::new),
                 };
                 let image = match image {
                     Ok(image) => image,
@@ -408,7 +406,7 @@ impl Studio {
         for path in paths {
             let id = self.entries.len();
             if let Some(jobs) = &self.jobs {
-                let _ = jobs.send((id, path.clone()));
+                let _ = jobs.send((id, path.clone(), self.settings.crop.auto_orient_exif));
             }
             self.entries.push(Entry {
                 path,
@@ -436,15 +434,16 @@ impl Studio {
                 let worker_engine = engine.clone();
                 let handle = self.get_thread_handle();
                 thread::spawn(move || {
-                    for (id, path) in rx {
-                        let result = pipeline::detect(&worker_engine, &path)
+                    for (id, path, orient) in rx {
+                        let result = pipeline::detect(&worker_engine, &path, orient)
                             .map_err(|err| format!("{err:#}"));
                         handle.invoke_mut(move |studio| studio.detected(id, result));
                     }
                 });
                 // Photos added while the models loaded.
                 for (id, entry) in self.entries.iter().enumerate() {
-                    let _ = tx.send((id, entry.path.clone()));
+                    let orient = self.settings.crop.auto_orient_exif;
+                    let _ = tx.send((id, entry.path.clone(), orient));
                 }
                 self.jobs = Some(tx);
                 self.engine = Some(engine);
@@ -509,23 +508,19 @@ impl Studio {
         }
         self.sync_settings();
         self.settings_changed();
+        // The crop overlays on the photo follow the framing.
+        self.publish_image();
         self.request_previews();
     }
 
     fn sync_settings(&mut self) {
+        self.settings_json = serde_json::to_value(&self.settings).unwrap_or_default();
         let crop = &self.settings.crop;
-        self.preset = crop.preset.clone();
-        self.output_width = crop.output_width as i32;
-        self.output_height = crop.output_height as i32;
-        self.face_height = crop.face_height_pct as f64;
-        self.shape = match crop.shape {
-            CropShape::Rectangle => "rectangle",
-            CropShape::RoundedRectangle { .. } => "rounded",
-            CropShape::Ellipse => "ellipse",
-            _ => "custom",
-        }
-        .into();
-        self.format = crop.output_format.extension().into();
+        self.shape_outline = outline(
+            &crop.shape,
+            crop.output_width as f32,
+            crop.output_height as f32,
+        );
     }
 
     fn publish_queue(&mut self) {
@@ -571,6 +566,7 @@ impl Studio {
             return;
         };
         let (w, h) = (entry.size.0.max(1) as f32, entry.size.1.max(1) as f32);
+        let core: fcs_core::CropSettings = (&self.settings.crop).into();
         self.image_url = images::url(&format!("canvas/{id}"));
         self.image_width = entry.size.0 as i32;
         self.image_height = entry.size.1 as i32;
@@ -583,6 +579,7 @@ impl Studio {
                 let b = face.detection.bbox;
                 let x = (b.x / w).clamp(0.0, 1.0);
                 let y = (b.y / h).clamp(0.0, 1.0);
+                let crop = fcs_core::calculate_crop_region(entry.size.0, entry.size.1, b, &core);
                 json!({
                     "index": i,
                     "x": x,
@@ -592,6 +589,13 @@ impl Studio {
                     "score": face.detection.score,
                     "quality": format!("{:?}", face.quality),
                     "selected": on,
+                    // Where this face's crop falls, in fractions of the photo: the overlay.
+                    "crop": {
+                        "x": crop.x as f32 / w,
+                        "y": crop.y as f32 / h,
+                        "w": crop.width as f32 / w,
+                        "h": crop.height as f32 / h,
+                    },
                 })
             })
             .collect();
@@ -616,9 +620,11 @@ impl Studio {
             return;
         };
         let path = entry.path.clone();
+        let orient = self.settings.crop.auto_orient_exif;
         let handle = self.get_thread_handle();
         thread::spawn(move || {
-            let loaded = load_image(&path).map(|image| (pipeline::canvas(&image), image));
+            let loaded =
+                pipeline::load(&path, orient).map(|image| (pipeline::canvas(&image), image));
             handle.invoke_mut(move |studio| studio.current_image_loaded(id, loaded));
         });
     }
@@ -753,5 +759,73 @@ impl Studio {
             _ => format!("Exported {}, {} failed (see log)", faces(saved), failed),
         };
         self.toast(message, folder_url);
+    }
+}
+
+/// Merge `patch` into `base`: objects key by key, anything else replaced. Whole-number floats
+/// become integers on the way, since QML sends every number as a double and serde will not
+/// read `400.0` into the `u32` an output width is.
+fn merge(base: &mut Value, patch: Value) {
+    match (base, patch) {
+        (Value::Object(base), Value::Object(patch)) => {
+            for (key, value) in patch {
+                merge(base.entry(key).or_insert(Value::Null), value);
+            }
+        }
+        (base, Value::Number(n)) => {
+            *base = match n.as_f64() {
+                Some(f) if f.fract() == 0.0 && f.abs() < 2f64.powi(53) => json!(f as i64),
+                _ => Value::Number(n),
+            };
+        }
+        (base, patch) => *base = patch,
+    }
+}
+
+/// `shape`'s outline drawn into a `width` x `height` box, as [x, y] fractions of it.
+fn outline(shape: &CropShape, width: f32, height: f32) -> Vec<Value> {
+    // Traced at a real pixel size (longest side 200), so curves get enough points to look
+    // smooth at any size QML draws them.
+    let scale = 200.0 / width.max(height).max(1.0);
+    let (w, h) = ((width * scale).max(1.0), (height * scale).max(1.0));
+    outline_points_for_rect(w, h, shape)
+        .into_iter()
+        .map(|(x, y)| json!([x / w, y / h]))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_patches_one_field_and_turns_whole_doubles_into_integers() {
+        let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+        merge(
+            &mut settings,
+            json!({ "crop": { "output_width": 640.0, "vertical_offset": 0.25 } }),
+        );
+        let settings: AppSettings = serde_json::from_value(settings).expect("still valid");
+        assert_eq!(settings.crop.output_width, 640);
+        assert_eq!(settings.crop.vertical_offset, 0.25);
+        assert_eq!(
+            settings.crop.output_height,
+            AppSettings::default().crop.output_height
+        );
+    }
+
+    #[test]
+    fn every_catalogue_shape_has_an_outline_inside_its_box() {
+        for (label, shape) in fcs_utils::shape_catalogue() {
+            let points = outline(&shape, 400.0, 300.0);
+            assert!(points.len() >= 3, "{label}");
+            for p in points {
+                let (x, y) = (p[0].as_f64().unwrap(), p[1].as_f64().unwrap());
+                assert!(
+                    (-0.01..=1.01).contains(&x) && (-0.01..=1.01).contains(&y),
+                    "{label}: ({x}, {y})"
+                );
+            }
+        }
     }
 }

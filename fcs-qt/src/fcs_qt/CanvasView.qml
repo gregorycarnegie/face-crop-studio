@@ -11,6 +11,8 @@ Rectangle {
     readonly property bool hasImage: Studio.imageUrl !== ""
 
     color: Theme.bg
+    // A crop larger than the photo draws past it; keep that out of the side panels.
+    clip: true
 
     EmptyState {
         anchors.centerIn: parent
@@ -89,6 +91,14 @@ Rectangle {
                 color: "transparent"
                 border.width: 1
                 border.color: Qt.alpha(Theme.ink, 0.08)
+            }
+
+            Repeater {
+                model: UiState.showCropOverlay ? Studio.faces : []
+                delegate: CropOverlay {
+                    frameWidth: frame.width
+                    frameHeight: frame.height
+                }
             }
 
             Repeater {

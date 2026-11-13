@@ -6,7 +6,7 @@ use fcs_core::{Detection, EyeRefiner, FaceDetector};
 use fcs_utils::{
     EnhancementRuntime, GpuAvailability, GpuContext, GpuContextOptions, MetadataContext,
     OutputClaims, OutputOptions, Quality, config::AppSettings, estimate_sharpness, load_image,
-    resolve_data_path, save_dynamic_image,
+    load_image_raw, resolve_data_path, save_dynamic_image,
 };
 use image::{DynamicImage, RgbImage, RgbaImage};
 use std::{
@@ -75,10 +75,21 @@ pub struct Detected {
     pub thumb: RgbImage,
 }
 
-/// Load `path` (EXIF-oriented, as the detector sees it), find and refine its faces, and make
-/// the canvas and queue copies.
-pub fn detect(engine: &Engine, path: &Path) -> Result<Detected> {
-    let image = load_image(path).with_context(|| format!("failed to load {}", path.display()))?;
+/// Decode `path`, turned upright by its EXIF orientation when `orient` (the "Auto-orient via
+/// EXIF" setting). Detection, previews and export all load through here, so the boxes found
+/// on one decode land on the same pixels in the others.
+pub fn load(path: &Path, orient: bool) -> Result<DynamicImage> {
+    if orient {
+        load_image(path)
+    } else {
+        load_image_raw(path)
+    }
+    .with_context(|| format!("failed to load {}", path.display()))
+}
+
+/// Load `path`, find and refine its faces, and make the canvas and queue copies.
+pub fn detect(engine: &Engine, path: &Path, orient: bool) -> Result<Detected> {
+    let image = load(path, orient)?;
     let mut output = engine
         .detector
         .detect_image(&image)
@@ -263,7 +274,7 @@ mod tests {
         std::fs::create_dir_all(&out).expect("temp dir");
         let source = root.join("samples/sample_01.jpg");
 
-        let detected = detect(&engine, &source).expect("detect");
+        let detected = detect(&engine, &source, true).expect("detect");
         assert_eq!(detected.faces.len(), 1);
         // sample_01 is 1024 square: under both limits, the canvas keeps it whole.
         assert_eq!(detected.canvas.dimensions(), (1024, 1024));
