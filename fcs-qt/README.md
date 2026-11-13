@@ -31,7 +31,7 @@ against the prebuilt Qt 6.10.3 MSVC 2022 binaries without trouble.
 
 ```powershell
 ./fcs-qt/dev.ps1 run                # or: test, clippy --all-targets, build --release
-./fcs-qt/dev.ps1 run -- "$PWD\samples"   # with photos queued (dev.ps1 runs from fcs-qt/)
+./fcs-qt/dev.ps1 run '--' samples   # photos queued; quote the --, PowerShell eats a bare one
 ```
 
 HEIC and AVIF decoding need libheif and dav1d built for the dynamic CRT, once:

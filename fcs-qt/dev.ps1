@@ -1,7 +1,9 @@
 # Run cargo for fcs-qt with Qt on PATH and the dynamic CRT (see build.rs).
 #   ./fcs-qt/dev.ps1 run          ./fcs-qt/dev.ps1 test          ./fcs-qt/dev.ps1 build --release
+#   ./fcs-qt/dev.ps1 run '--' samples      (quote the --: PowerShell swallows a bare one)
 # Qt location: $env:QT_DIR, else the newest %USERPROFILE%\Qt\6.*\msvc2022_64.
-param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $CargoArgs)
+# $args rather than a param() block: a param block rejects `pwsh -File dev.ps1 run -- x`.
+$CargoArgs = $args
 $ErrorActionPreference = 'Stop'
 
 $qt = $env:QT_DIR
@@ -22,8 +24,15 @@ $env:VCPKG_ROOT = $vcpkg
 $env:PKG_CONFIG_PATH = "$vcpkg\installed\x64-windows-static-md\lib\pkgconfig"
 
 if (-not $CargoArgs) { $CargoArgs = @('run') }
-# From here, not --manifest-path: cargo reads .cargo/config.toml (fcs-qt's own target dir)
-# relative to the working directory.
-Push-Location $PSScriptRoot
-try { cargo @CargoArgs } finally { Pop-Location }
+# Run from the repo root: the app finds models/ relative to its working directory, as fcs-gui
+# does under `cargo run`. Cargo would then read only the workspace's .cargo/config.toml, so
+# fcs-qt's own target dir and test environment are passed here instead.
+$env:LIBHEIF_PLUGIN_PATH = "$PSScriptRoot\target\libheif-plugins"  # for tests; see process_env
+$command, $rest = $CargoArgs
+Push-Location "$PSScriptRoot\.."
+try {
+    # --manifest-path right after the subcommand, so it never lands after a `--`.
+    cargo --config "build.target-dir='$PSScriptRoot\target'" $command `
+        --manifest-path "$PSScriptRoot\Cargo.toml" @rest
+} finally { Pop-Location }
 exit $LASTEXITCODE
