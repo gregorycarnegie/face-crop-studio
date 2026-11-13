@@ -71,7 +71,7 @@ rfd = "0.18.0"
 # Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
 # APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
 # ours, because a create event fires before the file finishes being written.
-notify = "8.2.1"
+notify = "8.2.2"
 
 # Image processing and graphics
 fast_image_resize = { version = "6.1.0", features = ["rayon"] }
@@ -108,7 +108,7 @@ tiny-skia = "0.12.0"
 
 # Machine learning and numeric processing
 bytemuck = { version = "1.25.2", features = ["derive"] }
-prost = "0.14.4"
+prost = "0.14.6"
 # Dynamic loading of the ONNX Runtime library, used by fcs-ort.
 libloading = "0.9.0"
 
@@ -116,9 +116,9 @@ libloading = "0.9.0"
 # nvrtc supplies the PTX container; kernels are precompiled, so no runtime compiler is loaded.
 cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-12000"] }
 metal = "0.33.0"
-naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out"] }
+naga = { version = "30.0.2", features = ["wgsl-in", "spv-out", "msl-out"] }
 pollster = "1.0.1"
-wgpu = "30.0.1"
+wgpu = "30.0.2"
 wesl = "0.6.0"
 
 # Camera and platform integration
@@ -141,7 +141,7 @@ winresource = "0.1.34"
 # Data formats and storage
 base64 = "0.23.1"
 calamine = "0.38.0"
-crc32fast = "1.5.4"
+crc32fast = "1.5.5"
 csv = "1.4.0"
 parquet = { version = "60.1.0", default-features = false, features = [
     "arrow",
@@ -154,7 +154,7 @@ parquet = { version = "60.1.0", default-features = false, features = [
 # `hooks` is not a default feature and is what `Connection::authorizer` lives behind.
 # It is the read-only guard for user-supplied SQL in fcs-mapping: an allowlist SQLite
 # enforces while it compiles the statement, rather than a keyword denylist of ours.
-rusqlite = { version = "0.41.1", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.42.0", features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
@@ -183,4 +183,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.4.2", default-features = false }
+zip = { version = "9.5.1", default-features = false }
