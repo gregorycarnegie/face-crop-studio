@@ -1,12 +1,13 @@
 # Run cargo for fcs-qt with Qt on PATH and the dynamic CRT (see build.rs).
 #   ./fcs-qt/dev.ps1 run          ./fcs-qt/dev.ps1 test          ./fcs-qt/dev.ps1 build --release
 #   ./fcs-qt/dev.ps1 run '--' samples      (quote the --: PowerShell swallows a bare one)
-# Qt location: $env:QT_DIR, else the newest %USERPROFILE%\Qt\6.*\msvc2022_64.
+# Qt location: $env:QT_DIR, else $env:QT_ROOT_DIR, else the newest %USERPROFILE%\Qt\6.*\msvc2022_64.
 # $args rather than a param() block: a param block rejects `pwsh -File dev.ps1 run -- x`.
 $CargoArgs = $args
 $ErrorActionPreference = 'Stop'
 
 $qt = $env:QT_DIR
+if (-not $qt) { $qt = $env:QT_ROOT_DIR }  # set by install-qt-action in CI
 if (-not $qt) {
     $qt = Get-ChildItem "$env:USERPROFILE\Qt\6.*\msvc2022_64" -Directory -ErrorAction SilentlyContinue |
         Sort-Object { [version]$_.Parent.Name } | Select-Object -Last 1 -ExpandProperty FullName

@@ -1,0 +1,158 @@
+name: fcs-qt
+
+# The Qt Quick front end, on the three platforms Face Crop Studio ships for. Separate from ci.yml
+# because fcs-qt is not a workspace member (it needs Qt, which the main legs don't install) and
+# only matters when it or the crates it uses change.
+on:
+  push:
+    branches: [ "master", "qt-bridge-ui" ]
+    paths: &paths
+      - "fcs-qt/**"
+      - "fcs-core/**"
+      - "fcs-utils/**"
+      - "fcs-mapping/**"
+      - "Cargo.lock"
+      - ".github/workflows/qt.yml"
+      - ".github/actions/**"
+  pull_request:
+    branches: [ "master" ]
+    paths: *paths
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.99.0"
+  QT_VERSION: "6.10.3"
+  # Keep in sync with ci.yml.
+  EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
+  EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1.1/eye_refiner.onnx
+  SCRFD_SHA256: 2437def9510f2af6431a5b2090ae9f357bc189cb0223be1b6c4d4ff085798e64
+  SCRFD_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-scrfd-80k-v2.1/scrfd80k_500m_640.onnx
+
+jobs:
+  build:
+    name: fcs-qt (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            qt-arch: win64_msvc2022_64
+          - name: macOS
+            os: macos-latest
+            qt-arch: clang_64
+          # 24.04, not ci.yml's 22.04: this checks fcs-qt builds, not the release glibc baseline,
+          # and Qt's own 6.10 Linux binaries target newer distributions.
+          - name: Linux
+            os: ubuntu-24.04
+            qt-arch: linux_gcc_64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # The end-to-end test runs the real detector, so a missing model fails it rather than
+      # skipping. Through the API, as ci.yml does (the public URL once served a cached 504).
+      - name: Download models
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p models
+          for url in "$EYE_REFINER_URL" "$SCRFD_URL"; do
+            gh release download "$(basename "$(dirname "$url")")" --repo "$GITHUB_REPOSITORY" --pattern "$(basename "$url")" --dir models --clobber
+          done
+
+      - name: Verify model checksums
+        uses: ./.github/actions/verify-models
+        with:
+          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
+          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
+
+      # The official binaries ship the private headers qtbridge includes.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: ${{ matrix.qt-arch }}
+          cache: true
+          # 3.3 reads the 6.10 repository layout; Qt 6.11.2+ needs a newer one (see README).
+          aqtversion: "==3.3.*"
+
+      # ── Native dependencies ──────────────────────────────────────────────
+      - name: Install pkg-config (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install pkgconfiglite --no-progress -y
+          echo "C:\ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # x64-windows-static-md, not ci.yml's static triplet: fcs-qt links Qt, which uses the
+      # dynamic CRT, so its C libraries have to as well (see fcs-qt/README.md).
+      - name: Cache vcpkg (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-dav1d-libheif-nohevc-x64-windows-static-md
+
+      - name: Install dav1d + libheif (Windows, vcpkg)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
+            git clone https://github.com/microsoft/vcpkg C:\vcpkg
+            & C:\vcpkg\bootstrap-vcpkg.bat
+          }
+          & C:\vcpkg\vcpkg.exe install "dav1d:x64-windows-static-md" "libheif[core]:x64-windows-static-md"
+
+      - name: Install dav1d + libheif (macOS, Homebrew)
+        if: runner.os == 'macOS'
+        run: brew install dav1d libheif pkg-config
+
+      - name: Install native dependencies (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/linux-build-deps
+
+      # ── Toolchain ────────────────────────────────────────────────────────
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: fcs-qt
+          key: ${{ matrix.os }}
+
+      # ── Checks ───────────────────────────────────────────────────────────
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path fcs-qt/Cargo.toml -- --check
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./fcs-qt/dev.ps1 test
+
+      - name: Clippy (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./fcs-qt/dev.ps1 clippy --all-targets '--' -D warnings
+
+      - name: Test (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: ./fcs-qt/dev.sh test
+
+      - name: Clippy (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: ./fcs-qt/dev.sh clippy --all-targets -- -D warnings
+
+      # Fails on errors only: qmllint exits 0 on warnings, and the expected ones are
+      # "unqualified access" to Studio, the Rust singleton it cannot see.
+      - name: QML lint
+        if: runner.os == 'Linux'
+        run: qmllint -I fcs-qt/src fcs-qt/src/fcs_qt/*.qml
