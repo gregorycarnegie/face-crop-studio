@@ -133,6 +133,22 @@ official online installer for those.
 - **Packaging is untested.** A release would need `windeployqt` (or the macOS/Linux
   equivalents) and Qt's LGPL obligations, on top of the current installers.
 
-**If this goes further:** box editing (drag handles) is the biggest missing workflow, and maps
-onto QML `DragHandler` directly. Ask upstream for an image provider API in the bridge, so the
-C++ file can go.
+- **Windows only, so far.** Face Crop Studio ships on Windows, macOS and Linux; fcs-qt has
+  only been built and run on Windows. qtbridge calls macOS (arm64) experimental, Linux needs
+  Qt 6.10+ (distro packages only from Ubuntu 26.04 / Fedora 43), and `dev.ps1`, the CRT
+  workaround and the vcpkg triplet are Windows-specific.
+
+**Before fcs-qt could replace fcs-gui** (agreed 2026-11-13: keep both until then), in order:
+
+1. CI on all three platforms: a matrix job that installs Qt 6.10+ and builds, tests and lints
+   fcs-qt on Windows, macOS and Linux (with a non-PowerShell dev script for the latter two).
+2. Packaging on all three: Qt deployed with the app (`windeployqt`, `macdeployqt`, a Linux
+   bundle), LGPL notices, and the existing installers built from it.
+3. The fcs-gui features still missing: clipboard paste, queue list and after-the-fact
+   reports, aspect-ratio picks, metadata settings, telemetry and log level, settings
+   save/restore/defaults, About.
+4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).
+5. One release shipping both front ends before deciding; dropping egui would be the UI
+   overhaul the 3.0 version is reserved for.
+
+Also worth asking upstream for an image provider API in the bridge, so the C++ file can go.
