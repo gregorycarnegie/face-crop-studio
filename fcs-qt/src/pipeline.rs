@@ -296,6 +296,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    /// HEIC (libheif) and AVIF (dav1d) decode in this build, whose C libraries have to come
+    /// from vcpkg's dynamic-CRT triplet. Both files are sample_01 at 512 px.
+    #[test]
+    fn decodes_heic_and_avif() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+        for name in ["sample_01.heic", "sample_01.avif"] {
+            let image = load_image(dir.join(name)).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!((image.width(), image.height()), (512, 512), "{name}");
+        }
+    }
+
     #[test]
     fn fit_only_shrinks() {
         assert_eq!(fit(5120, 2560, 2560), (2560, 1280));

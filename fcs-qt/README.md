@@ -34,9 +34,18 @@ against the prebuilt Qt 6.10.3 MSVC 2022 binaries without trouble.
 ./fcs-qt/dev.ps1 run -- "$PWD\samples"   # with photos queued (dev.ps1 runs from fcs-qt/)
 ```
 
+HEIC and AVIF decoding need libheif and dav1d built for the dynamic CRT, once:
+
+```powershell
+C:\vcpkg\vcpkg.exe install "libheif[core]:x64-windows-static-md" "dav1d:x64-windows-static-md"
+```
+
+`[core]` leaves out the default `hevc` feature. That feature is the x265 *encoder* (GPL-2.0),
+which decoding doesn't use; decoding goes through libde265.
+
 `dev.ps1` finds Qt (`$env:QT_DIR`, else the newest `%USERPROFILE%\Qt\6.*\msvc2022_64`), puts
-its `bin` on PATH and sets `RUSTFLAGS`. The crate is not a workspace member, because CI builds
-`--workspace` on runners without Qt.
+its `bin` on PATH, sets `RUSTFLAGS`, and points `PKG_CONFIG_PATH` at the static-md triplet. The
+crate is not a workspace member, because CI builds `--workspace` on runners without Qt.
 
 Qt came from `aqtinstall` (`aqt install-qt windows desktop 6.10.3 win64_msvc2022_64`). Qt 6.11.2
 and later moved to a new repository layout that aqtinstall 3.3.0 cannot read yet. Use the
@@ -65,9 +74,15 @@ official online installer for those.
   Qt uses the dynamic one. Mixing them risks one heap freeing another's memory. A nested config
   cannot undo it, because rustc lets `+crt-static` win over a later `-crt-static`. Only
   `RUSTFLAGS` can override it, so `dev.ps1` sets it and `build.rs` refuses to build otherwise.
-  For the same reason there is no HEIC here: libheif comes from vcpkg's static triplet. dav1d
-  (AVIF) still links statically and triggers one LNK4098 warning; it is a self-contained C
-  decoder, so this is not the Qt heap issue.
+  The C libraries have to match too: the workspace's libheif and dav1d come from vcpkg's
+  `x64-windows-static` triplet (static CRT), so fcs-qt uses `x64-windows-static-md` (static
+  libraries on the dynamic CRT); see the vcpkg line below.
+- **libheif loads DLLs from `C:\`.** vcpkg builds libheif with an empty plugin directory,
+  so on Windows `heif_init` calls `LoadLibrary` on every `*.dll` in the root of the current
+  drive. fcs-qt sets `LIBHEIF_PLUGIN_PATH` to a folder next to the exe before anything starts.
+  It has to go through the CRT's `_wputenv_s`: libheif and Qt read variables with `getenv`,
+  which never sees `std::env::set_var`. The workspace's fcs-cli and fcs-gui still have the
+  problem (`LoadLibraryA error: 193` on stderr when decoding a HEIC).
 - **No image provider.** QML's `Image` loads only URLs, and the bridge has no way to register
   a `QQuickImageProvider`. fcs-qt adds one itself: [cpp/image_provider.cpp](cpp/image_provider.cpp)
   (about 60 lines, compiled by `build.rs` through `qt-build-utils`) serves `image://fcs/<key>`

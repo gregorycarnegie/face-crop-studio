@@ -15,6 +15,11 @@ if (-not $qt -or -not (Test-Path "$qt\bin\qmake.exe")) {
 $env:PATH = "$qt\bin;$env:PATH"
 # Replaces the workspace's rustflags, dropping +crt-static but keeping its CPU baseline.
 $env:RUSTFLAGS = '-C target-cpu=x86-64-v3'
+# C libraries to match: static libs built on the dynamic CRT. libheif-sys's vcpkg lookup picks
+# this triplet by itself once +crt-static is gone; dav1d (AVIF) goes through pkg-config.
+$vcpkg = if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { 'C:\vcpkg' }
+$env:VCPKG_ROOT = $vcpkg
+$env:PKG_CONFIG_PATH = "$vcpkg\installed\x64-windows-static-md\lib\pkgconfig"
 
 if (-not $CargoArgs) { $CargoArgs = @('run') }
 # From here, not --manifest-path: cargo reads .cargo/config.toml (fcs-qt's own target dir)
