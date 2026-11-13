@@ -88,6 +88,19 @@ Qt came from `aqtinstall` (`aqt install-qt windows desktop 6.10.3 win64_msvc2022
 and later moved to a new repository layout that aqtinstall 3.3.0 cannot read yet. Use the
 official online installer for those.
 
+**Linux** (checked on Ubuntu 26.04 in WSL2, Qt 6.10.2 from apt):
+
+```bash
+sudo apt install cmake libclang-dev qt6-base-dev qt6-declarative-dev \
+  qt6-base-private-dev qt6-declarative-private-dev \
+  qml6-module-qtquick-{controls,dialogs,layouts,shapes,effects}
+# then libde265 + libheif built into /usr/local, as .github/actions/linux-build-deps does
+./fcs-qt/dev.sh run -- samples        # or: test, clippy --all-targets
+```
+
+`dev.sh` finds `qmake6` and, when `/usr/local/lib/libheif.a` exists, links it statically
+with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
+
 ## Findings
 
 **Works well**
@@ -133,15 +146,33 @@ official online installer for those.
 - **Packaging is untested.** A release would need `windeployqt` (or the macOS/Linux
   equivalents) and Qt's LGPL obligations, on top of the current installers.
 
-- **Windows only, so far.** Face Crop Studio ships on Windows, macOS and Linux; fcs-qt has
-  only been built and run on Windows. qtbridge calls macOS (arm64) experimental, Linux needs
-  Qt 6.10+ (distro packages only from Ubuntu 26.04 / Fedora 43), and `dev.ps1`, the CRT
-  workaround and the vcpkg triplet are Windows-specific.
+- **Windows and Linux so far; macOS untried.** Face Crop Studio ships on all three. On Linux
+  (2026-11-13, Ubuntu 26.04 in WSL2) fcs-qt builds with no code changes, its 11 tests pass
+  (HEIC and AVIF included), clippy is clean, and the app runs under WSLg: photos load, faces
+  are detected, previews render. The Linux-specific work was all in the build:
+  - qtbridge includes Qt's **private headers** (`private/qobject_p.h`, `private/qqmldata_p.h`),
+    so it needs `qt6-*-private-dev`. Private headers carry no compatibility promise, so a build
+    is tied to the exact Qt version it was compiled against, which affects any distro package
+    or bundle.
+  - Qt 6.10 comes from apt only on Ubuntu 26.04 / Fedora 43 and later. CI's `ubuntu-22.04`
+    runners would need Qt from aqtinstall or the online installer.
+  - CMake 4 (Ubuntu 26.04) refuses libde265 1.0.15's CMakeLists without
+    `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`, which linux-build-deps will also need on a newer
+    runner.
+  - With a distro `libheif-dev` installed, the link picks its shared libheif (HEVC decode is a
+    separate plugin package) over the static one in `/usr/local`. A libheif built where
+    libwebp's sharpyuv is present needs `-DWITH_LIBSHARPYUV=OFF` or an extra link library.
+  - The webcam crate's bindgen needs `libclang-dev`, which CI runners have but a bare
+    system doesn't.
+
+  Not checked on Linux: the file and folder dialogs (Qt Quick's own, non-native, unless a
+  platform theme provides one), the camera (no webcam in WSL), and a real GPU (WSL's Vulkan
+  is llvmpipe). qtbridge calls macOS (arm64) experimental.
 
 **Before fcs-qt could replace fcs-gui** (agreed 2026-11-13: keep both until then), in order:
 
 1. CI on all three platforms: a matrix job that installs Qt 6.10+ and builds, tests and lints
-   fcs-qt on Windows, macOS and Linux (with a non-PowerShell dev script for the latter two).
+   fcs-qt on Windows, macOS and Linux (`dev.sh` covers the latter two; Linux works locally).
 2. Packaging on all three: Qt deployed with the app (`windeployqt`, `macdeployqt`, a Linux
    bundle), LGPL notices, and the existing installers built from it.
 3. The fcs-gui features still missing: clipboard paste, queue list and after-the-fact
