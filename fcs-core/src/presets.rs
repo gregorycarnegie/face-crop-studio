@@ -73,6 +73,31 @@ pub fn preset_by_name(name: &str) -> Option<CropPreset> {
     None
 }
 
+/// Switch `crop` to the named preset: its output size, a face size and framing that suit
+/// it, and a plain rectangle. Any front end's preset picker goes through here, so they all
+/// agree on what a preset means. Unknown names and `Custom` keep the size and framing.
+pub fn apply_preset(crop: &mut fcs_utils::config::CropSettings, name: &str) {
+    use fcs_utils::config::PositioningMode;
+    crop.preset = name.to_string();
+    crop.shape = fcs_utils::CropShape::Rectangle;
+    let Some(preset) = preset_by_name(name).filter(|p| p.width > 0 && p.height > 0) else {
+        return;
+    };
+    crop.output_width = preset.width;
+    crop.output_height = preset.height;
+    let (face_height_pct, positioning_mode) = match preset.name {
+        "Passport" => (75.0, PositioningMode::Center),
+        "Headshot" => (55.0, PositioningMode::RuleOfThirds),
+        "ID Card" => (62.0, PositioningMode::Center),
+        "Avatar" => (70.0, PositioningMode::Center),
+        _ => (55.0, PositioningMode::Center),
+    };
+    crop.face_height_pct = face_height_pct;
+    crop.positioning_mode = positioning_mode;
+    crop.horizontal_offset = 0.0;
+    crop.vertical_offset = 0.0;
+}
+
 fn normalize_name(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -126,6 +151,28 @@ mod tests {
         // Hyphens are stripped too
         let p2 = preset_by_name("linked-in").expect("should match LinkedIn with hyphen");
         assert_eq!(p2.name, "LinkedIn");
+    }
+
+    #[test]
+    fn apply_preset_sets_size_and_framing_and_leaves_custom_alone() {
+        use fcs_utils::config::{CropSettings, PositioningMode};
+        let mut crop = CropSettings {
+            shape: fcs_utils::CropShape::Ellipse,
+            vertical_offset: 0.4,
+            ..CropSettings::default()
+        };
+        apply_preset(&mut crop, "headshot");
+        assert_eq!((crop.output_width, crop.output_height), (600, 800));
+        assert_eq!(crop.face_height_pct, 55.0);
+        assert_eq!(crop.positioning_mode, PositioningMode::RuleOfThirds);
+        assert_eq!(crop.shape, fcs_utils::CropShape::Rectangle);
+        assert_eq!(crop.vertical_offset, 0.0);
+
+        let before = crop.clone();
+        apply_preset(&mut crop, "Custom");
+        assert_eq!(crop.preset, "Custom");
+        assert_eq!(crop.output_width, before.output_width);
+        assert_eq!(crop.face_height_pct, before.face_height_pct);
     }
 
     #[test]

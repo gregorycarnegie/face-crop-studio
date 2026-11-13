@@ -1,0 +1,24 @@
+module fcs_qt
+prefer :/qt/qml/fcs_qt/
+singleton Theme 1.0 Theme.qml
+singleton Icons 1.0 Icons.qml
+Main 1.0 Main.qml
+AppButton 1.0 AppButton.qml
+AppHeader 1.0 AppHeader.qml
+CanvasView 1.0 CanvasView.qml
+DropOverlay 1.0 DropOverlay.qml
+EmptyState 1.0 EmptyState.qml
+FaceBar 1.0 FaceBar.qml
+FaceBox 1.0 FaceBox.qml
+Icon 1.0 Icon.qml
+Inspector 1.0 Inspector.qml
+PresetCard 1.0 PresetCard.qml
+PreviewCard 1.0 PreviewCard.qml
+QueueDelegate 1.0 QueueDelegate.qml
+Section 1.0 Section.qml
+Segmented 1.0 Segmented.qml
+Sidebar 1.0 Sidebar.qml
+Spinner 1.0 Spinner.qml
+StatusPill 1.0 StatusPill.qml
+Toast 1.0 Toast.qml
+ValueSlider 1.0 ValueSlider.qml

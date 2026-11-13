@@ -1,0 +1,6 @@
+# Overrides for the workspace config one level up, which cargo still reads here.
+
+[build]
+# Its own target dir: fcs-qt builds with different rustflags (dynamic CRT, see build.rs),
+# and sharing one with the workspace would rebuild every dependency on each switch.
+target-dir = "target"

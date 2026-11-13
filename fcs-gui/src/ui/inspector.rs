@@ -9,8 +9,8 @@ use crate::{
     },
 };
 use egui::{Sense, Stroke, Ui, Vec2};
-use fcs_core::preset_by_name;
-use fcs_utils::{CropShape, ImageFormatHint, PositioningMode};
+use fcs_core::{apply_preset, preset_by_name};
+use fcs_utils::{ImageFormatHint, PositioningMode};
 
 const BODY_MARGIN_X: i8 = 14;
 
@@ -165,55 +165,10 @@ fn panel_01_crop_framing(ui: &mut Ui, app: &mut App2) {
             .response
             .labelled_by(preset_label);
         if selected_key != app.settings.crop.preset {
-            app.settings.crop.preset = selected_key.clone();
-            if let Some(p) = preset_by_name(&selected_key)
-                && p.width > 0
-                && p.height > 0
-            {
-                app.settings.crop.output_width = p.width;
-                app.settings.crop.output_height = p.height;
-                app.aspect_ratio_idx = aspect_idx_for(p.width, p.height);
-            }
-            app.settings.crop.shape = CropShape::Rectangle;
-            let c = &mut app.settings.crop;
-            match selected_key.as_str() {
-                "LinkedIn" => {
-                    c.face_height_pct = 55.0;
-                    c.positioning_mode = PositioningMode::Center;
-                    c.horizontal_offset = 0.0;
-                    c.vertical_offset = 0.0;
-                }
-                "Passport" => {
-                    c.face_height_pct = 75.0;
-                    c.positioning_mode = PositioningMode::Center;
-                    c.horizontal_offset = 0.0;
-                    c.vertical_offset = 0.0;
-                }
-                "Instagram" => {
-                    c.face_height_pct = 55.0;
-                    c.positioning_mode = PositioningMode::Center;
-                    c.horizontal_offset = 0.0;
-                    c.vertical_offset = 0.0;
-                }
-                "Headshot" => {
-                    c.face_height_pct = 55.0;
-                    c.positioning_mode = PositioningMode::RuleOfThirds;
-                    c.horizontal_offset = 0.0;
-                    c.vertical_offset = 0.0;
-                }
-                "ID Card" => {
-                    c.face_height_pct = 62.0;
-                    c.positioning_mode = PositioningMode::Center;
-                    c.horizontal_offset = 0.0;
-                    c.vertical_offset = 0.0;
-                }
-                "Avatar" => {
-                    c.face_height_pct = 70.0;
-                    c.positioning_mode = PositioningMode::Center;
-                    c.horizontal_offset = 0.0;
-                    c.vertical_offset = 0.0;
-                }
-                _ => {}
+            apply_preset(&mut app.settings.crop, &selected_key);
+            if preset_by_name(&selected_key).is_some_and(|p| p.width > 0 && p.height > 0) {
+                let c = &app.settings.crop;
+                app.aspect_ratio_idx = aspect_idx_for(c.output_width, c.output_height);
             }
         }
 

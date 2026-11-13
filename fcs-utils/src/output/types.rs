@@ -35,6 +35,18 @@ impl ImageFormatHint {
     pub fn from_extension(ext: &str) -> Option<Self> {
         ext.parse().ok()
     }
+
+    /// The file extension written for this format, without the dot.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Webp => "webp",
+            Self::Tiff => "tif",
+            Self::Bmp => "bmp",
+            Self::Avif => "avif",
+        }
+    }
 }
 
 impl std::str::FromStr for ImageFormatHint {

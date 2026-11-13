@@ -69,7 +69,7 @@ pub mod tensor;
 pub use crate::{
     cropper::{CropRegion, CropSettings, FillColor, PositioningMode, calculate_crop_region},
     face_cropper::{crop_face_from_image, eye_positions},
-    presets::{CropPreset, preset_by_name, standard_presets},
+    presets::{CropPreset, apply_preset, preset_by_name, standard_presets},
 };
 
 pub use eye_refiner::EyeRefiner;
