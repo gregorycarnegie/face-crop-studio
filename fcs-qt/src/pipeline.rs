@@ -28,27 +28,41 @@ pub struct Engine {
     pub detector: FaceDetector,
     pub refiner: Option<EyeRefiner>,
     pub enhancement: EnhancementRuntime,
-    /// What runs the detector, for the status pill: "GPU · <adapter>" or "CPU".
+    /// What runs the detector, for the status pill: "wgsl-gpu · <adapter>", "cuda · <device>"
+    /// or "cpu-graph".
     pub label: String,
 }
 
 impl Engine {
+    /// The detector and enhancement on the backend the settings choose, as fcs-gui's
+    /// `build_detector` picks it: experimental CUDA Rust when opted in (and the GPU is on),
+    /// else WGSL on the GPU, else the CPU graph.
     pub fn load(settings: &AppSettings) -> Result<Self> {
-        let options: GpuContextOptions = (&settings.gpu).into();
-        let context = match GpuContext::init_with_fallback(&options) {
-            GpuAvailability::Available(context) if settings.gpu.enabled => Some(context),
-            _ => None,
-        };
-        let adapter = context.as_ref().map(|c| c.adapter_info().name.clone());
-        let enhancement = EnhancementRuntime::new(context);
         let model = settings
             .model_path
             .as_deref()
             .map(resolve_data_path)
             .context("no model path configured")?;
-        let detector = FaceDetector::load_from_with_gpu(&model, &options)
-            .with_context(|| format!("no detector model at {}", model.display()))?
-            .with_settings(&settings.detection);
+        // A disabled GPU overrides a saved CUDA opt-in, as `--no-gpu` does in the CLI.
+        let cuda = settings.gpu.experimental_cuda && settings.gpu.enabled;
+        let (detector, enhancement, adapter) = if cuda {
+            let enhancement = EnhancementRuntime::experimental_cuda()?;
+            let detector = FaceDetector::load_from_cuda(&model, &settings.gpu)
+                .with_context(|| format!("loading the CUDA detector from {}", model.display()))?;
+            let device = enhancement.adapter_name();
+            (detector, enhancement, device)
+        } else {
+            let options: GpuContextOptions = (&settings.gpu).into();
+            let context = match GpuContext::init_with_fallback(&options) {
+                GpuAvailability::Available(context) if settings.gpu.enabled => Some(context),
+                _ => None,
+            };
+            let adapter = context.as_ref().map(|c| c.adapter_info().name.clone());
+            let detector = FaceDetector::load_from_with_gpu(&model, &options)
+                .with_context(|| format!("no detector model at {}", model.display()))?;
+            (detector, EnhancementRuntime::new(context), adapter)
+        };
+        let detector = detector.with_settings(&settings.detection);
         let refiner = EyeRefiner::load();
         let backend = detector.inference_backend();
         let label = match adapter {

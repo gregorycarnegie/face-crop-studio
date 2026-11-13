@@ -13,7 +13,7 @@ use fcs_core::BoundingBox;
 use fcs_mapping::{ColumnSelector, MappingFormat, MappingReadOptions};
 use fcs_utils::{
     CropShape, OutputClaims, OverwritePolicy,
-    config::{AppSettings, DetectionSettings, default_settings_path},
+    config::{AppSettings, DetectionSettings, GpuSettings, default_settings_path},
     is_supported_image_path, outline_points_for_rect,
 };
 use image::{DynamicImage, RgbImage, RgbaImage};
@@ -26,7 +26,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -133,6 +133,9 @@ pub struct Studio {
     settings: AppSettings,
     settings_path: PathBuf,
     engine: Option<Arc<Engine>>,
+    /// The engine detection jobs run on, read as each job starts, so a backend switch takes
+    /// effect for photos already queued.
+    engine_slot: Arc<RwLock<Option<Arc<Engine>>>>,
     jobs: Option<mpsc::Sender<DetectJob>>,
     entries: Vec<Entry>,
     next_uid: u64,
@@ -154,6 +157,12 @@ pub struct Studio {
     ready: bool,
     engine_label: String,
     engine_error: String,
+    /// A backend switch is loading the new engine.
+    switching: bool,
+    /// The CUDA probe's verdict: the device name, why CUDA is unusable, or empty while it runs.
+    cuda_status: String,
+    cuda_available: bool,
+    cuda_warning: String,
     pending: i32,
     queue: Vec<Value>,
     selected_total: i32,
@@ -213,6 +222,7 @@ impl Default for Studio {
             settings,
             settings_path,
             engine: None,
+            engine_slot: Arc::new(RwLock::new(None)),
             jobs: None,
             entries: Vec::new(),
             next_uid: 0,
@@ -228,6 +238,10 @@ impl Default for Studio {
             ready: false,
             engine_label: String::new(),
             engine_error: String::new(),
+            switching: false,
+            cuda_status: String::new(),
+            cuda_available: false,
+            cuda_warning: fcs_utils::cuda::WARNING.into(),
             pending: 0,
             queue: Vec::new(),
             selected_total: 0,
@@ -292,6 +306,14 @@ impl Studio {
         Member = engine_error,
         Notify = engine_changed
     );
+    qproperty!("switching", Member = switching, Notify = engine_changed);
+    qproperty!("cudaStatus", Member = cuda_status, Notify = engine_changed);
+    qproperty!(
+        "cudaAvailable",
+        Member = cuda_available,
+        Notify = engine_changed
+    );
+    qproperty!("cudaWarning", Member = cuda_warning, Constant);
     qproperty!("pending", Member = pending, Notify = queue_changed);
     qproperty!("queue", Member = queue, Notify = queue_changed);
     qproperty!(
@@ -391,6 +413,22 @@ impl Studio {
         thread::spawn(move || {
             let engine = Engine::load(&settings).map_err(|err| format!("{err:#}"));
             handle.invoke_mut(move |studio| studio.engine_loaded(engine));
+        });
+        // The probe compiles PTX and opens a driver context, so it runs once, off this thread,
+        // and the backend picker learns the answer when it arrives.
+        let handle = self.get_thread_handle();
+        thread::spawn(move || {
+            let verdict = loop {
+                if let Some(verdict) = fcs_utils::cuda::availability() {
+                    break verdict.clone();
+                }
+                thread::sleep(std::time::Duration::from_millis(100));
+            };
+            handle.invoke_mut(move |studio| {
+                studio.cuda_available = verdict.is_ok();
+                studio.cuda_status = verdict.unwrap_or_else(|reason| reason);
+                studio.engine_changed();
+            });
         });
     }
 
@@ -563,8 +601,14 @@ impl Studio {
                 settings.detection.sanitize();
                 let floor = settings.detection.confidence;
                 let floor_moved = floor != self.settings.detection.confidence;
+                let previous_gpu = self.settings.gpu.clone();
+                let backend_moved = gpu_key(&settings.gpu) != gpu_key(&previous_gpu);
                 self.settings = settings;
                 self.settings_edited();
+                if backend_moved {
+                    // Re-detects everything once the new engine is up.
+                    return self.rebuild_engine(previous_gpu);
+                }
                 // The boxes on screen were found under the old floor.
                 if floor_moved {
                     let count = self.redetect_all();
@@ -1140,29 +1184,8 @@ impl Studio {
     fn engine_loaded(&mut self, engine: Result<Engine, String>) {
         match engine {
             Ok(engine) => {
-                let engine = Arc::new(engine);
-                self.engine_label = engine.label.clone();
-                self.ready = true;
                 self.note("ok", format!("Models ready on {}", engine.label));
-                let (tx, rx) = mpsc::channel::<DetectJob>();
-                let worker_engine = engine.clone();
-                let handle = self.get_thread_handle();
-                thread::spawn(move || {
-                    for job in rx {
-                        let result = pipeline::detect(
-                            &worker_engine,
-                            &job.source,
-                            job.orient,
-                            job.turn,
-                            &job.detection,
-                        )
-                        .map_err(|err| format!("{err:#}"));
-                        let uid = job.uid;
-                        handle.invoke_mut(move |studio| studio.detected(uid, result));
-                    }
-                });
-                self.jobs = Some(tx);
-                self.engine = Some(engine);
+                self.install_engine(engine);
                 // Photos added while the models loaded.
                 for entry in &self.entries {
                     self.send_detection(entry);
@@ -1171,6 +1194,91 @@ impl Studio {
             Err(err) => {
                 self.note("error", format!("Models failed to load: {err}"));
                 self.engine_error = err;
+            }
+        }
+        self.engine_changed();
+    }
+
+    /// Make `engine` the one previews, exports and detection jobs use, starting the detection
+    /// worker the first time.
+    fn install_engine(&mut self, engine: Engine) {
+        let engine = Arc::new(engine);
+        self.engine_label = engine.label.clone();
+        self.engine_error.clear();
+        self.ready = true;
+        *self.engine_slot.write().unwrap_or_else(|e| e.into_inner()) = Some(engine.clone());
+        self.engine = Some(engine);
+        if self.jobs.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel::<DetectJob>();
+        let slot = self.engine_slot.clone();
+        let handle = self.get_thread_handle();
+        thread::spawn(move || {
+            for job in rx {
+                let engine = slot.read().unwrap_or_else(|e| e.into_inner()).clone();
+                let result = match engine {
+                    Some(engine) => {
+                        pipeline::detect(&engine, &job.source, job.orient, job.turn, &job.detection)
+                            .map_err(|err| format!("{err:#}"))
+                    }
+                    None => Err("no detector".to_string()),
+                };
+                let uid = job.uid;
+                handle.invoke_mut(move |studio| studio.detected(uid, result));
+            }
+        });
+        self.jobs = Some(tx);
+    }
+
+    /// Load an engine for the new backend settings in the background. Until it is up, the old
+    /// one keeps working; if it fails, the settings go back to `previous` and it stays.
+    fn rebuild_engine(&mut self, previous: GpuSettings) {
+        if self.switching {
+            return;
+        }
+        self.switching = true;
+        self.ready = false;
+        let target = backend_name(&self.settings.gpu);
+        self.engine_label = format!("Switching to {target}…");
+        self.note("info", format!("Switching to {target}"));
+        self.engine_changed();
+        let settings = self.settings.clone();
+        let handle = self.get_thread_handle();
+        thread::spawn(move || {
+            let engine = Engine::load(&settings).map_err(|err| format!("{err:#}"));
+            handle.invoke_mut(move |studio| studio.engine_rebuilt(engine, previous));
+        });
+    }
+
+    fn engine_rebuilt(&mut self, engine: Result<Engine, String>, previous: GpuSettings) {
+        self.switching = false;
+        match engine {
+            Ok(engine) => {
+                let label = engine.label.clone();
+                self.install_engine(engine);
+                self.note("ok", format!("Now running on {label}"));
+                // Boxes found by the old backend can differ a little; find them all again so
+                // every photo agrees with what export will use.
+                let count = self.redetect_all();
+                if count > 0 {
+                    self.note("info", format!("Finding faces again in {}", photos(count)));
+                }
+            }
+            Err(err) => {
+                let message = format!(
+                    "Couldn't switch to {}: {err}",
+                    backend_name(&self.settings.gpu)
+                );
+                warn!("{message}");
+                self.note("error", message.clone());
+                self.toast(message, String::new());
+                self.settings.gpu = previous;
+                self.settings_edited();
+                self.ready = self.engine.is_some();
+                if let Some(engine) = &self.engine {
+                    self.engine_label = engine.label.clone();
+                }
             }
         }
         self.engine_changed();
@@ -1765,6 +1873,20 @@ fn frame_faces(detections: &[fcs_core::Detection], width: u32, height: u32) -> V
             json!({ "x": x, "y": y, "w": (b.width / w).min(1.0 - x), "h": (b.height / h).min(1.0 - y) })
         })
         .collect()
+}
+
+/// The backend fields of the GPU settings, for spotting a change (`GpuSettings` has no
+/// `PartialEq`).
+fn gpu_key(gpu: &GpuSettings) -> (bool, bool, bool) {
+    (gpu.enabled, gpu.experimental_cuda, gpu.respect_env)
+}
+
+fn backend_name(gpu: &GpuSettings) -> &'static str {
+    match (gpu.enabled, gpu.experimental_cuda) {
+        (false, _) => "the CPU",
+        (true, true) => "CUDA Rust",
+        (true, false) => "the GPU (WGSL)",
+    }
 }
 
 fn is_mapping_file(path: &Path) -> bool {

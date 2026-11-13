@@ -46,6 +46,11 @@ pipeline and settings file.
 - Camera: a live view over the canvas, optionally with faces found in every frame. The
   shutter (or Space) adds the frame to the photos, held in memory. From there it is edited,
   previewed and exported like any photo, and named `Camera N`.
+- Backends, as in fcs-gui's GPU settings: WGSL on the GPU, experimental CUDA Rust (offered
+  once the CUDA probe finds a device, behind fcs-gui's warning), or the CPU graph, plus
+  "respect environment overrides". A switch loads the new engine in the background; the old
+  one keeps working until it is up, and if it fails the setting reverts. Then every photo is
+  detected again on the new backend.
 - Photos can be removed from the queue one at a time, or all at once with a confirmation.
   An Activity tab logs what happened: detections, failures, exports, reports.
 - Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).

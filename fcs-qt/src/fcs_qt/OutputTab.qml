@@ -6,6 +6,7 @@ InspectorPage {
 
     readonly property var crop: Studio.settings.crop
     readonly property var rules: crop.quality_rules
+    readonly property var gpu: Studio.settings.gpu
     function set(fields) { Studio.update({ crop: fields }) }
     function setRules(fields) { set({ quality_rules: fields }) }
 
@@ -100,6 +101,77 @@ InspectorPage {
             wrapMode: Text.Wrap
             color: Theme.ink3
             font.pixelSize: Theme.caption
+        }
+    }
+
+    Section {
+        Layout.fillWidth: true
+        title: qsTr("Processing")
+        detail: Studio.switching ? qsTr("switching…") : ""
+
+        Segmented {
+            Layout.fillWidth: true
+            enabled: !Studio.switching
+            value: !root.gpu.enabled ? "cpu" : root.gpu.experimental_cuda ? "cuda" : "gpu"
+            options: [
+                { value: "gpu", label: qsTr("GPU (WGSL)"), tip: qsTr("WGSL shaders on the GPU, the usual backend") },
+                { value: "cuda", label: qsTr("CUDA"), enabled: Studio.cudaAvailable,
+                  tip: Studio.cudaAvailable ? qsTr("Experimental CUDA Rust on %1").arg(Studio.cudaStatus)
+                     : Studio.cudaStatus !== "" ? Studio.cudaStatus : qsTr("Checking for CUDA…") },
+                { value: "cpu", label: qsTr("CPU"), tip: qsTr("No GPU: the built-in CPU graph") }
+            ]
+            onActivated: value => {
+                if (value === "cuda")
+                    cudaDialog.open()
+                else
+                    Studio.update({ gpu: { enabled: value === "gpu", experimental_cuda: false } })
+            }
+        }
+        Text {
+            Layout.fillWidth: true
+            text: Studio.switching ? Studio.engineLabel
+                : Studio.ready ? qsTr("Running on %1").arg(Studio.engineLabel) : ""
+            wrapMode: Text.Wrap
+            color: Theme.ink2
+            font.pixelSize: Theme.caption
+        }
+        Text {
+            Layout.fillWidth: true
+            text: Studio.cudaStatus === "" ? qsTr("Checking for CUDA…")
+                : Studio.cudaAvailable ? qsTr("CUDA device: %1").arg(Studio.cudaStatus)
+                : qsTr("CUDA unavailable: %1").arg(Studio.cudaStatus)
+            wrapMode: Text.Wrap
+            color: Theme.ink3
+            font.pixelSize: Theme.caption
+        }
+        ToggleRow {
+            Layout.fillWidth: true
+            enabled: root.gpu.enabled && !Studio.switching
+            text: qsTr("Respect environment overrides")
+            hint: qsTr("Let GPU environment variables such as WGPU_POWER_PREF choose the adapter")
+            on: root.gpu.respect_env
+            onToggledTo: on => Studio.update({ gpu: { respect_env: on } })
+        }
+        Text {
+            Layout.fillWidth: true
+            text: qsTr("Switching finds the faces in every photo again, so hand edits are lost.")
+            wrapMode: Text.Wrap
+            color: Theme.ink3
+            font.pixelSize: Theme.caption
+        }
+
+        ChoiceDialog {
+            id: cudaDialog
+            title: qsTr("Enable experimental CUDA Rust?")
+            message: Studio.cudaWarning
+            choices: [
+                { value: "enable", label: qsTr("Enable CUDA Rust"), variant: "primary" },
+                { value: "cancel", label: qsTr("Cancel"), variant: "ghost" }
+            ]
+            onChosen: value => {
+                if (value === "enable")
+                    Studio.update({ gpu: { enabled: true, experimental_cuda: true } })
+            }
         }
     }
 

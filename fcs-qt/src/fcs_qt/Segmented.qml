@@ -3,8 +3,9 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// One-of-n picker. `options` is [{ value, label, glyph? }]; glyph draws a shape outline
-// ("rectangle", "rounded" or "ellipse") before the label.
+// One-of-n picker. `options` is [{ value, label, glyph?, enabled?, tip? }]; glyph draws a shape
+// outline ("rectangle", "rounded" or "ellipse") before the label; `enabled: false` greys an
+// option out, with `tip` saying why.
 Rectangle {
     id: root
 
@@ -36,6 +37,11 @@ Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 hoverEnabled: true
+                enabled: root.enabled && (modelData.enabled ?? true)
+                opacity: enabled ? 1 : 0.4
+                ToolTip.visible: hovered && (modelData.tip ?? "") !== ""
+                ToolTip.delay: 400
+                ToolTip.text: modelData.tip ?? ""
                 Accessible.role: Accessible.RadioButton
                 Accessible.name: modelData.label
                 Accessible.checked: active
