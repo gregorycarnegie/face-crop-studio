@@ -42,6 +42,8 @@ use types::{ImageDetections, ProgressCounters};
 use workflow::process_single_image;
 
 fn main() -> Result<()> {
+    // SAFETY: first thing in main, before any thread starts.
+    unsafe { fcs_utils::process_env::confine_libheif_plugins() };
     let args = DetectArgs::parse();
 
     let mut settings = load_settings(args.config.as_ref())?;

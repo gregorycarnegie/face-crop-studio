@@ -17,6 +17,8 @@ use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
     let _ = fcs_gui::LAUNCH.set(std::time::Instant::now());
+    // SAFETY: before logging, eframe or any worker thread starts.
+    unsafe { fcs_utils::process_env::confine_libheif_plugins() };
     init_logging(LevelFilter::Info).expect("failed to initialize logging");
     let mut options = NativeOptions::default();
     options.viewport = options

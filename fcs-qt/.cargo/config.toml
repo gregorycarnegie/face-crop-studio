@@ -7,5 +7,6 @@ target-dir = "target"
 
 [env]
 # For `cargo test`, which never runs main's guard: without it, libheif loads every DLL in the
-# root of the current drive (see set_env_default in src/main.rs). A folder that doesn't exist.
+# root of the current drive (see fcs_utils::process_env::confine_libheif_plugins). A folder
+# that doesn't exist.
 LIBHEIF_PLUGIN_PATH = { value = "target/libheif-plugins", relative = true, force = false }

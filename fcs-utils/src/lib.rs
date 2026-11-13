@@ -60,6 +60,8 @@ pub mod macros;
 pub mod output;
 /// 2D point geometry primitives.
 pub mod point;
+/// Setting environment variables the bundled C libraries can see.
+pub mod process_env;
 /// Image quality analysis (Laplacian variance blur detection).
 pub mod quality;
 /// Shape metadata and masking helpers for custom crop geometry.

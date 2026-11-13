@@ -79,10 +79,10 @@ official online installer for those.
   libraries on the dynamic CRT); see the vcpkg line below.
 - **libheif loads DLLs from `C:\`.** vcpkg builds libheif with an empty plugin directory,
   so on Windows `heif_init` calls `LoadLibrary` on every `*.dll` in the root of the current
-  drive. fcs-qt sets `LIBHEIF_PLUGIN_PATH` to a folder next to the exe before anything starts.
-  It has to go through the CRT's `_wputenv_s`: libheif and Qt read variables with `getenv`,
-  which never sees `std::env::set_var`. The workspace's fcs-cli and fcs-gui still have the
-  problem (`LoadLibraryA error: 193` on stderr when decoding a HEIC).
+  drive. All three binaries now set `LIBHEIF_PLUGIN_PATH` to a folder next to the exe before
+  anything starts (`fcs_utils::process_env::confine_libheif_plugins`). It has to go through the
+  CRT's `_wputenv_s`: libheif and Qt read variables with `getenv`, which never sees
+  `std::env::set_var`.
 - **No image provider.** QML's `Image` loads only URLs, and the bridge has no way to register
   a `QQuickImageProvider`. fcs-qt adds one itself: [cpp/image_provider.cpp](cpp/image_provider.cpp)
   (about 60 lines, compiled by `build.rs` through `qt-build-utils`) serves `image://fcs/<key>`

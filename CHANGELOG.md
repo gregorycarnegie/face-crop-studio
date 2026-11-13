@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- On Windows, decoding a HEIC no longer loads every DLL in the root of the current drive
+  (`C:\*.dll`). vcpkg builds libheif with an empty plugin directory, which made it try each one
+  as a plugin; a DLL planted there would have run inside the app. fcs-cli and fcs-gui now point
+  `LIBHEIF_PLUGIN_PATH` at a `libheif-plugins` folder beside the executable at startup, unless
+  it is already set. The bundled libheif has its HEVC decoder built in, so it needs no plugins.
+  The visible symptom was `LoadLibraryA error: 193` on stderr.
+
 ### Changed
 
 - `docs/MODEL_COMPARISON.md` now explains why the eye refiner's median error rises from 1.18° on
