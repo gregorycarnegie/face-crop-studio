@@ -8,17 +8,17 @@ use fcs_utils::{
     OutputClaims, OutputOptions, Quality, config::AppSettings, estimate_sharpness, load_image,
     resolve_data_path, save_dynamic_image,
 };
-use image::{DynamicImage, ImageEncoder, codecs::jpeg::JpegEncoder};
+use image::{DynamicImage, RgbImage, RgbaImage};
 use std::{
-    fs::File,
-    io::BufWriter,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 /// Longest side of the copy the canvas shows. The face boxes are positioned in fractions of
 /// the image, so the canvas never needs the full resolution.
-const DISPLAY_SIDE: u32 = 2560;
+const CANVAS_SIDE: u32 = 2048;
+/// Longest side of a queue thumbnail (48 px at up to 4x).
+const THUMB_SIDE: u32 = 192;
 /// Longest side of a result preview card.
 const PREVIEW_SIDE: u32 = 480;
 
@@ -71,11 +71,13 @@ pub struct Face {
 pub struct Detected {
     pub image: Arc<DynamicImage>,
     pub faces: Vec<Face>,
+    pub canvas: RgbImage,
+    pub thumb: RgbImage,
 }
 
-/// Load `path` (EXIF-oriented, as the detector sees it), find and refine its faces, and write
-/// the canvas copy to `display`.
-pub fn detect(engine: &Engine, path: &Path, display: &Path) -> Result<Detected> {
+/// Load `path` (EXIF-oriented, as the detector sees it), find and refine its faces, and make
+/// the canvas and queue copies.
+pub fn detect(engine: &Engine, path: &Path) -> Result<Detected> {
     let image = load_image(path).with_context(|| format!("failed to load {}", path.display()))?;
     let mut output = engine
         .detector
@@ -92,8 +94,9 @@ pub fn detect(engine: &Engine, path: &Path, display: &Path) -> Result<Detected> 
             detection,
         })
         .collect();
-    save_display_copy(&image, display)?;
     Ok(Detected {
+        canvas: canvas(&image),
+        thumb: scaled(&image, THUMB_SIDE),
         image: Arc::new(image),
         faces,
     })
@@ -109,17 +112,14 @@ fn face_quality(image: &DynamicImage, detection: &Detection) -> Quality {
     estimate_sharpness(&image.crop_imm(x, y, w, h)).1
 }
 
-fn save_display_copy(image: &DynamicImage, path: &Path) -> Result<()> {
-    let (w, h) = fit(image.width(), image.height(), DISPLAY_SIDE);
-    let rgb = fcs_utils::resize_image(image, w, h, image::imageops::FilterType::Triangle);
-    let file = BufWriter::new(File::create(path)?);
-    JpegEncoder::new_with_quality(file, 90).write_image(
-        rgb.as_raw(),
-        w,
-        h,
-        image::ExtendedColorType::Rgb8,
-    )?;
-    Ok(())
+/// The copy of a photo the canvas shows.
+pub fn canvas(image: &DynamicImage) -> RgbImage {
+    scaled(image, CANVAS_SIDE)
+}
+
+fn scaled(image: &DynamicImage, side: u32) -> RgbImage {
+    let (w, h) = fit(image.width(), image.height(), side);
+    fcs_utils::resize_image(image, w, h, image::imageops::FilterType::Triangle)
 }
 
 fn fit(w: u32, h: u32, side: u32) -> (u32, u32) {
@@ -149,14 +149,9 @@ pub fn finish(
     )
 }
 
-/// Write a small PNG of a finished crop for the preview strip (PNG keeps a shaped crop's
-/// transparent corners).
-// shortcut: images reach QML as temp files because qtbridge 0.4 has no image provider; costs an
-// encode and decode per preview. Replace with a QQuickImageProvider if previews feel slow.
-pub fn save_preview(crop: &DynamicImage, path: &Path) -> Result<()> {
-    crop.thumbnail(PREVIEW_SIDE, PREVIEW_SIDE)
-        .save_with_format(path, image::ImageFormat::Png)?;
-    Ok(())
+/// A finished crop sized for the preview strip, with alpha kept for a shaped crop's corners.
+pub fn preview(crop: &DynamicImage) -> RgbaImage {
+    crop.thumbnail(PREVIEW_SIDE, PREVIEW_SIDE).into_rgba8()
 }
 
 /// Finish and save face `index` of `source` into `out_dir` as `{stem}_face_NN.{ext}`, the
@@ -228,35 +223,20 @@ pub fn url_to_path(url: &str) -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(&out).into_owned())
 }
 
-/// A local path as a `file:` URL QML's `Image` can load.
-pub fn path_to_url(path: &Path) -> String {
-    let s = path.to_string_lossy().replace('\\', "/");
-    let mut url = String::from(if s.starts_with('/') {
-        "file://"
-    } else {
-        "file:///"
-    });
-    for c in s.chars() {
-        match c {
-            '%' => url.push_str("%25"),
-            '#' => url.push_str("%23"),
-            '?' => url.push_str("%3F"),
-            ' ' => url.push_str("%20"),
-            c => url.push(c),
-        }
-    }
-    url
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn file_urls_round_trip_through_paths() {
-        for path in ["C:/Users/a b/#1 100%.jpg", "/home/a b/ü?.png"] {
-            assert_eq!(url_to_path(&path_to_url(Path::new(path))), Path::new(path));
-        }
+    fn file_urls_become_local_paths() {
+        assert_eq!(
+            url_to_path("file:///C:/Users/a%20b/%231%20100%25.jpg"),
+            Path::new("C:/Users/a b/#1 100%.jpg")
+        );
+        assert_eq!(
+            url_to_path("file:///home/a%20b/x.png"),
+            Path::new("/home/a b/x.png")
+        );
         assert_eq!(
             url_to_path("file:///C:/Photos/caf%C3%A9.jpg"),
             Path::new("C:/Photos/café.jpg")
@@ -283,9 +263,11 @@ mod tests {
         std::fs::create_dir_all(&out).expect("temp dir");
         let source = root.join("samples/sample_01.jpg");
 
-        let detected = detect(&engine, &source, &out.join("display.jpg")).expect("detect");
+        let detected = detect(&engine, &source).expect("detect");
         assert_eq!(detected.faces.len(), 1);
-        assert!(out.join("display.jpg").is_file());
+        // sample_01 is 1024 square: under both limits, the canvas keeps it whole.
+        assert_eq!(detected.canvas.dimensions(), (1024, 1024));
+        assert_eq!(detected.thumb.dimensions(), (THUMB_SIDE, THUMB_SIDE));
 
         // A fresh claims set per export, as each click of Export makes one.
         let export = || {

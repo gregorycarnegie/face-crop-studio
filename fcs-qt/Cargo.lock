@@ -980,11 +980,13 @@ name = "fcs-qt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cc",
  "env_logger",
  "fcs-core",
  "fcs-utils",
  "image",
  "log",
+ "qt-build-utils",
  "qtbridge",
  "serde_json",
 ]

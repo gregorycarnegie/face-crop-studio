@@ -25,7 +25,7 @@ Rectangle {
 
         Spinner {
             anchors.horizontalCenter: parent.horizontalCenter
-            visible: root.entry?.status === "queued"
+            visible: root.entry?.status !== "failed"
             size: 28
         }
         Icon {
@@ -38,6 +38,7 @@ Rectangle {
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: root.entry?.status === "failed" ? qsTr("Couldn't read %1").arg(root.entry.name)
+                : root.entry?.status === "done" ? qsTr("Opening photo…")
                 : Studio.ready ? qsTr("Finding faces…") : qsTr("Loading models…")
             color: Theme.ink2
             font.pixelSize: Theme.title
@@ -62,9 +63,12 @@ Rectangle {
         anchors.bottomMargin: 84
         visible: root.hasImage
         source: Studio.imageUrl
-        sourceSize: Qt.size(2560, 2560)
+        sourceSize: Qt.size(2048, 2048)
         fillMode: Image.PreserveAspectFit
         asynchronous: true
+        // Studio keeps the recent canvas copies itself; a second cached copy would only
+        // double the memory.
+        cache: false
         opacity: status === Image.Ready ? 1 : 0
         Accessible.role: Accessible.Graphic
         Accessible.name: root.entry?.name ?? ""

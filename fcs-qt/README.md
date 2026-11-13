@@ -53,7 +53,7 @@ official online installer for those.
   result back onto the Qt thread with `&mut self`. Detection, previews and export all use it.
 - `Vec<serde_json::Value>` properties give QML plain arrays of objects, enough for every list
   here.
-- QML makes a modern, animated, accessible UI cheap: about 1,400 lines of QML and 1,000 of
+- QML makes a modern, animated, accessible UI cheap: about 1,400 lines of QML and 1,250 of
   Rust for this screen.
 - Detection and export reuse fcs-core/fcs-utils unchanged. The only shared-code changes are
   `fcs_core::apply_preset` (moved out of the egui inspector so both front ends agree) and
@@ -68,15 +68,19 @@ official online installer for those.
   For the same reason there is no HEIC here: libheif comes from vcpkg's static triplet. dav1d
   (AVIF) still links statically and triggers one LNK4098 warning; it is a self-contained C
   decoder, so this is not the Qt heap issue.
-- **No image provider.** The bridge has no `QQuickImageProvider` or `QImage`, so the canvas
-  copy and previews go through PNG/JPEG files in a temp folder, loaded as `file:` URLs. It
-  works, but costs an encode and decode per preview.
+- **No image provider.** QML's `Image` loads only URLs, and the bridge has no way to register
+  a `QQuickImageProvider`. fcs-qt adds one itself: [cpp/image_provider.cpp](cpp/image_provider.cpp)
+  (about 60 lines, compiled by `build.rs` through `qt-build-utils`) serves `image://fcs/<key>`
+  from an in-memory store in [src/images.rs](src/images.rs). It gets the engine through the
+  bridge's doc-hidden `QApp::qml_engine()`, which a later bridge release could change. The
+  store holds a thumbnail per photo, canvas copies of the 8 most recent photos, and the
+  previews on screen. Nothing goes through the disk.
 - **Models are awkward.** `QListModel` exists but is a separate QObject with little
   documentation. Here QML mirrors the queue array into a `ListModel` with `set()`/`append()`,
   which keeps the list from resetting on each update.
 - **Packaging is untested.** A release would need `windeployqt` (or the macOS/Linux
   equivalents) and Qt's LGPL obligations, on top of the current installers.
 
-**If this goes further:** a Rust image provider (C++ via the bridge's cxx-qt layer) would drop
-the temp files. Box editing (drag handles) is the biggest missing workflow, and maps onto QML
-`DragHandler` directly.
+**If this goes further:** box editing (drag handles) is the biggest missing workflow, and maps
+onto QML `DragHandler` directly. Ask upstream for an image provider API in the bridge, so the
+C++ file can go.

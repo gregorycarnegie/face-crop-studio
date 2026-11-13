@@ -33,6 +33,8 @@ Rectangle {
         sourceSize: Qt.size(480, 480)
         fillMode: Image.PreserveAspectFit
         asynchronous: true
+        // Every render has a new URL; caching old ones would only hold memory.
+        cache: false
         opacity: status === Image.Ready ? 1 : 0
         Accessible.role: Accessible.Graphic
         Accessible.name: label.text

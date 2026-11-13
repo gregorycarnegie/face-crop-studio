@@ -1,17 +1,21 @@
 //! The one object QML talks to. It owns the queue, the selection and the settings; the work
 //! itself runs on background threads and comes back through `QThreadHandle::invoke_mut`.
 
-use crate::pipeline::{self, Detected, Engine, Face};
+use crate::{
+    images::{self, Pixels},
+    pipeline::{self, Detected, Engine, Face},
+};
 use fcs_utils::{
     CropShape, ImageFormatHint, OutputClaims, OverwritePolicy,
     config::{AppSettings, default_settings_path},
     is_supported_image_path, load_image,
 };
-use image::DynamicImage;
+use image::{DynamicImage, RgbImage, RgbaImage};
 use log::warn;
 use qtbridge::{QmlObject, qobject};
 use serde_json::{Value, json};
 use std::{
+    collections::VecDeque,
     fs,
     path::PathBuf,
     sync::{Arc, mpsc},
@@ -26,22 +30,23 @@ enum Status {
 
 struct Entry {
     path: PathBuf,
-    display: PathBuf,
     status: Status,
     size: (u32, u32),
     faces: Vec<Face>,
     selected: Vec<bool>,
 }
 
-type DetectJob = (usize, PathBuf, PathBuf);
+type DetectJob = (usize, PathBuf);
+
+/// Canvas copies kept in memory: up to ~12 MB each at 2048 px, so a few photos back and forth
+/// switch instantly without holding a whole batch.
+const CANVAS_CACHE: usize = 8;
 /// Entry id, source path, and its selected faces with their indices.
 type ExportJob = (usize, PathBuf, Vec<(usize, Face)>);
 
 pub struct Studio {
     settings: AppSettings,
     settings_path: PathBuf,
-    /// Canvas copies and preview PNGs; removed on drop.
-    scratch: PathBuf,
     engine: Option<Arc<Engine>>,
     jobs: Option<mpsc::Sender<DetectJob>>,
     entries: Vec<Entry>,
@@ -51,7 +56,10 @@ pub struct Studio {
     preview_running: bool,
     preview_dirty: bool,
     preview_seq: u64,
-    preview_files: Vec<PathBuf>,
+    /// Image-store keys of the previews on screen.
+    preview_keys: Vec<String>,
+    /// Entries whose canvas copy is in the image store, oldest first.
+    canvases: VecDeque<usize>,
 
     ready: bool,
     engine_label: String,
@@ -88,10 +96,6 @@ impl Default for Studio {
             );
             AppSettings::default()
         });
-        let scratch = std::env::temp_dir().join(format!("fcs-qt-{}", std::process::id()));
-        if let Err(err) = fs::create_dir_all(&scratch) {
-            warn!("Failed to create {}: {err}", scratch.display());
-        }
         let presets = fcs_core::standard_presets()
             .iter()
             .filter(|p| p.width > 0)
@@ -100,7 +104,6 @@ impl Default for Studio {
         let mut studio = Self {
             settings,
             settings_path,
-            scratch,
             engine: None,
             jobs: None,
             entries: Vec::new(),
@@ -108,7 +111,8 @@ impl Default for Studio {
             preview_running: false,
             preview_dirty: false,
             preview_seq: 0,
-            preview_files: Vec::new(),
+            preview_keys: Vec::new(),
+            canvases: VecDeque::new(),
             ready: false,
             engine_label: String::new(),
             engine_error: String::new(),
@@ -141,12 +145,6 @@ impl Default for Studio {
         };
         studio.sync_settings();
         studio
-    }
-}
-
-impl Drop for Studio {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.scratch);
     }
 }
 
@@ -409,13 +407,11 @@ impl Studio {
         }
         for path in paths {
             let id = self.entries.len();
-            let display = self.scratch.join(format!("display-{id}.jpg"));
             if let Some(jobs) = &self.jobs {
-                let _ = jobs.send((id, path.clone(), display.clone()));
+                let _ = jobs.send((id, path.clone()));
             }
             self.entries.push(Entry {
                 path,
-                display,
                 status: Status::Queued,
                 size: (0, 0),
                 faces: Vec::new(),
@@ -440,15 +436,15 @@ impl Studio {
                 let worker_engine = engine.clone();
                 let handle = self.get_thread_handle();
                 thread::spawn(move || {
-                    for (id, path, display) in rx {
-                        let result = pipeline::detect(&worker_engine, &path, &display)
+                    for (id, path) in rx {
+                        let result = pipeline::detect(&worker_engine, &path)
                             .map_err(|err| format!("{err:#}"));
                         handle.invoke_mut(move |studio| studio.detected(id, result));
                     }
                 });
                 // Photos added while the models loaded.
                 for (id, entry) in self.entries.iter().enumerate() {
-                    let _ = tx.send((id, entry.path.clone(), entry.display.clone()));
+                    let _ = tx.send((id, entry.path.clone()));
                 }
                 self.jobs = Some(tx);
                 self.engine = Some(engine);
@@ -469,6 +465,8 @@ impl Studio {
                 entry.selected = vec![true; detected.faces.len()];
                 entry.faces = detected.faces;
                 entry.status = Status::Done;
+                images::put(&format!("thumb/{id}"), Pixels::Rgb(detected.thumb));
+                self.cache_canvas(id, detected.canvas);
                 if self.current == id as i32 {
                     self.image = Some((id, detected.image));
                     self.publish_image();
@@ -534,7 +532,8 @@ impl Studio {
         self.queue = self
             .entries
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(id, e)| {
                 let (status, error) = match &e.status {
                     Status::Queued => ("queued", ""),
                     Status::Done => ("done", ""),
@@ -542,7 +541,7 @@ impl Studio {
                 };
                 json!({
                     "name": e.path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
-                    "thumb": if matches!(e.status, Status::Done) { pipeline::path_to_url(&e.display) } else { String::new() },
+                    "thumb": if matches!(e.status, Status::Done) { images::url(&format!("thumb/{id}")) } else { String::new() },
                     "status": status,
                     "error": error,
                     "faces": e.faces.len(),
@@ -559,18 +558,20 @@ impl Studio {
     }
 
     fn publish_image(&mut self) {
+        // Shown once its canvas copy is in the store; until then the canvas says it is opening.
         let entry = usize::try_from(self.current)
             .ok()
-            .and_then(|i| self.entries.get(i))
-            .filter(|e| matches!(e.status, Status::Done));
-        let Some(entry) = entry else {
+            .filter(|id| self.canvases.contains(id))
+            .and_then(|id| Some(id).zip(self.entries.get(id)))
+            .filter(|(_, e)| matches!(e.status, Status::Done));
+        let Some((id, entry)) = entry else {
             self.image_url.clear();
             self.faces.clear();
             self.image_changed();
             return;
         };
         let (w, h) = (entry.size.0.max(1) as f32, entry.size.1.max(1) as f32);
-        self.image_url = pipeline::path_to_url(&entry.display);
+        self.image_url = images::url(&format!("canvas/{id}"));
         self.image_width = entry.size.0 as i32;
         self.image_height = entry.size.1 as i32;
         self.faces = entry
@@ -597,7 +598,7 @@ impl Studio {
         self.image_changed();
     }
 
-    /// Decode the current photo for previews, unless it is the one already held.
+    /// Decode the current photo for previews, and remake its canvas copy if that was evicted.
     fn load_current_image(&mut self) {
         let Ok(id) = usize::try_from(self.current) else {
             return;
@@ -616,15 +617,61 @@ impl Studio {
         };
         let path = entry.path.clone();
         let handle = self.get_thread_handle();
-        thread::spawn(move || match load_image(&path) {
-            Ok(image) => handle.invoke_mut(move |studio| {
-                if studio.current == id as i32 {
-                    studio.image = Some((id, Arc::new(image)));
-                    studio.request_previews();
-                }
-            }),
-            Err(err) => warn!("Failed to load {}: {err:#}", path.display()),
+        thread::spawn(move || {
+            let loaded = load_image(&path).map(|image| (pipeline::canvas(&image), image));
+            handle.invoke_mut(move |studio| studio.current_image_loaded(id, loaded));
         });
+    }
+
+    fn current_image_loaded(
+        &mut self,
+        id: usize,
+        loaded: anyhow::Result<(RgbImage, DynamicImage)>,
+    ) {
+        match loaded {
+            Ok((canvas, image)) => {
+                if self.current != id as i32 {
+                    return;
+                }
+                self.image = Some((id, Arc::new(image)));
+                if !self.canvases.contains(&id) {
+                    self.cache_canvas(id, canvas);
+                    self.publish_image();
+                }
+                self.request_previews();
+            }
+            // Read once already, so the file changed or went away since.
+            Err(err) => {
+                let err = format!("{err:#}");
+                warn!("{err}");
+                if let Some(entry) = self.entries.get_mut(id) {
+                    entry.status = Status::Failed(err);
+                }
+                self.publish_image();
+                self.publish_queue();
+            }
+        }
+    }
+
+    /// Hold `canvas` as entry `id`'s copy, evicting the oldest other one past
+    /// [`CANVAS_CACHE`]. Never the current photo's: it is on screen.
+    fn cache_canvas(&mut self, id: usize, canvas: RgbImage) {
+        images::put(&format!("canvas/{id}"), Pixels::Rgb(canvas));
+        self.canvases.retain(|&held| held != id);
+        self.canvases.push_back(id);
+        while self.canvases.len() > CANVAS_CACHE {
+            let current = self.current;
+            let Some(oldest) = self
+                .canvases
+                .iter()
+                .position(|&held| held as i32 != current)
+            else {
+                break;
+            };
+            if let Some(evicted) = self.canvases.remove(oldest) {
+                images::remove(&format!("canvas/{evicted}"));
+            }
+        }
     }
 
     /// Render the selected faces of the current photo with the current settings. One render
@@ -651,42 +698,40 @@ impl Studio {
         self.preview_running = true;
         self.preview_seq += 1;
         let seq = self.preview_seq;
-        let scratch = self.scratch.clone();
         let settings = self.settings.clone();
         let handle = self.get_thread_handle();
         thread::spawn(move || {
-            let previews: Vec<(usize, PathBuf)> = faces
+            let previews: Vec<(usize, RgbaImage)> = faces
                 .into_iter()
-                .filter_map(|(i, face)| {
+                .map(|(i, face)| {
                     let crop = pipeline::finish(&engine, &image, &face.detection, &settings);
-                    let path = scratch.join(format!("preview-{seq}-{i}.png"));
-                    match pipeline::save_preview(&crop.image, &path) {
-                        Ok(()) => Some((i, path)),
-                        Err(err) => {
-                            warn!("Failed to write preview {}: {err:#}", path.display());
-                            None
-                        }
-                    }
+                    (i, pipeline::preview(&crop.image))
                 })
                 .collect();
-            handle.invoke_mut(move |studio| studio.previews_ready(id, previews));
+            handle.invoke_mut(move |studio| studio.previews_ready(id, seq, previews));
         });
     }
 
-    fn previews_ready(&mut self, id: usize, previews: Vec<(usize, PathBuf)>) {
+    fn previews_ready(&mut self, id: usize, seq: u64, previews: Vec<(usize, RgbaImage)>) {
         self.preview_running = false;
-        // Each render has fresh names, so QML never shows a cached older one; the last set
-        // is already decoded on screen and can go.
-        remove_files(&mut self.preview_files);
+        // Fresh keys each render, so QML never shows a cached older one; the last set is
+        // already on screen and can leave the store.
+        for key in self.preview_keys.drain(..) {
+            images::remove(&key);
+        }
         if self.current == id as i32 {
+            let mut keys = Vec::with_capacity(previews.len());
             self.previews = previews
-                .iter()
-                .map(|(i, path)| json!({ "index": i, "url": pipeline::path_to_url(path) }))
+                .into_iter()
+                .map(|(i, pixels)| {
+                    let key = format!("preview/{seq}/{i}");
+                    let url = images::put(&key, Pixels::Rgba(pixels));
+                    keys.push(key);
+                    json!({ "index": i, "url": url })
+                })
                 .collect();
-            self.preview_files = previews.into_iter().map(|(_, p)| p).collect();
+            self.preview_keys = keys;
             self.previews_changed();
-        } else {
-            remove_files(&mut previews.into_iter().map(|(_, p)| p).collect());
         }
         if std::mem::take(&mut self.preview_dirty) {
             self.request_previews();
@@ -708,11 +753,5 @@ impl Studio {
             _ => format!("Exported {}, {} failed (see log)", faces(saved), failed),
         };
         self.toast(message, folder_url);
-    }
-}
-
-fn remove_files(files: &mut Vec<PathBuf>) {
-    for file in files.drain(..) {
-        let _ = fs::remove_file(file);
     }
 }
