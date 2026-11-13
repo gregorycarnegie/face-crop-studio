@@ -2,7 +2,7 @@
 //! Mirrors what fcs-gui's core does, minus its egui types.
 
 use anyhow::{Context, Result};
-use fcs_core::{Detection, EyeRefiner, FaceDetector};
+use fcs_core::{BoundingBox, Detection, EyeRefiner, FaceDetector};
 use fcs_utils::{
     EnhancementRuntime, GpuAvailability, GpuContext, GpuContextOptions, MetadataContext,
     OutputClaims, OutputOptions, Quality, config::AppSettings, estimate_sharpness, load_image,
@@ -64,8 +64,38 @@ impl Engine {
 
 #[derive(Clone)]
 pub struct Face {
+    /// Its `bbox` is the box as edited; cropping and export read it.
     pub detection: Detection,
     pub quality: Quality,
+    /// The box as the detector found it, for "reset".
+    pub original: BoundingBox,
+    /// Drawn by hand rather than detected.
+    pub manual: bool,
+}
+
+impl Face {
+    /// A face the user drew where the detector found none: no landmarks, full confidence,
+    /// and High quality, as fcs-gui's `commit_manual_box` makes them.
+    pub fn manual(bbox: BoundingBox) -> Self {
+        Self {
+            detection: Detection {
+                bbox,
+                landmarks: [None; 5],
+                score: 1.0,
+            },
+            quality: Quality::High,
+            original: bbox,
+            manual: true,
+        }
+    }
+}
+
+/// How a photo is turned before anything sees it: whole clockwise quarter turns, which swap
+/// width and height, then a small straightening tilt that keeps the size.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub struct Turn {
+    pub quarters: u8,
+    pub tilt_deg: f32,
 }
 
 pub struct Detected {
@@ -78,18 +108,25 @@ pub struct Detected {
 /// Decode `path`, turned upright by its EXIF orientation when `orient` (the "Auto-orient via
 /// EXIF" setting). Detection, previews and export all load through here, so the boxes found
 /// on one decode land on the same pixels in the others.
-pub fn load(path: &Path, orient: bool) -> Result<DynamicImage> {
-    if orient {
+pub fn load(path: &Path, orient: bool, turn: Turn) -> Result<DynamicImage> {
+    let image = if orient {
         load_image(path)
     } else {
         load_image_raw(path)
     }
-    .with_context(|| format!("failed to load {}", path.display()))
+    .with_context(|| format!("failed to load {}", path.display()))?;
+    let image = match turn.quarters % 4 {
+        1 => image.rotate90(),
+        2 => image.rotate180(),
+        3 => image.rotate270(),
+        _ => image,
+    };
+    Ok(fcs_core::rotate_photo(&image, turn.tilt_deg).unwrap_or(image))
 }
 
 /// Load `path`, find and refine its faces, and make the canvas and queue copies.
-pub fn detect(engine: &Engine, path: &Path, orient: bool) -> Result<Detected> {
-    let image = load(path, orient)?;
+pub fn detect(engine: &Engine, path: &Path, orient: bool, turn: Turn) -> Result<Detected> {
+    let image = load(path, orient, turn)?;
     let mut output = engine
         .detector
         .detect_image(&image)
@@ -102,6 +139,8 @@ pub fn detect(engine: &Engine, path: &Path, orient: bool) -> Result<Detected> {
         .into_iter()
         .map(|detection| Face {
             quality: face_quality(&image, &detection),
+            original: detection.bbox,
+            manual: false,
             detection,
         })
         .collect();
@@ -274,7 +313,7 @@ mod tests {
         std::fs::create_dir_all(&out).expect("temp dir");
         let source = root.join("samples/sample_01.jpg");
 
-        let detected = detect(&engine, &source, true).expect("detect");
+        let detected = detect(&engine, &source, true, Turn::default()).expect("detect");
         assert_eq!(detected.faces.len(), 1);
         // sample_01 is 1024 square: under both limits, the canvas keeps it whole.
         assert_eq!(detected.canvas.dimensions(), (1024, 1024));
@@ -322,5 +361,35 @@ mod tests {
     fn fit_only_shrinks() {
         assert_eq!(fit(5120, 2560, 2560), (2560, 1280));
         assert_eq!(fit(800, 600, 2560), (800, 600));
+    }
+
+    #[test]
+    fn quarter_turns_swap_the_sides_and_a_tilt_keeps_them() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/sample_01.jpg");
+        let raw = load(&source, true, Turn::default()).unwrap();
+        // A 1024 square would hide a missed swap, so crop it to a portrait first.
+        let tmp = std::env::temp_dir().join(format!("fcs-qt-turn-{}.png", std::process::id()));
+        raw.crop_imm(0, 0, 600, 1000).save(&tmp).unwrap();
+        let turned = load(
+            &tmp,
+            true,
+            Turn {
+                quarters: 1,
+                tilt_deg: 0.0,
+            },
+        )
+        .unwrap();
+        let tilted = load(
+            &tmp,
+            true,
+            Turn {
+                quarters: 2,
+                tilt_deg: 5.0,
+            },
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!((turned.width(), turned.height()), (1000, 600));
+        assert_eq!((tilted.width(), tilted.height()), (600, 1000));
     }
 }

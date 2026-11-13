@@ -9,8 +9,27 @@ use crate::{
 };
 
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, imageops::FilterType};
-use imageproc::geometric_transformations::{Border, Interpolation, Projection, warp_into};
+use imageproc::geometric_transformations::{
+    Border, Interpolation, Projection, rotate_about_center, warp_into,
+};
 mod copy;
+
+/// `image` turned `rotation_deg` degrees about its centre, as a tilted photo is straightened
+/// before detection. The size stays the same: corners turned out of the frame are lost and
+/// those turned in are black. `None` for an angle too small to matter, so the caller keeps
+/// the original rather than paying for a copy.
+pub fn rotate_photo(image: &DynamicImage, rotation_deg: f32) -> Option<DynamicImage> {
+    if rotation_deg.abs() < 0.01 {
+        return None;
+    }
+    let rotated = rotate_about_center(
+        &image.to_rgba8(),
+        rotation_deg.to_radians(),
+        Interpolation::Bilinear,
+        Border::Constant(Rgba([0, 0, 0, 255])),
+    );
+    Some(DynamicImage::ImageRgba8(rotated))
+}
 
 /// Copy the in-bounds source region `(x, y, w, h)` onto the padded canvas at `offset`.
 ///

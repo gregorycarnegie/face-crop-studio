@@ -13,8 +13,14 @@ pipeline and settings file.
   command line (`fcs-qt photo.jpg folder/`).
 - Detection runs in the background, one photo at a time, on the same GPU/CPU detector and eye
   refiner as fcs-gui. The queue updates row by row.
-- The photo shows its faces as boxes. Click a box (or focus it and press Space) to include or
-  skip that face. All / None act on the current photo.
+- The photo shows its faces as boxes. The number chip (or Space) includes or skips a face; All
+  / None act on the current photo.
+- Face editing: click a box to make it active, then drag it or its handles to move and
+  resize it, reset it to the detector's box, or delete it (Delete). The draw tool (D) adds a
+  face the detector missed. Undo and redo (Ctrl+Z, Ctrl+Y) cover every edit of the photo.
+- The canvas zooms with the mouse wheel or Ctrl +/-/0 and pans by dragging. Photos rotate in
+  quarter turns or straighten by up to 45°; either finds the faces again on the turned photo,
+  and previews and export use it too.
 - The inspector has four tabs, as fcs-gui's settings do:
   - **Crop**: presets or a custom width and height, face size, position (center, thirds, or
     custom X/Y offsets), eye-line align, padding colour, crop overlay, EXIF orientation.
@@ -29,8 +35,8 @@ pipeline and settings file.
   existing file is never replaced; the new one gets a `(2)` suffix.
 - Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).
 
-Not ported yet: manual box editing, undo, batch and output options (overwrite choice, quality
-automation, reports), mapping files, webcam, watch folders.
+Not ported yet: batch and output options (overwrite choice, quality automation, reports),
+mapping files, webcam, watch folders.
 
 Settings reach QML as one JSON object (`Studio.settings`, the serialized `AppSettings`), and
 every control writes through one slot, `Studio.update(patch)`, which merges the patch, checks

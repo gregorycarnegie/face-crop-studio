@@ -34,3 +34,5 @@ ShapeChip 1.0 ShapeChip.qml
 ShapeTab 1.0 ShapeTab.qml
 SliderRow 1.0 SliderRow.qml
 ToggleRow 1.0 ToggleRow.qml
+CanvasTools 1.0 CanvasTools.qml
+IconButton 1.0 IconButton.qml

@@ -75,6 +75,16 @@ ApplicationWindow {
         sequences: [StandardKey.SelectAll]
         onActivated: Studio.selectAllFaces(true)
     }
+    Shortcut {
+        sequences: [StandardKey.Undo]
+        enabled: Studio.canUndo
+        onActivated: Studio.undo()
+    }
+    Shortcut {
+        sequences: [StandardKey.Redo, "Ctrl+Y"]
+        enabled: Studio.canRedo
+        onActivated: Studio.redo()
+    }
 
     FileDialog {
         id: photoDialog

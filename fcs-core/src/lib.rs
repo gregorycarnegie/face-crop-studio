@@ -68,7 +68,7 @@ pub mod tensor;
 
 pub use crate::{
     cropper::{CropRegion, CropSettings, FillColor, PositioningMode, calculate_crop_region},
-    face_cropper::{crop_face_from_image, eye_positions},
+    face_cropper::{crop_face_from_image, eye_positions, rotate_photo},
     presets::{CropPreset, apply_preset, preset_by_name, standard_presets},
 };
 

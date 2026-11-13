@@ -3,8 +3,9 @@
 
 use crate::{
     images::{self, Pixels},
-    pipeline::{self, Detected, Engine, Face},
+    pipeline::{self, Detected, Engine, Face, Turn},
 };
+use fcs_core::BoundingBox;
 use fcs_utils::{
     CropShape, OutputClaims, OverwritePolicy,
     config::{AppSettings, default_settings_path},
@@ -30,20 +31,30 @@ enum Status {
 
 struct Entry {
     path: PathBuf,
+    turn: Turn,
+    /// Bumped each time the photo is detected again, so its thumbnail gets a new URL and QML's
+    /// image cache cannot show the old one.
+    rev: u32,
     status: Status,
     size: (u32, u32),
     faces: Vec<Face>,
     selected: Vec<bool>,
 }
 
-/// Entry id, source path, and whether to apply EXIF orientation.
-type DetectJob = (usize, PathBuf, bool);
+/// Entry id, source path, whether to apply EXIF orientation, and how to turn the photo.
+type DetectJob = (usize, PathBuf, bool, Turn);
+/// The current photo's faces and their export selection, as undo restores them.
+type Snapshot = (Vec<Face>, Vec<bool>);
+/// Undo steps kept per photo, as in fcs-gui.
+const UNDO_LIMIT: usize = 50;
+/// The smallest box an edit leaves, in photo pixels.
+const MIN_BOX: f32 = 8.0;
 
 /// Canvas copies kept in memory: up to ~12 MB each at 2048 px, so a few photos back and forth
 /// switch instantly without holding a whole batch.
 const CANVAS_CACHE: usize = 8;
-/// Entry id, source path, and its selected faces with their indices.
-type ExportJob = (usize, PathBuf, Vec<(usize, Face)>);
+/// Entry id, source path, its turn, and its selected faces with their indices.
+type ExportJob = (usize, PathBuf, Turn, Vec<(usize, Face)>);
 
 pub struct Studio {
     settings: AppSettings,
@@ -61,6 +72,9 @@ pub struct Studio {
     preview_keys: Vec<String>,
     /// Entries whose canvas copy is in the image store, oldest first.
     canvases: VecDeque<usize>,
+    /// Edits of the current photo; both cleared when another photo is selected.
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
 
     ready: bool,
     engine_label: String,
@@ -73,6 +87,10 @@ pub struct Studio {
     image_width: i32,
     image_height: i32,
     faces: Vec<Value>,
+    can_undo: bool,
+    can_redo: bool,
+    quarter_turns: i32,
+    tilt: f64,
     previews: Vec<Value>,
     presets: Vec<Value>,
     image_filter: String,
@@ -113,6 +131,8 @@ impl Default for Studio {
             preview_seq: 0,
             preview_keys: Vec::new(),
             canvases: VecDeque::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             ready: false,
             engine_label: String::new(),
             engine_error: String::new(),
@@ -124,6 +144,10 @@ impl Default for Studio {
             image_width: 0,
             image_height: 0,
             faces: Vec::new(),
+            can_undo: false,
+            can_redo: false,
+            quarter_turns: 0,
+            tilt: 0.0,
             previews: Vec::new(),
             presets,
             image_filter: format!(
@@ -175,6 +199,14 @@ impl Studio {
     qproperty!("imageWidth", Member = image_width, Notify = image_changed);
     qproperty!("imageHeight", Member = image_height, Notify = image_changed);
     qproperty!("faces", Member = faces, Notify = image_changed);
+    qproperty!("canUndo", Member = can_undo, Notify = image_changed);
+    qproperty!("canRedo", Member = can_redo, Notify = image_changed);
+    qproperty!(
+        "quarterTurns",
+        Member = quarter_turns,
+        Notify = image_changed
+    );
+    qproperty!("tilt", Member = tilt, Notify = image_changed);
     qproperty!("previews", Member = previews, Notify = previews_changed);
     qproperty!("presets", Member = presets, Constant);
     qproperty!("imageFilter", Member = image_filter, Constant);
@@ -241,6 +273,8 @@ impl Studio {
             return;
         }
         self.current = index;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.previews.clear();
         self.previews_changed();
         self.publish_image();
@@ -270,6 +304,73 @@ impl Studio {
     fn set_preset(&mut self, name: String) {
         fcs_core::apply_preset(&mut self.settings.crop, &name);
         self.settings_edited();
+    }
+
+    /// Move or resize face `index` of the current photo; the box is in fractions of the photo.
+    #[qslot(qml_name = "setFaceBox")]
+    fn set_face_box(&mut self, index: i32, x: f64, y: f64, w: f64, h: f64) {
+        self.edit_faces(|entry| {
+            let bbox = clamped_box(entry.size, x, y, w, h);
+            let face = entry.faces.get_mut(usize::try_from(index).ok()?)?;
+            (face.detection.bbox != bbox).then(|| face.detection.bbox = bbox)
+        });
+    }
+
+    /// Add a face the detector missed, selected for export.
+    #[qslot(qml_name = "addFace")]
+    fn add_face(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        self.edit_faces(|entry| {
+            entry
+                .faces
+                .push(Face::manual(clamped_box(entry.size, x, y, w, h)));
+            entry.selected.push(true);
+            Some(())
+        });
+    }
+
+    #[qslot(qml_name = "deleteFace")]
+    fn delete_face(&mut self, index: i32) {
+        self.edit_faces(|entry| {
+            let index = usize::try_from(index)
+                .ok()
+                .filter(|&i| i < entry.faces.len())?;
+            entry.faces.remove(index);
+            entry.selected.remove(index);
+            Some(())
+        });
+    }
+
+    /// Put face `index` back where the detector found it.
+    #[qslot(qml_name = "resetFace")]
+    fn reset_face(&mut self, index: i32) {
+        self.edit_faces(|entry| {
+            let face = entry.faces.get_mut(usize::try_from(index).ok()?)?;
+            (face.detection.bbox != face.original).then(|| face.detection.bbox = face.original)
+        });
+    }
+
+    #[qslot]
+    fn undo(&mut self) {
+        self.step_history(true);
+    }
+
+    #[qslot]
+    fn redo(&mut self) {
+        self.step_history(false);
+    }
+
+    /// Turn the current photo by `quarters` clockwise quarter turns and find its faces again.
+    #[qslot]
+    fn rotate(&mut self, quarters: i32) {
+        self.turn_current(|turn| {
+            turn.quarters = (turn.quarters as i32 + quarters).rem_euclid(4) as u8
+        });
+    }
+
+    /// Straighten the current photo by `degrees` and find its faces again.
+    #[qslot(qml_name = "setTilt")]
+    fn set_tilt(&mut self, degrees: f64) {
+        self.turn_current(|turn| turn.tilt_deg = degrees.clamp(-45.0, 45.0) as f32);
     }
 
     /// Change any settings: `patch` is merged into the serialized `AppSettings`, so
@@ -318,11 +419,11 @@ impl Studio {
                     .filter(|(_, (_, on))| **on)
                     .map(|(i, (face, _))| (i, face.clone()))
                     .collect::<Vec<_>>();
-                (id, e.path.clone(), faces)
+                (id, e.path.clone(), e.turn, faces)
             })
-            .filter(|(_, _, faces)| !faces.is_empty())
+            .filter(|(_, _, _, faces)| !faces.is_empty())
             .collect();
-        let total: usize = jobs.iter().map(|(_, _, f)| f.len()).sum();
+        let total: usize = jobs.iter().map(|(_, _, _, f)| f.len()).sum();
         if total == 0 {
             self.toast("Select at least one face to export".into(), String::new());
             return;
@@ -339,10 +440,10 @@ impl Studio {
             // Rename rather than replace: an earlier export in the same folder is someone's work.
             let claims = OutputClaims::new(OverwritePolicy::KeepBoth);
             let (mut saved, mut failed, mut done) = (0usize, 0usize, 0usize);
-            for (id, path, faces) in jobs {
+            for (id, path, turn, faces) in jobs {
                 let image = match &current {
                     Some((current_id, image)) if *current_id == id => Ok(image.clone()),
-                    _ => pipeline::load(&path, settings.crop.auto_orient_exif).map(Arc::new),
+                    _ => pipeline::load(&path, settings.crop.auto_orient_exif, turn).map(Arc::new),
                 };
                 let image = match image {
                     Ok(image) => image,
@@ -406,10 +507,17 @@ impl Studio {
         for path in paths {
             let id = self.entries.len();
             if let Some(jobs) = &self.jobs {
-                let _ = jobs.send((id, path.clone(), self.settings.crop.auto_orient_exif));
+                let _ = jobs.send((
+                    id,
+                    path.clone(),
+                    self.settings.crop.auto_orient_exif,
+                    Turn::default(),
+                ));
             }
             self.entries.push(Entry {
                 path,
+                turn: Turn::default(),
+                rev: 0,
                 status: Status::Queued,
                 size: (0, 0),
                 faces: Vec::new(),
@@ -434,8 +542,8 @@ impl Studio {
                 let worker_engine = engine.clone();
                 let handle = self.get_thread_handle();
                 thread::spawn(move || {
-                    for (id, path, orient) in rx {
-                        let result = pipeline::detect(&worker_engine, &path, orient)
+                    for (id, path, orient, turn) in rx {
+                        let result = pipeline::detect(&worker_engine, &path, orient, turn)
                             .map_err(|err| format!("{err:#}"));
                         handle.invoke_mut(move |studio| studio.detected(id, result));
                     }
@@ -443,7 +551,7 @@ impl Studio {
                 // Photos added while the models loaded.
                 for (id, entry) in self.entries.iter().enumerate() {
                     let orient = self.settings.crop.auto_orient_exif;
-                    let _ = tx.send((id, entry.path.clone(), orient));
+                    let _ = tx.send((id, entry.path.clone(), orient, entry.turn));
                 }
                 self.jobs = Some(tx);
                 self.engine = Some(engine);
@@ -464,9 +572,12 @@ impl Studio {
                 entry.selected = vec![true; detected.faces.len()];
                 entry.faces = detected.faces;
                 entry.status = Status::Done;
-                images::put(&format!("thumb/{id}"), Pixels::Rgb(detected.thumb));
+                images::put(&thumb_key(id, entry.rev), Pixels::Rgb(detected.thumb));
                 self.cache_canvas(id, detected.canvas);
                 if self.current == id as i32 {
+                    // New boxes: the old edits no longer apply to anything.
+                    self.undo_stack.clear();
+                    self.redo_stack.clear();
                     self.image = Some((id, detected.image));
                     self.publish_image();
                     self.request_previews();
@@ -480,6 +591,88 @@ impl Studio {
                 }
             }
         }
+        self.publish_queue();
+    }
+
+    /// Apply `edit` to the current photo's faces as one undo step. `edit` returns `None` when
+    /// it changed nothing, so a no-op leaves no step behind.
+    fn edit_faces(&mut self, edit: impl FnOnce(&mut Entry) -> Option<()>) {
+        let Some(entry) = self
+            .current_entry_mut()
+            .filter(|e| matches!(e.status, Status::Done))
+        else {
+            return;
+        };
+        let before = (entry.faces.clone(), entry.selected.clone());
+        if edit(entry).is_none() {
+            return;
+        }
+        self.undo_stack.push(before);
+        if self.undo_stack.len() > UNDO_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+        self.selection_edited();
+    }
+
+    fn step_history(&mut self, back: bool) {
+        let (from, to) = if back {
+            (&mut self.undo_stack, &mut self.redo_stack)
+        } else {
+            (&mut self.redo_stack, &mut self.undo_stack)
+        };
+        let Some((faces, selected)) = from.pop() else {
+            return;
+        };
+        let Some(entry) = usize::try_from(self.current)
+            .ok()
+            .and_then(|i| self.entries.get_mut(i))
+        else {
+            return;
+        };
+        to.push((
+            std::mem::replace(&mut entry.faces, faces),
+            std::mem::replace(&mut entry.selected, selected),
+        ));
+        self.selection_edited();
+    }
+
+    /// Change how the current photo is turned and send it back through detection: the old
+    /// boxes were found on differently turned pixels. Its edits and history go with them.
+    fn turn_current(&mut self, change: impl FnOnce(&mut Turn)) {
+        let orient = self.settings.crop.auto_orient_exif;
+        let Ok(id) = usize::try_from(self.current) else {
+            return;
+        };
+        let Some(entry) = self
+            .entries
+            .get_mut(id)
+            .filter(|e| matches!(e.status, Status::Done))
+        else {
+            return;
+        };
+        let before = entry.turn;
+        change(&mut entry.turn);
+        if entry.turn == before {
+            return;
+        }
+        entry.status = Status::Queued;
+        entry.faces.clear();
+        entry.selected.clear();
+        images::remove(&thumb_key(id, entry.rev));
+        entry.rev += 1;
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send((id, entry.path.clone(), orient, entry.turn));
+        }
+        self.pending += 1;
+        self.canvases.retain(|&held| held != id);
+        images::remove(&format!("canvas/{id}"));
+        self.image = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.previews.clear();
+        self.previews_changed();
+        self.publish_image();
         self.publish_queue();
     }
 
@@ -536,7 +729,7 @@ impl Studio {
                 };
                 json!({
                     "name": e.path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
-                    "thumb": if matches!(e.status, Status::Done) { images::url(&format!("thumb/{id}")) } else { String::new() },
+                    "thumb": if matches!(e.status, Status::Done) { images::url(&thumb_key(id, e.rev)) } else { String::new() },
                     "status": status,
                     "error": error,
                     "faces": e.faces.len(),
@@ -559,6 +752,14 @@ impl Studio {
             .filter(|id| self.canvases.contains(id))
             .and_then(|id| Some(id).zip(self.entries.get(id)))
             .filter(|(_, e)| matches!(e.status, Status::Done));
+        self.can_undo = !self.undo_stack.is_empty();
+        self.can_redo = !self.redo_stack.is_empty();
+        let current = usize::try_from(self.current)
+            .ok()
+            .and_then(|i| self.entries.get(i));
+        let turn = current.map(|e| e.turn).unwrap_or_default();
+        self.quarter_turns = i32::from(turn.quarters);
+        self.tilt = f64::from(turn.tilt_deg);
         let Some((id, entry)) = entry else {
             self.image_url.clear();
             self.faces.clear();
@@ -589,6 +790,8 @@ impl Studio {
                     "score": face.detection.score,
                     "quality": format!("{:?}", face.quality),
                     "selected": on,
+                    "manual": face.manual,
+                    "modified": face.detection.bbox != face.original,
                     // Where this face's crop falls, in fractions of the photo: the overlay.
                     "crop": {
                         "x": crop.x as f32 / w,
@@ -620,11 +823,12 @@ impl Studio {
             return;
         };
         let path = entry.path.clone();
+        let turn = entry.turn;
         let orient = self.settings.crop.auto_orient_exif;
         let handle = self.get_thread_handle();
         thread::spawn(move || {
             let loaded =
-                pipeline::load(&path, orient).map(|image| (pipeline::canvas(&image), image));
+                pipeline::load(&path, orient, turn).map(|image| (pipeline::canvas(&image), image));
             handle.invoke_mut(move |studio| studio.current_image_loaded(id, loaded));
         });
     }
@@ -782,6 +986,24 @@ fn merge(base: &mut Value, patch: Value) {
     }
 }
 
+fn thumb_key(id: usize, rev: u32) -> String {
+    format!("thumb/{id}.{rev}")
+}
+
+/// A box given in fractions of a `size` photo, in pixels, kept inside the photo and at
+/// least [`MIN_BOX`] on a side.
+fn clamped_box(size: (u32, u32), x: f64, y: f64, w: f64, h: f64) -> BoundingBox {
+    let (iw, ih) = (size.0 as f32, size.1 as f32);
+    let side = |v: f64, full: f32| (v as f32 * full).clamp(MIN_BOX.min(full), full);
+    let (width, height) = (side(w, iw), side(h, ih));
+    BoundingBox {
+        x: (x as f32 * iw).clamp(0.0, iw - width),
+        y: (y as f32 * ih).clamp(0.0, ih - height),
+        width,
+        height,
+    }
+}
+
 /// `shape`'s outline drawn into a `width` x `height` box, as [x, y] fractions of it.
 fn outline(shape: &CropShape, width: f32, height: f32) -> Vec<Value> {
     // Traced at a real pixel size (longest side 200), so curves get enough points to look
@@ -811,6 +1033,25 @@ mod tests {
         assert_eq!(
             settings.crop.output_height,
             AppSettings::default().crop.output_height
+        );
+    }
+
+    #[test]
+    fn edited_boxes_stay_inside_the_photo_and_above_the_minimum() {
+        let size = (1000, 500);
+        let inside = clamped_box(size, 0.1, 0.2, 0.3, 0.4);
+        assert_eq!(
+            (inside.x, inside.y, inside.width, inside.height),
+            (100.0, 100.0, 300.0, 200.0)
+        );
+        // Dragged past the right and bottom edges: moved back in, size kept.
+        let pushed = clamped_box(size, 0.9, 0.9, 0.3, 0.4);
+        assert_eq!((pushed.x, pushed.y), (700.0, 300.0));
+        // Shrunk to nothing, or dragged off the top-left: the minimum, at the edge.
+        let tiny = clamped_box(size, -0.5, -0.5, 0.0, -1.0);
+        assert_eq!(
+            (tiny.x, tiny.y, tiny.width, tiny.height),
+            (0.0, 0.0, MIN_BOX, MIN_BOX)
         );
     }
 
