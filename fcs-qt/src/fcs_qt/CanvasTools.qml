@@ -131,6 +131,8 @@ Rectangle {
                         property: "value"
                         value: Studio.tilt
                         when: !tiltSlider.pressed
+                        // See SliderRow: restoring would jump the slider to its minimum.
+                        restoreMode: Binding.RestoreNone
                     }
                     Text {
                         width: parent.width

@@ -31,12 +31,19 @@ pipeline and settings file.
   - **Output**: PNG, JPEG (with quality), WebP or AVIF.
 - Each face's crop is outlined on the photo in the chosen shape. Previews are rendered
   through the real export path, so they show exactly what export writes.
-- Export writes the selected faces of every photo to a folder, as `{stem}_face_NN.{ext}`. An
-  existing file is never replaced; the new one gets a `(2)` suffix.
+- Export writes the selected faces of every photo to a folder, as `{stem}_face_NN.{ext}`. If
+  any of those names already exist there, it asks first: keep both (the new crop gets a
+  `(2)` suffix) or replace.
+- Output options, as in fcs-gui and the CLI:
+  - Quality rules: best face only, skip photos without a sharp face, a minimum quality, and
+    quality suffixes in names. They judge the finished crop, as the CLI does.
+  - The detection confidence floor; changing it finds the faces in every photo again.
+  - An optional CSV or JSON report beside the crops, in fcs-gui's columns.
+- Photos can be removed from the queue one at a time, or all at once with a confirmation.
+  An Activity tab logs what happened: detections, failures, exports, reports.
 - Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).
 
-Not ported yet: batch and output options (overwrite choice, quality automation, reports),
-mapping files, webcam, watch folders.
+Not ported yet: mapping files, webcam, watch folders.
 
 Settings reach QML as one JSON object (`Studio.settings`, the serialized `AppSettings`), and
 every control writes through one slot, `Studio.update(patch)`, which merges the patch, checks

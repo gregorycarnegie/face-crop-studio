@@ -1,26 +1,32 @@
 //! The one object QML talks to. It owns the queue, the selection and the settings; the work
 //! itself runs on background threads and comes back through `QThreadHandle::invoke_mut`.
+//!
+//! Photos have two identities. QML knows a photo by its position in the queue (`current`,
+//! `select(index)`); everything that outlives a moment (detection jobs, image keys, the held
+//! decode) knows it by its `uid`, which survives other photos being removed.
 
 use crate::{
     images::{self, Pixels},
-    pipeline::{self, Detected, Engine, Face, Turn},
+    pipeline::{self, Detected, Engine, Face, PhotoExport, Turn},
 };
 use fcs_core::BoundingBox;
 use fcs_utils::{
     CropShape, OutputClaims, OverwritePolicy,
-    config::{AppSettings, default_settings_path},
+    config::{AppSettings, DetectionSettings, default_settings_path},
     is_supported_image_path, outline_points_for_rect,
 };
 use image::{DynamicImage, RgbImage, RgbaImage};
 use log::warn;
 use qtbridge::{QmlObject, qobject};
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, mpsc},
     thread,
+    time::Instant,
 };
 
 enum Status {
@@ -30,6 +36,7 @@ enum Status {
 }
 
 struct Entry {
+    uid: u64,
     path: PathBuf,
     turn: Turn,
     /// Bumped each time the photo is detected again, so its thumbnail gets a new URL and QML's
@@ -41,20 +48,43 @@ struct Entry {
     selected: Vec<bool>,
 }
 
-/// Entry id, source path, whether to apply EXIF orientation, and how to turn the photo.
-type DetectJob = (usize, PathBuf, bool, Turn);
+struct DetectJob {
+    uid: u64,
+    path: PathBuf,
+    orient: bool,
+    turn: Turn,
+    detection: DetectionSettings,
+}
+
+struct ExportJob {
+    uid: u64,
+    path: PathBuf,
+    turn: Turn,
+    detected: usize,
+    faces: Vec<(usize, Face)>,
+}
+
+/// One photo's line in the export report: fcs-gui's columns, so the reports compare.
+#[derive(Serialize)]
+struct ReportRow {
+    image: String,
+    outcome: &'static str,
+    faces_detected: usize,
+    faces_exported: usize,
+    error: Option<String>,
+}
+
 /// The current photo's faces and their export selection, as undo restores them.
 type Snapshot = (Vec<Face>, Vec<bool>);
 /// Undo steps kept per photo, as in fcs-gui.
 const UNDO_LIMIT: usize = 50;
 /// The smallest box an edit leaves, in photo pixels.
 const MIN_BOX: f32 = 8.0;
-
 /// Canvas copies kept in memory: up to ~12 MB each at 2048 px, so a few photos back and forth
 /// switch instantly without holding a whole batch.
 const CANVAS_CACHE: usize = 8;
-/// Entry id, source path, its turn, and its selected faces with their indices.
-type ExportJob = (usize, PathBuf, Turn, Vec<(usize, Face)>);
+/// Activity log lines kept.
+const LOG_LIMIT: usize = 300;
 
 pub struct Studio {
     settings: AppSettings,
@@ -62,19 +92,21 @@ pub struct Studio {
     engine: Option<Arc<Engine>>,
     jobs: Option<mpsc::Sender<DetectJob>>,
     entries: Vec<Entry>,
-    /// The decoded current image, kept for previews. Only one: a batch of camera files
-    /// would not fit in memory.
-    image: Option<(usize, Arc<DynamicImage>)>,
+    next_uid: u64,
+    /// The decoded current photo, kept for previews. Only one: a batch of camera files would
+    /// not fit in memory.
+    image: Option<(u64, Arc<DynamicImage>)>,
     preview_running: bool,
     preview_dirty: bool,
     preview_seq: u64,
     /// Image-store keys of the previews on screen.
     preview_keys: Vec<String>,
-    /// Entries whose canvas copy is in the image store, oldest first.
-    canvases: VecDeque<usize>,
+    /// Photos whose canvas copy is in the image store, oldest first.
+    canvases: VecDeque<u64>,
     /// Edits of the current photo; both cleared when another photo is selected.
     undo_stack: Vec<Snapshot>,
     redo_stack: Vec<Snapshot>,
+    started: Instant,
 
     ready: bool,
     engine_label: String,
@@ -101,6 +133,7 @@ pub struct Studio {
     shape_outline: Vec<Value>,
     exporting: bool,
     export_progress: f64,
+    log: Vec<Value>,
 }
 
 impl Default for Studio {
@@ -125,6 +158,7 @@ impl Default for Studio {
             engine: None,
             jobs: None,
             entries: Vec::new(),
+            next_uid: 0,
             image: None,
             preview_running: false,
             preview_dirty: false,
@@ -133,6 +167,7 @@ impl Default for Studio {
             canvases: VecDeque::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            started: Instant::now(),
             ready: false,
             engine_label: String::new(),
             engine_error: String::new(),
@@ -168,6 +203,7 @@ impl Default for Studio {
             shape_outline: Vec::new(),
             exporting: false,
             export_progress: 0.0,
+            log: Vec::new(),
         };
         studio.sync_settings();
         studio
@@ -227,6 +263,7 @@ impl Studio {
         Member = export_progress,
         Notify = export_changed
     );
+    qproperty!("log", Member = log, Notify = log_changed);
 
     #[qsignal(qml_name = "engineChanged")]
     fn engine_changed(&mut self);
@@ -240,6 +277,8 @@ impl Studio {
     fn settings_changed(&mut self);
     #[qsignal(qml_name = "exportChanged")]
     fn export_changed(&mut self);
+    #[qsignal(qml_name = "logChanged")]
+    fn log_changed(&mut self);
     /// A transient message; `url` is a folder to offer opening, or empty.
     #[qsignal]
     fn toast(&mut self, message: String, url: String);
@@ -273,12 +312,52 @@ impl Studio {
             return;
         }
         self.current = index;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.previews.clear();
-        self.previews_changed();
-        self.publish_image();
-        self.load_current_image();
+        self.current_changed();
+    }
+
+    /// Take photo `index` out of the queue (not off the disk).
+    #[qslot]
+    fn remove(&mut self, index: i32) {
+        let Some(position) = usize::try_from(index)
+            .ok()
+            .filter(|&i| i < self.entries.len())
+        else {
+            return;
+        };
+        let entry = self.entries.remove(position);
+        self.forget(&entry);
+        self.note("info", format!("Removed {}", file_name(&entry.path)));
+        let current = self.current;
+        if current > index {
+            // The same photo stays current; its position moved up.
+            self.current -= 1;
+            self.publish_queue();
+            self.publish_image();
+        } else if current == index {
+            self.current = index.min(self.entries.len() as i32 - 1);
+            self.publish_queue();
+            self.current_changed();
+        } else {
+            self.publish_queue();
+        }
+    }
+
+    /// Empty the queue.
+    #[qslot(qml_name = "clearQueue")]
+    fn clear_queue(&mut self) {
+        let removed = std::mem::take(&mut self.entries);
+        for entry in &removed {
+            self.forget(entry);
+        }
+        if !removed.is_empty() {
+            self.note(
+                "info",
+                format!("Cleared {} from the queue", photos(removed.len())),
+            );
+        }
+        self.current = -1;
+        self.publish_queue();
+        self.current_changed();
     }
 
     #[qslot(qml_name = "toggleFace")]
@@ -383,9 +462,25 @@ impl Studio {
         };
         merge(&mut value, patch);
         match serde_json::from_value::<AppSettings>(value) {
-            Ok(settings) => {
+            Ok(mut settings) => {
+                settings.detection.sanitize();
+                let floor = settings.detection.confidence;
+                let floor_moved = floor != self.settings.detection.confidence;
                 self.settings = settings;
                 self.settings_edited();
+                // The boxes on screen were found under the old floor.
+                if floor_moved {
+                    let count = self.redetect_all();
+                    if count > 0 {
+                        self.note(
+                            "info",
+                            format!(
+                                "Confidence floor {floor:.2}: finding faces again in {}",
+                                photos(count)
+                            ),
+                        );
+                    }
+                }
             }
             Err(err) => {
                 warn!("Rejected a settings change: {err}");
@@ -400,30 +495,42 @@ impl Studio {
         self.settings_edited();
     }
 
-    /// Save every selected face of every finished photo into `folder_url`.
+    /// How many files an export into `folder_url` would find already there, so the user can
+    /// choose to replace or keep them first. Counts every name a face could take, with each
+    /// quality suffix when suffixes are on.
+    #[qslot]
+    fn conflicts(&mut self, folder_url: String) -> i32 {
+        let out_dir = pipeline::url_to_path(&folder_url);
+        let suffixes: &[&str] = if self.settings.crop.quality_rules.quality_suffix {
+            &["_highq", "_medq", "_lowq"]
+        } else {
+            &[""]
+        };
+        let mut count = 0;
+        for job in self.export_jobs() {
+            for (index, _) in &job.faces {
+                count += suffixes
+                    .iter()
+                    .filter(|suffix| {
+                        pipeline::face_path(&job.path, *index, suffix, &self.settings, &out_dir)
+                            .exists()
+                    })
+                    .count() as i32;
+            }
+        }
+        count
+    }
+
+    /// Save every selected face of every finished photo into `folder_url`. `policy` is
+    /// "replace" or "keep" (existing files stay, new ones get a `(2)` suffix); `report` is
+    /// "none", "csv" or "json".
     #[qslot(qml_name = "exportTo")]
-    fn export_to(&mut self, folder_url: String) {
+    fn export_to(&mut self, folder_url: String, policy: String, report: String) {
         let Some(engine) = self.engine.clone().filter(|_| !self.exporting) else {
             return;
         };
-        let jobs: Vec<ExportJob> = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(id, e)| {
-                let faces = e
-                    .faces
-                    .iter()
-                    .zip(&e.selected)
-                    .enumerate()
-                    .filter(|(_, (_, on))| **on)
-                    .map(|(i, (face, _))| (i, face.clone()))
-                    .collect::<Vec<_>>();
-                (id, e.path.clone(), e.turn, faces)
-            })
-            .filter(|(_, _, _, faces)| !faces.is_empty())
-            .collect();
-        let total: usize = jobs.iter().map(|(_, _, _, f)| f.len()).sum();
+        let jobs = self.export_jobs();
+        let total: usize = jobs.iter().map(|job| job.faces.len()).sum();
         if total == 0 {
             self.toast("Select at least one face to export".into(), String::new());
             return;
@@ -431,52 +538,73 @@ impl Studio {
         self.exporting = true;
         self.export_progress = 0.0;
         self.export_changed();
+        self.note(
+            "info",
+            format!("Exporting {} from {}", faces(total), photos(jobs.len())),
+        );
 
         let out_dir = pipeline::url_to_path(&folder_url);
+        let overwrite = if policy == "replace" {
+            OverwritePolicy::Overwrite
+        } else {
+            OverwritePolicy::KeepBoth
+        };
         let settings = self.settings.clone();
         let current = self.image.clone();
         let handle = self.get_thread_handle();
         thread::spawn(move || {
-            // Rename rather than replace: an earlier export in the same folder is someone's work.
-            let claims = OutputClaims::new(OverwritePolicy::KeepBoth);
-            let (mut saved, mut failed, mut done) = (0usize, 0usize, 0usize);
-            for (id, path, turn, faces) in jobs {
+            let claims = OutputClaims::new(overwrite);
+            let mut totals = PhotoExport::default();
+            let mut rows = Vec::with_capacity(jobs.len());
+            let mut done = 0usize;
+            for job in jobs {
                 let image = match &current {
-                    Some((current_id, image)) if *current_id == id => Ok(image.clone()),
-                    _ => pipeline::load(&path, settings.crop.auto_orient_exif, turn).map(Arc::new),
+                    Some((uid, image)) if *uid == job.uid => Ok(image.clone()),
+                    _ => pipeline::load(&job.path, settings.crop.auto_orient_exif, job.turn)
+                        .map(Arc::new),
                 };
-                let image = match image {
-                    Ok(image) => image,
+                let (result, error) = match image {
+                    Ok(image) => (
+                        pipeline::export_photo(
+                            &engine, &image, &job.path, &job.faces, &settings, &out_dir, &claims,
+                        ),
+                        None,
+                    ),
                     Err(err) => {
-                        warn!("Failed to load {}: {err:#}", path.display());
-                        failed += faces.len();
-                        done += faces.len();
-                        continue;
+                        warn!("{err:#}");
+                        let failed = PhotoExport {
+                            failed: job.faces.len(),
+                            ..PhotoExport::default()
+                        };
+                        (failed, Some(format!("{err:#}")))
                     }
                 };
-                for (index, face) in faces {
-                    match pipeline::export_face(
-                        &engine, &image, &path, &face, index, &settings, &out_dir, &claims,
-                    ) {
-                        Ok(_) => saved += 1,
-                        Err(err) => {
-                            warn!(
-                                "Failed to export {} face {}: {err:#}",
-                                path.display(),
-                                index + 1
-                            );
-                            failed += 1;
-                        }
-                    }
-                    done += 1;
-                    let progress = done as f64 / total as f64;
-                    handle.invoke_mut(move |studio| {
-                        studio.export_progress = progress;
-                        studio.export_changed();
-                    });
-                }
+                rows.push(ReportRow {
+                    image: job.path.display().to_string(),
+                    outcome: if result.failed > 0 {
+                        "failed"
+                    } else {
+                        "succeeded"
+                    },
+                    faces_detected: job.detected,
+                    faces_exported: result.exported,
+                    error: error.or_else(|| {
+                        (result.failed > 0)
+                            .then(|| format!("{} faces failed to save", result.failed))
+                    }),
+                });
+                totals.exported += result.exported;
+                totals.skipped += result.skipped;
+                totals.failed += result.failed;
+                done += job.faces.len();
+                let progress = done as f64 / total as f64;
+                handle.invoke_mut(move |studio| {
+                    studio.export_progress = progress;
+                    studio.export_changed();
+                });
             }
-            handle.invoke_mut(move |studio| studio.export_finished(saved, failed, folder_url));
+            let report = write_report(&rows, &report, &out_dir, &claims);
+            handle.invoke_mut(move |studio| studio.export_finished(totals, report, folder_url));
         });
     }
 }
@@ -504,17 +632,10 @@ impl Studio {
             self.toast("No new supported photos there".into(), String::new());
             return;
         }
+        self.note("info", format!("Added {}", photos(paths.len())));
         for path in paths {
-            let id = self.entries.len();
-            if let Some(jobs) = &self.jobs {
-                let _ = jobs.send((
-                    id,
-                    path.clone(),
-                    self.settings.crop.auto_orient_exif,
-                    Turn::default(),
-                ));
-            }
-            self.entries.push(Entry {
+            let entry = Entry {
+                uid: self.next_uid,
                 path,
                 turn: Turn::default(),
                 rev: 0,
@@ -522,7 +643,10 @@ impl Studio {
                 size: (0, 0),
                 faces: Vec::new(),
                 selected: Vec::new(),
-            });
+            };
+            self.next_uid += 1;
+            self.send_detection(&entry);
+            self.entries.push(entry);
             self.pending += 1;
         }
         if self.current < 0 {
@@ -538,60 +662,127 @@ impl Studio {
                 let engine = Arc::new(engine);
                 self.engine_label = engine.label.clone();
                 self.ready = true;
+                self.note("ok", format!("Models ready on {}", engine.label));
                 let (tx, rx) = mpsc::channel::<DetectJob>();
                 let worker_engine = engine.clone();
                 let handle = self.get_thread_handle();
                 thread::spawn(move || {
-                    for (id, path, orient, turn) in rx {
-                        let result = pipeline::detect(&worker_engine, &path, orient, turn)
-                            .map_err(|err| format!("{err:#}"));
-                        handle.invoke_mut(move |studio| studio.detected(id, result));
+                    for job in rx {
+                        let result = pipeline::detect(
+                            &worker_engine,
+                            &job.path,
+                            job.orient,
+                            job.turn,
+                            &job.detection,
+                        )
+                        .map_err(|err| format!("{err:#}"));
+                        let uid = job.uid;
+                        handle.invoke_mut(move |studio| studio.detected(uid, result));
                     }
                 });
-                // Photos added while the models loaded.
-                for (id, entry) in self.entries.iter().enumerate() {
-                    let orient = self.settings.crop.auto_orient_exif;
-                    let _ = tx.send((id, entry.path.clone(), orient, entry.turn));
-                }
                 self.jobs = Some(tx);
                 self.engine = Some(engine);
+                // Photos added while the models loaded.
+                for entry in &self.entries {
+                    self.send_detection(entry);
+                }
             }
-            Err(err) => self.engine_error = err,
+            Err(err) => {
+                self.note("error", format!("Models failed to load: {err}"));
+                self.engine_error = err;
+            }
         }
         self.engine_changed();
     }
 
-    fn detected(&mut self, id: usize, result: Result<Detected, String>) {
-        self.pending -= 1;
-        let Some(entry) = self.entries.get_mut(id) else {
+    fn send_detection(&self, entry: &Entry) {
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(DetectJob {
+                uid: entry.uid,
+                path: entry.path.clone(),
+                orient: self.settings.crop.auto_orient_exif,
+                turn: entry.turn,
+                detection: self.settings.detection.clone(),
+            });
+        }
+    }
+
+    fn detected(&mut self, uid: u64, result: Result<Detected, String>) {
+        // Removed while it was being detected: nothing to update, and `forget` already
+        // took it off the pending count.
+        let Some(position) = self.position(uid) else {
             return;
         };
+        self.pending -= 1;
+        let is_current = self.current == position as i32;
+        let entry = &mut self.entries[position];
+        let name = file_name(&entry.path);
         match result {
             Ok(detected) => {
+                let found = detected.faces.len();
                 entry.size = (detected.image.width(), detected.image.height());
-                entry.selected = vec![true; detected.faces.len()];
+                entry.selected = vec![true; found];
                 entry.faces = detected.faces;
                 entry.status = Status::Done;
-                images::put(&thumb_key(id, entry.rev), Pixels::Rgb(detected.thumb));
-                self.cache_canvas(id, detected.canvas);
-                if self.current == id as i32 {
+                images::put(&thumb_key(uid, entry.rev), Pixels::Rgb(detected.thumb));
+                self.cache_canvas(uid, detected.canvas);
+                self.note(
+                    if found == 0 { "warn" } else { "ok" },
+                    format!(
+                        "{name}: {}",
+                        if found == 0 {
+                            "no faces found".into()
+                        } else {
+                            faces(found)
+                        }
+                    ),
+                );
+                if is_current {
                     // New boxes: the old edits no longer apply to anything.
                     self.undo_stack.clear();
                     self.redo_stack.clear();
-                    self.image = Some((id, detected.image));
+                    self.image = Some((uid, detected.image));
                     self.publish_image();
                     self.request_previews();
                 }
             }
             Err(err) => {
                 warn!("{err}");
-                entry.status = Status::Failed(err);
-                if self.current == id as i32 {
+                self.note("error", format!("{name}: {err}"));
+                self.entries[position].status = Status::Failed(err);
+                if is_current {
                     self.publish_image();
                 }
             }
         }
         self.publish_queue();
+    }
+
+    /// Drop everything held for a photo leaving the queue.
+    fn forget(&mut self, entry: &Entry) {
+        if matches!(entry.status, Status::Queued) {
+            self.pending -= 1;
+        }
+        images::remove(&thumb_key(entry.uid, entry.rev));
+        images::remove(&canvas_key(entry.uid));
+        self.canvases.retain(|&held| held != entry.uid);
+        if self
+            .image
+            .as_ref()
+            .is_some_and(|(held, _)| *held == entry.uid)
+        {
+            self.image = None;
+        }
+    }
+
+    /// Another photo became current (or none did): start it fitted and fresh.
+    fn current_changed(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.previews.clear();
+        self.previews_changed();
+        self.publish_image();
+        self.load_current_image();
     }
 
     /// Apply `edit` to the current photo's faces as one undo step. `edit` returns `None` when
@@ -640,46 +831,96 @@ impl Studio {
     /// Change how the current photo is turned and send it back through detection: the old
     /// boxes were found on differently turned pixels. Its edits and history go with them.
     fn turn_current(&mut self, change: impl FnOnce(&mut Turn)) {
-        let orient = self.settings.crop.auto_orient_exif;
-        let Ok(id) = usize::try_from(self.current) else {
-            return;
-        };
         let Some(entry) = self
-            .entries
-            .get_mut(id)
+            .current_entry_mut()
             .filter(|e| matches!(e.status, Status::Done))
         else {
             return;
         };
         let before = entry.turn;
         change(&mut entry.turn);
-        if entry.turn == before {
-            return;
+        if entry.turn != before {
+            self.requeue(self.current as usize);
+            self.publish_queue();
         }
+    }
+
+    /// Send every finished or failed photo back through detection. Returns how many.
+    fn redetect_all(&mut self) -> usize {
+        let positions: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| !matches!(self.entries[i].status, Status::Queued))
+            .collect();
+        for &position in &positions {
+            self.requeue(position);
+        }
+        self.publish_queue();
+        positions.len()
+    }
+
+    /// Clear photo `position`'s faces and detect it again with the current settings.
+    fn requeue(&mut self, position: usize) {
+        let entry = &mut self.entries[position];
+        let uid = entry.uid;
         entry.status = Status::Queued;
         entry.faces.clear();
         entry.selected.clear();
-        images::remove(&thumb_key(id, entry.rev));
+        images::remove(&thumb_key(uid, entry.rev));
         entry.rev += 1;
-        if let Some(jobs) = &self.jobs {
-            let _ = jobs.send((id, entry.path.clone(), orient, entry.turn));
-        }
+        images::remove(&canvas_key(uid));
+        self.canvases.retain(|&held| held != uid);
         self.pending += 1;
-        self.canvases.retain(|&held| held != id);
-        images::remove(&format!("canvas/{id}"));
-        self.image = None;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.previews.clear();
-        self.previews_changed();
-        self.publish_image();
-        self.publish_queue();
+        self.send_detection(&self.entries[position]);
+        if self.current == position as i32 {
+            self.image = None;
+            self.undo_stack.clear();
+            self.redo_stack.clear();
+            self.previews.clear();
+            self.previews_changed();
+            self.publish_image();
+        }
+    }
+
+    fn position(&self, uid: u64) -> Option<usize> {
+        self.entries.iter().position(|e| e.uid == uid)
+    }
+
+    fn current_entry(&self) -> Option<&Entry> {
+        usize::try_from(self.current)
+            .ok()
+            .and_then(|i| self.entries.get(i))
     }
 
     fn current_entry_mut(&mut self) -> Option<&mut Entry> {
         usize::try_from(self.current)
             .ok()
             .and_then(|i| self.entries.get_mut(i))
+    }
+
+    fn current_uid(&self) -> Option<u64> {
+        self.current_entry().map(|e| e.uid)
+    }
+
+    /// Every finished photo with a selected face, and those faces.
+    fn export_jobs(&self) -> Vec<ExportJob> {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.status, Status::Done))
+            .map(|e| ExportJob {
+                uid: e.uid,
+                path: e.path.clone(),
+                turn: e.turn,
+                detected: e.faces.len(),
+                faces: e
+                    .faces
+                    .iter()
+                    .zip(&e.selected)
+                    .enumerate()
+                    .filter(|(_, (_, on))| **on)
+                    .map(|(i, (face, _))| (i, face.clone()))
+                    .collect(),
+            })
+            .filter(|job| !job.faces.is_empty())
+            .collect()
     }
 
     fn selection_edited(&mut self) {
@@ -716,20 +957,33 @@ impl Studio {
         );
     }
 
+    /// Add a line to the activity log: `kind` is "info", "ok", "warn" or "error".
+    fn note(&mut self, kind: &str, text: String) {
+        let secs = self.started.elapsed().as_secs();
+        self.log.push(json!({
+            "time": format!("{:02}:{:02}", secs / 60, secs % 60),
+            "kind": kind,
+            "text": text,
+        }));
+        if self.log.len() > LOG_LIMIT {
+            self.log.remove(0);
+        }
+        self.log_changed();
+    }
+
     fn publish_queue(&mut self) {
         self.queue = self
             .entries
             .iter()
-            .enumerate()
-            .map(|(id, e)| {
+            .map(|e| {
                 let (status, error) = match &e.status {
                     Status::Queued => ("queued", ""),
                     Status::Done => ("done", ""),
                     Status::Failed(err) => ("failed", err.as_str()),
                 };
                 json!({
-                    "name": e.path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
-                    "thumb": if matches!(e.status, Status::Done) { images::url(&thumb_key(id, e.rev)) } else { String::new() },
+                    "name": file_name(&e.path),
+                    "thumb": if matches!(e.status, Status::Done) { images::url(&thumb_key(e.uid, e.rev)) } else { String::new() },
                     "status": status,
                     "error": error,
                     "faces": e.faces.len(),
@@ -746,21 +1000,16 @@ impl Studio {
     }
 
     fn publish_image(&mut self) {
-        // Shown once its canvas copy is in the store; until then the canvas says it is opening.
-        let entry = usize::try_from(self.current)
-            .ok()
-            .filter(|id| self.canvases.contains(id))
-            .and_then(|id| Some(id).zip(self.entries.get(id)))
-            .filter(|(_, e)| matches!(e.status, Status::Done));
         self.can_undo = !self.undo_stack.is_empty();
         self.can_redo = !self.redo_stack.is_empty();
-        let current = usize::try_from(self.current)
-            .ok()
-            .and_then(|i| self.entries.get(i));
-        let turn = current.map(|e| e.turn).unwrap_or_default();
+        let turn = self.current_entry().map(|e| e.turn).unwrap_or_default();
         self.quarter_turns = i32::from(turn.quarters);
         self.tilt = f64::from(turn.tilt_deg);
-        let Some((id, entry)) = entry else {
+        // Shown once its canvas copy is in the store; until then the canvas says it is opening.
+        let Some(entry) = self
+            .current_entry()
+            .filter(|e| matches!(e.status, Status::Done) && self.canvases.contains(&e.uid))
+        else {
             self.image_url.clear();
             self.faces.clear();
             self.image_changed();
@@ -768,10 +1017,9 @@ impl Studio {
         };
         let (w, h) = (entry.size.0.max(1) as f32, entry.size.1.max(1) as f32);
         let core: fcs_core::CropSettings = (&self.settings.crop).into();
-        self.image_url = images::url(&format!("canvas/{id}"));
-        self.image_width = entry.size.0 as i32;
-        self.image_height = entry.size.1 as i32;
-        self.faces = entry
+        let image_url = images::url(&canvas_key(entry.uid));
+        let size = entry.size;
+        let faces = entry
             .faces
             .iter()
             .zip(&entry.selected)
@@ -780,7 +1028,7 @@ impl Studio {
                 let b = face.detection.bbox;
                 let x = (b.x / w).clamp(0.0, 1.0);
                 let y = (b.y / h).clamp(0.0, 1.0);
-                let crop = fcs_core::calculate_crop_region(entry.size.0, entry.size.1, b, &core);
+                let crop = fcs_core::calculate_crop_region(size.0, size.1, b, &core);
                 json!({
                     "index": i,
                     "x": x,
@@ -802,22 +1050,25 @@ impl Studio {
                 })
             })
             .collect();
+        self.image_url = image_url;
+        self.image_width = size.0 as i32;
+        self.image_height = size.1 as i32;
+        self.faces = faces;
         self.image_changed();
     }
 
     /// Decode the current photo for previews, and remake its canvas copy if that was evicted.
     fn load_current_image(&mut self) {
-        let Ok(id) = usize::try_from(self.current) else {
+        let Some(uid) = self.current_uid() else {
             return;
         };
-        if self.image.as_ref().is_some_and(|(held, _)| *held == id) {
+        if self.image.as_ref().is_some_and(|(held, _)| *held == uid) {
             self.request_previews();
             return;
         }
         self.image = None;
         let Some(entry) = self
-            .entries
-            .get(id)
+            .current_entry()
             .filter(|e| matches!(e.status, Status::Done))
         else {
             return;
@@ -829,23 +1080,19 @@ impl Studio {
         thread::spawn(move || {
             let loaded =
                 pipeline::load(&path, orient, turn).map(|image| (pipeline::canvas(&image), image));
-            handle.invoke_mut(move |studio| studio.current_image_loaded(id, loaded));
+            handle.invoke_mut(move |studio| studio.current_image_loaded(uid, loaded));
         });
     }
 
-    fn current_image_loaded(
-        &mut self,
-        id: usize,
-        loaded: anyhow::Result<(RgbImage, DynamicImage)>,
-    ) {
+    fn current_image_loaded(&mut self, uid: u64, loaded: anyhow::Result<(RgbImage, DynamicImage)>) {
         match loaded {
             Ok((canvas, image)) => {
-                if self.current != id as i32 {
+                if self.current_uid() != Some(uid) {
                     return;
                 }
-                self.image = Some((id, Arc::new(image)));
-                if !self.canvases.contains(&id) {
-                    self.cache_canvas(id, canvas);
+                self.image = Some((uid, Arc::new(image)));
+                if !self.canvases.contains(&uid) {
+                    self.cache_canvas(uid, canvas);
                     self.publish_image();
                 }
                 self.request_previews();
@@ -854,8 +1101,9 @@ impl Studio {
             Err(err) => {
                 let err = format!("{err:#}");
                 warn!("{err}");
-                if let Some(entry) = self.entries.get_mut(id) {
-                    entry.status = Status::Failed(err);
+                self.note("error", err.clone());
+                if let Some(position) = self.position(uid) {
+                    self.entries[position].status = Status::Failed(err);
                 }
                 self.publish_image();
                 self.publish_queue();
@@ -863,23 +1111,19 @@ impl Studio {
         }
     }
 
-    /// Hold `canvas` as entry `id`'s copy, evicting the oldest other one past
+    /// Hold `canvas` as photo `uid`'s copy, evicting the oldest other one past
     /// [`CANVAS_CACHE`]. Never the current photo's: it is on screen.
-    fn cache_canvas(&mut self, id: usize, canvas: RgbImage) {
-        images::put(&format!("canvas/{id}"), Pixels::Rgb(canvas));
-        self.canvases.retain(|&held| held != id);
-        self.canvases.push_back(id);
+    fn cache_canvas(&mut self, uid: u64, canvas: RgbImage) {
+        images::put(&canvas_key(uid), Pixels::Rgb(canvas));
+        self.canvases.retain(|&held| held != uid);
+        self.canvases.push_back(uid);
+        let current = self.current_uid();
         while self.canvases.len() > CANVAS_CACHE {
-            let current = self.current;
-            let Some(oldest) = self
-                .canvases
-                .iter()
-                .position(|&held| held as i32 != current)
-            else {
+            let Some(oldest) = self.canvases.iter().position(|&held| Some(held) != current) else {
                 break;
             };
             if let Some(evicted) = self.canvases.remove(oldest) {
-                images::remove(&format!("canvas/{evicted}"));
+                images::remove(&canvas_key(evicted));
             }
         }
     }
@@ -891,10 +1135,10 @@ impl Studio {
             self.preview_dirty = true;
             return;
         }
-        let (Some(engine), Some((id, image))) = (self.engine.clone(), self.image.clone()) else {
+        let (Some(engine), Some((uid, image))) = (self.engine.clone(), self.image.clone()) else {
             return;
         };
-        let Some(entry) = self.entries.get(id) else {
+        let Some(entry) = self.current_entry().filter(|e| e.uid == uid) else {
             return;
         };
         let faces: Vec<(usize, Face)> = entry
@@ -918,18 +1162,18 @@ impl Studio {
                     (i, pipeline::preview(&crop.image))
                 })
                 .collect();
-            handle.invoke_mut(move |studio| studio.previews_ready(id, seq, previews));
+            handle.invoke_mut(move |studio| studio.previews_ready(uid, seq, previews));
         });
     }
 
-    fn previews_ready(&mut self, id: usize, seq: u64, previews: Vec<(usize, RgbaImage)>) {
+    fn previews_ready(&mut self, uid: u64, seq: u64, previews: Vec<(usize, RgbaImage)>) {
         self.preview_running = false;
         // Fresh keys each render, so QML never shows a cached older one; the last set is
         // already on screen and can leave the store.
         for key in self.preview_keys.drain(..) {
             images::remove(&key);
         }
-        if self.current == id as i32 {
+        if self.current_uid() == Some(uid) {
             let mut keys = Vec::with_capacity(previews.len());
             self.previews = previews
                 .into_iter()
@@ -948,22 +1192,63 @@ impl Studio {
         }
     }
 
-    fn export_finished(&mut self, saved: usize, failed: usize, folder_url: String) {
+    fn export_finished(&mut self, totals: PhotoExport, report: Option<String>, folder_url: String) {
         self.exporting = false;
         self.export_changed();
-        let faces = |n| {
-            if n == 1 {
-                "1 face".to_string()
-            } else {
-                format!("{n} faces")
-            }
-        };
-        let message = match failed {
-            0 => format!("Exported {}", faces(saved)),
-            _ => format!("Exported {}, {} failed (see log)", faces(saved), failed),
-        };
+        let mut message = format!("Exported {}", faces(totals.exported));
+        if totals.skipped > 0 {
+            message += &format!(", {} left out by the quality rules", totals.skipped);
+        }
+        if totals.failed > 0 {
+            message += &format!(", {} failed (see Activity)", totals.failed);
+        }
+        let kind = if totals.failed > 0 { "error" } else { "ok" };
+        self.note(kind, message.clone());
+        if let Some(report) = report {
+            self.note("info", report);
+        }
         self.toast(message, folder_url);
     }
+}
+
+/// Write the export report into `out_dir`; returns a line for the activity log.
+fn write_report(
+    rows: &[ReportRow],
+    format: &str,
+    out_dir: &Path,
+    claims: &OutputClaims,
+) -> Option<String> {
+    let (name, bytes) = match format {
+        "csv" => {
+            let mut writer = csv::Writer::from_writer(Vec::new());
+            let written = rows.iter().try_for_each(|row| writer.serialize(row));
+            (
+                "face-crop-report.csv",
+                written.ok().and_then(|()| writer.into_inner().ok()),
+            )
+        }
+        "json" => {
+            let count = |outcome| rows.iter().filter(|r| r.outcome == outcome).count();
+            let json = json!({
+                "succeeded": count("succeeded"),
+                "failed": count("failed"),
+                "images": rows,
+            });
+            (
+                "face-crop-report.json",
+                serde_json::to_vec_pretty(&json).ok(),
+            )
+        }
+        _ => return None,
+    };
+    let path = claims.claim(out_dir.join(name), Path::new(name));
+    let written = bytes
+        .ok_or_else(|| anyhow::anyhow!("could not encode the report"))
+        .and_then(|bytes| fcs_utils::write_atomically(&path, &bytes));
+    Some(match written {
+        Ok(()) => format!("Report saved as {}", path.display()),
+        Err(err) => format!("Couldn't save the report: {err:#}"),
+    })
 }
 
 /// Merge `patch` into `base`: objects key by key, anything else replaced. Whole-number floats
@@ -986,8 +1271,34 @@ fn merge(base: &mut Value, patch: Value) {
     }
 }
 
-fn thumb_key(id: usize, rev: u32) -> String {
-    format!("thumb/{id}.{rev}")
+fn thumb_key(uid: u64, rev: u32) -> String {
+    format!("thumb/{uid}.{rev}")
+}
+
+fn canvas_key(uid: u64) -> String {
+    format!("canvas/{uid}")
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn faces(n: usize) -> String {
+    if n == 1 {
+        "1 face".into()
+    } else {
+        format!("{n} faces")
+    }
+}
+
+fn photos(n: usize) -> String {
+    if n == 1 {
+        "1 photo".into()
+    } else {
+        format!("{n} photos")
+    }
 }
 
 /// A box given in fractions of a `size` photo, in pixels, kept inside the photo and at
@@ -1068,5 +1379,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn reports_carry_fcs_guis_columns_in_csv_and_json() {
+        let out = std::env::temp_dir().join(format!("fcs-qt-report-{}", std::process::id()));
+        fs::create_dir_all(&out).unwrap();
+        let rows = [
+            ReportRow {
+                image: "a.jpg".into(),
+                outcome: "succeeded",
+                faces_detected: 2,
+                faces_exported: 1,
+                error: None,
+            },
+            ReportRow {
+                image: "b.jpg".into(),
+                outcome: "failed",
+                faces_detected: 1,
+                faces_exported: 0,
+                error: Some("unreadable".into()),
+            },
+        ];
+        let claims = OutputClaims::new(OverwritePolicy::Overwrite);
+        assert!(write_report(&rows, "none", &out, &claims).is_none());
+        write_report(&rows, "csv", &out, &claims).unwrap();
+        write_report(&rows, "json", &out, &claims).unwrap();
+        let csv = fs::read_to_string(out.join("face-crop-report.csv")).unwrap();
+        assert_eq!(
+            csv.lines().collect::<Vec<_>>(),
+            [
+                "image,outcome,faces_detected,faces_exported,error",
+                "a.jpg,succeeded,2,1,",
+                "b.jpg,failed,1,0,unreadable"
+            ]
+        );
+        let json: Value =
+            serde_json::from_str(&fs::read_to_string(out.join("face-crop-report.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            (json["succeeded"].as_u64(), json["failed"].as_u64()),
+            (Some(1), Some(1))
+        );
+        assert_eq!(json["images"][1]["error"], "unreadable");
+        let _ = fs::remove_dir_all(&out);
     }
 }

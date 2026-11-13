@@ -4,9 +4,11 @@
 use anyhow::{Context, Result};
 use fcs_core::{BoundingBox, Detection, EyeRefiner, FaceDetector};
 use fcs_utils::{
-    EnhancementRuntime, GpuAvailability, GpuContext, GpuContextOptions, MetadataContext,
-    OutputClaims, OutputOptions, Quality, config::AppSettings, estimate_sharpness, load_image,
-    load_image_raw, resolve_data_path, save_dynamic_image,
+    EnhancementRuntime, FinishedCrop, GpuAvailability, GpuContext, GpuContextOptions,
+    MetadataContext, OutputClaims, OutputOptions, Quality, QualityFilter,
+    append_suffix_to_filename,
+    config::{AppSettings, DetectionSettings},
+    estimate_sharpness, load_image, load_image_raw, resolve_data_path, save_dynamic_image,
 };
 use image::{DynamicImage, RgbImage, RgbaImage};
 use std::{
@@ -124,11 +126,20 @@ pub fn load(path: &Path, orient: bool, turn: Turn) -> Result<DynamicImage> {
     Ok(fcs_core::rotate_photo(&image, turn.tilt_deg).unwrap_or(image))
 }
 
-/// Load `path`, find and refine its faces, and make the canvas and queue copies.
-pub fn detect(engine: &Engine, path: &Path, orient: bool, turn: Turn) -> Result<Detected> {
+/// Load `path`, find and refine its faces with `settings` (the confidence floor and the rest),
+/// and make the canvas and queue copies.
+pub fn detect(
+    engine: &Engine,
+    path: &Path,
+    orient: bool,
+    turn: Turn,
+    settings: &DetectionSettings,
+) -> Result<Detected> {
     let image = load(path, orient, turn)?;
+    // Cheap: the same loaded model under other thresholds.
     let mut output = engine
         .detector
+        .with_settings(settings)
         .detect_image(&image)
         .with_context(|| format!("detection failed for {}", path.display()))?;
     if let Some(refiner) = &engine.refiner {
@@ -204,39 +215,120 @@ pub fn preview(crop: &DynamicImage) -> RgbaImage {
     crop.thumbnail(PREVIEW_SIDE, PREVIEW_SIDE).into_rgba8()
 }
 
-/// Finish and save face `index` of `source` into `out_dir` as `{stem}_face_NN.{ext}`, the
-/// GUI's naming. `claims` renames rather than replaces an existing file.
+/// What exporting one photo did with each of its selected faces.
+#[derive(Debug, Default, PartialEq)]
+pub struct PhotoExport {
+    pub exported: usize,
+    /// Left out by the quality rules.
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+/// The quality rules from the settings, as the CLI applies them.
+pub fn quality_filter(settings: &AppSettings) -> QualityFilter {
+    let rules = &settings.crop.quality_rules;
+    QualityFilter {
+        min_quality: rules.min_quality,
+        auto_select: rules.auto_select_best_face,
+        auto_skip_no_high: rules.auto_skip_no_high_quality,
+        suffix_enabled: rules.quality_suffix,
+    }
+}
+
+/// Finish the selected `faces` of one photo and save those the quality rules keep, in the
+/// CLI's order: skip the photo when no face is sharp enough, keep only the best face when
+/// asked, drop faces under the minimum, then name what is left. The rules judge the finished
+/// crop, as the CLI does, not the detected box.
 #[allow(clippy::too_many_arguments)] // each is a separate input; a struct for one caller adds nothing
-pub fn export_face(
+pub fn export_photo(
     engine: &Engine,
     image: &DynamicImage,
+    source: &Path,
+    faces: &[(usize, Face)],
+    settings: &AppSettings,
+    out_dir: &Path,
+    claims: &OutputClaims,
+) -> PhotoExport {
+    let filter = quality_filter(settings);
+    let finished: Vec<FinishedCrop> = faces
+        .iter()
+        .map(|(_, face)| finish(engine, image, &face.detection, settings))
+        .collect();
+    let mut result = PhotoExport::default();
+    if filter.should_skip_image(finished.iter().map(|c| c.quality).max()) {
+        result.skipped = finished.len();
+        return result;
+    }
+    let best = filter.auto_select.then(|| {
+        let scored: Vec<_> = finished
+            .iter()
+            .map(|c| (c.quality, c.quality_score))
+            .collect();
+        filter.select_best_index(&scored)
+    });
+    for (position, ((index, face), crop)) in faces.iter().zip(finished).enumerate() {
+        if best.is_some_and(|best| best != Some(position)) || filter.should_skip(crop.quality) {
+            result.skipped += 1;
+            continue;
+        }
+        let suffix = filter.suffix_for(crop.quality).unwrap_or("");
+        match save_face(
+            &crop, source, face, *index, settings, out_dir, claims, suffix,
+        ) {
+            Ok(_) => result.exported += 1,
+            Err(err) => {
+                log::warn!(
+                    "Failed to export {} face {}: {err:#}",
+                    source.display(),
+                    index + 1
+                );
+                result.failed += 1;
+            }
+        }
+    }
+    result
+}
+
+/// Where face `index` of `source` is saved: `{stem}_face_NN{suffix}.{ext}`, fcs-gui's naming.
+pub fn face_path(
+    source: &Path,
+    index: usize,
+    suffix: &str,
+    settings: &AppSettings,
+    out_dir: &Path,
+) -> PathBuf {
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("face");
+    let ext = settings.crop.output_format.extension();
+    let name = format!("{stem}_face_{:02}.{ext}", index + 1);
+    out_dir.join(append_suffix_to_filename(&name, suffix))
+}
+
+/// Save one finished crop; `claims` decides whether an existing file is replaced or kept.
+#[allow(clippy::too_many_arguments)] // each is a separate input; a struct for one caller adds nothing
+fn save_face(
+    crop: &FinishedCrop,
     source: &Path,
     face: &Face,
     index: usize,
     settings: &AppSettings,
     out_dir: &Path,
     claims: &OutputClaims,
+    suffix: &str,
 ) -> Result<PathBuf> {
-    let finished = finish(engine, image, &face.detection, settings);
-    let stem = source
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("face");
-    let ext = settings.crop.output_format.extension();
-    let path = claims.claim(
-        out_dir.join(format!("{stem}_face_{:02}.{ext}", index + 1)),
-        source,
-    );
+    let path = claims.claim(face_path(source, index, suffix, settings, out_dir), source);
     save_dynamic_image(
-        &finished.image,
+        &crop.image,
         &path,
         &OutputOptions::from_crop_settings(&settings.crop),
         &MetadataContext {
             source_path: Some(source),
             crop_settings: Some(&settings.crop),
             detection_score: Some(face.detection.score),
-            quality: Some(finished.quality),
-            quality_score: Some(finished.quality_score),
+            quality: Some(crop.quality),
+            quality_score: Some(crop.quality_score),
         },
     )?;
     Ok(path)
@@ -295,12 +387,12 @@ mod tests {
         assert_eq!(url_to_path("file:///tmp/50%"), Path::new("/tmp/50%"));
     }
 
-    /// The real models end to end: detect a sample, then export its face twice into one folder.
-    /// The second export must be renamed, not replace the first.
+    /// The real models end to end: detect a sample and export it twice into one folder (the
+    /// second must be renamed, not replace the first), then again keeping only the best face.
     #[test]
     fn detects_and_exports_a_sample_without_overwriting() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let settings = AppSettings {
+        let mut settings = AppSettings {
             model_path: Some(
                 root.join("models/scrfd80k_500m_640.onnx")
                     .display()
@@ -313,36 +405,54 @@ mod tests {
         std::fs::create_dir_all(&out).expect("temp dir");
         let source = root.join("samples/sample_01.jpg");
 
-        let detected = detect(&engine, &source, true, Turn::default()).expect("detect");
+        let detected =
+            detect(&engine, &source, true, Turn::default(), &settings.detection).expect("detect");
         assert_eq!(detected.faces.len(), 1);
         // sample_01 is 1024 square: under both limits, the canvas keeps it whole.
         assert_eq!(detected.canvas.dimensions(), (1024, 1024));
         assert_eq!(detected.thumb.dimensions(), (THUMB_SIDE, THUMB_SIDE));
 
         // A fresh claims set per export, as each click of Export makes one.
-        let export = || {
+        let export = |faces: &[(usize, Face)], settings: &AppSettings| {
             let claims = OutputClaims::new(fcs_utils::OverwritePolicy::KeepBoth);
-            let face = &detected.faces[0];
-            export_face(
+            export_photo(
                 &engine,
                 &detected.image,
                 &source,
-                face,
-                0,
-                &settings,
+                faces,
+                settings,
                 &out,
                 &claims,
             )
         };
-        let (first, second) = (export(), export());
-        let (first, second) = (first.expect("first export"), second.expect("second export"));
-        assert_eq!(first.file_name().unwrap(), "sample_01_face_01.png");
-        assert_ne!(first, second);
+        let one = vec![(0, detected.faces[0].clone())];
+        assert_eq!(export(&one, &settings).exported, 1);
+        assert_eq!(export(&one, &settings).exported, 1);
+        let first = out.join("sample_01_face_01.png");
         let saved = image::open(&first).expect("readable crop");
         assert_eq!(
             (saved.width(), saved.height()),
             (settings.crop.output_width, settings.crop.output_height)
         );
+        assert!(
+            out.join("sample_01_face_01(2).png").is_file(),
+            "the second export was renamed"
+        );
+
+        // A hand-drawn box over the background, beside the real face: best-face-only keeps one.
+        settings.crop.quality_rules.auto_select_best_face = true;
+        let mut two = one.clone();
+        two.push((
+            1,
+            Face::manual(BoundingBox {
+                x: 10.0,
+                y: 10.0,
+                width: 60.0,
+                height: 60.0,
+            }),
+        ));
+        let result = export(&two, &settings);
+        assert_eq!((result.exported, result.skipped, result.failed), (1, 1, 0));
         let _ = std::fs::remove_dir_all(&out);
     }
 

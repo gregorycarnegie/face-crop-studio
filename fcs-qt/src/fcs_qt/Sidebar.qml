@@ -42,81 +42,117 @@ Rectangle {
         anchors.rightMargin: 1
         spacing: 0
 
-        RowLayout {
+        Segmented {
             Layout.fillWidth: true
             Layout.margins: Theme.pad
-            Layout.bottomMargin: 10
-            spacing: 8
-
-            Text {
-                text: qsTr("Photos")
-                color: Theme.ink3
-                font.pixelSize: Theme.caption
-                font.weight: Font.DemiBold
-                font.letterSpacing: 0.9
-                font.capitalization: Font.AllUppercase
-                Accessible.role: Accessible.Heading
-            }
-            Text {
-                visible: queueModel.count > 0
-                text: queueModel.count
-                color: Theme.ink2
-                font.pixelSize: Theme.caption
-            }
-            Item { Layout.fillWidth: true }
-            Spinner {
-                visible: Studio.pending > 0
-                size: 12
-            }
-            Text {
-                visible: Studio.pending > 0
-                text: qsTr("%1 to go").arg(Studio.pending)
-                color: Theme.ink3
-                font.pixelSize: Theme.caption
-            }
+            Layout.bottomMargin: 6
+            value: UiState.sidebarTab
+            options: [
+                { value: "photos", label: queueModel.count > 0 ? qsTr("Photos · %1").arg(queueModel.count) : qsTr("Photos") },
+                { value: "activity", label: qsTr("Activity") }
+            ]
+            onActivated: value => UiState.sidebarTab = value
         }
 
-        ListView {
-            id: list
-
+        StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            clip: true
-            model: queueModel
-            spacing: 2
-            leftMargin: 8
-            rightMargin: 8
-            bottomMargin: 8
-            currentIndex: Studio.current
-            activeFocusOnTab: true
-            boundsBehavior: Flickable.StopAtBounds
-            highlightMoveDuration: Theme.medium
-            Accessible.role: Accessible.List
-            Accessible.name: qsTr("Photos")
-            Keys.onUpPressed: Studio.select(Studio.current - 1)
-            Keys.onDownPressed: Studio.select(Studio.current + 1)
+            currentIndex: UiState.sidebarTab === "activity" ? 1 : 0
 
-            ScrollBar.vertical: ScrollBar {}
+            ColumnLayout {
+                spacing: 0
 
-            add: Transition {
-                OpacityAnimator { from: 0; to: 1; duration: Theme.medium; easing.type: Easing.OutCubic }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Theme.pad
+                    Layout.rightMargin: Theme.pad - 6
+                    Layout.bottomMargin: 4
+                    Layout.preferredHeight: 32
+                    spacing: 8
+
+                    Spinner {
+                        visible: Studio.pending > 0
+                        size: 12
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: Studio.pending > 0 ? qsTr("Finding faces · %1 to go").arg(Studio.pending)
+                            : queueModel.count > 0 ? qsTr("All photos ready") : ""
+                        color: Theme.ink3
+                        font.pixelSize: Theme.caption
+                        elide: Text.ElideRight
+                    }
+                    AppButton {
+                        visible: queueModel.count > 0
+                        implicitHeight: 28
+                        leftPadding: 10
+                        rightPadding: 10
+                        variant: "ghost"
+                        text: qsTr("Clear")
+                        font.pixelSize: Theme.caption
+                        onClicked: clearDialog.open()
+                    }
+                }
+
+                ListView {
+                    id: list
+
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: queueModel
+                    spacing: 2
+                    leftMargin: 8
+                    rightMargin: 8
+                    bottomMargin: 8
+                    currentIndex: Studio.current
+                    activeFocusOnTab: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    highlightMoveDuration: Theme.medium
+                    Accessible.role: Accessible.List
+                    Accessible.name: qsTr("Photos")
+                    Keys.onUpPressed: Studio.select(Studio.current - 1)
+                    Keys.onDownPressed: Studio.select(Studio.current + 1)
+                    Keys.onDeletePressed: Studio.remove(Studio.current)
+
+                    ScrollBar.vertical: ScrollBar {}
+
+                    add: Transition {
+                        OpacityAnimator { from: 0; to: 1; duration: Theme.medium; easing.type: Easing.OutCubic }
+                    }
+
+                    delegate: QueueDelegate {
+                        width: ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin
+                        onClicked: Studio.select(index)
+                        onRemoveRequested: Studio.remove(index)
+                    }
+
+                    Text {
+                        anchors.centerIn: parent
+                        width: parent.width - 48
+                        visible: queueModel.count === 0
+                        text: qsTr("Photos you add appear here.")
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        color: Theme.ink3
+                        font.pixelSize: Theme.caption
+                    }
+                }
             }
 
-            delegate: QueueDelegate {
-                width: ListView.view.width - ListView.view.leftMargin - ListView.view.rightMargin
-                onClicked: Studio.select(index)
-            }
-
-            Text {
-                anchors.centerIn: parent
-                width: parent.width - 48
-                visible: queueModel.count === 0
-                text: qsTr("Photos you add appear here.")
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.Wrap
-                color: Theme.ink3
-                font.pixelSize: Theme.caption
-            }
+            ActivityLog {}
         }
+    }
+
+    ChoiceDialog {
+        id: clearDialog
+        title: qsTr("Clear all photos?")
+        message: qsTr("This removes %1 from the queue, with any face edits. The files themselves stay where they are.")
+            .arg(queueModel.count === 1 ? qsTr("1 photo") : qsTr("%1 photos").arg(queueModel.count))
+        choices: [
+            { value: "clear", label: qsTr("Clear"), variant: "primary" },
+            { value: "cancel", label: qsTr("Cancel"), variant: "ghost" }
+        ]
+        onChosen: value => { if (value === "clear") Studio.clearQueue() }
     }
 }

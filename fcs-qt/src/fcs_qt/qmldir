@@ -36,3 +36,5 @@ SliderRow 1.0 SliderRow.qml
 ToggleRow 1.0 ToggleRow.qml
 CanvasTools 1.0 CanvasTools.qml
 IconButton 1.0 IconButton.qml
+ActivityLog 1.0 ActivityLog.qml
+ChoiceDialog 1.0 ChoiceDialog.qml

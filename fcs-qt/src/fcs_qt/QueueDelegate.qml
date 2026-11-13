@@ -13,6 +13,7 @@ ItemDelegate {
     required property int faces
     required property int selected
     readonly property bool current: ListView.isCurrentItem
+    signal removeRequested
 
     implicitHeight: 64
     padding: 8
@@ -97,8 +98,16 @@ ItemDelegate {
             }
         }
 
+        IconButton {
+            visible: control.hovered
+            side: 28
+            iconPath: Icons.close
+            tip: qsTr("Remove from the queue (Delete); the file stays")
+            onClicked: control.removeRequested()
+        }
+
         Rectangle {
-            visible: control.status === "done" && control.faces > 0
+            visible: !control.hovered && control.status === "done" && control.faces > 0
             implicitWidth: badge.implicitWidth + 14
             implicitHeight: 22
             radius: 11

@@ -13,6 +13,8 @@ ColumnLayout {
     property real stepSize: 0
     // Turns the slider value into the text shown beside the title.
     property var format: v => v.toFixed(2)
+    // Report only when the drag ends, for settings too costly to apply on every step.
+    property bool commitOnRelease: false
     signal moved(real value)
 
     spacing: 2
@@ -42,7 +44,9 @@ ColumnLayout {
         to: root.to
         stepSize: root.stepSize
         Accessible.name: root.title
-        onMoved: root.moved(value)
+        // Keyboard steps arrive unpressed, so they still commit at once.
+        onMoved: if (!root.commitOnRelease || !pressed) root.moved(value)
+        onPressedChanged: if (root.commitOnRelease && !pressed) root.moved(value)
     }
 
     Binding {
@@ -50,5 +54,8 @@ ColumnLayout {
         property: "value"
         value: root.value
         when: !slider.pressed
+        // Not the default restore: a key press also sets `pressed`, and restoring would put
+        // back the slider's value from before this binding (its minimum) mid-step.
+        restoreMode: Binding.RestoreNone
     }
 }

@@ -97,6 +97,38 @@ ApplicationWindow {
     FolderDialog {
         id: folderDialog
         title: qsTr("Export faces to")
-        onAccepted: Studio.exportTo(selectedFolder.toString())
+        onAccepted: {
+            const folder = selectedFolder.toString()
+            const clashes = Studio.conflicts(folder)
+            if (clashes > 0) {
+                conflictDialog.folder = folder
+                conflictDialog.clashes = clashes
+                conflictDialog.open()
+            } else {
+                Studio.exportTo(folder, "keep", UiState.report)
+            }
+        }
+    }
+
+    // Asked before an export would land on files already in the folder.
+    ChoiceDialog {
+        id: conflictDialog
+
+        property string folder
+        property int clashes
+
+        title: qsTr("Some of these files already exist")
+        message: clashes === 1
+            ? qsTr("1 file in that folder has a name an exported face would take. Keep both saves the new crop as name(2); Replace overwrites it.")
+            : qsTr("%1 files in that folder have names exported faces would take. Keep both saves new crops as name(2); Replace overwrites them.").arg(clashes)
+        choices: [
+            { value: "keep", label: qsTr("Keep both"), variant: "primary" },
+            { value: "replace", label: qsTr("Replace") },
+            { value: "cancel", label: qsTr("Cancel"), variant: "ghost" }
+        ]
+        onChosen: value => {
+            if (value !== "cancel")
+                Studio.exportTo(folder, value, UiState.report)
+        }
     }
 }

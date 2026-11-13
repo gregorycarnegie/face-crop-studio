@@ -18,6 +18,10 @@ Switch {
     Accessible.checkable: true
     Accessible.checked: on
     Accessible.name: text
+    // A non-checkable button ignores the toggle action, so a screen reader's "toggle"
+    // would do nothing; route both actions to the same answer as a click.
+    Accessible.onToggleAction: toggledTo(!on)
+    Accessible.onPressAction: toggledTo(!on)
     implicitHeight: 34
     padding: 0
     hoverEnabled: true
