@@ -2,7 +2,7 @@
 
 This inventory covers the application sources audited after the convolution-read
 proofs. A completed entry means the stated property of the production helper is
-checked by Lean. It does not imply verification of its external dependencies or
+checked by the listed verifier. It does not imply verification of its external dependencies or
 the whole application. Pending entries stay visible until proved or a concrete
 limitation is recorded. Existing geometry, tensor, RGB-row, partition, and
 convolution proofs are described in README.md.
@@ -14,6 +14,7 @@ convolution proofs are described in README.md.
 | C3 | CPU upsampling | Doubled dimensions do not wrap; each output maps to the correct in-bounds source pixel | Proved: TransformProofs |
 | C4 | CPU weights/global average | Partial blocks include exactly the real channels; padded lanes cannot become real channels | Proved: TransformProofs |
 | C5 | CPU allocation | Element-to-byte sizing respects Rust allocation/slice limits | Proved: TransformProofs |
+| C6 | CPU upsample, add and depthwise output initialization | Every output slot is initialized (upsample: with input `i / 2`; add: with the closure's value for `i`); the depthwise schedule calls its unchecked tile only inside `lo..hi`; writers terminate with bounded indices | Proved: Verus checks the production generic `MaybeUninit<T>` writers in `tools/verus`; Rayon, arena ownership, tap arithmetic, and final vector conversion remain outside the proof. Dense convolution's raw `OutPtr` writes are not covered |
 | G1 | GPU host geometry | Convolution/pooling dimensions reject overflow and invalid geometry | Proved: GpuProofs |
 | G2 | GPU dispatch | Ceiling division covers each logical item, with a bounded final partial workgroup | Proved: GpuProofs |
 | G3 | GPU upsampling/grouping | Doubled dimensions and channel groups retain exact indices without narrowing wrap | Proved: GpuProofs and TransformProofs |

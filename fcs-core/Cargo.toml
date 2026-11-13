@@ -19,6 +19,7 @@ log.workspace = true
 prost.workspace = true
 rayon.workspace = true
 serde.workspace = true
+vstd.workspace = true
 wgpu.workspace = true
 wide.workspace = true
 

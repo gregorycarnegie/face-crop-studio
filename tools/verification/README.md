@@ -35,6 +35,11 @@ used by the scheduler. [LIMITS.md](LIMITS.md) records actual translation probes 
 the operations that remain unproved. No proof assumes the external axioms those
 probes generated.
 
+The [Verus pilot](../verus/README.md) additionally checks initialization of the
+production CPU upsample, add and depthwise row writers' `MaybeUninit<T>` output,
+with exact values for upsample and add.
+Its proof boundary excludes Rayon, arena ownership, and the final vector conversion.
+
 The check also changes the width clamp from `min` to `max` in a disposable Rust
 copy, translates that copy, and requires Lean to reject its proof. Production
 sources are never changed by this negative control; its log is in

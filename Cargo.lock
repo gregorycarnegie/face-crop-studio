@@ -1350,6 +1350,12 @@ dependencies = [
 
 [[package]]
 name = "convert_case"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
+
+[[package]]
+name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
@@ -1677,7 +1683,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case",
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -2257,6 +2263,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "vstd",
  "wesl",
  "wgpu",
  "wide",
@@ -6776,6 +6783,71 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "verus_builtin"
+version = "0.0.0-2026-11-01-0251"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5cecde3e49b95f670dee0000707b0fe24d3894ffec56d9e6c49f404878b30e9"
+
+[[package]]
+name = "verus_builtin_macros"
+version = "0.0.0-2026-11-08-0256"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f5e92dc7e482c038bbab4c90aba02419e8ea1d9f81a2114e479e8affa76148b"
+dependencies = [
+ "convert_case 0.4.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "synstructure",
+ "verus_prettyplease",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_prettyplease"
+version = "0.0.0-2026-11-01-0251"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2cf0618d8d5ed0cde78122effaf56f5be0a0d0e0f9066735fa9f17d6ba6a4a"
+dependencies = [
+ "proc-macro2",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_state_machines_macros"
+version = "0.0.0-2026-11-08-0256"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c09a37ece6bfbb23da8bf5f9b2566975a828fd3b04d4c7d4a7097e0b14f786be"
+dependencies = [
+ "indexmap 2.14.0",
+ "proc-macro2",
+ "quote",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_syn"
+version = "0.0.0-2026-11-01-0251"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "461620a5ec0fb547ba398e42fb25a017bd8764798a32099eed73c77dd979ac39"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "vstd"
+version = "0.0.0-2026-11-08-0256"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e53b72b31bc15ad62fce68bdf8740092de4a0412e09f2d4bd49af4d935372b0"
+dependencies = [
+ "verus_builtin",
+ "verus_builtin_macros",
+ "verus_state_machines_macros",
+]
 
 [[package]]
 name = "wait-timeout"

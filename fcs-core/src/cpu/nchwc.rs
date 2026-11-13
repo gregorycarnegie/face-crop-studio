@@ -22,6 +22,7 @@ use super::geometry::{
     column_index, column_inside, input_index, interior, output_dim, tap_offset, tap_rows,
     weight_index,
 };
+use super::output::{write_each, write_tiled_row, write_upsampled_row};
 use super::partition::{chunk_span, decode_job, row_base, tile_end};
 use super::size::{checked_allocation, checked_elements};
 use super::tensor::Tensor;
@@ -705,7 +706,8 @@ fn depthwise_with<const K: usize, const S: usize>(
         .context("convolution output exceeds Rust's allocation limit")?;
     let (lo, hi) = interior(w, K, S, pad, out_w);
 
-    // SAFETY: one task per output row, and each writes every column of it.
+    // SAFETY: one task per output row, and `write_tiled_row` (verified by tools/verus)
+    // writes every column of it.
     let output = unsafe {
         Blocked::written(arena, input.batch, input.channels, out_h, out_w, |data| {
             balanced(data.par_chunks_mut(out_w.max(1)))
@@ -722,20 +724,13 @@ fn depthwise_with<const K: usize, const S: usize>(
                         pad,
                         relu,
                     };
-                    let mut ox = 0;
-                    while ox < lo {
-                        row.tile::<1, true>(ox, out_row);
-                        ox += 1;
-                    }
-                    let full = tile_end(lo, hi, 4);
-                    while ox < full {
-                        row.tile::<4, false>(ox, out_row);
-                        ox += 4;
-                    }
-                    while ox < out_w {
-                        row.tile::<1, true>(ox, out_row);
-                        ox += 1;
-                    }
+                    write_tiled_row(
+                        out_row,
+                        lo,
+                        hi,
+                        |ox| row.tile::<1, true>(ox)[0],
+                        |ox| row.tile::<4, false>(ox),
+                    );
                 });
         })
     };
@@ -759,7 +754,7 @@ impl<const K: usize, const S: usize> DepthwiseRow<'_, K, S> {
     /// their latency; `P` independent chains keep the FMA units busy instead. `CHECK` skips
     /// taps outside the image, which only border pixels need.
     #[inline(always)]
-    fn tile<const P: usize, const CHECK: bool>(&self, ox: usize, out: &mut [MaybeUninit<f32x8>]) {
+    fn tile<const P: usize, const CHECK: bool>(&self, ox: usize) -> [f32x8; P] {
         let mut acc = [self.bias; P];
         let (taps, _) = self.taps.as_chunks::<K>();
         for (row, taps) in self.rows.chunks_exact(self.width).zip(taps) {
@@ -773,14 +768,17 @@ impl<const K: usize, const S: usize> DepthwiseRow<'_, K, S> {
                     let ix = column_index(left, offset, self.pad);
                     debug_assert!(ix < row.len());
                     // SAFETY: border pixels were checked just above; interior ones lie inside
-                    // the row by construction of `interior`.
+                    // the row by construction of `interior`, and `write_tiled_row` only
+                    // runs unchecked tiles inside `lo..hi` (verified by tools/verus).
                     let x = unsafe { *row.get_unchecked(ix) };
                     *acc = x.mul_add(tap, *acc);
                 }
             }
         }
-        for (o, v) in out[ox..ox + P].iter_mut().zip(acc) {
-            o.write(if self.relu { v.max(f32x8::ZERO) } else { v });
+        if self.relu {
+            acc.map(|v| v.max(f32x8::ZERO))
+        } else {
+            acc
         }
     }
 }
@@ -792,7 +790,8 @@ pub fn add(arena: &mut Arena, lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
             == (rhs.batch, rhs.channels, rhs.height, rhs.width),
         "add expects matching shapes"
     );
-    // SAFETY: the chunks of `data`, `lhs` and `rhs` line up one to one, all of one length.
+    // SAFETY: `write_each` (verified by tools/verus) writes every slot of each chunk; a
+    // shorter input chunk would panic in the slicing below rather than leave slots unwritten.
     let out = unsafe {
         Blocked::written(
             arena,
@@ -804,9 +803,8 @@ pub fn add(arena: &mut Arena, lhs: &Blocked, rhs: &Blocked) -> Result<Blocked> {
                 data.par_chunks_mut(4096)
                     .zip(lhs.data.par_chunks(4096).zip(rhs.data.par_chunks(4096)))
                     .for_each(|(o, (a, b))| {
-                        for (o, (a, b)) in o.iter_mut().zip(a.iter().zip(b)) {
-                            o.write(*a + *b);
-                        }
+                        let (a, b) = (&a[..o.len()], &b[..o.len()]);
+                        write_each(o, |i| a[i] + b[i]);
                     });
             },
         )
@@ -831,9 +829,7 @@ pub fn upsample2x(arena: &mut Arena, input: &Blocked) -> Result<Blocked> {
                 .for_each(|(r, out_row)| {
                     let (start, end) = upsample_row(r, w);
                     let in_row = &input.data[start..end];
-                    for (x, o) in out_row.iter_mut().enumerate() {
-                        o.write(in_row[x / 2]);
-                    }
+                    write_upsampled_row(in_row, out_row);
                 });
         })
     };

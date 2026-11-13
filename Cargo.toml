@@ -38,6 +38,7 @@ description = "Face Crop Studio — pure Rust face detection and cropping."
 # `lints.workspace = true`.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(verus_only)"] }
 # `missing_docs` is enabled in fcs-core and fcs-utils via crate attributes.
 # Keep it per-crate until the remaining workspace crates are documented;
 # CI's `-D warnings` enforces coverage for the opted-in libraries.
@@ -111,6 +112,9 @@ bytemuck = { version = "1.25.2", features = ["derive"] }
 prost = "0.14.6"
 # Dynamic loading of the ONNX Runtime library, used by fcs-ort.
 libloading = "0.9.0"
+
+# Formal verification
+vstd = "=0.0.0-2026-11-08-0256"
 
 # GPU and shader support
 # nvrtc supplies the PTX container; kernels are precompiled, so no runtime compiler is loaded.
