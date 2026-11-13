@@ -43,11 +43,14 @@ pipeline and settings file.
   dropped on the window) names each photo's crops. Its photo and name columns are guessed
   from the headers and can be changed. Rows match photos by file name, then by stem, exact
   case first, as in fcs-gui, and the tab shows how many matched.
+- Camera: a live view over the canvas, optionally with faces found in every frame. The
+  shutter (or Space) adds the frame to the photos, held in memory. From there it is edited,
+  previewed and exported like any photo, and named `Camera N`.
 - Photos can be removed from the queue one at a time, or all at once with a confirmation.
   An Activity tab logs what happened: detections, failures, exports, reports.
 - Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).
 
-Not ported yet: webcam, watch folders.
+Not ported: watch folders. fcs-cli has them (`--watch`); fcs-gui does not either.
 
 Settings reach QML as one JSON object (`Studio.settings`, the serialized `AppSettings`), and
 every control writes through one slot, `Studio.update(patch)`, which merges the patch, checks

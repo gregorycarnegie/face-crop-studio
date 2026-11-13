@@ -7,7 +7,7 @@
 
 use crate::{
     images::{self, Pixels},
-    pipeline::{self, Detected, Engine, Face, PhotoExport, Turn},
+    pipeline::{self, Detected, Engine, Face, PhotoExport, Source, Turn},
 };
 use fcs_core::BoundingBox;
 use fcs_mapping::{ColumnSelector, MappingFormat, MappingReadOptions};
@@ -25,7 +25,11 @@ use std::{
     collections::VecDeque,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Instant,
 };
@@ -38,7 +42,7 @@ enum Status {
 
 struct Entry {
     uid: u64,
-    path: PathBuf,
+    source: Source,
     turn: Turn,
     /// Bumped each time the photo is detected again, so its thumbnail gets a new URL and QML's
     /// image cache cannot show the old one.
@@ -65,6 +69,20 @@ struct MappingFile {
     output: usize,
 }
 
+/// A running camera stream.
+struct Camera {
+    stop: Arc<AtomicBool>,
+    /// Find faces in every frame.
+    live: Arc<AtomicBool>,
+    /// A frame is on its way to the screen; the stream drops frames until it arrives, so a busy
+    /// UI never builds a queue of them.
+    busy: Arc<AtomicBool>,
+}
+
+/// What the camera is asked for; `WebcamCapture` picks the nearest format it offers.
+const CAMERA_SIZE: (u32, u32) = (1280, 720);
+const CAMERA_FPS: u32 = 30;
+
 /// Rows of a mapping file shown in the sidebar.
 const MAPPING_PREVIEW_ROWS: usize = 12;
 /// Extensions read as mapping files rather than photos when dropped or opened.
@@ -74,7 +92,7 @@ const MAPPING_EXTENSIONS: &[&str] = &[
 
 struct DetectJob {
     uid: u64,
-    path: PathBuf,
+    source: Source,
     orient: bool,
     turn: Turn,
     detection: DetectionSettings,
@@ -82,7 +100,7 @@ struct DetectJob {
 
 struct ExportJob {
     uid: u64,
-    path: PathBuf,
+    source: Source,
     turn: Turn,
     detected: usize,
     faces: Vec<(usize, Face)>,
@@ -162,6 +180,17 @@ pub struct Studio {
     mapping: Option<MappingFile>,
     /// `mapping`, as the sidebar shows it.
     mapping_json: Value,
+    camera: Option<Camera>,
+    /// The newest camera frame, kept for a snapshot.
+    camera_frame: Option<Arc<DynamicImage>>,
+    camera_frames: u64,
+    snapshots: u32,
+    camera_open: bool,
+    camera_live: bool,
+    camera_status: String,
+    camera_url: String,
+    camera_faces: Vec<Value>,
+    cameras: Vec<Value>,
 }
 
 impl Default for Studio {
@@ -234,6 +263,16 @@ impl Default for Studio {
             log: Vec::new(),
             mapping: None,
             mapping_json: json!({ "loaded": false }),
+            camera: None,
+            camera_frame: None,
+            camera_frames: 0,
+            snapshots: 0,
+            camera_open: false,
+            camera_live: false,
+            camera_status: String::new(),
+            camera_url: String::new(),
+            camera_faces: Vec::new(),
+            cameras: Vec::new(),
         };
         studio.sync_settings();
         studio
@@ -295,6 +334,24 @@ impl Studio {
     );
     qproperty!("log", Member = log, Notify = log_changed);
     qproperty!("mapping", Member = mapping_json, Notify = mapping_changed);
+    qproperty!("cameraOpen", Member = camera_open, Notify = camera_changed);
+    qproperty!("cameraLive", Member = camera_live, Notify = camera_changed);
+    qproperty!(
+        "cameraStatus",
+        Member = camera_status,
+        Notify = camera_changed
+    );
+    qproperty!("cameras", Member = cameras, Notify = camera_changed);
+    qproperty!(
+        "cameraUrl",
+        Member = camera_url,
+        Notify = camera_frame_changed
+    );
+    qproperty!(
+        "cameraFaces",
+        Member = camera_faces,
+        Notify = camera_frame_changed
+    );
 
     #[qsignal(qml_name = "engineChanged")]
     fn engine_changed(&mut self);
@@ -312,6 +369,10 @@ impl Studio {
     fn log_changed(&mut self);
     #[qsignal(qml_name = "mappingChanged")]
     fn mapping_changed(&mut self);
+    #[qsignal(qml_name = "cameraChanged")]
+    fn camera_changed(&mut self);
+    #[qsignal(qml_name = "cameraFrameChanged")]
+    fn camera_frame_changed(&mut self);
     /// A transient message; `url` is a folder to offer opening, or empty.
     #[qsignal]
     fn toast(&mut self, message: String, url: String);
@@ -359,7 +420,10 @@ impl Studio {
         };
         let entry = self.entries.remove(position);
         self.forget(&entry);
-        self.note("info", format!("Removed {}", file_name(&entry.path)));
+        self.note(
+            "info",
+            format!("Removed {}", file_name(entry.source.name())),
+        );
         let current = self.current;
         if current > index {
             // The same photo stays current; its position moved up.
@@ -550,8 +614,14 @@ impl Studio {
                             multi_face: job.faces.len() > 1,
                             suffix,
                         };
-                        pipeline::face_path(&job.path, *index, &naming, &self.settings, &out_dir)
-                            .exists()
+                        pipeline::face_path(
+                            job.source.name(),
+                            *index,
+                            &naming,
+                            &self.settings,
+                            &out_dir,
+                        )
+                        .exists()
                     })
                     .count() as i32;
             }
@@ -598,7 +668,7 @@ impl Studio {
             for job in jobs {
                 let image = match &current {
                     Some((uid, image)) if *uid == job.uid => Ok(image.clone()),
-                    _ => pipeline::load(&job.path, settings.crop.auto_orient_exif, job.turn)
+                    _ => pipeline::load(&job.source, settings.crop.auto_orient_exif, job.turn)
                         .map(Arc::new),
                 };
                 let (result, error) = match image {
@@ -606,7 +676,7 @@ impl Studio {
                         pipeline::export_photo(
                             &engine,
                             &image,
-                            &job.path,
+                            &job.source,
                             &job.faces,
                             job.mapped.as_deref(),
                             &settings,
@@ -625,7 +695,7 @@ impl Studio {
                     }
                 };
                 rows.push(ReportRow {
-                    image: job.path.display().to_string(),
+                    image: job.source.name().display().to_string(),
                     outcome: if result.failed > 0 {
                         "failed"
                     } else {
@@ -700,6 +770,143 @@ impl Studio {
         self.publish_mapping(None);
         self.publish_queue();
     }
+
+    /// Start streaming camera `device` (an index into `cameras`, which this refreshes).
+    #[qslot(qml_name = "openCamera")]
+    fn open_camera(&mut self, device: i32) {
+        self.stop_camera();
+        let devices = fcs_utils::list_webcam_devices().unwrap_or_else(|err| {
+            warn!("Failed to list cameras: {err:#}");
+            Vec::new()
+        });
+        self.cameras = devices
+            .iter()
+            .map(|(index, name)| json!({ "index": index, "name": name }))
+            .collect();
+        self.camera_open = true;
+        self.camera_live = false;
+        let Some(&(index, ref name)) = devices.get(device.max(0) as usize).or(devices.first())
+        else {
+            self.camera_status = "No camera found".into();
+            return self.camera_changed();
+        };
+        self.camera_status = format!("Starting {name}…");
+        self.camera_changed();
+
+        let camera = Camera {
+            stop: Arc::new(AtomicBool::new(false)),
+            live: Arc::new(AtomicBool::new(false)),
+            busy: Arc::new(AtomicBool::new(false)),
+        };
+        let (stop, live, busy) = (
+            camera.stop.clone(),
+            camera.live.clone(),
+            camera.busy.clone(),
+        );
+        self.camera = Some(camera);
+        let engine = self.engine.clone();
+        let detection = self.settings.detection.clone();
+        let handle = self.get_thread_handle();
+        let name = name.clone();
+        thread::spawn(move || {
+            let (width, height) = CAMERA_SIZE;
+            let mut cam =
+                match fcs_utils::WebcamCapture::with_device_index(index, width, height, CAMERA_FPS)
+                {
+                    Ok(cam) => cam,
+                    Err(err) => {
+                        let message = format!("Couldn't open {name}: {err:#}");
+                        return handle.invoke_mut(move |studio| studio.camera_failed(message));
+                    }
+                };
+            let (w, h) = cam.resolution();
+            handle.invoke_mut(move |studio| studio.camera_started(name, w, h));
+            let detector = engine
+                .as_ref()
+                .map(|e| e.detector.with_settings(&detection));
+            while !stop.load(Ordering::Relaxed) {
+                let frame = match cam.capture_frame() {
+                    Ok(frame) => frame,
+                    Err(err) => {
+                        let message = format!("The camera stopped: {err:#}");
+                        handle.invoke_mut(move |studio| studio.camera_failed(message));
+                        break;
+                    }
+                };
+                if busy.swap(true, Ordering::AcqRel) {
+                    // The last frame is not on screen yet: skip this one rather than queue it.
+                    continue;
+                }
+                let faces = match (&detector, live.load(Ordering::Relaxed)) {
+                    (Some(detector), true) => detector
+                        .detect_image(&frame)
+                        .map(|out| frame_faces(&out.detections, frame.width(), frame.height()))
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                let rgb = frame.to_rgb8();
+                let frame = Arc::new(frame);
+                handle.invoke_mut(move |studio| studio.camera_frame_ready(frame, rgb, faces));
+            }
+            let _ = cam.stop();
+        });
+    }
+
+    /// Find faces in every frame, or stop.
+    #[qslot(qml_name = "setCameraLive")]
+    fn set_camera_live(&mut self, on: bool) {
+        if let Some(camera) = &self.camera {
+            camera.live.store(on, Ordering::Relaxed);
+            self.camera_live = on;
+            if !on {
+                // Boxes from a frame already gone would read as live ones.
+                self.camera_faces.clear();
+                self.camera_frame_changed();
+            }
+            self.camera_changed();
+        }
+    }
+
+    /// Add the frame on screen to the photos, held in memory.
+    #[qslot]
+    fn snapshot(&mut self) {
+        let Some(frame) = self.camera_frame.clone() else {
+            return self.toast("No camera frame yet".into(), String::new());
+        };
+        self.snapshots += 1;
+        let name = PathBuf::from(format!("Camera {}.png", self.snapshots));
+        let label = file_name(&name);
+        let entry = Entry {
+            uid: self.next_uid,
+            source: Source::Memory { name, image: frame },
+            turn: Turn::default(),
+            rev: 0,
+            status: Status::Queued,
+            size: (0, 0),
+            faces: Vec::new(),
+            selected: Vec::new(),
+            mapped: None,
+        };
+        self.next_uid += 1;
+        self.send_detection(&entry);
+        self.entries.push(entry);
+        self.pending += 1;
+        self.note("info", format!("Snapshot added as {label}"));
+        self.toast(format!("Added {label} to the photos"), String::new());
+        self.current = self.entries.len() as i32 - 1;
+        if self.mapping.is_some() {
+            self.apply_mapping();
+        }
+        self.publish_queue();
+        self.current_changed();
+    }
+
+    #[qslot(qml_name = "closeCamera")]
+    fn close_camera(&mut self) {
+        self.stop_camera();
+        self.camera_open = false;
+        self.camera_changed();
+    }
 }
 
 impl Studio {
@@ -723,7 +930,12 @@ impl Studio {
                 self.open_mapping(path);
             }
         }
-        paths.retain(|p| !self.entries.iter().any(|e| &e.path == p));
+        paths.retain(|p| {
+            !self
+                .entries
+                .iter()
+                .any(|e| e.source.file() == Some(p.as_path()))
+        });
         if paths.is_empty() {
             if self.mapping.is_none() {
                 self.toast("No new supported photos there".into(), String::new());
@@ -734,7 +946,7 @@ impl Studio {
         for path in paths {
             let entry = Entry {
                 uid: self.next_uid,
-                path,
+                source: Source::File(path),
                 turn: Turn::default(),
                 rev: 0,
                 status: Status::Queued,
@@ -757,6 +969,51 @@ impl Studio {
             self.apply_mapping();
         }
         self.publish_queue();
+    }
+
+    fn stop_camera(&mut self) {
+        if let Some(camera) = self.camera.take() {
+            camera.stop.store(true, Ordering::Relaxed);
+            self.note("info", "Camera off".into());
+        }
+        self.camera_frame = None;
+        self.camera_live = false;
+        self.camera_url.clear();
+        self.camera_faces.clear();
+        images::remove("camera/0");
+        images::remove("camera/1");
+        self.camera_frame_changed();
+    }
+
+    fn camera_started(&mut self, name: String, width: u32, height: u32) {
+        if self.camera.is_some() {
+            self.camera_status = format!("{name} · {width}×{height}");
+            self.note("ok", format!("Camera on: {name}, {width}×{height}"));
+            self.camera_changed();
+        }
+    }
+
+    fn camera_failed(&mut self, message: String) {
+        warn!("{message}");
+        self.note("error", message.clone());
+        self.camera = None;
+        self.camera_status = message;
+        self.camera_changed();
+    }
+
+    fn camera_frame_ready(&mut self, frame: Arc<DynamicImage>, rgb: RgbImage, faces: Vec<Value>) {
+        // Closed while this frame was on its way.
+        let Some(camera) = &self.camera else {
+            return;
+        };
+        camera.busy.store(false, Ordering::Release);
+        self.camera_frames += 1;
+        // Alternating keys: a new URL each frame, without keeping more than two frames.
+        let key = format!("camera/{}", self.camera_frames % 2);
+        self.camera_url = images::put(&key, Pixels::Rgb(rgb));
+        self.camera_faces = faces;
+        self.camera_frame = Some(frame);
+        self.camera_frame_changed();
     }
 
     fn open_mapping(&mut self, path: PathBuf) {
@@ -832,7 +1089,7 @@ impl Studio {
             }
         };
         let names: Vec<Option<String>> =
-            fcs_mapping::match_entries(&entries, self.entries.iter().map(|e| e.path.as_path()))
+            fcs_mapping::match_entries(&entries, self.entries.iter().map(|e| e.source.name()))
                 .into_iter()
                 .map(|name| name.map(str::to_owned))
                 .collect();
@@ -894,7 +1151,7 @@ impl Studio {
                     for job in rx {
                         let result = pipeline::detect(
                             &worker_engine,
-                            &job.path,
+                            &job.source,
                             job.orient,
                             job.turn,
                             &job.detection,
@@ -923,7 +1180,7 @@ impl Studio {
         if let Some(jobs) = &self.jobs {
             let _ = jobs.send(DetectJob {
                 uid: entry.uid,
-                path: entry.path.clone(),
+                source: entry.source.clone(),
                 orient: self.settings.crop.auto_orient_exif,
                 turn: entry.turn,
                 detection: self.settings.detection.clone(),
@@ -940,7 +1197,7 @@ impl Studio {
         self.pending -= 1;
         let is_current = self.current == position as i32;
         let entry = &mut self.entries[position];
-        let name = file_name(&entry.path);
+        let name = file_name(entry.source.name());
         match result {
             Ok(detected) => {
                 let found = detected.faces.len();
@@ -1131,7 +1388,7 @@ impl Studio {
             .filter(|e| matches!(e.status, Status::Done))
             .map(|e| ExportJob {
                 uid: e.uid,
-                path: e.path.clone(),
+                source: e.source.clone(),
                 turn: e.turn,
                 detected: e.faces.len(),
                 mapped: e.mapped.clone(),
@@ -1207,7 +1464,7 @@ impl Studio {
                     Status::Failed(err) => ("failed", err.as_str()),
                 };
                 json!({
-                    "name": file_name(&e.path),
+                    "name": file_name(e.source.name()),
                     "thumb": if matches!(e.status, Status::Done) { images::url(&thumb_key(e.uid, e.rev)) } else { String::new() },
                     "status": status,
                     "error": error,
@@ -1299,13 +1556,13 @@ impl Studio {
         else {
             return;
         };
-        let path = entry.path.clone();
+        let source = entry.source.clone();
         let turn = entry.turn;
         let orient = self.settings.crop.auto_orient_exif;
         let handle = self.get_thread_handle();
         thread::spawn(move || {
-            let loaded =
-                pipeline::load(&path, orient, turn).map(|image| (pipeline::canvas(&image), image));
+            let loaded = pipeline::load(&source, orient, turn)
+                .map(|image| (pipeline::canvas(&image), image));
             handle.invoke_mut(move |studio| studio.current_image_loaded(uid, loaded));
         });
     }
@@ -1495,6 +1752,19 @@ fn merge(base: &mut Value, patch: Value) {
         }
         (base, patch) => *base = patch,
     }
+}
+
+/// Detected faces as boxes in fractions of a `width` x `height` frame.
+fn frame_faces(detections: &[fcs_core::Detection], width: u32, height: u32) -> Vec<Value> {
+    let (w, h) = (width.max(1) as f32, height.max(1) as f32);
+    detections
+        .iter()
+        .map(|d| {
+            let b = d.bbox;
+            let (x, y) = ((b.x / w).clamp(0.0, 1.0), (b.y / h).clamp(0.0, 1.0));
+            json!({ "x": x, "y": y, "w": (b.width / w).min(1.0 - x), "h": (b.height / h).min(1.0 - y) })
+        })
+        .collect()
 }
 
 fn is_mapping_file(path: &Path) -> bool {

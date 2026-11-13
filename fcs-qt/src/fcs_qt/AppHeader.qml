@@ -68,6 +68,12 @@ Rectangle {
         StatusPill {}
 
         AppButton {
+            iconPath: Icons.camera
+            text: Studio.cameraOpen ? qsTr("Close camera") : qsTr("Camera")
+            onClicked: Studio.cameraOpen ? Studio.closeCamera() : Studio.openCamera(0)
+        }
+
+        AppButton {
             variant: "primary"
             iconPath: Icons.plus
             text: qsTr("Add photos")

@@ -18,7 +18,7 @@ env_logger = "0.11.11"
 fcs-core = { path = "../fcs-core" }
 fcs-mapping = { path = "../fcs-mapping" }
 # "heic" needs libheif for vcpkg's x64-windows-static-md triplet on Windows (see README).
-fcs-utils = { path = "../fcs-utils", features = ["raw", "heic"] }
+fcs-utils = { path = "../fcs-utils", features = ["raw", "heic", "webcam"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 log = "0.4.35"
 qtbridge = { version = "0.4.1", features = ["serde_json"] }

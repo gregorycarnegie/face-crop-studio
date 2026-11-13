@@ -290,4 +290,11 @@ Rectangle {
         anchors.bottomMargin: 22
         visible: root.hasImage
     }
+
+    // Over everything else while the camera is open.
+    Loader {
+        anchors.fill: parent
+        active: Studio.cameraOpen
+        sourceComponent: CameraView {}
+    }
 }

@@ -21,5 +21,6 @@ QtObject {
     readonly property string trash: "M4 7h16M10 11v6M14 11v6M5.5 7l1 12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
     readonly property string restore: "M4 12a8 8 0 1 0 2.3-5.6L4 8.5M4 4v4.5h4.5M12 8v4l2.5 2.5"
     readonly property string close: "M6 6l12 12M18 6L6 18"
+    readonly property string camera: "M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.5-2h5L16 6h1.5A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5zM12 16a3.5 3.5 0 1 0 0-7a3.5 3.5 0 0 0 0 7z"
     readonly property string faceScan: "M4 8.5V6.5A2.5 2.5 0 0 1 6.5 4H8.5M15.5 4h2A2.5 2.5 0 0 1 20 6.5v2M20 15.5v2a2.5 2.5 0 0 1-2.5 2.5h-2M8.5 20h-2A2.5 2.5 0 0 1 4 17.5v-2M9.5 10v.5M14.5 10v.5M9.5 15a3.5 3.5 0 0 0 5 0"
 }

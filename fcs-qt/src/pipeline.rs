@@ -107,16 +107,45 @@ pub struct Detected {
     pub thumb: RgbImage,
 }
 
-/// Decode `path`, turned upright by its EXIF orientation when `orient` (the "Auto-orient via
-/// EXIF" setting). Detection, previews and export all load through here, so the boxes found
-/// on one decode land on the same pixels in the others.
-pub fn load(path: &Path, orient: bool, turn: Turn) -> Result<DynamicImage> {
-    let image = if orient {
-        load_image(path)
-    } else {
-        load_image_raw(path)
+/// Where a photo's pixels come from.
+#[derive(Clone)]
+pub enum Source {
+    File(PathBuf),
+    /// A camera snapshot: no file behind it. `name` stands in for one in naming and reports.
+    Memory {
+        name: PathBuf,
+        image: Arc<DynamicImage>,
+    },
+}
+
+impl Source {
+    /// What the photo is called: its path, or a snapshot's stand-in name.
+    pub fn name(&self) -> &Path {
+        match self {
+            Self::File(path) => path,
+            Self::Memory { name, .. } => name,
+        }
     }
-    .with_context(|| format!("failed to load {}", path.display()))?;
+
+    /// The file behind the photo, if there is one (for copying its EXIF).
+    pub fn file(&self) -> Option<&Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Memory { .. } => None,
+        }
+    }
+}
+
+/// Decode `source`, a file turned upright by its EXIF orientation when `orient` (the
+/// "Auto-orient via EXIF" setting), then turned by `turn`. Detection, previews and export all
+/// load through here, so the boxes found on one decode land on the same pixels in the others.
+pub fn load(source: &Source, orient: bool, turn: Turn) -> Result<DynamicImage> {
+    let image = match source {
+        Source::File(path) if orient => load_image(path),
+        Source::File(path) => load_image_raw(path),
+        Source::Memory { image, .. } => Ok((**image).clone()),
+    }
+    .with_context(|| format!("failed to load {}", source.name().display()))?;
     let image = match turn.quarters % 4 {
         1 => image.rotate90(),
         2 => image.rotate180(),
@@ -130,18 +159,18 @@ pub fn load(path: &Path, orient: bool, turn: Turn) -> Result<DynamicImage> {
 /// and make the canvas and queue copies.
 pub fn detect(
     engine: &Engine,
-    path: &Path,
+    source: &Source,
     orient: bool,
     turn: Turn,
     settings: &DetectionSettings,
 ) -> Result<Detected> {
-    let image = load(path, orient, turn)?;
+    let image = load(source, orient, turn)?;
     // Cheap: the same loaded model under other thresholds.
     let mut output = engine
         .detector
         .with_settings(settings)
         .detect_image(&image)
-        .with_context(|| format!("detection failed for {}", path.display()))?;
+        .with_context(|| format!("detection failed for {}", source.name().display()))?;
     if let Some(refiner) = &engine.refiner {
         refiner.refine(&image, &mut output.detections);
     }
@@ -243,7 +272,7 @@ pub fn quality_filter(settings: &AppSettings) -> QualityFilter {
 pub fn export_photo(
     engine: &Engine,
     image: &DynamicImage,
-    source: &Path,
+    source: &Source,
     faces: &[(usize, Face)],
     mapped: Option<&str>,
     settings: &AppSettings,
@@ -284,7 +313,7 @@ pub fn export_photo(
             Err(err) => {
                 log::warn!(
                     "Failed to export {} face {}: {err:#}",
-                    source.display(),
+                    source.name().display(),
                     index + 1
                 );
                 result.failed += 1;
@@ -335,7 +364,7 @@ pub fn face_path(
 #[allow(clippy::too_many_arguments)] // each is a separate input; a struct for one caller adds nothing
 fn save_face(
     crop: &FinishedCrop,
-    source: &Path,
+    source: &Source,
     face: &Face,
     index: usize,
     naming: &Naming,
@@ -343,7 +372,8 @@ fn save_face(
     out_dir: &Path,
     claims: &OutputClaims,
 ) -> Result<PathBuf> {
-    let path = claims.claim(face_path(source, index, naming, settings, out_dir), source);
+    let name = source.name();
+    let path = claims.claim(face_path(name, index, naming, settings, out_dir), name);
     if let Some(parent) = path.parent() {
         // A mapped name may put the crop in a subfolder.
         std::fs::create_dir_all(parent)?;
@@ -353,7 +383,8 @@ fn save_face(
         &path,
         &OutputOptions::from_crop_settings(&settings.crop),
         &MetadataContext {
-            source_path: Some(source),
+            // A snapshot has no file to copy EXIF from.
+            source_path: source.file(),
             crop_settings: Some(&settings.crop),
             detection_score: Some(face.detection.score),
             quality: Some(crop.quality),
@@ -432,7 +463,7 @@ mod tests {
         let engine = Engine::load(&settings).expect("engine");
         let out = std::env::temp_dir().join(format!("fcs-qt-test-{}", std::process::id()));
         std::fs::create_dir_all(&out).expect("temp dir");
-        let source = root.join("samples/sample_01.jpg");
+        let source = Source::File(root.join("samples/sample_01.jpg"));
 
         let detected =
             detect(&engine, &source, true, Turn::default(), &settings.detection).expect("detect");
@@ -505,31 +536,20 @@ mod tests {
 
     #[test]
     fn quarter_turns_swap_the_sides_and_a_tilt_keeps_them() {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/sample_01.jpg");
-        let raw = load(&source, true, Turn::default()).unwrap();
-        // A 1024 square would hide a missed swap, so crop it to a portrait first.
-        let tmp = std::env::temp_dir().join(format!("fcs-qt-turn-{}.png", std::process::id()));
-        raw.crop_imm(0, 0, 600, 1000).save(&tmp).unwrap();
-        let turned = load(
-            &tmp,
-            true,
-            Turn {
-                quarters: 1,
-                tilt_deg: 0.0,
-            },
-        )
-        .unwrap();
-        let tilted = load(
-            &tmp,
-            true,
-            Turn {
-                quarters: 2,
-                tilt_deg: 5.0,
-            },
-        )
-        .unwrap();
-        let _ = std::fs::remove_file(&tmp);
+        let file =
+            Source::File(Path::new(env!("CARGO_MANIFEST_DIR")).join("../samples/sample_01.jpg"));
+        let raw = load(&file, true, Turn::default()).unwrap();
+        // A 1024 square would hide a missed swap, so a portrait crop of it, held in memory as a
+        // camera snapshot is.
+        let portrait = Source::Memory {
+            name: PathBuf::from("Snapshot 1.png"),
+            image: Arc::new(raw.crop_imm(0, 0, 600, 1000)),
+        };
+        let turn = |quarters, tilt_deg| load(&portrait, true, Turn { quarters, tilt_deg }).unwrap();
+        let (turned, tilted) = (turn(1, 0.0), turn(2, 5.0));
         assert_eq!((turned.width(), turned.height()), (1000, 600));
         assert_eq!((tilted.width(), tilted.height()), (600, 1000));
+        assert_eq!(portrait.name(), Path::new("Snapshot 1.png"));
+        assert!(portrait.file().is_none());
     }
 }
