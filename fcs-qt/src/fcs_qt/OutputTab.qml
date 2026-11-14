@@ -7,6 +7,8 @@ InspectorPage {
     readonly property var crop: Studio.settings.crop
     readonly property var rules: crop.quality_rules
     readonly property var gpu: Studio.settings.gpu
+    readonly property var metadata: crop.metadata
+    readonly property var telemetry: Studio.settings.telemetry
     function set(fields) { Studio.update({ crop: fields }) }
     function setRules(fields) { set({ quality_rules: fields }) }
 
@@ -35,6 +37,47 @@ InspectorPage {
             value: root.crop.jpeg_quality
             format: v => Math.round(v)
             onMoved: v => root.set({ jpeg_quality: v })
+        }
+    }
+
+    Section {
+        Layout.fillWidth: true
+        title: qsTr("Metadata")
+
+        Segmented {
+            Layout.fillWidth: true
+            value: root.metadata.mode
+            options: [
+                { value: "preserve", label: qsTr("Preserve") },
+                { value: "strip", label: qsTr("Strip") },
+                { value: "custom", label: qsTr("Custom") }
+            ]
+            onActivated: value => root.set({ metadata: { mode: value } })
+        }
+        Text {
+            Layout.fillWidth: true
+            text: root.metadata.mode === "strip" ? qsTr("Crops carry no metadata at all.")
+                : root.metadata.mode === "custom" ? qsTr("Only the details chosen below, none of the photo's EXIF.")
+                : qsTr("The photo's EXIF, plus the details chosen below.")
+            wrapMode: Text.Wrap
+            color: Theme.ink3
+            font.pixelSize: Theme.caption
+        }
+        ToggleRow {
+            Layout.fillWidth: true
+            visible: root.metadata.mode !== "strip"
+            text: qsTr("Include crop settings")
+            hint: qsTr("Size, position and preset")
+            on: root.metadata.include_crop_settings
+            onToggledTo: on => root.set({ metadata: { include_crop_settings: on } })
+        }
+        ToggleRow {
+            Layout.fillWidth: true
+            visible: root.metadata.mode !== "strip"
+            text: qsTr("Include quality metrics")
+            hint: qsTr("Detection confidence and sharpness")
+            on: root.metadata.include_quality_metrics
+            onToggledTo: on => root.set({ metadata: { include_quality_metrics: on } })
         }
     }
 
@@ -172,6 +215,31 @@ InspectorPage {
                 if (value === "enable")
                     Studio.update({ gpu: { enabled: true, experimental_cuda: true } })
             }
+        }
+    }
+
+    // fcs-gui's telemetry: timing lines in the log (stderr), under the fcs::telemetry target.
+    Section {
+        Layout.fillWidth: true
+        title: qsTr("Telemetry")
+
+        ToggleRow {
+            Layout.fillWidth: true
+            text: qsTr("Log stage timings")
+            hint: qsTr("How long detection, enhancement and export take, written to the log")
+            on: root.telemetry.enabled
+            onToggledTo: on => Studio.update({ telemetry: { enabled: on } })
+        }
+        AppComboBox {
+            readonly property var levels: ["off", "error", "warn", "info", "debug", "trace"]
+
+            Layout.fillWidth: true
+            visible: root.telemetry.enabled
+            model: [qsTr("Off"), qsTr("Errors"), qsTr("Warnings"), qsTr("Info"), qsTr("Debug"), qsTr("Trace")]
+            // level_filter reads any case and "warning" too.
+            currentIndex: levels.indexOf(String(root.telemetry.level).trim().toLowerCase().replace("warning", "warn"))
+            Accessible.name: qsTr("Telemetry log level")
+            onActivated: index => Studio.update({ telemetry: { level: levels[index] } })
         }
     }
 

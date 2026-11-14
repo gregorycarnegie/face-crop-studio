@@ -1372,7 +1372,6 @@ dependencies = [
  "anyhow",
  "cc",
  "csv",
- "env_logger",
  "fcs-core",
  "fcs-mapping",
  "fcs-utils",

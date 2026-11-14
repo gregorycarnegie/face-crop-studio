@@ -1601,6 +1601,11 @@ impl Studio {
     }
 
     fn sync_settings(&mut self) {
+        // Cheap atomics; covers start-up and every edit, as fcs-gui does.
+        fcs_utils::configure_telemetry(
+            self.settings.telemetry.enabled,
+            self.settings.telemetry.level_filter(),
+        );
         self.settings_json = serde_json::to_value(&self.settings).unwrap_or_default();
         let crop = &self.settings.crop;
         self.shape_outline = outline(

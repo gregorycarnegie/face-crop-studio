@@ -14,7 +14,9 @@ unsafe extern "C" {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // RUST_LOG still overrides; the telemetry target is always let through, and the
+    // Telemetry settings decide whether anything is written to it.
+    fcs_utils::init_logging(log::LevelFilter::Info).expect("logging initialises");
     // SAFETY (both): first thing in main, before Qt or any other thread starts.
     unsafe {
         // Every control the app styles is built on Basic templates; pin it so a desktop style

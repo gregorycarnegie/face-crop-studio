@@ -28,7 +28,9 @@ pipeline and settings file.
     plus vignette.
   - **Enhance**: auto colour, red-eye removal, background blur, exposure, brightness,
     contrast, saturation, sharpness, skin smoothing.
-  - **Output**: PNG, JPEG (with quality), WebP or AVIF.
+  - **Output**: PNG, JPEG (with quality), WebP or AVIF; metadata (preserve the photo's EXIF,
+    strip everything, or only the crop settings and quality metrics); fcs-gui's telemetry
+    (stage timings in the log, at a chosen level).
 - Each face's crop is outlined on the photo in the chosen shape. Previews are rendered
   through the real export path, so they show exactly what export writes.
 - Export writes the selected faces of every photo to a folder, as `{stem}_face_NN.{ext}`. If
@@ -236,9 +238,9 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
 1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
 2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
    Packaging); the existing installers built from them are not.
-3. The fcs-gui features still missing: metadata settings, telemetry and log level, settings
-   save/restore/defaults, About. (Clipboard paste, the queue list, after-the-fact reports and
-   aspect-ratio picks are done, 2026-11-14.)
+3. The fcs-gui features still missing: settings save/restore/defaults, About. (Clipboard
+   paste, the queue list, after-the-fact reports, aspect-ratio picks, metadata, and telemetry
+   with its log level are done, 2026-11-14.)
 4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).
 5. One release shipping both front ends before deciding; dropping egui would be the UI
    overhaul the 3.0 version is reserved for.
