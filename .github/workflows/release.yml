@@ -741,12 +741,19 @@ jobs:
             dist/linux/*.deb
             dist/linux/SHA256SUMS-linux-${{ matrix.arch }}.txt
 
+  # fcs-qt, the Qt Quick preview, beside fcs-gui: built, tested, packaged and smoke-tested by its
+  # own workflow, exactly as on every push. Its uploads are named for the publish job below.
+  qt-release:
+    uses: ./.github/workflows/qt.yml
+    with:
+      release: true
+
   # One publish step, after the tests and every package. Each platform used to publish its own
   # assets as soon as it finished, so a release could go out with one platform missing -- which
   # happened once, after a macOS packaging failure.
   publish:
     name: Publish GitHub release
-    needs: [tests, windows-release, macos-release, linux-release]
+    needs: [tests, windows-release, macos-release, linux-release, qt-release]
     # Tag-only, like store-submit. A manual run builds and uploads every artifact as a dry run;
     # without this it would also publish a release named after the branch.
     if: startsWith(github.ref, 'refs/tags/v')

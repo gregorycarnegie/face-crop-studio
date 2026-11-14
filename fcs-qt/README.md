@@ -117,7 +117,7 @@ with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
 ## Packaging
 
 ```powershell
-./fcs-qt/packaging/package.ps1     # Windows: fcs-qt/dist/fcs-qt-windows-x86_64 folder + .zip
+./fcs-qt/packaging/package.ps1     # Windows: fcs-qt/dist/face-crop-studio-qt-windows-x86_64 folder + .zip
 ```
 ```bash
 ./fcs-qt/packaging/package.sh      # Linux: an AppImage and .deb; macOS: a .app and .dmg
@@ -138,8 +138,15 @@ AppImage's AppDir, under `/opt/face-crop-studio-qt` with its own Qt and a `Depen
 `dpkg-shlibdeps` (the workflow installs it with apt and smoke-tests `fcs-qt` from PATH). Both
 are their own product ("Face Crop Studio Qt", `face-crop-studio-qt`), so they install beside
 fcs-gui's rather than replacing it. The .dmg holds the .app. Not done: NSIS and MSIX (the Store
-listing is fcs-gui's), and signing: the .exe and MSI are unsigned and the .app is signed ad hoc,
-which the release workflow would fix with its certificates (step 5).
+listing is fcs-gui's), and signing: the .exe and MSI are unsigned and the .app is signed ad hoc.
+fcs-gui's release builds sign only when the repository has certificates (`CODE_SIGN_PFX`,
+`APPLE_DEVELOPER_ID_*`), and it has none yet. Adding them means adding fcs-qt's signing too, in
+`qt.yml` under `inputs.release`; check then whether the hardened runtime needs
+`com.apple.security.cs.allow-jit` for the QML engine.
+
+Releases: `release.yml` runs `qt.yml` with `release: true` (`qt-release`), and its publish job
+waits for it and attaches the `face-crop-studio-qt-*` assets and `SHA256SUMS-qt-*.txt` beside
+fcs-gui's. Every package carries the workspace version, which the About box shows too.
 
 Icons: the .exe embeds fcs-gui's `app_icon.ico` (build.rs), every window gets it at startup
 (`images::install_app_icon`, which also serves it to the header), the .app gets an `.icns` made from `app_logo.svg`, and the Linux
@@ -276,6 +283,7 @@ packages a 256 px PNG of it.
    since the faces are already found. The window answers within 20 ms throughout, apart from
    about 0.5 s while 1,000 photos are first added to the list.
 5. One release shipping both front ends before deciding; dropping egui would be the UI
-   overhaul the 3.0 version is reserved for.
+   overhaul the 3.0 version is reserved for. The release workflow builds and attaches fcs-qt
+   since 2026-11-14 (see Packaging); what remains is cutting that release from master.
 
 Also worth asking upstream for an image provider API in the bridge, so the C++ file can go.

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Face Crop Studio Qt, a preview of a new interface built on Qt Quick, ships beside the egui app
+  (fcs-gui), which stays the main one. It has the same detection, cropping and export features,
+  models and settings file, and
+  installs separately: `face-crop-studio-qt-*` assets, as a portable zip and an MSI on Windows, a
+  .dmg on macOS (Apple silicon), and an AppImage and a .deb on Linux (Ubuntu 24.04 or newer). It
+  bundles Qt 6.12 under the LGPL v3; the notices ship with it. See `fcs-qt/README.md`.
+
 ### Security
 
 - On Windows, decoding a HEIC no longer loads every DLL in the root of the current drive

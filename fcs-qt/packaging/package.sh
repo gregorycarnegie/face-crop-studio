@@ -12,6 +12,8 @@ dist="$qt/dist"
 "$qt/dev.sh" build --release
 qmake="${QMAKE:-$(command -v qmake6 || command -v qmake)}"
 qt_version="$("$qmake" -query QT_VERSION)"
+# Face Crop Studio's version (the workspace's), which the About box shows too.
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)"
 rm -rf "$dist"
 mkdir -p "$dist"
 
@@ -63,7 +65,7 @@ EOF
     (cd "$dist" && PATH="$tools:$PATH" QMAKE="$qmake" \
         LD_LIBRARY_PATH="$("$qmake" -query QT_INSTALL_LIBS):${LD_LIBRARY_PATH:-}" \
         QML_SOURCES_PATHS="$qt/src/fcs_qt" APPIMAGE_EXTRACT_AND_RUN=1 \
-        LDAI_OUTPUT="fcs-qt-linux-$arch.AppImage" \
+        LDAI_OUTPUT="face-crop-studio-qt-$version-$arch.AppImage" \
         "$tools/linuxdeploy-$arch.AppImage" --appdir "$appdir" \
             --executable "$qt/target/release/fcs-qt" \
             --desktop-file "$tools/fcs-qt.desktop" --icon-file "$tools/fcs-qt.png" \
@@ -71,7 +73,6 @@ EOF
 
     # A .deb of the same AppDir, under /opt: it carries its own Qt, since a build only runs on
     # the exact Qt it was compiled against. Depends lists what the system still has to provide.
-    version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$qt/Cargo.toml" | head -n 1)"
     deb_arch="$(dpkg --print-architecture)"
     pkg="$dist/deb"
     opt="$pkg/opt/face-crop-studio-qt"
@@ -102,7 +103,7 @@ Description: Face Crop Studio (Qt preview)
  Face detection and batch portrait cropping, with the Qt Quick interface. Installs
  beside the face-crop-studio package; Qt is bundled under /opt/face-crop-studio-qt.
 EOF
-    dpkg-deb --build --root-owner-group "$pkg" "$dist/face-crop-studio-qt_${version}_${deb_arch}.deb"
+    dpkg-deb --build --root-owner-group "$pkg" "$dist/face-crop-studio-qt-$version-$arch.deb"
     rm -rf "$pkg"
     ;;
 Darwin)
@@ -120,7 +121,7 @@ Darwin)
         rsvg-convert -w $((size * 2)) -h $((size * 2)) "$root/fcs-gui/assets/app_logo.svg" -o "$iconset/icon_${size}x${size}@2x.png"
     done
     iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" "$iconset"
-    cat > "$app/Contents/Info.plist" <<'EOF'
+    cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -130,7 +131,7 @@ Darwin)
     <key>CFBundleIdentifier</key><string>dev.facecropstudio.qtpreview</string>
     <key>CFBundleName</key><string>Face Crop Studio Qt</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleShortVersionString</key><string>$version</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSCameraUsageDescription</key><string>Face Crop Studio uses the camera to capture faces for cropping.</string>
@@ -146,7 +147,7 @@ EOF
     # signatures; re-sign ad hoc (no Developer ID yet, so Gatekeeper still warns).
     codesign --force --deep --sign - "$app"
     hdiutil create -volname "Face Crop Studio Qt" -srcfolder "$app" -ov -format UDZO \
-        "$dist/fcs-qt-macos-$(uname -m).dmg"
+        "$dist/face-crop-studio-qt-$version-$(uname -m | sed 's/arm64/aarch64/')-apple-darwin.dmg"
     ;;
 *)
     echo "unsupported system: $(uname -s)" >&2

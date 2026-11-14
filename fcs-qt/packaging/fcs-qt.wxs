@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   MSI for fcs-qt, built from package.ps1's folder (WiX v7):
-    wix build -arch x64 -d SourceDir=fcs-qt\dist\fcs-qt-windows-x86_64 -d MsiVersion=0.1.0
+    wix build -arch x64 -d SourceDir=fcs-qt\dist\face-crop-studio-qt-windows-x86_64 -d MsiVersion=2.3.4
               -ext WixToolset.UI.wixext -o fcs-qt.msi fcs-qt\packaging\fcs-qt.wxs
   Its own product (name, UpgradeCode, folders, shortcuts), so it installs beside fcs-gui's MSI
   instead of upgrading or replacing it. Unlike that one it has no PATH option: there is no CLI.

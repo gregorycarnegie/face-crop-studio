@@ -18,6 +18,13 @@ on:
     branches: [ "master" ]
     paths: *paths
   workflow_dispatch:
+  # release.yml runs this for fcs-qt's release assets, so they are built and checked exactly as
+  # on every push; with `release` the upload is named for its publish job, with checksums.
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -171,19 +178,20 @@ jobs:
         shell: pwsh
         run: |
           ./fcs-qt/packaging/package.ps1
-          ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/fcs-qt-windows-x86_64/fcs-qt.exe
+          ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
 
       # The MSI, from the folder above; then installed, smoke-tested from Program Files and
-      # removed again. Unsigned: signing belongs to the release workflow.
+      # removed again. Unsigned, as fcs-gui's are while the repository has no certificates.
       - name: Installer (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: pwsh
         run: |
           dotnet tool install -g wix --version 7.0.0
           wix -acceptEula wix7 extension add WixToolset.UI.wixext/7.0.0
-          $version = (Select-String -Path fcs-qt/Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          $msi = "$PWD\fcs-qt\dist\fcs-qt-$version-windows-x86_64.msi"
-          wix build -acceptEula wix7 -arch x64 -d SourceDir="$PWD\fcs-qt\dist\fcs-qt-windows-x86_64" `
+          # Face Crop Studio's version, which the About box shows too.
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $msi = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64.msi"
+          wix build -acceptEula wix7 -arch x64 -d SourceDir="$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64" `
             -d MsiVersion="$version" -ext WixToolset.UI.wixext -o $msi fcs-qt\packaging\fcs-qt.wxs
           if ($LASTEXITCODE) { throw "wix build failed ($LASTEXITCODE)" }
 
@@ -204,9 +212,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends libxcb-cursor0 xvfb
           ./fcs-qt/packaging/package.sh
           APPIMAGE_EXTRACT_AND_RUN=1 ./fcs-qt/packaging/smoke.sh \
-            xvfb-run -a "$PWD/fcs-qt/dist/fcs-qt-linux-x86_64.AppImage"
+            xvfb-run -a "$(ls "$PWD"/fcs-qt/dist/*.AppImage)"
           # The .deb as a user gets it: installed with its dependencies, run from PATH.
-          sudo apt-get install -y ./fcs-qt/dist/face-crop-studio-qt_*.deb
+          sudo apt-get install -y ./fcs-qt/dist/*.deb
           ./fcs-qt/packaging/smoke.sh xvfb-run -a fcs-qt
 
       # libheif and dav1d are static (macos-build-deps); the check fails if anything in the bundle
@@ -222,12 +230,23 @@ jobs:
           fi
           ./fcs-qt/packaging/smoke.sh "$PWD/$app/Contents/MacOS/fcs-qt"
 
+      - name: Checksums
+        if: github.event_name != 'pull_request'
+        shell: bash
+        working-directory: fcs-qt/dist
+        run: |
+          shopt -s nullglob
+          shasum -a 256 *.zip *.msi *.AppImage *.deb *.dmg > "SHA256SUMS-qt-$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]').txt"
+          cat SHA256SUMS-qt-*.txt
+
+      # release.yml's publish job collects every "*-release-artifacts*" upload.
       - name: Upload package
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: fcs-qt-${{ runner.os }}
+          name: ${{ inputs.release && format('qt-release-artifacts-{0}', runner.os) || format('fcs-qt-{0}', runner.os) }}
           path: |
+            fcs-qt/dist/SHA256SUMS-qt-*.txt
             fcs-qt/dist/*.zip
             fcs-qt/dist/*.msi
             fcs-qt/dist/*.AppImage

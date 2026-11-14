@@ -1,9 +1,9 @@
 # Build a portable fcs-qt folder and zip for Windows, with Qt deployed beside the exe.
-#   ./fcs-qt/packaging/package.ps1          -> fcs-qt/dist/fcs-qt-windows-x86_64(.zip)
+#   ./fcs-qt/packaging/package.ps1          -> fcs-qt/dist/face-crop-studio-qt-windows-x86_64(.zip)
 # Needs the models in models/ (as for the other release builds) and what dev.ps1 needs.
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
-$name = 'fcs-qt-windows-x86_64'
+$name = 'face-crop-studio-qt-windows-x86_64'
 $dist = "$root\fcs-qt\dist\$name"
 
 & "$root\fcs-qt\dev.ps1" build --release   # also puts Qt's bin on PATH for windeployqt

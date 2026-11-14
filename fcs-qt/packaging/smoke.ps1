@@ -1,6 +1,6 @@
 # Windows twin of smoke.sh: run the packaged fcs-qt.exe on the samples for 20 s, from an empty
 # folder and with Qt off PATH, and check it stayed up, loaded the detector and its QML.
-#   ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/fcs-qt-windows-x86_64/fcs-qt.exe
+#   ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
 param([Parameter(Mandatory)][string]$Exe)
 $ErrorActionPreference = 'Stop'
 $exe = (Resolve-Path $Exe).Path

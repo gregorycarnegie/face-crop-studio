@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run a packaged fcs-qt on the sample photos for 20 s, from an empty folder so the models have to
 # come from the package, and check it stayed up, loaded the detector and its QML.
-#   smoke.sh <command...>      e.g. smoke.sh xvfb-run -a dist/fcs-qt-linux-x86_64.AppImage
+#   smoke.sh <command...>      e.g. smoke.sh xvfb-run -a dist/face-crop-studio-qt-2.3.4-x86_64.AppImage
 set -uo pipefail
 samples="$(cd "$(dirname "$0")/../.." && pwd)/samples"
 log="$(mktemp)"
