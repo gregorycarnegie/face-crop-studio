@@ -37,6 +37,13 @@ runs:
           libegl-dev \
           libgl-dev
 
+    # The Ubuntu release goes in the key too: a 24.04 build (fcs-qt's workflow) must never be
+    # restored on the 22.04 release legs, whose glibc is the shipped baseline.
+    - name: Identify the Ubuntu release
+      id: distro
+      shell: bash
+      run: echo "release=$(. /etc/os-release && echo "$VERSION_ID")" >> "$GITHUB_OUTPUT"
+
     # Keyed on the three pinned versions, so bumping any of them rebuilds.
     - name: Cache source-built native libraries
       id: cache-native
@@ -48,7 +55,7 @@ runs:
         # runner.arch is part of the key because x64 and arm64 runners share the
         # same runner.os ("Linux"); without it an arm64 job restores x86_64 .so
         # files and fails at link time.
-        key: linux-native-deps-${{ runner.os }}-${{ runner.arch }}-dav1d${{ inputs.dav1d-version }}-de265${{ inputs.de265-version }}-heif${{ inputs.libheif-version }}
+        key: linux-native-deps-${{ runner.os }}${{ steps.distro.outputs.release }}-${{ runner.arch }}-nosharpyuv-dav1d${{ inputs.dav1d-version }}-de265${{ inputs.de265-version }}-heif${{ inputs.libheif-version }}
 
     - name: Build dav1d from source
       if: steps.cache-native.outputs.cache-hit != 'true'
@@ -112,7 +119,8 @@ runs:
           -DWITH_X265=OFF \
           -DWITH_AOM_ENCODER=OFF \
           -DWITH_AOM_DECODER=OFF \
-          -DENABLE_PLUGIN_LOADING=OFF
+          -DENABLE_PLUGIN_LOADING=OFF \
+          -DWITH_LIBSHARPYUV=OFF
         cmake --build "/tmp/libheif-${LIBHEIF_VERSION}/build" --parallel
         sudo cmake --install "/tmp/libheif-${LIBHEIF_VERSION}/build"
 

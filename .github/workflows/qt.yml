@@ -98,7 +98,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-dav1d-libheif-nohevc-x64-windows-static-md
+          key: vcpkg-dav1d-libheif-nohevc-de265-x64-windows-static-md
 
       - name: Install dav1d + libheif (Windows, vcpkg)
         if: runner.os == 'Windows'
@@ -108,7 +108,7 @@ jobs:
             git clone https://github.com/microsoft/vcpkg C:\vcpkg
             & C:\vcpkg\bootstrap-vcpkg.bat
           }
-          & C:\vcpkg\vcpkg.exe install "dav1d:x64-windows-static-md" "libheif[core]:x64-windows-static-md"
+          & C:\vcpkg\vcpkg.exe install "dav1d:x64-windows-static-md" "libheif[core,libde265]:x64-windows-static-md"
 
       - name: Install dav1d + libheif (macOS, Homebrew)
         if: runner.os == 'macOS'

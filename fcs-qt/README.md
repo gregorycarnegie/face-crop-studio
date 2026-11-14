@@ -74,11 +74,13 @@ against the prebuilt Qt 6.10.3 MSVC 2022 binaries without trouble; Qt 6.12 needs
 HEIC and AVIF decoding need libheif and dav1d built for the dynamic CRT, once:
 
 ```powershell
-C:\vcpkg\vcpkg.exe install "libheif[core]:x64-windows-static-md" "dav1d:x64-windows-static-md"
+C:\vcpkg\vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" "dav1d:x64-windows-static-md"
 ```
 
-`[core]` leaves out the default `hevc` feature. That feature is the x265 *encoder* (GPL-2.0),
-which decoding doesn't use; decoding goes through libde265.
+`[core]` leaves out the default features; `libde265` puts the HEVC decoder back. The other
+default, `hevc`, is the x265 *encoder* (GPL-2.0), which decoding doesn't use. vcpkg ports from
+before its 2026 libheif updates have no `libde265` feature (it was always built in): there,
+use plain `libheif[core]`.
 
 `dev.ps1` finds Qt (`$env:QT_DIR`, else the newest `%USERPROFILE%\Qt\6.*\msvc2022_64`), puts
 its `bin` on PATH, sets `RUSTFLAGS`, and points `PKG_CONFIG_PATH` at the static-md triplet. The
