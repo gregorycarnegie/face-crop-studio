@@ -111,7 +111,7 @@ tiny-skia = "0.12.0"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 prost = "0.14.6"
 # Dynamic loading of the ONNX Runtime library, used by fcs-ort.
-libloading = "0.9.0"
+libloading = "0.9.1"
 
 # Formal verification
 vstd = "=0.0.0-2026-11-08-0256"
