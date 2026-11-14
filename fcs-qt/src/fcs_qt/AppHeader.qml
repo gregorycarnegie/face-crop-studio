@@ -36,7 +36,10 @@ Rectangle {
         }
 
         Text {
-            text: qsTr("Face Crop Studio")
+            // The wordmark, as fcs-gui and the website set it: "Crop" in the accent.
+            text: "Face<font color=\"%1\">Crop</font> Studio".arg(Theme.accent)
+            textFormat: Text.StyledText
+            Accessible.name: "Face Crop Studio"
             color: Theme.ink
             font.pixelSize: Theme.title
             font.weight: Font.DemiBold
