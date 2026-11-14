@@ -7,7 +7,7 @@ AbstractButton {
 
     // { name, width, height } from Studio.presets
     required property var modelData
-    readonly property bool active: Studio.settings.crop.preset === modelData.name
+    readonly property bool active: Studio.presetName === modelData.name
 
     implicitHeight: 58
     padding: 10

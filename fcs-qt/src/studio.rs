@@ -183,6 +183,9 @@ pub struct Studio {
     settings_json: Value,
     /// The crop shape's outline for the current output size, in fractions of the crop.
     shape_outline: Vec<Value>,
+    /// The preset's canonical name ("LinkedIn"); settings may hold any case ("linkedin", as
+    /// fcs-gui saves it). Empty for Custom.
+    preset_name: String,
     exporting: bool,
     /// The last export's rows, for saving its report afterwards.
     last_report: Vec<ReportRow>,
@@ -204,6 +207,9 @@ pub struct Studio {
     camera_url: String,
     camera_faces: Vec<Value>,
     cameras: Vec<Value>,
+    /// For the About box: the app (workspace) version and the Qt it runs on.
+    version: String,
+    qt_version: String,
 }
 
 impl Default for Studio {
@@ -276,6 +282,7 @@ impl Default for Studio {
                 .collect(),
             settings_json: Value::Null,
             shape_outline: Vec::new(),
+            preset_name: String::new(),
             exporting: false,
             last_report: Vec::new(),
             has_report: false,
@@ -294,6 +301,8 @@ impl Default for Studio {
             camera_url: String::new(),
             camera_faces: Vec::new(),
             cameras: Vec::new(),
+            version: fcs_core::version().to_string(),
+            qt_version: images::qt_version(),
         };
         studio.sync_settings();
         studio
@@ -321,6 +330,8 @@ impl Studio {
         Notify = engine_changed
     );
     qproperty!("cudaWarning", Member = cuda_warning, Constant);
+    qproperty!("version", Member = version, Constant);
+    qproperty!("qtVersion", Member = qt_version, Constant);
     qproperty!("pending", Member = pending, Notify = queue_changed);
     qproperty!("queue", Member = queue, Notify = queue_changed);
     qproperty!(
@@ -348,6 +359,11 @@ impl Studio {
     qproperty!(
         "settings",
         Member = settings_json,
+        Notify = settings_changed
+    );
+    qproperty!(
+        "presetName",
+        Member = preset_name,
         Notify = settings_changed
     );
     qproperty!(
@@ -605,37 +621,21 @@ impl Studio {
         };
         merge(&mut value, patch);
         match serde_json::from_value::<AppSettings>(value) {
-            Ok(mut settings) => {
-                settings.detection.sanitize();
-                let floor = settings.detection.confidence;
-                let floor_moved = floor != self.settings.detection.confidence;
-                let previous_gpu = self.settings.gpu.clone();
-                let backend_moved = gpu_key(&settings.gpu) != gpu_key(&previous_gpu);
-                self.settings = settings;
-                self.settings_edited();
-                if backend_moved {
-                    // Re-detects everything once the new engine is up.
-                    return self.rebuild_engine(previous_gpu);
-                }
-                // The boxes on screen were found under the old floor.
-                if floor_moved {
-                    let count = self.redetect_all();
-                    if count > 0 {
-                        self.note(
-                            "info",
-                            format!(
-                                "Confidence floor {floor:.2}: finding faces again in {}",
-                                photos(count)
-                            ),
-                        );
-                    }
-                }
-            }
+            Ok(settings) => self.apply_settings(settings),
             Err(err) => {
                 warn!("Rejected a settings change: {err}");
                 self.toast(format!("Couldn't apply that setting: {err}"), String::new());
             }
         }
+    }
+
+    /// Every setting back to how the app ships (fcs-gui's Restore Defaults returns to the
+    /// settings it launched with instead; fcs-qt saves every change, so that point is gone).
+    #[qslot(qml_name = "restoreDefaults")]
+    fn restore_defaults(&mut self) {
+        self.apply_settings(AppSettings::default());
+        self.note("info", "Settings restored to their defaults".into());
+        self.toast("Settings restored to their defaults".into(), String::new());
     }
 
     #[qslot(qml_name = "restoreEnhance")]
@@ -1582,6 +1582,35 @@ impl Studio {
         self.request_previews();
     }
 
+    /// Make `settings` current, save them, and find faces again if the backend or the
+    /// confidence floor moved.
+    fn apply_settings(&mut self, mut settings: AppSettings) {
+        settings.detection.sanitize();
+        let floor = settings.detection.confidence;
+        let floor_moved = floor != self.settings.detection.confidence;
+        let previous_gpu = self.settings.gpu.clone();
+        let backend_moved = gpu_key(&settings.gpu) != gpu_key(&previous_gpu);
+        self.settings = settings;
+        self.settings_edited();
+        if backend_moved {
+            // Re-detects everything once the new engine is up.
+            return self.rebuild_engine(previous_gpu);
+        }
+        // The boxes on screen were found under the old floor.
+        if floor_moved {
+            let count = self.redetect_all();
+            if count > 0 {
+                self.note(
+                    "info",
+                    format!(
+                        "Confidence floor {floor:.2}: finding faces again in {}",
+                        photos(count)
+                    ),
+                );
+            }
+        }
+    }
+
     fn settings_edited(&mut self) {
         self.settings.crop.sanitize();
         let saved = self
@@ -1608,6 +1637,9 @@ impl Studio {
         );
         self.settings_json = serde_json::to_value(&self.settings).unwrap_or_default();
         let crop = &self.settings.crop;
+        self.preset_name = fcs_core::preset_by_name(&crop.preset)
+            .filter(|p| p.width > 0)
+            .map_or_else(String::new, |p| p.name.to_string());
         self.shape_outline = outline(
             &crop.shape,
             crop.output_width as f32,

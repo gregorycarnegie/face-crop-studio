@@ -94,6 +94,16 @@ pub unsafe extern "C" fn fcs_image_request(
 unsafe extern "C" {
     /// cpp/image_provider.cpp: the clipboard's image as RGBA, sized through `alloc`.
     fn fcs_clipboard_image(ctx: *mut c_void, alloc: Alloc) -> bool;
+    /// cpp/image_provider.cpp: `qVersion()`, a static NUL-terminated string.
+    fn fcs_qt_version() -> *const std::ffi::c_char;
+}
+
+/// The version of the Qt libraries loaded at run time.
+pub fn qt_version() -> String {
+    // SAFETY: qVersion returns a static, NUL-terminated string.
+    unsafe { std::ffi::CStr::from_ptr(fcs_qt_version()) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// A tightly packed buffer for the C++ side to fill, as `(width, height, bytes)`.

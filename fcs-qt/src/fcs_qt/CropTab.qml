@@ -11,7 +11,7 @@ InspectorPage {
     Section {
         Layout.fillWidth: true
         title: qsTr("Output size")
-        detail: root.crop.preset === "Custom" ? qsTr("Custom") : ""
+        detail: Studio.presetName === "" ? qsTr("Custom") : ""
 
         GridLayout {
             Layout.fillWidth: true

@@ -59,7 +59,9 @@ pipeline and settings file.
   detected again on the new backend.
 - Photos can be removed from the queue one at a time, or all at once with a confirmation.
   An Activity tab logs what happened: detections, failures, exports, reports.
-- Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`).
+- Settings go to the same file as fcs-gui (`AppSettings::default_settings_path`). The header's
+  ⋯ menu restores the defaults (after asking) and opens About, which names the Qt version
+  for the LGPL notice.
 
 Not ported: watch folders. fcs-cli has them (`--watch`); fcs-gui does not either.
 
@@ -238,9 +240,11 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
 1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
 2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
    Packaging); the existing installers built from them are not.
-3. The fcs-gui features still missing: settings save/restore/defaults, About. (Clipboard
-   paste, the queue list, after-the-fact reports, aspect-ratio picks, metadata, and telemetry
-   with its log level are done, 2026-11-14.)
+3. ~~The fcs-gui features still missing~~: done 2026-11-14 (clipboard paste, the queue list,
+   after-the-fact reports, aspect-ratio picks, metadata, telemetry, restoring defaults, About).
+   Deliberate differences: settings save on every change, so there is no Save Settings; and
+   Restore defaults resets to the factory settings, where fcs-gui's returns to the settings it
+   launched with (or "Set as Default"'s in-memory copy).
 4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).
 5. One release shipping both front ends before deciding; dropping egui would be the UI
    overhaul the 3.0 version is reserved for.

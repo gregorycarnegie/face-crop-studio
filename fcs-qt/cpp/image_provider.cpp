@@ -1,6 +1,9 @@
-// QML's Image only loads URLs. This provider serves image://fcs/<key> from the Rust image store
-// (src/images.rs), so photos and previews reach the screen without touching the disk.
+// The Qt that qtbridge does not reach, called from src/images.rs. Mainly the image provider:
+// QML's Image only loads URLs, and this serves image://fcs/<key> from the Rust image store, so
+// photos and previews reach the screen without touching the disk. Also the clipboard's image
+// and Qt's version.
 
+#include <QtCore/QtGlobal>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
@@ -75,6 +78,12 @@ extern "C" bool fcs_clipboard_image(void *ctx, FcsAlloc alloc)
     for (int y = 0; y < image.height(); ++y)
         std::memcpy(dst + std::size_t(y) * stride, image.constScanLine(y), row);
     return true;
+}
+
+// The Qt the app runs on, for the About box (the LGPL notice names it).
+extern "C" const char *fcs_qt_version()
+{
+    return qVersion();
 }
 
 // The engine owns the provider from here on.
