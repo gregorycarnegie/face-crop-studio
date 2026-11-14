@@ -236,7 +236,9 @@ jobs:
         working-directory: fcs-qt/dist
         run: |
           shopt -s nullglob
-          shasum -a 256 *.zip *.msi *.AppImage *.deb *.dmg > "SHA256SUMS-qt-$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]').txt"
+          # Git Bash on Windows has only sha256sum, macOS only shasum.
+          sum="$(command -v sha256sum || echo 'shasum -a 256')"
+          $sum *.zip *.msi *.AppImage *.deb *.dmg > "SHA256SUMS-qt-$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]').txt"
           cat SHA256SUMS-qt-*.txt
 
       # release.yml's publish job collects every "*-release-artifacts*" upload.
