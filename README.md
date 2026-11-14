@@ -6,6 +6,7 @@ GPU accelerated face detection and cropping software built in Rust.
 <https://facecropstudio.com>
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
+[![Qt](https://img.shields.io/badge/Qt-Experimental-41CD52?logo=qt&logoColor=white)](fcs-qt/README.md)
 ![WESL](https://img.shields.io/badge/WESL-GPU%20Compute-blue?logo=webgpu)
 [![Lean](https://img.shields.io/badge/Lean-Formal%20Proofs-blue)](tools/verification/README.md)
 [![Verus](https://img.shields.io/badge/Verus-Output%20Initialization-blue)](tools/verus/README.md)
