@@ -441,10 +441,14 @@ jobs:
           MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
         run: |
           $RawVersion = "${{ github.ref_name }}"
+          # A manual dry run on a branch has no version tag; use the workspace version instead.
+          if ("${{ github.ref_type }}" -ne "tag") {
+            $RawVersion = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          }
           if ($RawVersion.StartsWith("v")) { $RawVersion = $RawVersion.Substring(1) }
           $Version = $RawVersion.Split("-")[0]
           if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Invalid MSIX version '$Version' derived from tag '${{ github.ref_name }}'"
+            throw "Invalid MSIX version '$Version' derived from '$RawVersion'"
           }
           ./installer/windows/msix/build_msix.ps1 `
             -Version $Version `
