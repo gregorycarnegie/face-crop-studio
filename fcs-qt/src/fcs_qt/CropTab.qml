@@ -29,6 +29,38 @@ InspectorPage {
             }
         }
 
+        Text {
+            Layout.topMargin: 6
+            text: qsTr("Aspect ratio")
+            color: Theme.ink2
+            font.pixelSize: Theme.body - 1
+        }
+        // fcs-gui's picks and sizes. "Free" is lit when the size matches none of them, and
+        // picking it keeps the current size.
+        Segmented {
+            readonly property var sizes: ({ "1:1": [1024, 1024], "4:5": [1024, 1280], "3:4": [768, 1024] })
+
+            Layout.fillWidth: true
+            value: {
+                const ratio = root.crop.output_width / root.crop.output_height
+                for (const key in sizes) {
+                    if (Math.abs(ratio - sizes[key][0] / sizes[key][1]) < 0.005)
+                        return key
+                }
+                return "free"
+            }
+            options: [
+                { value: "free", label: qsTr("Free") },
+                { value: "1:1", label: "1:1" },
+                { value: "4:5", label: "4:5" },
+                { value: "3:4", label: "3:4" }
+            ]
+            onActivated: value => {
+                if (value in sizes)
+                    root.set({ output_width: sizes[value][0], output_height: sizes[value][1], preset: "Custom" })
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.topMargin: 4

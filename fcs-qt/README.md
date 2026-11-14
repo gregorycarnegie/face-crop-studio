@@ -22,7 +22,7 @@ pipeline and settings file.
   quarter turns or straighten by up to 45°; either finds the faces again on the turned photo,
   and previews and export use it too.
 - The inspector has four tabs, as fcs-gui's settings do:
-  - **Crop**: presets or a custom width and height, face size, position (center, thirds, or
+  - **Crop**: presets, fcs-gui's aspect-ratio picks (1:1, 4:5, 3:4) or a custom width and height, face size, position (center, thirds, or
     custom X/Y offsets), eye-line align, padding colour, crop overlay, EXIF orientation.
   - **Shape**: all eleven crop shapes, drawn from their real outlines, with their parameters,
     plus vignette.
@@ -236,9 +236,9 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
 1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
 2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
    Packaging); the existing installers built from them are not.
-3. The fcs-gui features still missing: aspect-ratio picks, metadata settings, telemetry and
-   log level, settings save/restore/defaults, About. (Clipboard paste, the queue list and
-   after-the-fact reports are done, 2026-11-14.)
+3. The fcs-gui features still missing: metadata settings, telemetry and log level, settings
+   save/restore/defaults, About. (Clipboard paste, the queue list, after-the-fact reports and
+   aspect-ratio picks are done, 2026-11-14.)
 4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).
 5. One release shipping both front ends before deciding; dropping egui would be the UI
    overhaul the 3.0 version is reserved for.
