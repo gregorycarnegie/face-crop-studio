@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 Rectangle {
@@ -93,6 +94,14 @@ Rectangle {
                         font.pixelSize: Theme.caption
                         onClicked: clearDialog.open()
                     }
+                    IconButton {
+                        id: moreButton
+                        visible: queueModel.count > 0 || Studio.hasReport
+                        side: 28
+                        iconPath: Icons.more
+                        tip: qsTr("Save the queue list or the last export report")
+                        onClicked: moreMenu.popup(moreButton, 0, moreButton.height + 4)
+                    }
                 }
 
                 ListView {
@@ -144,6 +153,41 @@ Rectangle {
             MappingTab {}
             ActivityLog {}
         }
+    }
+
+    AppMenu {
+        id: moreMenu
+        Action {
+            text: qsTr("Save queue list…")
+            enabled: queueModel.count > 0
+            onTriggered: queueListDialog.open()
+        }
+        Action {
+            text: qsTr("Save last export report…")
+            enabled: Studio.hasReport && !Studio.exporting
+            onTriggered: reportDialog.open()
+        }
+    }
+
+    FileDialog {
+        id: queueListDialog
+        title: qsTr("Save queue list")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "txt"
+        selectedFile: "queue.txt"
+        nameFilters: [qsTr("Text files (*.txt)")]
+        onAccepted: Studio.saveQueueList(selectedFile.toString())
+    }
+
+    // JSON for a .json name (with success and failure totals), CSV otherwise.
+    FileDialog {
+        id: reportDialog
+        title: qsTr("Save export report")
+        fileMode: FileDialog.SaveFile
+        defaultSuffix: "csv"
+        selectedFile: "face-crop-report.csv"
+        nameFilters: [qsTr("CSV (*.csv)"), qsTr("JSON (*.json)")]
+        onAccepted: Studio.saveReport(selectedFile.toString())
     }
 
     ChoiceDialog {

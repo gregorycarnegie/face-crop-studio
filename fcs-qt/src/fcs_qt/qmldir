@@ -41,3 +41,4 @@ ChoiceDialog 1.0 ChoiceDialog.qml
 AppComboBox 1.0 AppComboBox.qml
 MappingTab 1.0 MappingTab.qml
 CameraView 1.0 CameraView.qml
+AppMenu 1.0 AppMenu.qml

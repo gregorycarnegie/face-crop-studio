@@ -39,6 +39,8 @@ pipeline and settings file.
     quality suffixes in names. They judge the finished crop, as the CLI does.
   - The detection confidence floor; changing it finds the faces in every photo again.
   - An optional CSV or JSON report beside the crops, in fcs-gui's columns.
+- The Photos tab's ⋯ menu saves the queue list (one path per line, as fcs-gui's) and, after an
+  export, that export's report to any file (JSON for a `.json` name, CSV otherwise).
 - Mapping files: a CSV, Excel, Parquet or SQLite table (opened from the Mapping tab, or
   dropped on the window) names each photo's crops. Its photo and name columns are guessed
   from the headers and can be changed. Rows match photos by file name, then by stem, exact
@@ -234,9 +236,9 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
 1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
 2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
    Packaging); the existing installers built from them are not.
-3. The fcs-gui features still missing (clipboard paste done 2026-11-14): queue list and after-the-fact
-   reports, aspect-ratio picks, metadata settings, telemetry and log level, settings
-   save/restore/defaults, About.
+3. The fcs-gui features still missing: aspect-ratio picks, metadata settings, telemetry and
+   log level, settings save/restore/defaults, About. (Clipboard paste, the queue list and
+   after-the-fact reports are done, 2026-11-14.)
 4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).
 5. One release shipping both front ends before deciding; dropping egui would be the UI
    overhaul the 3.0 version is reserved for.

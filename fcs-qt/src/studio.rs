@@ -184,6 +184,9 @@ pub struct Studio {
     /// The crop shape's outline for the current output size, in fractions of the crop.
     shape_outline: Vec<Value>,
     exporting: bool,
+    /// The last export's rows, for saving its report afterwards.
+    last_report: Vec<ReportRow>,
+    has_report: bool,
     export_progress: f64,
     log: Vec<Value>,
     mapping: Option<MappingFile>,
@@ -274,6 +277,8 @@ impl Default for Studio {
             settings_json: Value::Null,
             shape_outline: Vec::new(),
             exporting: false,
+            last_report: Vec::new(),
+            has_report: false,
             export_progress: 0.0,
             log: Vec::new(),
             mapping: None,
@@ -351,6 +356,7 @@ impl Studio {
         Notify = settings_changed
     );
     qproperty!("exporting", Member = exporting, Notify = export_changed);
+    qproperty!("hasReport", Member = has_report, Notify = export_changed);
     qproperty!(
         "exportProgress",
         Member = export_progress,
@@ -765,8 +771,39 @@ impl Studio {
                 });
             }
             let report = write_report(&rows, &report, &out_dir, &claims);
-            handle.invoke_mut(move |studio| studio.export_finished(totals, report, folder_url));
+            handle.invoke_mut(move |studio| {
+                studio.last_report = rows;
+                studio.export_finished(totals, report, folder_url)
+            });
         });
+    }
+
+    /// Save the last export's report to `url`: JSON for a `.json` name, CSV otherwise.
+    #[qslot(qml_name = "saveReport")]
+    fn save_report(&mut self, url: String) {
+        let path = pipeline::url_to_path(&url);
+        let json = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"));
+        let written = encode_report(&self.last_report, if json { "json" } else { "csv" })
+            .expect("csv and json always encode")
+            .and_then(|bytes| fcs_utils::write_atomically(&path, &bytes));
+        self.saved(written, "Report", &path);
+    }
+
+    /// Save the queued photos' paths to `url`, one per line, as fcs-gui's queue list does.
+    /// Snapshots and pastes have no file, so they are left out.
+    #[qslot(qml_name = "saveQueueList")]
+    fn save_queue_list(&mut self, url: String) {
+        let path = pipeline::url_to_path(&url);
+        let lines: Vec<String> = self
+            .entries
+            .iter()
+            .filter_map(|e| e.source.file())
+            .map(|p| p.display().to_string())
+            .collect();
+        let written = fcs_utils::write_atomically(&path, lines.join("\n").as_bytes());
+        self.saved(written, "Queue list", &path);
     }
 
     /// Read a mapping file (CSV, Excel, Parquet or SQLite) whose rows name exported faces.
@@ -977,6 +1014,11 @@ impl Studio {
 
     fn add_paths(&mut self, dropped: Vec<PathBuf>) {
         let mut paths = Vec::new();
+        // Absolute, as dialogs and drops give them: command-line paths are relative to wherever
+        // the app was started, and the queue list and reports must not depend on that.
+        let dropped = dropped
+            .into_iter()
+            .map(|p| std::path::absolute(&p).unwrap_or(p));
         for path in dropped {
             if path.is_dir() {
                 let mut found: Vec<_> = fs::read_dir(&path)
@@ -1804,8 +1846,24 @@ impl Studio {
         }
     }
 
+    /// Log and toast the outcome of saving `what` to `path`.
+    fn saved(&mut self, written: anyhow::Result<()>, what: &str, path: &Path) {
+        match written {
+            Ok(()) => {
+                self.note("ok", format!("{what} saved as {}", path.display()));
+                self.toast(format!("{what} saved"), String::new());
+            }
+            Err(err) => {
+                let message = format!("Couldn't save the {}: {err:#}", what.to_lowercase());
+                self.note("error", message.clone());
+                self.toast(message, String::new());
+            }
+        }
+    }
+
     fn export_finished(&mut self, totals: PhotoExport, report: Option<String>, folder_url: String) {
         self.exporting = false;
+        self.has_report = !self.last_report.is_empty();
         self.export_changed();
         let mut message = format!("Exported {}", faces(totals.exported));
         if totals.skipped > 0 {
@@ -1823,22 +1881,16 @@ impl Studio {
     }
 }
 
-/// Write the export report into `out_dir`; returns a line for the activity log.
-fn write_report(
-    rows: &[ReportRow],
-    format: &str,
-    out_dir: &Path,
-    claims: &OutputClaims,
-) -> Option<String> {
-    let (name, bytes) = match format {
-        "csv" => {
+/// The report as "csv" or "json" (with success/failure totals); None for any other format.
+fn encode_report(rows: &[ReportRow], format: &str) -> Option<anyhow::Result<Vec<u8>>> {
+    Some(match format {
+        "csv" => (|| {
             let mut writer = csv::Writer::from_writer(Vec::new());
-            let written = rows.iter().try_for_each(|row| writer.serialize(row));
-            (
-                "face-crop-report.csv",
-                written.ok().and_then(|()| writer.into_inner().ok()),
-            )
-        }
+            for row in rows {
+                writer.serialize(row)?;
+            }
+            Ok(writer.into_inner().map_err(|e| e.into_error())?)
+        })(),
         "json" => {
             let count = |outcome| rows.iter().filter(|r| r.outcome == outcome).count();
             let json = json!({
@@ -1846,17 +1898,23 @@ fn write_report(
                 "failed": count("failed"),
                 "images": rows,
             });
-            (
-                "face-crop-report.json",
-                serde_json::to_vec_pretty(&json).ok(),
-            )
+            serde_json::to_vec_pretty(&json).map_err(Into::into)
         }
         _ => return None,
-    };
-    let path = claims.claim(out_dir.join(name), Path::new(name));
-    let written = bytes
-        .ok_or_else(|| anyhow::anyhow!("could not encode the report"))
-        .and_then(|bytes| fcs_utils::write_atomically(&path, &bytes));
+    })
+}
+
+/// Write the export report into `out_dir`; returns a line for the activity log.
+fn write_report(
+    rows: &[ReportRow],
+    format: &str,
+    out_dir: &Path,
+    claims: &OutputClaims,
+) -> Option<String> {
+    let bytes = encode_report(rows, format)?;
+    let name = format!("face-crop-report.{format}");
+    let path = claims.claim(out_dir.join(&name), Path::new(&name));
+    let written = bytes.and_then(|bytes| fcs_utils::write_atomically(&path, &bytes));
     Some(match written {
         Ok(()) => format!("Report saved as {}", path.display()),
         Err(err) => format!("Couldn't save the report: {err:#}"),
