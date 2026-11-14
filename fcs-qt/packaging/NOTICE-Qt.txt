@@ -1,0 +1,22 @@
+Face Crop Studio (Qt preview) uses Qt and Qt Bridge for Rust
+==============================================================
+
+Face Crop Studio itself is licensed under MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE).
+This build also contains the following, under the GNU Lesser General Public License v3
+(licenses/LGPL-3.0-only.txt, which builds on licenses/GPL-3.0-only.txt):
+
+Qt {{QT_VERSION}} (The Qt Company Ltd. and other contributors)
+  Modules: Qt Core, Gui, Network, OpenGL, Qml, Quick, Quick Controls, Quick Dialogs,
+  Quick Layouts, Quick Shapes, Quick Effects, and their plugins.
+  Linked dynamically and shipped unmodified, as separate shared libraries next to the program.
+  You may replace them with your own build of the same Qt version.
+  Source: https://download.qt.io/official_releases/qt/{{QT_SERIES}}/{{QT_VERSION}}/single/
+
+Qt Bridge for Rust (qtbridge, qtbridge-runtime, qtbridge-gen, qtbridge-interfaces,
+qtbridge-type-lib 0.4.1; The Qt Company Ltd.)
+  Compiled into the program (statically linked), unmodified.
+  Source: https://crates.io/crates/qtbridge
+
+To relink or rebuild the program against a modified version of either, build Face Crop
+Studio from its source, which is available for this exact version at
+https://github.com/gregorycarnegie/face-crop-studio (see fcs-qt/README.md for build steps).

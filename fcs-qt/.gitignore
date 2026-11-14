@@ -1,2 +1,4 @@
 # Written by the app when it runs from fcs-qt/ instead of the repo root.
 config/
+# Output of packaging/package.ps1 and package.sh.
+dist/

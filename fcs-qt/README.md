@@ -106,6 +106,27 @@ sudo apt install cmake libclang-dev qt6-base-dev qt6-declarative-dev \
 `dev.sh` finds `qmake6` and, when `/usr/local/lib/libheif.a` exists, links it statically
 with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
 
+## Packaging
+
+```powershell
+./fcs-qt/packaging/package.ps1     # Windows: fcs-qt/dist/fcs-qt-windows-x86_64 folder + .zip
+```
+```bash
+./fcs-qt/packaging/package.sh      # Linux: an AppImage; macOS: a .app and .dmg
+```
+
+Each does a release build and deploys Qt beside it: `windeployqt`, linuxdeploy with its Qt
+plugin, or `macdeployqt`. The QML is compiled into the binary, so each deploy tool scans
+`src/fcs_qt` for imports. Models go where `resolve_data_path` looks, as in fcs-gui's
+packages. Every package carries `NOTICE-Qt.txt` (filled in with the Qt version), the LGPL-3.0
+and GPL-3.0 texts, and Face Crop Studio's own licences. `packaging/smoke.ps1` / `smoke.sh` run
+a package for 20 s with Qt off PATH, from an empty folder. They check that it stayed up,
+loaded the detector from the package and logged no QML or plugin errors. The fcs-qt
+workflow packages, smoke-tests and uploads all three on every push (not on pull requests).
+
+These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed .dmg in
+`installer/` are still fcs-gui only.
+
 ## Findings
 
 **Works well**
@@ -148,10 +169,25 @@ with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
 - **Models are awkward.** `QListModel` exists but is a separate QObject with little
   documentation. Here QML mirrors the queue array into a `ListModel` with `set()`/`append()`,
   which keeps the list from resetting on each update.
-- **Packaging is untested.** A release would need `windeployqt` (or the macOS/Linux
-  equivalents) and Qt's LGPL obligations, on top of the current installers.
+- **Packaging** (2026-11-14):
+  - **qtbridge is LGPL-3.0 and statically linked.** Qt's own libraries ship as replaceable
+    shared libraries, but the qtbridge crates (`LicenseRef-Qt-Commercial OR LGPL-3.0-only`)
+    are compiled into the binary. LGPLv3 then requires that users can relink, which Face Crop
+    Studio meets by being open source. Packages must still carry the licence texts and point
+    to the exact source, which `NOTICE-Qt.txt` does. Not legal advice; worth a proper check
+    before a release.
+  - **windeployqt ships a 2013 `d3dcompiler_47.dll`** (Windows 8.1's) unless told not to.
+    Next to the exe it shadows Windows' current copy, and wgpu's DX12 backend then fails to
+    compile its shaders (`unrecognized compiler target 'cs_5_1'`). Detection silently fell
+    back to Vulkan here, and would fall back to the CPU on machines without Vulkan.
+    `--no-system-d3d-compiler` fixes it; Qt Quick doesn't need it either.
+  - **The MSVC runtime is now a dependency.** fcs-gui links the CRT statically; fcs-qt can't,
+    because Qt doesn't. The package copies the VS 2022 runtime DLLs next to the exe. VS 2019's
+    are too old for Qt's MSVC 2022 binaries, so a local build without VS 2022 skips them and
+    relies on the installed VC++ redistributable.
+  - Windows package: 113 MB unpacked, 47 MB zipped (fcs-gui's zip has no Qt).
 
-- **Windows and Linux so far; macOS untried.** Face Crop Studio ships on all three. On Linux
+- **Windows, Linux and macOS.** Face Crop Studio ships on all three. On Linux
   (2026-11-13, Ubuntu 26.04 in WSL2) fcs-qt builds with no code changes, its 11 tests pass
   (HEIC and AVIF included), clippy is clean, and the app runs under WSLg: photos load, faces
   are detected, previews render. The Linux-specific work was all in the build:
@@ -183,10 +219,9 @@ with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
 
 **Before fcs-qt could replace fcs-gui** (agreed 2026-11-13: keep both until then), in order:
 
-1. CI on all three platforms: a matrix job that installs Qt 6.10+ and builds, tests and lints
-   fcs-qt on Windows, macOS and Linux (`dev.sh` covers the latter two; Linux works locally).
-2. Packaging on all three: Qt deployed with the app (`windeployqt`, `macdeployqt`, a Linux
-   bundle), LGPL notices, and the existing installers built from it.
+1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
+2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
+   Packaging); the existing installers built from them are not.
 3. The fcs-gui features still missing: clipboard paste, queue list and after-the-fact
    reports, aspect-ratio picks, metadata settings, telemetry and log level, settings
    save/restore/defaults, About.

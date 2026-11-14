@@ -159,3 +159,50 @@ jobs:
       - name: QML lint
         if: runner.os == 'Linux'
         run: qmllint -I fcs-qt/src fcs-qt/src/fcs_qt/*.qml
+
+      # ── Packages ─────────────────────────────────────────────────────────
+      # A release build plus Qt's deploy tool, then a 20 s run of the result with Qt off PATH.
+      # Not on pull requests: it adds a release build per leg.
+      - name: Package (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          ./fcs-qt/packaging/package.ps1
+          ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/fcs-qt-windows-x86_64/fcs-qt.exe
+
+      # xcb-cursor0 is installed so linuxdeploy bundles it: Qt's xcb plugin needs it and many
+      # desktops lack it. xvfb gives the smoke run a display.
+      - name: Package (Linux)
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        run: |
+          sudo apt-get install -y --no-install-recommends libxcb-cursor0 xvfb
+          ./fcs-qt/packaging/package.sh
+          APPIMAGE_EXTRACT_AND_RUN=1 ./fcs-qt/packaging/smoke.sh \
+            xvfb-run -a "$PWD/fcs-qt/dist/fcs-qt-linux-x86_64.AppImage"
+
+      # The otool lines answer whether Homebrew's libheif/dav1d are linked dynamically, which
+      # would also hold for fcs-gui's bundle (build_macos.sh copies no dylibs); the check after
+      # fails if fcs-qt's bundle still points into Homebrew.
+      - name: Package (macOS)
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        run: |
+          ./fcs-qt/packaging/package.sh
+          app="fcs-qt/dist/Face Crop Studio Qt.app"
+          echo "Built binary links:"; otool -L fcs-qt/target/release/fcs-qt | grep -v "/System/\|/usr/lib/"
+          echo "libheif plugins on the build machine:"; ls "$(brew --prefix libheif)/lib/libheif/plugins" 2>/dev/null || echo none
+          if find "$app" -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} + 2>/dev/null | grep /opt/homebrew; then
+            echo "the bundle still loads libraries from Homebrew (above)" >&2; exit 1
+          fi
+          ./fcs-qt/packaging/smoke.sh "$PWD/$app/Contents/MacOS/fcs-qt"
+
+      - name: Upload package
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcs-qt-${{ runner.os }}
+          path: |
+            fcs-qt/dist/*.zip
+            fcs-qt/dist/*.AppImage
+            fcs-qt/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
