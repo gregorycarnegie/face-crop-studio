@@ -83,10 +83,11 @@ EOF
     cp "$tools/fcs-qt.desktop" "$pkg/usr/share/applications/"
     cp "$tools/fcs-qt.png" "$pkg/usr/share/icons/hicolor/256x256/apps/"
     mkdir -p "$tools/shlibs/debian"
-    printf 'Source: fcs-qt\n\nPackage: face-crop-studio-qt\n' > "$tools/shlibs/debian/control"
+    # dpkg-shlibdeps reads a source package's control file; this is the least it accepts.
+    printf 'Source: fcs-qt\n\nPackage: face-crop-studio-qt\nArchitecture: any\n' > "$tools/shlibs/debian/control"
     mapfile -t elves < <(find "$opt" -type f -exec sh -c 'head -c 4 "$1" | grep -q ELF' _ {} \; -print)
     depends="$(cd "$tools/shlibs" && dpkg-shlibdeps -O --ignore-missing-info -l"$opt/lib" \
-        "${elves[@]}" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')"
+        "${elves[@]}" | sed -n 's/^shlibs:Depends=//p')"
     [ -n "$depends" ] || { echo "dpkg-shlibdeps found no dependencies" >&2; exit 1; }
     cat > "$pkg/DEBIAN/control" <<EOF
 Package: face-crop-studio-qt
