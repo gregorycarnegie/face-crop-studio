@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MSI for fcs-qt, built from package.ps1's folder (WiX v7):
+    wix build -arch x64 -d SourceDir=fcs-qt\dist\fcs-qt-windows-x86_64 -d MsiVersion=0.1.0
+              -ext WixToolset.UI.wixext -o fcs-qt.msi fcs-qt\packaging\fcs-qt.wxs
+  Its own product (name, UpgradeCode, folders, shortcuts), so it installs beside fcs-gui's MSI
+  instead of upgrading or replacing it. Unlike that one it has no PATH option: there is no CLI.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+    Name="Face Crop Studio Qt"
+    Language="1033"
+    Version="$(var.MsiVersion)"
+    Manufacturer="Face Crop Studio"
+    UpgradeCode="469B5D3F-3EAE-4FD0-8857-9823741A67DE"
+    InstallerVersion="500"
+    Compressed="yes"
+    Scope="perMachine">
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Face Crop Studio Qt is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(sys.SOURCEFILEDIR)..\..\fcs-gui\assets\app_icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+
+    <!-- The same terms as fcs-gui's installer; they defer to the licence files shipped. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)..\..\installer\windows\wix\EULA.rtf" />
+    <ui:WixUI Id="WixUI_FeatureTree" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="Face Crop Studio Qt" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="{451930FC-CCA0-4FF7-B6C6-636CF63F9B8B}">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Name="Face Crop Studio Qt"
+          Description="Face detection and batch portrait cropping (Qt preview)"
+          Target="[INSTALLDIR]fcs-qt.exe"
+          WorkingDirectory="INSTALLDIR"
+          Icon="AppIcon.ico" />
+        <RegistryValue Root="HKCU" Key="Software\Face Crop Studio Qt" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="{EF66F89C-AD23-43AF-8EE4-0599303257C7}">
+        <Shortcut
+          Id="DesktopShortcut"
+          Name="Face Crop Studio Qt"
+          Description="Face detection and batch portrait cropping (Qt preview)"
+          Target="[INSTALLDIR]fcs-qt.exe"
+          WorkingDirectory="INSTALLDIR"
+          Icon="AppIcon.ico" />
+        <RegistryValue Root="HKCU" Key="Software\Face Crop Studio Qt" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Face Crop Studio Qt" Level="1" AllowAbsent="no">
+      <Files Directory="INSTALLDIR" Include="$(var.SourceDir)\**" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <Feature
+      Id="DesktopShortcutFeature"
+      Title="Desktop Shortcut"
+      Description="Create a desktop shortcut for Face Crop Studio Qt."
+      Level="1"
+      AllowAdvertise="no"
+      AllowAbsent="yes">
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+  </Package>
+</Wix>

@@ -120,7 +120,7 @@ with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
 ./fcs-qt/packaging/package.ps1     # Windows: fcs-qt/dist/fcs-qt-windows-x86_64 folder + .zip
 ```
 ```bash
-./fcs-qt/packaging/package.sh      # Linux: an AppImage; macOS: a .app and .dmg
+./fcs-qt/packaging/package.sh      # Linux: an AppImage and .deb; macOS: a .app and .dmg
 ```
 
 Each does a release build and deploys Qt beside it: `windeployqt`, linuxdeploy with its Qt
@@ -132,8 +132,18 @@ a package for 20 s with Qt off PATH, from an empty folder. They check that it st
 loaded the detector from the package and logged no QML or plugin errors. The fcs-qt
 workflow packages, smoke-tests and uploads all three on every push (not on pull requests).
 
-These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed .dmg in
-`installer/` are still fcs-gui only.
+Installers: an MSI from the Windows folder (`packaging/fcs-qt.wxs`, WiX v7; the fcs-qt workflow
+builds it, installs it, smoke-tests the installed copy and uninstalls it), and a .deb from the
+AppImage's AppDir, under `/opt/face-crop-studio-qt` with its own Qt and a `Depends` line from
+`dpkg-shlibdeps` (the workflow installs it with apt and smoke-tests `fcs-qt` from PATH). Both
+are their own product ("Face Crop Studio Qt", `face-crop-studio-qt`), so they install beside
+fcs-gui's rather than replacing it. The .dmg holds the .app. Not done: NSIS and MSIX (the Store
+listing is fcs-gui's), and signing: the .exe and MSI are unsigned and the .app is signed ad hoc,
+which the release workflow would fix with its certificates (step 5).
+
+Icons: the .exe embeds fcs-gui's `app_icon.ico` (build.rs), every window gets it at startup
+(`images::set_window_icon`), the .app gets an `.icns` made from `app_logo.svg`, and the Linux
+packages a 256 px PNG of it.
 
 ## Findings
 
@@ -239,8 +249,9 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
 **Before fcs-qt could replace fcs-gui** (agreed 2026-11-13: keep both until then), in order:
 
 1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
-2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
-   Packaging); the existing installers built from them are not.
+2. ~~Packaging on all three~~: done 2026-11-14. Portable packages with Qt and the LGPL notices,
+   an MSI and a .deb (see Packaging). Signing waits for step 5; NSIS and MSIX are not planned
+   for the preview.
 3. ~~The fcs-gui features still missing~~: done 2026-11-14 (clipboard paste, the queue list,
    after-the-fact reports, aspect-ratio picks, metadata, telemetry, restoring defaults, About).
    Deliberate differences: settings save on every change, so there is no Save Settings; and

@@ -96,6 +96,27 @@ unsafe extern "C" {
     fn fcs_clipboard_image(ctx: *mut c_void, alloc: Alloc) -> bool;
     /// cpp/image_provider.cpp: `qVersion()`, a static NUL-terminated string.
     fn fcs_qt_version() -> *const std::ffi::c_char;
+    /// cpp/image_provider.cpp: `QGuiApplication::setWindowIcon` from packed RGBA.
+    fn fcs_set_window_icon(rgba: *const u8, width: i32, height: i32);
+}
+
+/// fcs-gui's icon, which its exe also embeds (the Windows file icon comes from build.rs).
+const APP_ICON: &[u8] = include_bytes!("../../fcs-gui/assets/app_icon.ico");
+
+/// The app icon's largest image.
+fn app_icon() -> image::ImageResult<RgbaImage> {
+    image::load_from_memory_with_format(APP_ICON, image::ImageFormat::Ico).map(|i| i.to_rgba8())
+}
+
+/// Give every window the app icon. Call once the QApp exists.
+pub fn set_window_icon() {
+    match app_icon() {
+        // SAFETY: the buffer is width * height * 4 bytes, and Qt copies it before returning.
+        Ok(icon) => unsafe {
+            fcs_set_window_icon(icon.as_ptr(), icon.width() as i32, icon.height() as i32)
+        },
+        Err(err) => log::warn!("app icon unreadable: {err}"),
+    }
 }
 
 /// The version of the Qt libraries loaded at run time.
@@ -137,6 +158,12 @@ pub fn clipboard() -> Option<RgbaImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_app_icon_decodes_at_a_usable_size() {
+        let icon = app_icon().expect("app_icon.ico decodes");
+        assert!(icon.width() >= 128 && icon.width() == icon.height());
+    }
 
     #[test]
     fn fill_sizes_a_packed_rgba_buffer() {

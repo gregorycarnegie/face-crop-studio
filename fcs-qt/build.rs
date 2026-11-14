@@ -35,4 +35,14 @@ fn main() {
     }
     qt.cargo_link_libraries(&mut build);
     build.compile("fcs_qt_image_provider");
+
+    // The file icon Explorer shows, and the one Qt's windows start with. Host and target both
+    // Windows, as in fcs-gui's build.rs: winresource runs the Windows resource compiler.
+    #[cfg(windows)]
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=../fcs-gui/assets/app_icon.ico");
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../fcs-gui/assets/app_icon.ico");
+        res.compile().expect("Windows resources for fcs-qt compile");
+    }
 }

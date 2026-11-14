@@ -1,12 +1,14 @@
 // The Qt that qtbridge does not reach, called from src/images.rs. Mainly the image provider:
 // QML's Image only loads URLs, and this serves image://fcs/<key> from the Rust image store, so
-// photos and previews reach the screen without touching the disk. Also the clipboard's image
-// and Qt's version.
+// photos and previews reach the screen without touching the disk. Also the clipboard's image,
+// Qt's version and the window icon.
 
 #include <QtCore/QtGlobal>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QIcon>
 #include <QtGui/QImage>
+#include <QtGui/QPixmap>
 #include <QtQml/QQmlEngine>
 #include <QtQuick/QQuickImageProvider>
 
@@ -84,6 +86,13 @@ extern "C" bool fcs_clipboard_image(void *ctx, FcsAlloc alloc)
 extern "C" const char *fcs_qt_version()
 {
     return qVersion();
+}
+
+// Every window's icon (title bar, taskbar, X11; the Dock on macOS), from tightly packed RGBA.
+extern "C" void fcs_set_window_icon(const std::uint8_t *rgba, int width, int height)
+{
+    const QImage image(rgba, width, height, width * 4, QImage::Format_RGBA8888);
+    QGuiApplication::setWindowIcon(QIcon(QPixmap::fromImage(image.copy())));
 }
 
 // The engine owns the provider from here on.

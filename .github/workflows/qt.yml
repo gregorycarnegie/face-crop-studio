@@ -173,6 +173,29 @@ jobs:
           ./fcs-qt/packaging/package.ps1
           ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/fcs-qt-windows-x86_64/fcs-qt.exe
 
+      # The MSI, from the folder above; then installed, smoke-tested from Program Files and
+      # removed again. Unsigned: signing belongs to the release workflow.
+      - name: Installer (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          dotnet tool install -g wix --version 7.0.0
+          wix -acceptEula wix7 extension add WixToolset.UI.wixext/7.0.0
+          $version = (Select-String -Path fcs-qt/Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $msi = "$PWD\fcs-qt\dist\fcs-qt-$version-windows-x86_64.msi"
+          wix build -acceptEula wix7 -arch x64 -d SourceDir="$PWD\fcs-qt\dist\fcs-qt-windows-x86_64" `
+            -d MsiVersion="$version" -ext WixToolset.UI.wixext -o $msi fcs-qt\packaging\fcs-qt.wxs
+          if ($LASTEXITCODE) { throw "wix build failed ($LASTEXITCODE)" }
+
+          $install = Start-Process msiexec -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install.log' -Wait -PassThru
+          if ($install.ExitCode) { Get-Content msi-install.log -Tail 40; throw "install failed ($($install.ExitCode))" }
+          $installed = "$env:ProgramFiles\Face Crop Studio Qt\fcs-qt.exe"
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Face Crop Studio Qt.lnk")) { throw 'no Start menu shortcut' }
+          ./fcs-qt/packaging/smoke.ps1 $installed
+          $remove = Start-Process msiexec -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
+          if ($remove.ExitCode) { throw "uninstall failed ($($remove.ExitCode))" }
+          if (Test-Path $installed) { throw 'uninstall left fcs-qt.exe behind' }
+
       # xcb-cursor0 is installed so linuxdeploy bundles it: Qt's xcb plugin needs it and many
       # desktops lack it. xvfb gives the smoke run a display.
       - name: Package (Linux)
@@ -182,12 +205,16 @@ jobs:
           ./fcs-qt/packaging/package.sh
           APPIMAGE_EXTRACT_AND_RUN=1 ./fcs-qt/packaging/smoke.sh \
             xvfb-run -a "$PWD/fcs-qt/dist/fcs-qt-linux-x86_64.AppImage"
+          # The .deb as a user gets it: installed with its dependencies, run from PATH.
+          sudo apt-get install -y ./fcs-qt/dist/face-crop-studio-qt_*.deb
+          ./fcs-qt/packaging/smoke.sh xvfb-run -a fcs-qt
 
       # libheif and dav1d are static (macos-build-deps); the check fails if anything in the bundle
       # still points into Homebrew.
       - name: Package (macOS)
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: |
+          brew install librsvg   # rsvg-convert, for the bundle's icon
           ./fcs-qt/packaging/package.sh
           app="fcs-qt/dist/Face Crop Studio Qt.app"
           if find "$app" -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} + 2>/dev/null | grep /opt/homebrew; then
@@ -202,7 +229,9 @@ jobs:
           name: fcs-qt-${{ runner.os }}
           path: |
             fcs-qt/dist/*.zip
+            fcs-qt/dist/*.msi
             fcs-qt/dist/*.AppImage
+            fcs-qt/dist/*.deb
             fcs-qt/dist/*.dmg
           if-no-files-found: error
           retention-days: 14

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Package fcs-qt with Qt deployed beside it: an AppImage on Linux, a .app and .dmg on macOS.
+# Package fcs-qt with Qt deployed beside it: an AppImage and .deb on Linux, a .app and .dmg on
+# macOS.
 #   ./fcs-qt/packaging/package.sh        -> fcs-qt/dist/
-# Needs the models in models/ (as for the other release builds) and what dev.sh needs; on Linux
-# also rsvg-convert, and network access the first time (linuxdeploy is downloaded).
+# Needs the models in models/ (as for the other release builds), what dev.sh needs and
+# rsvg-convert (icons); on Linux also network access the first time (linuxdeploy is downloaded).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 qt="$root/fcs-qt"
@@ -67,6 +68,41 @@ EOF
             --executable "$qt/target/release/fcs-qt" \
             --desktop-file "$tools/fcs-qt.desktop" --icon-file "$tools/fcs-qt.png" \
             --plugin qt --output appimage)
+
+    # A .deb of the same AppDir, under /opt: it carries its own Qt, since a build only runs on
+    # the exact Qt it was compiled against. Depends lists what the system still has to provide.
+    version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$qt/Cargo.toml" | head -n 1)"
+    deb_arch="$(dpkg --print-architecture)"
+    pkg="$dist/deb"
+    opt="$pkg/opt/face-crop-studio-qt"
+    mkdir -p "$opt" "$pkg/DEBIAN" "$pkg/usr/bin" "$pkg/usr/share/applications" \
+        "$pkg/usr/share/icons/hicolor/256x256/apps"
+    cp -a "$appdir/usr/." "$opt/"
+    # The binary finds its libraries, Qt and models relative to its resolved path.
+    ln -s /opt/face-crop-studio-qt/bin/fcs-qt "$pkg/usr/bin/fcs-qt"
+    cp "$tools/fcs-qt.desktop" "$pkg/usr/share/applications/"
+    cp "$tools/fcs-qt.png" "$pkg/usr/share/icons/hicolor/256x256/apps/"
+    mkdir -p "$tools/shlibs/debian"
+    printf 'Source: fcs-qt\n\nPackage: face-crop-studio-qt\n' > "$tools/shlibs/debian/control"
+    mapfile -t elves < <(find "$opt" -type f -exec sh -c 'head -c 4 "$1" | grep -q ELF' _ {} \; -print)
+    depends="$(cd "$tools/shlibs" && dpkg-shlibdeps -O --ignore-missing-info -l"$opt/lib" \
+        "${elves[@]}" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')"
+    [ -n "$depends" ] || { echo "dpkg-shlibdeps found no dependencies" >&2; exit 1; }
+    cat > "$pkg/DEBIAN/control" <<EOF
+Package: face-crop-studio-qt
+Version: $version
+Architecture: $deb_arch
+Maintainer: Gregory Carnegie <gregory.carnegie+claude_ai@gmail.com>
+Depends: $depends
+Section: graphics
+Priority: optional
+Homepage: https://facecropstudio.com/
+Description: Face Crop Studio (Qt preview)
+ Face detection and batch portrait cropping, with the Qt Quick interface. Installs
+ beside the face-crop-studio package; Qt is bundled under /opt/face-crop-studio-qt.
+EOF
+    dpkg-deb --build --root-owner-group "$pkg" "$dist/face-crop-studio-qt_${version}_${deb_arch}.deb"
+    rm -rf "$pkg"
     ;;
 Darwin)
     app="$dist/Face Crop Studio Qt.app"
@@ -75,12 +111,21 @@ Darwin)
     # resolve_data_path looks next to the executable, as for fcs-gui's bundle.
     models "$app/Contents/MacOS/models"
     notices "$app/Contents/Resources"
+    # The Finder and Dock icon: fcs-gui's logo at every size Apple's iconset asks for.
+    iconset="$qt/target/packaging-tools/AppIcon.iconset"
+    rm -rf "$iconset" && mkdir -p "$iconset"
+    for size in 16 32 128 256 512; do
+        rsvg-convert -w "$size" -h "$size" "$root/fcs-gui/assets/app_logo.svg" -o "$iconset/icon_${size}x${size}.png"
+        rsvg-convert -w $((size * 2)) -h $((size * 2)) "$root/fcs-gui/assets/app_logo.svg" -o "$iconset/icon_${size}x${size}@2x.png"
+    done
+    iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" "$iconset"
     cat > "$app/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key><string>fcs-qt</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIdentifier</key><string>dev.facecropstudio.qtpreview</string>
     <key>CFBundleName</key><string>Face Crop Studio Qt</string>
     <key>CFBundlePackageType</key><string>APPL</string>
