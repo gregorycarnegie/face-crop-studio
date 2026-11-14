@@ -540,13 +540,18 @@ jobs:
       - name: Install build dependencies (Homebrew)
         run: |
           brew update
-          # dav1d + pkg-config: AVIF decode support (mirrors the Windows vcpkg setup).
-          # libheif: HEIC/HEIF decode (brew ships a recent libheif for libheif-rs).
           # librsvg: rsvg-convert for SVG → PNG iconset generation.
           # create-dmg: drag-to-Applications DMG layout.
           # nasm: mozjpeg-sys assembles libjpeg-turbo's SIMD with it and silently falls
           # back to scalar C when it is missing (see the Windows leg for why that matters).
-          brew install dav1d libheif pkg-config librsvg create-dmg nasm
+          brew install librsvg create-dmg nasm
+
+      # dav1d + libheif as static libraries built from source. Through 2.3.4 they came from
+      # Homebrew as dylibs that build_macos.sh never bundled, so the .app loaded them from
+      # /opt/homebrew and only started where Homebrew had them; Homebrew's libheif also
+      # links GPL x265.
+      - name: Install dav1d + libheif (static, from source)
+        uses: ./.github/actions/macos-build-deps
 
       - name: Build release binary (aarch64-apple-darwin)
         run: cargo build --release -p fcs-gui -p fcs-cli --target aarch64-apple-darwin
@@ -584,6 +589,21 @@ jobs:
           RawVersion="${{ github.ref_name }}"
           Version="${RawVersion#v}"
           bash installer/macos/build_macos.sh "$Version"
+
+      # verify_package below runs on this runner, where Homebrew is installed, so it cannot
+      # notice a library the bundle loads from outside itself. This can.
+      - name: Verify the bundle loads nothing from outside macOS and itself
+        run: |
+          set -euo pipefail
+          App="dist/macos/Face Crop Studio.app"
+          for bin in "$App"/Contents/MacOS/*; do
+            file "$bin" | grep -q Mach-O || continue
+            echo "$bin:"; otool -L "$bin" | tail -n +2
+            if otool -L "$bin" | tail -n +2 | grep -vE '^[[:space:]]+(/usr/lib/|/System/Library/|@)'; then
+              echo "$bin loads a library from outside the bundle (above)" >&2
+              exit 1
+            fi
+          done
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -719,6 +739,9 @@ jobs:
   publish:
     name: Publish GitHub release
     needs: [tests, windows-release, macos-release, linux-release]
+    # Tag-only, like store-submit. A manual run builds and uploads every artifact as a dry run;
+    # without this it would also publish a release named after the branch.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

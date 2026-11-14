@@ -1,0 +1,115 @@
+name: macOS native build dependencies
+description: >-
+  dav1d, libde265 and libheif built from source as static libraries, as linux-build-deps does.
+  Homebrew's libheif is not used: it links x265 (GPL-2.0-or-later) and dozens of other dylibs,
+  and the binary would load all of them from /opt/homebrew, so the shipped .app only started
+  on Macs that had those Homebrew packages installed. Static libraries leave nothing to bundle.
+
+inputs:
+  dav1d-version:
+    description: dav1d release to build from source (AVIF decode).
+    default: "1.5.1"
+  de265-version:
+    description: libde265 release to build from source (HEVC decode for libheif).
+    default: "1.0.15"
+  libheif-version:
+    description: libheif release to build from source.
+    default: "1.23.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install build tools
+      shell: bash
+      run: brew install meson ninja pkg-config cmake
+
+    - name: Identify the macOS release
+      id: os
+      shell: bash
+      run: echo "release=$(sw_vers -productVersion | cut -d. -f1)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache source-built native libraries
+      id: cache-native
+      uses: actions/cache@v6
+      with:
+        path: ~/fcs-native
+        key: macos-native-deps-${{ steps.os.outputs.release }}-${{ runner.arch }}-dav1d${{ inputs.dav1d-version }}-de265${{ inputs.de265-version }}-heif${{ inputs.libheif-version }}
+
+    - name: Build dav1d, libde265 and libheif from source
+      if: steps.cache-native.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        DAV1D_VERSION: ${{ inputs.dav1d-version }}
+        DE265_VERSION: ${{ inputs.de265-version }}
+        LIBHEIF_VERSION: ${{ inputs.libheif-version }}
+      run: |
+        set -euo pipefail
+        prefix="$HOME/fcs-native"
+        src="$RUNNER_TEMP/native-src"
+        mkdir -p "$src"
+        RETRY="--retry 3 --retry-all-errors --retry-delay 5 --connect-timeout 20"
+
+        # dav1d: the GitHub mirror, which linux-build-deps falls back to as well.
+        curl -fsSL $RETRY -o "$src/dav1d.tar.gz" \
+          "https://github.com/videolan/dav1d/archive/refs/tags/${DAV1D_VERSION}.tar.gz"
+        tar -xf "$src/dav1d.tar.gz" -C "$src"
+        meson setup "$src/dav1d-${DAV1D_VERSION}/build" "$src/dav1d-${DAV1D_VERSION}" \
+          --prefix="$prefix" --libdir=lib --buildtype=release --default-library=static \
+          -Denable_tools=false -Denable_tests=false
+        ninja -C "$src/dav1d-${DAV1D_VERSION}/build" install
+
+        # CMake 4 refuses libde265 1.0.15's minimum version without the policy floor.
+        curl -fsSL $RETRY -o "$src/libde265.tar.gz" \
+          "https://github.com/strukturag/libde265/releases/download/v${DE265_VERSION}/libde265-${DE265_VERSION}.tar.gz"
+        tar -xf "$src/libde265.tar.gz" -C "$src"
+        cmake -S "$src/libde265-${DE265_VERSION}" -B "$src/libde265-${DE265_VERSION}/build" \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX="$prefix" \
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+          -DENABLE_DECODER=ON -DENABLE_ENCODER=OFF -DENABLE_SDL=OFF
+        cmake --build "$src/libde265-${DE265_VERSION}/build" --parallel
+        cmake --install "$src/libde265-${DE265_VERSION}/build"
+
+        # Every optional codec off explicitly: the runner's Homebrew has x265, jpeg, openjpeg and
+        # more, and libheif's CMake would otherwise find and link them.
+        curl -fsSL $RETRY -o "$src/libheif.tar.gz" \
+          "https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz"
+        tar -xf "$src/libheif.tar.gz" -C "$src"
+        off=""
+        for codec in X265 AOM_DECODER AOM_ENCODER DAV1D RAV1E SvtEnc X264 KVAZAAR UVG266 VVDEC VVENC \
+                     JPEG_DECODER JPEG_ENCODER OpenJPEG_DECODER OpenJPEG_ENCODER OPENJPH_ENCODER \
+                     FFMPEG_DECODER OpenH264_DECODER LIBSHARPYUV GDK_PIXBUF \
+                     HEADER_COMPRESSION UNCOMPRESSED_CODEC EXAMPLES; do
+          off="$off -DWITH_${codec}=OFF"
+        done
+        # shellcheck disable=SC2086
+        cmake -S "$src/libheif-${LIBHEIF_VERSION}" -B "$src/libheif-${LIBHEIF_VERSION}/build" \
+          -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_PREFIX_PATH="$prefix" \
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
+          -DENABLE_PLUGIN_LOADING=OFF -DWITH_LIBDE265=ON $off
+        cmake --build "$src/libheif-${LIBHEIF_VERSION}/build" --parallel
+        cmake --install "$src/libheif-${LIBHEIF_VERSION}/build"
+
+    # Runs on cache hits too: the exports have to be present either way, and the checks double
+    # as proof a restored cache is usable and holds no dylib that could be linked instead.
+    - name: Export build environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        prefix="$HOME/fcs-native"
+        if ls "$prefix"/lib/*.dylib >/dev/null 2>&1; then
+          echo "dylibs in $prefix/lib; the build must be static" >&2; exit 1
+        fi
+        export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+        pkg-config --modversion dav1d libheif
+        pkg-config --libs --static libheif
+        {
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          echo "PKG_CONFIG_ALL_STATIC=1"
+          echo "SYSTEM_DEPS_LIBHEIF_LINK=static"
+          echo "SYSTEM_DEPS_LIBHEIF_SEARCH_NATIVE=$prefix/lib"
+          echo "SYSTEM_DEPS_LIBHEIF_LIB=heif de265"
+          echo "SYSTEM_DEPS_LIBHEIF_INCLUDE=$prefix/include"
+          # libheif and libde265 are C++; on Linux libstdc++ comes in anyway, macOS needs libc++
+          # named. Only aarch64 is built here, and it has no other rustflags to displace.
+          echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-lc++"
+        } >> "$GITHUB_ENV"
