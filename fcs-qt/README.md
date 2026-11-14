@@ -71,8 +71,8 @@ it still deserializes, saves and re-renders. A new setting needs no Rust changes
 
 ## Build and run
 
-You need Qt 6.10 or newer (MSVC 64-bit kit) and the MSVC build tools. VS 2019 Build Tools link
-against the prebuilt Qt 6.10.3 MSVC 2022 binaries without trouble; Qt 6.12 needs VS 2022.
+You need Qt 6.10 or newer (MSVC 64-bit kit) and the MSVC build tools: VS 2022 for Qt 6.12, as
+CI uses (VS 2019 links Qt 6.10.3 fine, but stops at Qt 6.12's compiler check).
 
 ```powershell
 ./fcs-qt/dev.ps1 run                # or: test, clippy --all-targets, build --release
@@ -94,12 +94,12 @@ use plain `libheif[core]`.
 its `bin` on PATH, sets `RUSTFLAGS`, and points `PKG_CONFIG_PATH` at the static-md triplet. The
 crate is not a workspace member, because CI builds `--workspace` on runners without Qt.
 
-Qt came from `aqtinstall` (`aqt install-qt windows desktop 6.10.3 win64_msvc2022_64`). Qt 6.11.2
-and later moved to a new repository layout that aqtinstall 3.3.0, the latest release, cannot
-read. Its main branch can (`pip install git+https://github.com/miurahr/aqtinstall.git`), and CI
-installs Qt 6.12.0 that way. **Qt 6.12 needs Visual Studio 2022** (MSVC 19.30+) on Windows;
-with VS 2019 it stops at `#error` in `qcompilerdetection.h`, so local Windows builds stay on
-6.10.3 until VS 2022 is installed.
+Qt comes from `aqtinstall`. Qt 6.11.2 and later moved to a new repository layout that
+aqtinstall 3.3.0, the latest release, cannot read; its main branch can, and both CI and local
+builds install Qt 6.12.0 with it:
+`uvx --from git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7 aqt install-qt windows desktop 6.12.0 win64_msvc2022_64 -O %USERPROFILE%\Qt`.
+**Qt 6.12 needs Visual Studio 2022** (MSVC 19.30+) on Windows; with VS 2019 it stops at
+`#error` in `qcompilerdetection.h`.
 
 **Linux** (checked on Ubuntu 26.04 in WSL2, Qt 6.10.2 from apt):
 
@@ -190,9 +190,10 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
     back to Vulkan here, and would fall back to the CPU on machines without Vulkan.
     `--no-system-d3d-compiler` fixes it; Qt Quick doesn't need it either.
   - **The MSVC runtime is now a dependency.** fcs-gui links the CRT statically; fcs-qt can't,
-    because Qt doesn't. The package copies the VS 2022 runtime DLLs next to the exe. VS 2019's
-    are too old for Qt's MSVC 2022 binaries, so a local build without VS 2022 skips them and
-    relies on the installed VC++ redistributable.
+    because Qt doesn't. The package copies the VS 2022 runtime DLLs next to the exe (14.44 from
+    the local VS 2022 Build Tools, 2026-11-14). VS 2019's are too old for Qt's MSVC 2022
+    binaries, so a machine without VS 2022 skips them and relies on the installed VC++
+    redistributable.
   - Sizes (CI artifacts, Qt 6.12): Windows zip 48 MB (113 MB unpacked), Linux AppImage 61 MB,
     macOS dmg 79 MB.
   - **macdeployqt copies Qt's SQL drivers.** Their ODBC/PostgreSQL/Mimer client libraries

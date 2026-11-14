@@ -169,12 +169,13 @@ Rectangle {
         }
     }
 
+    // No preset file name: Qt rejects a name that doesn't exist yet (a startup warning when
+    // declared), and Windows' native dialog ignores one set at open time.
     FileDialog {
         id: queueListDialog
         title: qsTr("Save queue list")
         fileMode: FileDialog.SaveFile
         defaultSuffix: "txt"
-        selectedFile: "queue.txt"
         nameFilters: [qsTr("Text files (*.txt)")]
         onAccepted: Studio.saveQueueList(selectedFile.toString())
     }
@@ -185,7 +186,6 @@ Rectangle {
         title: qsTr("Save export report")
         fileMode: FileDialog.SaveFile
         defaultSuffix: "csv"
-        selectedFile: "face-crop-report.csv"
         nameFilters: [qsTr("CSV (*.csv)"), qsTr("JSON (*.json)")]
         onAccepted: Studio.saveReport(selectedFile.toString())
     }
