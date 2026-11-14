@@ -93,6 +93,9 @@ Darwin)
 EOF
     # macdeployqt copies Qt and every other non-system dylib (Homebrew's libheif, dav1d) in.
     macdeployqt "$app" -qmldir="$qt/src/fcs_qt" -always-overwrite
+    # It also copies Qt's SQL drivers, which fcs-qt never uses and whose ODBC/PostgreSQL/Mimer
+    # client libraries it cannot bundle, leaving references into Homebrew and /Applications.
+    rm -rf "$app/Contents/PlugIns/sqldrivers"
     # Apple silicon refuses unsigned code, and macdeployqt's edits void the linker's ad-hoc
     # signatures; re-sign ad hoc (no Developer ID yet, so Gatekeeper still warns).
     codesign --force --deep --sign - "$app"
