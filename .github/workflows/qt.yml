@@ -110,9 +110,9 @@ jobs:
           }
           & C:\vcpkg\vcpkg.exe install "dav1d:x64-windows-static-md" "libheif[core,libde265]:x64-windows-static-md"
 
-      - name: Install dav1d + libheif (macOS, Homebrew)
+      - name: Install native dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install dav1d libheif pkg-config
+        uses: ./.github/actions/macos-build-deps
 
       - name: Install native dependencies (Linux)
         if: runner.os == 'Linux'
@@ -180,16 +180,13 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN=1 ./fcs-qt/packaging/smoke.sh \
             xvfb-run -a "$PWD/fcs-qt/dist/fcs-qt-linux-x86_64.AppImage"
 
-      # The otool lines answer whether Homebrew's libheif/dav1d are linked dynamically, which
-      # would also hold for fcs-gui's bundle (build_macos.sh copies no dylibs); the check after
-      # fails if fcs-qt's bundle still points into Homebrew.
+      # libheif and dav1d are static (macos-build-deps); the check fails if anything in the bundle
+      # still points into Homebrew.
       - name: Package (macOS)
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
         run: |
           ./fcs-qt/packaging/package.sh
           app="fcs-qt/dist/Face Crop Studio Qt.app"
-          echo "Built binary links:"; otool -L fcs-qt/target/release/fcs-qt | grep -v "/System/\|/usr/lib/"
-          echo "libheif plugins on the build machine:"; ls "$(brew --prefix libheif)/lib/libheif/plugins" 2>/dev/null || echo none
           if find "$app" -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} + 2>/dev/null | grep /opt/homebrew; then
             echo "the bundle still loads libraries from Homebrew (above)" >&2; exit 1
           fi
