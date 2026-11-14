@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `oi_train_fetch --large` adds photographs with large faces, and `oi_negatives pick` can keep only
   a fraction of the frame-filling negatives.
 
+### Fixed
+
+- The macOS app now starts on Macs without Homebrew. Its HEIC and AVIF decoders (libheif,
+  dav1d) came from Homebrew as shared libraries that were never copied into the app, so it
+  only ran where `brew install libheif dav1d` had been done. They are now built from source
+  and linked in, as on Linux, and the release checks the app loads nothing from outside
+  itself and macOS. This also keeps the GPL x265 encoder, which Homebrew's libheif links,
+  out of the app, as the Windows and Linux builds already did.
+
 ## [2.3.4] - 2026-11-08
 
 ### Changed
