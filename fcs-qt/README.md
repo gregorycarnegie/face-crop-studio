@@ -142,7 +142,7 @@ listing is fcs-gui's), and signing: the .exe and MSI are unsigned and the .app i
 which the release workflow would fix with its certificates (step 5).
 
 Icons: the .exe embeds fcs-gui's `app_icon.ico` (build.rs), every window gets it at startup
-(`images::set_window_icon`), the .app gets an `.icns` made from `app_logo.svg`, and the Linux
+(`images::install_app_icon`, which also serves it to the header), the .app gets an `.icns` made from `app_logo.svg`, and the Linux
 packages a 256 px PNG of it.
 
 ## Findings

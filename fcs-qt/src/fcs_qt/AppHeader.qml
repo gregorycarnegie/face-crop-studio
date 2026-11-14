@@ -24,22 +24,15 @@ Rectangle {
         anchors.rightMargin: Theme.pad
         spacing: 12
 
-        Rectangle {
+        // The app icon, decoded from fcs-gui's app_icon.ico at startup (images.rs).
+        Image {
             Layout.preferredWidth: 30
             Layout.preferredHeight: 30
-            radius: 8
-            gradient: Gradient {
-                GradientStop { position: 0; color: Theme.peach }
-                GradientStop { position: 1; color: Theme.accent }
-            }
+            source: "image://fcs/app/icon"
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+            mipmap: true
             Accessible.ignored: true
-
-            Icon {
-                anchors.centerIn: parent
-                path: Icons.faceScan
-                color: Theme.textOnAccent
-                size: 20
-            }
         }
 
         Text {

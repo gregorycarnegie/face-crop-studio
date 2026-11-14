@@ -29,7 +29,7 @@ fn main() {
     // The QML module lives at :/qt/qml/fcs_qt, the URI qtbridge registers Studio under.
     include_bytes_qml!("fcs_qt", "qt/qml");
     let mut app = QApp::new();
-    images::set_window_icon();
+    images::install_app_icon();
     app.application_name("Face Crop Studio")
         .register::<studio::Studio>()
         .add_import_path("qrc:/qt/qml");

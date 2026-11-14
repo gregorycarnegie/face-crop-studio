@@ -108,13 +108,17 @@ fn app_icon() -> image::ImageResult<RgbaImage> {
     image::load_from_memory_with_format(APP_ICON, image::ImageFormat::Ico).map(|i| i.to_rgba8())
 }
 
-/// Give every window the app icon. Call once the QApp exists.
-pub fn set_window_icon() {
+/// Give every window the app icon, and hold it for the header as `image://fcs/app/icon`.
+/// Call once the QApp exists.
+pub fn install_app_icon() {
     match app_icon() {
-        // SAFETY: the buffer is width * height * 4 bytes, and Qt copies it before returning.
-        Ok(icon) => unsafe {
-            fcs_set_window_icon(icon.as_ptr(), icon.width() as i32, icon.height() as i32)
-        },
+        Ok(icon) => {
+            // SAFETY: the buffer is width * height * 4 bytes, and Qt copies it before returning.
+            unsafe {
+                fcs_set_window_icon(icon.as_ptr(), icon.width() as i32, icon.height() as i32)
+            };
+            put("app/icon", Pixels::Rgba(icon));
+        }
         Err(err) => log::warn!("app icon unreadable: {err}"),
     }
 }
