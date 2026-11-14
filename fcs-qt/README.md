@@ -185,7 +185,19 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
     because Qt doesn't. The package copies the VS 2022 runtime DLLs next to the exe. VS 2019's
     are too old for Qt's MSVC 2022 binaries, so a local build without VS 2022 skips them and
     relies on the installed VC++ redistributable.
-  - Windows package: 113 MB unpacked, 47 MB zipped (fcs-gui's zip has no Qt).
+  - Sizes (CI artifacts, Qt 6.12): Windows zip 48 MB (113 MB unpacked), Linux AppImage 61 MB,
+    macOS dmg 79 MB.
+  - **macdeployqt copies Qt's SQL drivers.** Their ODBC/PostgreSQL/Mimer client libraries
+    can't be bundled, which left references into Homebrew; `package.sh` deletes them. It did
+    bundle Homebrew's libheif and dav1d correctly, with no Homebrew paths left in the bundle.
+  - **The shipped fcs-gui bundle probably needs Homebrew.** fcs-qt's build log shows the
+    release binary loading `/opt/homebrew/opt/libheif/lib/libheif.1.dylib` and `libdav1d.7.dylib`
+    by absolute path. fcs-gui links the same libraries the same way, and `build_macos.sh`
+    copies no dylibs into the `.app`. So the current fcs-gui release very likely fails to start
+    on a Mac without `brew install libheif dav1d`. Not yet confirmed on a clean Mac, and not
+    fixed here.
+  - All three packages pass the smoke test in CI: the detector loads from the package (CPU on
+    the Linux runner, which has no GPU), with no QML or plugin errors.
 
 - **Windows, Linux and macOS.** Face Crop Studio ships on all three. On Linux
   (2026-11-13, Ubuntu 26.04 in WSL2) fcs-qt builds with no code changes, its 11 tests pass
