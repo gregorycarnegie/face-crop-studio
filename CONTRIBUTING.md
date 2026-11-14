@@ -74,7 +74,7 @@ if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
   & C:\vcpkg\bootstrap-vcpkg.bat
 }
 
-& C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static "libheif[core]:x64-windows-static"
+& C:\vcpkg\vcpkg.exe install dav1d:x64-windows-static "libheif[core,libde265]:x64-windows-static"
 ```
 
 Set the environment variables for your current terminal:
