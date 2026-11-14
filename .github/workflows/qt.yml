@@ -119,8 +119,8 @@ jobs:
 
       - name: Install native dependencies (macOS)
         if: runner.os == 'macOS'
-        # A source build takes about a minute; this step hung for an hour twice here (not in
-        # ci.yml or release.yml). Time out so the log is kept and says where.
+        # A source build takes about a minute; it used to hang on an unlimited make -j (fixed in
+        # the action). Time out so the log is kept and says where if it ever stalls again.
         timeout-minutes: 15
         uses: ./.github/actions/macos-build-deps
 

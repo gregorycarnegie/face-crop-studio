@@ -58,6 +58,8 @@ runs:
           -Denable_tools=false -Denable_tests=false
         ninja -C "$src/dav1d-${DAV1D_VERSION}/build" install
 
+        # --parallel needs a count: alone it is an unlimited make -j, which swaps the runner to a
+        # standstill mid-build.
         # CMake 4 refuses libde265 1.0.15's minimum version without the policy floor.
         curl -fsSL $RETRY -o "$src/libde265.tar.gz" \
           "https://github.com/strukturag/libde265/releases/download/v${DE265_VERSION}/libde265-${DE265_VERSION}.tar.gz"
@@ -66,7 +68,7 @@ runs:
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_INSTALL_PREFIX="$prefix" \
           -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
           -DENABLE_DECODER=ON -DENABLE_ENCODER=OFF -DENABLE_SDL=OFF
-        cmake --build "$src/libde265-${DE265_VERSION}/build" --parallel
+        cmake --build "$src/libde265-${DE265_VERSION}/build" --parallel "$(sysctl -n hw.ncpu)"
         cmake --install "$src/libde265-${DE265_VERSION}/build"
 
         # Every optional codec off explicitly: the runner's Homebrew has x265, jpeg, openjpeg and
@@ -86,7 +88,7 @@ runs:
           -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_PREFIX_PATH="$prefix" \
           -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
           -DENABLE_PLUGIN_LOADING=OFF -DWITH_LIBDE265=ON $off
-        cmake --build "$src/libheif-${LIBHEIF_VERSION}/build" --parallel
+        cmake --build "$src/libheif-${LIBHEIF_VERSION}/build" --parallel "$(sysctl -n hw.ncpu)"
         cmake --install "$src/libheif-${LIBHEIF_VERSION}/build"
 
     # Runs on cache hits too: the exports have to be present either way, and the checks double
