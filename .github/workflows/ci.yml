@@ -236,12 +236,11 @@ jobs:
             "RUSTFLAGS=${{ matrix.rustflags }}"
           ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Install dav1d + libheif (macOS, Homebrew)
+      # Built from source and linked statically, as release.yml does, so CI tests the
+      # library set that ships (see the action for why Homebrew's libheif is not used).
+      - name: Install native dependencies (macOS)
         if: runner.os == 'macOS'
-        run: |
-          # brew ships versions new enough for both crates, so unlike Linux there
-          # is nothing to build from source here.
-          brew install dav1d libheif pkg-config
+        uses: ./.github/actions/macos-build-deps
 
       - name: Install native dependencies (Linux)
         if: runner.os == 'Linux'
