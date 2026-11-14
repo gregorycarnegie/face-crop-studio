@@ -246,7 +246,24 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
    Deliberate differences: settings save on every change, so there is no Save Settings; and
    Restore defaults resets to the factory settings, where fcs-gui's returns to the settings it
    launched with (or "Set as Default"'s in-memory copy).
-4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).
+4. ~~A batch-performance comparison against fcs-gui~~: done 2026-11-14, release builds on
+   Windows (Ryzen 9 7950X, RTX 4090, wgsl-gpu), same settings file, timed from the first to
+   the last moment either app was busy:
+
+   | | fcs-qt before | fcs-qt now | fcs-gui |
+   |---|---|---|---|
+   | 1,000 Open Images photos (888 crops) | never finished: window hung 15+ min | 6.4 s finding faces + 5.9 s export | 9.0 s batch export |
+   | 8 camera RAW files (5 crops) | 10.2 s + 8.5 s | 5.0 s + 3.6 s | 4.4 s |
+   | Peak memory, 1,000 photos / RAW | — | 0.8 GB / 2.9 GB | 0.7 GB / 3.9 GB |
+
+   Two fixes came out of it. The queue went to QML whole after every detection, and QML takes
+   it in at a cost proportional to its length, so a batch was quadratic: 170 ms a photo at 200
+   photos. Single photos now go as a row update (`queueRowChanged`, `queueRowRemoved`). And
+   detection and export ran on one thread; they now use fcs-gui's batch worker count (half
+   the cores, at most 4). fcs-qt still does more work in all, because it decodes each photo
+   twice (to find faces as photos arrive, then to export), but the export itself is quicker
+   since the faces are already found. The window answers within 20 ms throughout, apart from
+   about 0.5 s while 1,000 photos are first added to the list.
 5. One release shipping both front ends before deciding; dropping egui would be the UI
    overhaul the 3.0 version is reserved for.
 

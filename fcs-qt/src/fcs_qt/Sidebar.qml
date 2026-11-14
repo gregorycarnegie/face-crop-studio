@@ -9,10 +9,14 @@ Rectangle {
 
     color: Theme.bg1
 
-    // Mirrors Studio.queue in place, so a finished detection updates one row instead of
-    // resetting the list (and its scroll position) mid-batch.
+    // Mirrors Studio.queue in place, so the list (and its scroll position) is not reset when
+    // photos are added. A single photo's change or removal comes as its own signal.
     function sync() {
         const items = Studio.queue
+        if (items.length === 0) {
+            queueModel.clear()
+            return
+        }
         for (let i = 0; i < items.length; ++i) {
             if (i < queueModel.count)
                 queueModel.set(i, items[i])
@@ -28,6 +32,8 @@ Rectangle {
     Connections {
         target: Studio
         function onQueueChanged() { root.sync() }
+        function onQueueRowChanged(row, item) { queueModel.set(row, item) }
+        function onQueueRowRemoved(row) { queueModel.remove(row) }
     }
 
     Rectangle {

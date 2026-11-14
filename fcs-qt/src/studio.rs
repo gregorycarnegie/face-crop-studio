@@ -26,8 +26,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, RwLock,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread,
@@ -166,6 +166,10 @@ pub struct Studio {
     pending: i32,
     queue: Vec<Value>,
     selected_total: i32,
+    /// How many photos have a face selected.
+    selected_photos: i32,
+    /// The current photo's queue row, or null.
+    current_row: Value,
     current: i32,
     image_url: String,
     image_width: i32,
@@ -254,6 +258,8 @@ impl Default for Studio {
             cuda_warning: fcs_utils::cuda::WARNING.into(),
             pending: 0,
             queue: Vec::new(),
+            selected_photos: 0,
+            current_row: Value::Null,
             selected_total: 0,
             current: -1,
             image_url: String::new(),
@@ -332,13 +338,19 @@ impl Studio {
     qproperty!("cudaWarning", Member = cuda_warning, Constant);
     qproperty!("version", Member = version, Constant);
     qproperty!("qtVersion", Member = qt_version, Constant);
-    qproperty!("pending", Member = pending, Notify = queue_changed);
+    qproperty!("pending", Member = pending, Notify = summary_changed);
     qproperty!("queue", Member = queue, Notify = queue_changed);
     qproperty!(
         "selectedTotal",
         Member = selected_total,
-        Notify = queue_changed
+        Notify = summary_changed
     );
+    qproperty!(
+        "selectedPhotos",
+        Member = selected_photos,
+        Notify = summary_changed
+    );
+    qproperty!("currentRow", Member = current_row, Notify = summary_changed);
     qproperty!("current", Member = current, Notify = image_changed);
     qproperty!("imageUrl", Member = image_url, Notify = image_changed);
     qproperty!("imageWidth", Member = image_width, Notify = image_changed);
@@ -403,6 +415,12 @@ impl Studio {
     fn engine_changed(&mut self);
     #[qsignal(qml_name = "queueChanged")]
     fn queue_changed(&mut self);
+    #[qsignal(qml_name = "queueRowChanged")]
+    fn queue_row_changed(&mut self, row: i32, item: Value);
+    #[qsignal(qml_name = "queueRowRemoved")]
+    fn queue_row_removed(&mut self, row: i32);
+    #[qsignal(qml_name = "summaryChanged")]
+    fn summary_changed(&mut self);
     #[qsignal(qml_name = "imageChanged")]
     fn image_changed(&mut self);
     #[qsignal(qml_name = "previewsChanged")]
@@ -490,14 +508,14 @@ impl Studio {
         if current > index {
             // The same photo stays current; its position moved up.
             self.current -= 1;
-            self.publish_queue();
+            self.publish_removed(position);
             self.publish_image();
         } else if current == index {
             self.current = index.min(self.entries.len() as i32 - 1);
-            self.publish_queue();
+            self.publish_removed(position);
             self.current_changed();
         } else {
-            self.publish_queue();
+            self.publish_removed(position);
         }
     }
 
@@ -712,18 +730,18 @@ impl Studio {
         let settings = self.settings.clone();
         let current = self.image.clone();
         let handle = self.get_thread_handle();
+        let workers = settings.resolved_batch_parallelism();
         thread::spawn(move || {
             let claims = OutputClaims::new(overwrite);
-            let mut totals = PhotoExport::default();
-            let mut rows = Vec::with_capacity(jobs.len());
-            let mut done = 0usize;
-            for job in jobs {
+            // What one photo's export did, and why it failed if it could not be read.
+            type Outcome = (PhotoExport, Option<String>);
+            let export_one = |job: &ExportJob| -> Outcome {
                 let image = match &current {
                     Some((uid, image)) if *uid == job.uid => Ok(image.clone()),
                     _ => pipeline::load(&job.source, settings.crop.auto_orient_exif, job.turn)
                         .map(Arc::new),
                 };
-                let (result, error) = match image {
+                match image {
                     Ok(image) => (
                         pipeline::export_photo(
                             &engine,
@@ -745,7 +763,41 @@ impl Studio {
                         };
                         (failed, Some(format!("{err:#}")))
                     }
-                };
+                }
+            };
+            // As fcs-gui's batch: `workers` photos at a time, each taking the next unclaimed one.
+            let next = AtomicUsize::new(0);
+            let done = AtomicUsize::new(0);
+            let results: Vec<Mutex<Option<Outcome>>> =
+                jobs.iter().map(|_| Mutex::new(None)).collect();
+            thread::scope(|scope| {
+                for _ in 0..workers.min(jobs.len()) {
+                    scope.spawn(|| {
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(job) = jobs.get(i) else {
+                                break;
+                            };
+                            let result = export_one(job);
+                            *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+                            let finished = done.fetch_add(job.faces.len(), Ordering::Relaxed)
+                                + job.faces.len();
+                            let progress = finished as f64 / total as f64;
+                            handle.invoke_mut(move |studio| {
+                                studio.export_progress = progress;
+                                studio.export_changed();
+                            });
+                        }
+                    });
+                }
+            });
+            let mut totals = PhotoExport::default();
+            let mut rows = Vec::with_capacity(jobs.len());
+            for (job, result) in jobs.iter().zip(results) {
+                let (result, error) = result
+                    .into_inner()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_default();
                 rows.push(ReportRow {
                     image: job.source.name().display().to_string(),
                     outcome: if result.failed > 0 {
@@ -763,12 +815,6 @@ impl Studio {
                 totals.exported += result.exported;
                 totals.skipped += result.skipped;
                 totals.failed += result.failed;
-                done += job.faces.len();
-                let progress = done as f64 / total as f64;
-                handle.invoke_mut(move |studio| {
-                    studio.export_progress = progress;
-                    studio.export_changed();
-                });
             }
             let report = write_report(&rows, &report, &out_dir, &claims);
             handle.invoke_mut(move |studio| {
@@ -1275,22 +1321,36 @@ impl Studio {
             return;
         }
         let (tx, rx) = mpsc::channel::<DetectJob>();
-        let slot = self.engine_slot.clone();
-        let handle = self.get_thread_handle();
-        thread::spawn(move || {
-            for job in rx {
-                let engine = slot.read().unwrap_or_else(|e| e.into_inner()).clone();
-                let result = match engine {
-                    Some(engine) => {
-                        pipeline::detect(&engine, &job.source, job.orient, job.turn, &job.detection)
-                            .map_err(|err| format!("{err:#}"))
-                    }
-                    None => Err("no detector".to_string()),
-                };
-                let uid = job.uid;
-                handle.invoke_mut(move |studio| studio.detected(uid, result));
-            }
-        });
+        // As many photos at once as fcs-gui's batch export works on.
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..self.settings.resolved_batch_parallelism() {
+            let rx = rx.clone();
+            let slot = self.engine_slot.clone();
+            let handle = self.get_thread_handle();
+            thread::spawn(move || {
+                loop {
+                    // Held only until a job arrives; the detection runs unlocked.
+                    let job = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    let engine = slot.read().unwrap_or_else(|e| e.into_inner()).clone();
+                    let result = match engine {
+                        Some(engine) => pipeline::detect(
+                            &engine,
+                            &job.source,
+                            job.orient,
+                            job.turn,
+                            &job.detection,
+                        )
+                        .map_err(|err| format!("{err:#}")),
+                        None => Err("no detector".to_string()),
+                    };
+                    let uid = job.uid;
+                    handle.invoke_mut(move |studio| studio.detected(uid, result));
+                }
+            });
+        }
         self.jobs = Some(tx);
     }
 
@@ -1407,7 +1467,7 @@ impl Studio {
                 }
             }
         }
-        self.publish_queue();
+        self.publish_row(position);
     }
 
     /// Drop everything held for a photo leaving the queue.
@@ -1493,7 +1553,7 @@ impl Studio {
         change(&mut entry.turn);
         if entry.turn != before {
             self.requeue(self.current as usize);
-            self.publish_queue();
+            self.publish_row(self.current as usize);
         }
     }
 
@@ -1578,7 +1638,7 @@ impl Studio {
 
     fn selection_edited(&mut self) {
         self.publish_image();
-        self.publish_queue();
+        self.publish_row(self.current as usize);
         self.request_previews();
     }
 
@@ -1661,36 +1721,56 @@ impl Studio {
         self.log_changed();
     }
 
+    /// Send the whole queue: for changes to which photos it holds, or to every row at once.
+    /// One photo changing goes through `publish_row` instead. QML takes time in proportion to
+    /// the queue's length to take in a whole one, so sending it per detection made a batch
+    /// quadratic: 1,000 photos hung the window for over a quarter of an hour.
     fn publish_queue(&mut self) {
-        self.queue = self
-            .entries
-            .iter()
-            .map(|e| {
-                let (status, error) = match &e.status {
-                    Status::Queued => ("queued", ""),
-                    Status::Done => ("done", ""),
-                    Status::Failed(err) => ("failed", err.as_str()),
-                };
-                json!({
-                    "name": file_name(e.source.name()),
-                    "thumb": if matches!(e.status, Status::Done) { images::url(&thumb_key(e.uid, e.rev)) } else { String::new() },
-                    "status": status,
-                    "error": error,
-                    "faces": e.faces.len(),
-                    "selected": e.selected.iter().filter(|s| **s).count(),
-                    "mapped": e.mapped.clone().unwrap_or_default(),
-                })
-            })
-            .collect();
-        self.selected_total = self
-            .entries
-            .iter()
-            .map(|e| e.selected.iter().filter(|s| **s).count() as i32)
-            .sum();
+        self.queue = self.entries.iter().map(queue_row).collect();
         self.queue_changed();
+        self.publish_summary();
+    }
+
+    /// Send photo `position`'s row alone.
+    fn publish_row(&mut self, position: usize) {
+        if self.queue.len() != self.entries.len() {
+            return self.publish_queue();
+        }
+        let Some(entry) = self.entries.get(position) else {
+            return;
+        };
+        let row = queue_row(entry);
+        self.queue[position] = row.clone();
+        self.queue_row_changed(position as i32, row);
+        self.publish_summary();
+    }
+
+    /// Tell QML photo `position` left the queue.
+    fn publish_removed(&mut self, position: usize) {
+        if self.queue.len() != self.entries.len() + 1 {
+            return self.publish_queue();
+        }
+        self.queue.remove(position);
+        self.queue_row_removed(position as i32);
+        self.publish_summary();
+    }
+
+    /// What QML shows from the queue outside the list itself, so nothing else reads it whole.
+    fn publish_summary(&mut self) {
+        let selected = |e: &Entry| e.selected.iter().filter(|s| **s).count() as i32;
+        self.selected_total = self.entries.iter().map(selected).sum();
+        self.selected_photos = self.entries.iter().filter(|e| selected(e) > 0).count() as i32;
+        self.current_row = usize::try_from(self.current)
+            .ok()
+            .and_then(|i| self.queue.get(i))
+            .cloned()
+            .unwrap_or(Value::Null);
+        self.summary_changed();
     }
 
     fn publish_image(&mut self) {
+        // The current photo may have changed.
+        self.publish_summary();
         self.can_undo = !self.undo_stack.is_empty();
         self.can_redo = !self.redo_stack.is_empty();
         let turn = self.current_entry().map(|e| e.turn).unwrap_or_default();
@@ -1795,9 +1875,9 @@ impl Studio {
                 self.note("error", err.clone());
                 if let Some(position) = self.position(uid) {
                     self.entries[position].status = Status::Failed(err);
+                    self.publish_row(position);
                 }
                 self.publish_image();
-                self.publish_queue();
             }
         }
     }
@@ -2029,6 +2109,24 @@ fn guess_mapping_columns(columns: &[String]) -> (usize, usize) {
         .unwrap_or(if source == 0 { 1 } else { 0 })
         .min(columns.len().saturating_sub(1));
     (source, output)
+}
+
+/// A photo's row in the sidebar list.
+fn queue_row(e: &Entry) -> Value {
+    let (status, error) = match &e.status {
+        Status::Queued => ("queued", ""),
+        Status::Done => ("done", ""),
+        Status::Failed(err) => ("failed", err.as_str()),
+    };
+    json!({
+        "name": file_name(e.source.name()),
+        "thumb": if matches!(e.status, Status::Done) { images::url(&thumb_key(e.uid, e.rev)) } else { String::new() },
+        "status": status,
+        "error": error,
+        "faces": e.faces.len(),
+        "selected": e.selected.iter().filter(|s| **s).count(),
+        "mapped": e.mapped.clone().unwrap_or_default(),
+    })
 }
 
 fn thumb_key(uid: u64, rev: u32) -> String {

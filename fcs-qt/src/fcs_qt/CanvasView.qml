@@ -6,8 +6,8 @@ Rectangle {
 
     signal addPhotos
 
-    readonly property var entry: Studio.current >= 0 && Studio.current < Studio.queue.length
-                                 ? Studio.queue[Studio.current] : null
+    // Not Studio.queue[Studio.current]: reading the queue copies all of it.
+    readonly property var entry: Studio.currentRow || null
     readonly property bool hasImage: Studio.imageUrl !== ""
     // The face whose handles show, by index into Studio.faces.
     property int activeFace: -1

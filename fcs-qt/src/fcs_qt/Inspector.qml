@@ -97,7 +97,7 @@ Rectangle {
         }
 
         Text {
-            readonly property int photos: Studio.queue.filter(entry => entry.selected > 0).length
+            readonly property int photos: Studio.selectedPhotos
             Layout.fillWidth: true
             Layout.leftMargin: Theme.pad
             Layout.rightMargin: Theme.pad
