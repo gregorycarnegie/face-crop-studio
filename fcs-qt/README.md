@@ -46,6 +46,8 @@ pipeline and settings file.
 - Camera: a live view over the canvas, optionally with faces found in every frame. The
   shutter (or Space) adds the frame to the photos, held in memory. From there it is edited,
   previewed and exported like any photo, and named `Camera N`.
+- Paste (Ctrl+V, ⌘V on macOS) adds the clipboard's image the same way, named `Pasted N`. Qt
+  reads the clipboard, so PNG-only copies from browsers work on Windows too.
 - Backends, as in fcs-gui's GPU settings: WGSL on the GPU, experimental CUDA Rust (offered
   once the CUDA probe finds a device, behind fcs-gui's warning), or the CPU graph, plus
   "respect environment overrides". A switch loads the new engine in the background; the old
@@ -232,7 +234,7 @@ These are portable packages, not installers. The NSIS/MSI/MSIX, .deb and signed 
 1. ~~CI on all three platforms~~: done 2026-11-14 (`.github/workflows/qt.yml`, Qt 6.12).
 2. Packaging on all three: portable packages with Qt deployed and LGPL notices are done (see
    Packaging); the existing installers built from them are not.
-3. The fcs-gui features still missing: clipboard paste, queue list and after-the-fact
+3. The fcs-gui features still missing (clipboard paste done 2026-11-14): queue list and after-the-fact
    reports, aspect-ratio picks, metadata settings, telemetry and log level, settings
    save/restore/defaults, About.
 4. A batch-performance comparison against fcs-gui (large queues, camera RAW files).

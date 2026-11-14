@@ -66,6 +66,11 @@ ApplicationWindow {
         sequences: [StandardKey.Open]
         onActivated: photoDialog.open()
     }
+    // A focused text field takes Ctrl+V for itself first.
+    Shortcut {
+        sequences: [StandardKey.Paste]
+        onActivated: Studio.paste()
+    }
     Shortcut {
         sequence: "Ctrl+E"
         enabled: Studio.ready && Studio.selectedTotal > 0 && !Studio.exporting

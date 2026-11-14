@@ -91,9 +91,54 @@ pub unsafe extern "C" fn fcs_image_request(
     true
 }
 
+unsafe extern "C" {
+    /// cpp/image_provider.cpp: the clipboard's image as RGBA, sized through `alloc`.
+    fn fcs_clipboard_image(ctx: *mut c_void, alloc: Alloc) -> bool;
+}
+
+/// A tightly packed buffer for the C++ side to fill, as `(width, height, bytes)`.
+type Filled = (u32, u32, Vec<u8>);
+
+unsafe extern "C" fn fill(
+    ctx: *mut c_void,
+    width: u32,
+    height: u32,
+    channels: u32,
+    stride: *mut usize,
+) -> *mut u8 {
+    // SAFETY: `clipboard` passes a `Filled` as ctx and a valid stride pointer.
+    let filled = unsafe { &mut *ctx.cast::<Filled>() };
+    let row = width as usize * channels as usize;
+    *filled = (width, height, vec![0; row * height as usize]);
+    unsafe { *stride = row };
+    filled.2.as_mut_ptr()
+}
+
+/// The image on the system clipboard, if it holds one. Call on the GUI thread (QClipboard).
+pub fn clipboard() -> Option<RgbaImage> {
+    let mut filled: Filled = (0, 0, Vec::new());
+    // SAFETY: `fill` matches `Alloc` and `filled` outlives the call.
+    let found = unsafe { fcs_clipboard_image(std::ptr::from_mut(&mut filled).cast(), fill) };
+    found
+        .then(|| RgbaImage::from_raw(filled.0, filled.1, filled.2))
+        .flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fill_sizes_a_packed_rgba_buffer() {
+        let mut filled: Filled = (0, 0, Vec::new());
+        let mut stride = 0;
+        // SAFETY: a `Filled` ctx and a valid stride pointer, as `clipboard` passes.
+        let ptr = unsafe { fill(std::ptr::from_mut(&mut filled).cast(), 3, 2, 4, &mut stride) };
+        assert_eq!(stride, 12);
+        assert_eq!((filled.0, filled.1, filled.2.len()), (3, 2, 24));
+        assert_eq!(ptr, filled.2.as_mut_ptr());
+        assert!(RgbaImage::from_raw(filled.0, filled.1, filled.2).is_some());
+    }
 
     /// Stands in for a QImage: a buffer whose rows are padded to 4 bytes.
     struct Target {

@@ -38,7 +38,7 @@ ColumnLayout {
     Text {
         Layout.alignment: Qt.AlignHCenter
         Layout.maximumWidth: 400
-        text: qsTr("Add photos or a whole folder. Detection runs on this computer; nothing is uploaded.")
+        text: qsTr("Add photos or a whole folder, or paste an image. Detection runs on this computer; nothing is uploaded.")
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.Wrap
         lineHeight: 1.35

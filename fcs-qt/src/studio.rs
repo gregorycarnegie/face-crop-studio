@@ -194,6 +194,7 @@ pub struct Studio {
     camera_frame: Option<Arc<DynamicImage>>,
     camera_frames: u64,
     snapshots: u32,
+    pastes: u32,
     camera_open: bool,
     camera_live: bool,
     camera_status: String,
@@ -281,6 +282,7 @@ impl Default for Studio {
             camera_frame: None,
             camera_frames: 0,
             snapshots: 0,
+            pastes: 0,
             camera_open: false,
             camera_live: false,
             camera_status: String::new(),
@@ -920,9 +922,38 @@ impl Studio {
         self.snapshots += 1;
         let name = PathBuf::from(format!("Camera {}.png", self.snapshots));
         let label = file_name(&name);
+        self.note("info", format!("Snapshot added as {label}"));
+        self.add_memory(name, frame);
+    }
+
+    /// Add the clipboard's image to the photos, held in memory.
+    #[qslot]
+    fn paste(&mut self) {
+        let Some(image) = images::clipboard() else {
+            return self.toast("The clipboard holds no image".into(), String::new());
+        };
+        self.pastes += 1;
+        let name = PathBuf::from(format!("Pasted {}.png", self.pastes));
+        let label = file_name(&name);
+        self.note("info", format!("Pasted image added as {label}"));
+        self.add_memory(name, Arc::new(DynamicImage::ImageRgba8(image)));
+    }
+
+    #[qslot(qml_name = "closeCamera")]
+    fn close_camera(&mut self) {
+        self.stop_camera();
+        self.camera_open = false;
+        self.camera_changed();
+    }
+}
+
+impl Studio {
+    /// Queue an image that has no file (a snapshot or a paste) and show it.
+    fn add_memory(&mut self, name: PathBuf, image: Arc<DynamicImage>) {
+        let label = file_name(&name);
         let entry = Entry {
             uid: self.next_uid,
-            source: Source::Memory { name, image: frame },
+            source: Source::Memory { name, image },
             turn: Turn::default(),
             rev: 0,
             status: Status::Queued,
@@ -935,7 +966,6 @@ impl Studio {
         self.send_detection(&entry);
         self.entries.push(entry);
         self.pending += 1;
-        self.note("info", format!("Snapshot added as {label}"));
         self.toast(format!("Added {label} to the photos"), String::new());
         self.current = self.entries.len() as i32 - 1;
         if self.mapping.is_some() {
@@ -945,15 +975,6 @@ impl Studio {
         self.current_changed();
     }
 
-    #[qslot(qml_name = "closeCamera")]
-    fn close_camera(&mut self) {
-        self.stop_camera();
-        self.camera_open = false;
-        self.camera_changed();
-    }
-}
-
-impl Studio {
     fn add_paths(&mut self, dropped: Vec<PathBuf>) {
         let mut paths = Vec::new();
         for path in dropped {

@@ -1,6 +1,8 @@
 // QML's Image only loads URLs. This provider serves image://fcs/<key> from the Rust image store
 // (src/images.rs), so photos and previews reach the screen without touching the disk.
 
+#include <QtGui/QClipboard>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
 #include <QtQml/QQmlEngine>
 #include <QtQuick/QQuickImageProvider>
@@ -8,6 +10,7 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 extern "C" {
 using FcsAlloc = std::uint8_t *(*)(void *ctx, std::uint32_t width, std::uint32_t height,
@@ -53,6 +56,26 @@ public:
 };
 
 } // namespace
+
+// The clipboard's image, if it holds one, sized through `alloc` as above and copied in as
+// RGBA. Qt reads each platform's formats, including the "PNG" one Windows browsers write.
+// GUI thread only.
+extern "C" bool fcs_clipboard_image(void *ctx, FcsAlloc alloc)
+{
+    const QImage image =
+        QGuiApplication::clipboard()->image().convertToFormat(QImage::Format_RGBA8888);
+    if (image.isNull())
+        return false;
+    std::size_t stride = 0;
+    std::uint8_t *dst = alloc(ctx, std::uint32_t(image.width()), std::uint32_t(image.height()),
+                              4, &stride);
+    const std::size_t row = std::size_t(image.width()) * 4;
+    if (!dst || stride < row)
+        return false;
+    for (int y = 0; y < image.height(); ++y)
+        std::memcpy(dst + std::size_t(y) * stride, image.constScanLine(y), row);
+    return true;
+}
 
 // The engine owns the provider from here on.
 extern "C" void fcs_install_image_provider(QQmlEngine *engine)
