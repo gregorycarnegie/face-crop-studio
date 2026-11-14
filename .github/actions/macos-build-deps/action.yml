@@ -111,5 +111,7 @@ runs:
           echo "SYSTEM_DEPS_LIBHEIF_INCLUDE=$prefix/include"
           # libheif and libde265 are C++; on Linux libstdc++ comes in anyway, macOS needs libc++
           # named. Only aarch64 is built here, and it has no other rustflags to displace.
+          # Doctests link through rustdoc, which reads RUSTDOCFLAGS instead.
           echo "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-lc++"
+          echo "RUSTDOCFLAGS=-C link-arg=-lc++"
         } >> "$GITHUB_ENV"

@@ -343,10 +343,14 @@ jobs:
         shell: pwsh
         run: |
           $RawVersion = "${{ github.ref_name }}"
+          # A manual dry run on a branch has no version tag; use the workspace version instead.
+          if ("${{ github.ref_type }}" -ne "tag") {
+            $RawVersion = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          }
           if ($RawVersion.StartsWith("v")) { $RawVersion = $RawVersion.Substring(1) }
           $MsiVersion = $RawVersion.Split("-")[0]
           if ($MsiVersion -notmatch '^\d+\.\d+\.\d+$') {
-            throw "Invalid MSI version '$MsiVersion' derived from tag '${{ github.ref_name }}'"
+            throw "Invalid MSI version '$MsiVersion' derived from '$RawVersion'"
           }
 
           $DistDir = Join-Path $PWD "dist\$env:DIST_NAME"
