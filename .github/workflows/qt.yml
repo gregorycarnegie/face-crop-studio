@@ -22,7 +22,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.99.0"
-  QT_VERSION: "6.10.3"
+  # 6.12, not 6.10: 6.10.3's qyieldcpu.h calls __yield() undeclared on arm64, which current
+  # Xcode clang rejects; 6.12 uses __builtin_arm_yield. 6.12 needs MSVC 2022 on Windows.
+  QT_VERSION: "6.12.0"
   # Keep in sync with ci.yml.
   EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
   EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1.1/eye_refiner.onnx
@@ -77,8 +79,9 @@ jobs:
           version: ${{ env.QT_VERSION }}
           arch: ${{ matrix.qt-arch }}
           cache: true
-          # 3.3 reads the 6.10 repository layout; Qt 6.11.2+ needs a newer one (see README).
-          aqtversion: "==3.3.*"
+          # aqtinstall 3.3.0, the latest release, cannot read Qt 6.11.2+'s repository layout;
+          # its main branch can. Pinned to the commit that installed 6.12.0 for a local check.
+          aqtsource: "git+https://github.com/miurahr/aqtinstall.git@5a49f2b391ae8ee1d3c0dd87f8b33c1d49a4deb7"
 
       # ── Native dependencies ──────────────────────────────────────────────
       - name: Install pkg-config (Windows)

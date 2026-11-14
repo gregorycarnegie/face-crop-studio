@@ -64,7 +64,7 @@ it still deserializes, saves and re-renders. A new setting needs no Rust changes
 ## Build and run
 
 You need Qt 6.10 or newer (MSVC 64-bit kit) and the MSVC build tools. VS 2019 Build Tools link
-against the prebuilt Qt 6.10.3 MSVC 2022 binaries without trouble.
+against the prebuilt Qt 6.10.3 MSVC 2022 binaries without trouble; Qt 6.12 needs VS 2022.
 
 ```powershell
 ./fcs-qt/dev.ps1 run                # or: test, clippy --all-targets, build --release
@@ -85,8 +85,11 @@ its `bin` on PATH, sets `RUSTFLAGS`, and points `PKG_CONFIG_PATH` at the static-
 crate is not a workspace member, because CI builds `--workspace` on runners without Qt.
 
 Qt came from `aqtinstall` (`aqt install-qt windows desktop 6.10.3 win64_msvc2022_64`). Qt 6.11.2
-and later moved to a new repository layout that aqtinstall 3.3.0 cannot read yet. Use the
-official online installer for those.
+and later moved to a new repository layout that aqtinstall 3.3.0, the latest release, cannot
+read. Its main branch can (`pip install git+https://github.com/miurahr/aqtinstall.git`), and CI
+installs Qt 6.12.0 that way. **Qt 6.12 needs Visual Studio 2022** (MSVC 19.30+) on Windows;
+with VS 2019 it stops at `#error` in `qcompilerdetection.h`, so local Windows builds stay on
+6.10.3 until VS 2022 is installed.
 
 **Linux** (checked on Ubuntu 26.04 in WSL2, Qt 6.10.2 from apt):
 
@@ -164,6 +167,13 @@ with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
     libwebp's sharpyuv is present needs `-DWITH_LIBSHARPYUV=OFF` or an extra link library.
   - The webcam crate's bindgen needs `libclang-dev`, which CI runners have but a bare
     system doesn't.
+
+  Qt 6.12.0 (aqtinstall's build, in WSL) works the same: tests pass and the app runs, with
+  qtbridge 0.4.1 compiled against 6.12's private headers.
+
+  macOS: the first CI run (Qt 6.10.3) failed inside Qt. On arm64, `qyieldcpu.h` calls
+  `__yield()` without declaring it, and the runner's Xcode clang rejects that. Qt 6.12 uses
+  `__builtin_arm_yield` instead, which is why CI moved to 6.12.
 
   Not checked on Linux: the file and folder dialogs (Qt Quick's own, non-native, unless a
   platform theme provides one), the camera (no webcam in WSL), and a real GPU (WSL's Vulkan
