@@ -774,10 +774,11 @@ impl Studio {
                 for _ in 0..workers.min(jobs.len()) {
                     scope.spawn(|| {
                         loop {
-                            let i = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(job) = jobs.get(i) else {
+                            let ticket = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(i) = fcs_utils::claim::claim(ticket, jobs.len()) else {
                                 break;
                             };
+                            let job = &jobs[i];
                             let result = export_one(job);
                             *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
                             let finished = done.fetch_add(job.faces.len(), Ordering::Relaxed)
@@ -794,10 +795,12 @@ impl Studio {
             let mut totals = PhotoExport::default();
             let mut rows = Vec::with_capacity(jobs.len());
             for (job, result) in jobs.iter().zip(results) {
+                // Every job was claimed exactly once (tools/verification: ClaimProofs), and a
+                // worker that panicked has already re-raised it out of the scope.
                 let (result, error) = result
                     .into_inner()
                     .unwrap_or_else(|e| e.into_inner())
-                    .unwrap_or_default();
+                    .expect("every export job is claimed and finished");
                 rows.push(ReportRow {
                     image: job.source.name().display().to_string(),
                     outcome: if result.failed > 0 {

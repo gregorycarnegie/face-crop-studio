@@ -15,7 +15,7 @@ Every check translates those Rust files through Charon and Aeneas, then checks
 `Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`,
 `PartitionProofs.lean`, `GeometryProofs.lean`, `TransformProofs.lean`,
 `GpuProofs.lean`, `ShapeProofs.lean`, `ByteProofs.lean`, `CopyProofs.lean`,
-`HeadProofs.lean`, `BufferProofs.lean`, `GraphProofs.lean`, and `GreedyProofs.lean` against the freshly
+`HeadProofs.lean`, `BufferProofs.lean`, `GraphProofs.lean`, `GreedyProofs.lean`, and `ClaimProofs.lean` against the freshly
 generated model. Generated files and toolchains stay outside the tracked source tree.
 
 The [proof ledger](PROOF_LEDGER.md) lists the remaining candidates found in the
