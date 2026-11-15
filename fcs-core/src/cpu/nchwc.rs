@@ -22,8 +22,8 @@ use super::geometry::{
     column_index, column_inside, input_index, interior, output_dim, tap_offset, tap_rows,
     weight_index,
 };
-use super::output::{write_each, write_tiled_row, write_upsampled_row};
-use super::partition::{chunk_span, decode_job, row_base, tile_end};
+use super::output::{write_each, write_tiled_row, write_tiled_rows, write_upsampled_row};
+use super::partition::{chunk_span, decode_job, row_base};
 use super::size::{checked_allocation, checked_elements};
 use super::tensor::Tensor;
 use super::transform::{
@@ -503,7 +503,8 @@ fn conv_with<const K: usize, const S: usize, const B: usize>(
         checked_elements(&[rows, chunks]).context("convolution job count overflows usize")?;
 
     // SAFETY: the jobs cover every (batch item, block group, row, column chunk), and each
-    // `Row::run` writes every column of its chunk for each of its blocks.
+    // `Row::run` writes every column of its chunk for each of its blocks (`write_tiled_rows`,
+    // verified by tools/verus).
     let output = unsafe {
         Blocked::written(arena, batch, out_channels, full_h, full_w, |data| {
             let out = OutPtr(data.as_mut_ptr());
@@ -554,31 +555,39 @@ struct Row<'a, const K: usize, const S: usize, const B: usize> {
 }
 
 impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
-    /// Columns `span` in tiles of `P` where no tap can leave the input, one checked pixel at
-    /// a time at the borders.
+    /// Columns `span` of blocks `first..first + F`: tiles of `P` where no tap can leave the
+    /// input, one checked pixel at a time at the borders.
     fn run<const F: usize, const P: usize>(&self, span: Range<usize>) {
         let g = self.geometry;
         let (lo, hi) = interior(self.input.width, K, S, g.pad, g.out_w);
         let lo = lo.clamp(span.start, span.end);
         let hi = hi.clamp(lo, span.end);
-        let full = tile_end(lo, hi, P);
-        let mut ox = span.start;
-        while ox < lo {
-            self.tile::<F, 1, true>(ox);
-            ox += 1;
-        }
-        while ox < full {
-            self.tile::<F, P, false>(ox);
-            ox += P;
-        }
-        while ox < hi {
-            self.tile::<F, 1, false>(ox);
-            ox += 1;
-        }
-        while ox < span.end {
-            self.tile::<F, 1, true>(ox);
-            ox += 1;
-        }
+        // SAFETY: segment `f` is columns `span` of row `oy` of block `first + f`, inside the
+        // output (`span.end <= out_w`). The jobs own disjoint (item, block, row, column)
+        // ranges (tools/verification: decode_job_spec, chunks_disjoint,
+        // output_indices_unique), so no other task touches these elements.
+        let mut rows: [&mut [MaybeUninit<f32x8>]; F] = std::array::from_fn(|f| {
+            let base = row_base(
+                self.n,
+                self.first + f,
+                self.oy,
+                g.out_blocks,
+                g.out_h,
+                g.out_w,
+            );
+            unsafe { std::slice::from_raw_parts_mut(self.out.at(base + span.start), span.len()) }
+        });
+        let x0 = span.start;
+        // Verified by tools/verus: every element of every segment is written, and only the
+        // unchecked tiles and pixels run inside `lo..hi`.
+        write_tiled_rows(
+            &mut rows,
+            lo - x0,
+            hi - x0,
+            |x| self.tile::<F, 1, true>(x0 + x),
+            |x| self.tile::<F, 1, false>(x0 + x),
+            |x| self.tile::<F, P, false>(x0 + x),
+        );
     }
 
     /// `F` output blocks x `P` pixels from column `ox`, in registers. `CHECK` skips taps that
@@ -588,7 +597,10 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
     /// weight vector through `P` FMAs. Holding the `F` weights instead would need `F` more
     /// registers than AVX2 has.
     #[inline(always)]
-    fn tile<const F: usize, const P: usize, const CHECK: bool>(&self, ox: usize) {
+    fn tile<const F: usize, const P: usize, const CHECK: bool>(
+        &self,
+        ox: usize,
+    ) -> [[f32x8; P]; F] {
         let (input, weights, g) = (self.input, self.weights, self.geometry);
         let width = input.width;
         let per_block = weights.per_block();
@@ -616,8 +628,9 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
                     // channels of a 4x3 tile, and the 1x1 layers fell from 117 to 73 GFLOP/s.
                     for j in 0..input.block {
                         // SAFETY: the pixel is inside the row -- interior tiles by construction
-                        // of `interior` and `tap_rows`, border ones by the check above -- and
-                        // `j < B`, the input's block.
+                        // of `interior` and `tap_rows`, and `write_tiled_rows` only runs
+                        // unchecked tiles inside `lo..hi` (verified by tools/verus); border ones
+                        // by the check above -- and `j < B`, the input's block.
                         let x: [f32x8; P] = std::array::from_fn(|p| {
                             let ix = column_index(left, p * S + kx, g.pad);
                             let at = input_index(row, ix, B, j);
@@ -639,22 +652,10 @@ impl<const K: usize, const S: usize, const B: usize> Row<'_, K, S, B> {
             }
         }
 
-        for (f, pixels) in acc.iter().enumerate() {
-            let base = row_base(
-                self.n,
-                self.first + f,
-                self.oy,
-                g.out_blocks,
-                g.out_h,
-                g.out_w,
-            ) + ox;
-            for (p, &v) in pixels.iter().enumerate() {
-                let v = if g.relu { v.max(f32x8::ZERO) } else { v };
-                // SAFETY: columns `ox..ox + P` of row `oy` of blocks `first..first + F` belong
-                // to this task alone, and `ox + P <= out_w`.
-                unsafe { self.out.at(base + p).write(MaybeUninit::new(v)) };
-            }
+        if g.relu {
+            acc = acc.map(|pixels| pixels.map(|v| v.max(f32x8::ZERO)));
         }
+        acc
     }
 }
 

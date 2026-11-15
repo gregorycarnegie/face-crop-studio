@@ -29,20 +29,6 @@ theorem chunk_span_spec (index chunk length : Usize)
   all_goals simp_all [Nat.add_mul]
   all_goals omega
 
-theorem tile_end_spec (start stop tile : Usize)
-    (hs : start.val ≤ stop.val) (ht : 0 < tile.val) :
-    partition.tile_end start stop tile ⦃ full =>
-      full.val = start.val + (stop.val - start.val) / tile.val * tile.val ∧
-      start.val ≤ full.val ∧ full.val ≤ stop.val ∧
-      stop.val - full.val < tile.val ⦄ := by
-  have hb := Nat.div_mul_le_self (stop.val - start.val) tile.val
-  have hr := Nat.mod_lt (stop.val - start.val) ht
-  have he := Nat.mod_add_div (stop.val - start.val) tile.val
-  unfold partition.tile_end
-  step*
-  all_goals simp_all [Nat.mul_comm]
-  all_goals omega
-
 /-- Every column belongs to a chunk, including the last partial chunk. -/
 theorem chunks_cover (x chunk length : Nat) (hc : 0 < chunk) (hx : x < length) :
     x / chunk * chunk < length ∧ x / chunk * chunk ≤ x ∧
@@ -120,7 +106,6 @@ theorem row_base_spec (n c y batches channels height width : Usize)
 
 #print axioms decode_job_spec
 #print axioms chunk_span_spec
-#print axioms tile_end_spec
 #print axioms chunks_cover
 #print axioms chunks_disjoint
 #print axioms output_indices_unique
