@@ -37,6 +37,8 @@
 
 /// Replacing a file without destroying it on the way.
 pub mod atomic_write;
+/// The claiming step of a shared-counter work queue, proved in tools/verification.
+pub mod claim;
 /// Shared color utilities.
 pub mod color;
 /// Application configuration and settings management.

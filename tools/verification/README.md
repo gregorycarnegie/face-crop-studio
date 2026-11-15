@@ -15,7 +15,7 @@ Every check translates those Rust files through Charon and Aeneas, then checks
 `Proofs.lean`, `TensorProofs.lean`, `LayoutProofs.lean`, `RowsProofs.lean`,
 `PartitionProofs.lean`, `GeometryProofs.lean`, `TransformProofs.lean`,
 `GpuProofs.lean`, `ShapeProofs.lean`, `ByteProofs.lean`, `CopyProofs.lean`,
-`HeadProofs.lean`, `BufferProofs.lean`, `GraphProofs.lean`, and `GreedyProofs.lean` against the freshly
+`HeadProofs.lean`, `BufferProofs.lean`, `GraphProofs.lean`, `GreedyProofs.lean`, and `ClaimProofs.lean` against the freshly
 generated model. Generated files and toolchains stay outside the tracked source tree.
 
 The [proof ledger](PROOF_LEDGER.md) lists the remaining candidates found in the
@@ -83,10 +83,11 @@ The additional proofs establish:
   is never longer than its input slice.
 - **Output ownership:** job decoding reconstructs the original index and produces
   valid group/row/chunk coordinates. The batch stays inside a bounded job grid.
-  Chunks cover every column without overlap; tile endpoints leave only a tail
-  shorter than one tile; valid NCHW output coordinates cannot alias. Row bases
-  stay inside the checked allocation. The production dense/depthwise schedulers
-  and write-address calculations use these helpers.
+  Chunks cover every column without overlap; valid NCHW output coordinates cannot
+  alias. Row bases stay inside the checked allocation. The production
+  dense/depthwise schedulers and write-address calculations use these helpers; the
+  dense convolution's per-job row segments are disjoint because of them. Tiling
+  within a segment is Verus's (`write_tiled_rows`, [`tools/verus`](../verus)).
 - **Convolution reads:** output dimensions match the existing saturating formula;
   invalid kernels/strides and overflowing padded sizes are rejected. Horizontal
   interior columns are exactly the complete in-bounds windows, including every

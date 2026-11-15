@@ -52,7 +52,7 @@ pub type Alloc = unsafe extern "C" fn(
 /// # Safety
 ///
 /// `id` must point to `id_len` readable bytes, and `alloc` must return null or a buffer of at
-/// least `stride * height` writable bytes with `stride` written.
+/// least `stride * height` initialized, writable bytes with `stride` written.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fcs_image_request(
     id: *const u8,
@@ -73,22 +73,26 @@ pub unsafe extern "C" fn fcs_image_request(
         return false;
     };
     let (width, height, channels, raw) = match pixels {
-        Pixels::Rgb(i) => (i.width(), i.height(), 3, i.as_raw()),
+        Pixels::Rgb(i) => (i.width(), i.height(), 3usize, i.as_raw()),
         Pixels::Rgba(i) => (i.width(), i.height(), 4, i.as_raw()),
     };
-    let row = width as usize * channels as usize;
+    let Some(row) = (width as usize).checked_mul(channels) else {
+        return false;
+    };
     let mut stride = 0;
     // SAFETY: the caller's allocator, called as documented.
-    let dst = unsafe { alloc(ctx, width, height, channels, &mut stride) };
-    if dst.is_null() || stride < row {
+    let dst = unsafe { alloc(ctx, width, height, channels as u32, &mut stride) };
+    let Some(len) = stride.checked_mul(height as usize) else {
+        return false;
+    };
+    if dst.is_null() {
         return false;
     }
-    // Row by row: QImage pads rows to 4 bytes, so an RGB row can be shorter than the stride.
-    for (y, src) in raw.chunks_exact(row).enumerate() {
-        // SAFETY: `alloc` gave `stride * height` bytes and `row <= stride`.
-        unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), dst.add(y * stride), row) };
-    }
-    true
+    // SAFETY: `alloc` returned `stride * height` initialized, writable bytes.
+    let dst = unsafe { std::slice::from_raw_parts_mut(dst, len) };
+    // QImage pads rows to 4 bytes, so an RGB row can be shorter than the stride. Verified by
+    // tools/verus: exactly `height` rows are copied, and only when they fit both buffers.
+    fcs_utils::image_utils::unpack_rows(raw, row, height as usize, dst, stride)
 }
 
 unsafe extern "C" {
@@ -143,8 +147,13 @@ unsafe extern "C" fn fill(
 ) -> *mut u8 {
     // SAFETY: `clipboard` passes a `Filled` as ctx and a valid stride pointer.
     let filled = unsafe { &mut *ctx.cast::<Filled>() };
-    let row = width as usize * channels as usize;
-    *filled = (width, height, vec![0; row * height as usize]);
+    let Some(row) = (width as usize).checked_mul(channels as usize) else {
+        return std::ptr::null_mut();
+    };
+    let Some(len) = row.checked_mul(height as usize) else {
+        return std::ptr::null_mut();
+    };
+    *filled = (width, height, vec![0; len]);
     unsafe { *stride = row };
     filled.2.as_mut_ptr()
 }
@@ -240,5 +249,19 @@ mod tests {
         remove("test/rgb");
         assert!(request("test/rgb").is_none());
         assert!(request("test/never").is_none());
+    }
+
+    #[test]
+    fn copies_only_the_images_rows_and_survives_a_zero_width_image() {
+        // `from_raw` accepts a buffer longer than the pixels; the copy used to write every
+        // extra row past the end of Qt's buffer.
+        let long = RgbImage::from_raw(1, 1, vec![5, 6, 7, 8, 9, 10]).expect("long enough");
+        put("test/long", Pixels::Rgb(long));
+        let target = request("test/long").expect("stored");
+        assert_eq!(target.bytes, [5, 6, 7, 0xEE]);
+
+        // A zero-width row used to panic in `chunks_exact`, aborting across the C boundary.
+        put("test/empty", Pixels::Rgba(RgbaImage::new(0, 3)));
+        assert!(request("test/empty").is_some());
     }
 }

@@ -41,5 +41,8 @@ fn main() {
         fcs_install_image_provider(std::ptr::from_mut(engine).cast());
     }
     let code = app.load_qml_from_file("qrc:/qt/qml/fcs_qt/Main.qml").run();
+    // `exit` runs no destructors: without this, Qt's own static teardown finds the engine
+    // and QGuiApplication alive and warns ("QDxgiVSyncService not destroyed in time").
+    drop(app);
     std::process::exit(code);
 }

@@ -34,6 +34,8 @@ extern "C" std::uint8_t *allocate(void *ctx, std::uint32_t width, std::uint32_t 
                     channels == 4 ? QImage::Format_RGBA8888 : QImage::Format_RGB888);
     if (image->isNull())
         return nullptr;
+    // Rust takes the buffer as a byte slice, which must not cover uninitialized memory.
+    image->fill(0);
     *stride = std::size_t(image->bytesPerLine());
     return image->bits();
 }

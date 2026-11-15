@@ -114,7 +114,7 @@ prost = "0.14.6"
 libloading = "0.9.1"
 
 # Formal verification
-vstd = "=0.0.0-2026-11-08-0256"
+vstd = "=0.0.0-2026-11-15-0327"
 
 # GPU and shader support
 # nvrtc supplies the PTX container; kernels are precompiled, so no runtime compiler is loaded.
@@ -187,4 +187,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.5.1", default-features = false }
+zip = { version = "9.6.0", default-features = false }

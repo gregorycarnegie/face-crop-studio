@@ -1411,6 +1411,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tiny-skia",
+ "vstd",
  "wesl",
  "wgpu",
  "windows",
@@ -4072,15 +4073,15 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "verus_builtin"
-version = "0.0.0-2026-11-01-0251"
+version = "0.0.0-2026-11-15-0327"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5cecde3e49b95f670dee0000707b0fe24d3894ffec56d9e6c49f404878b30e9"
+checksum = "dd29a64c04716a29a09f4cc65696aefc2a2455a1dd0562ade2a6066dca917459"
 
 [[package]]
 name = "verus_builtin_macros"
-version = "0.0.0-2026-11-08-0256"
+version = "0.0.0-2026-11-15-0327"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f5e92dc7e482c038bbab4c90aba02419e8ea1d9f81a2114e479e8affa76148b"
+checksum = "82b1bd34bfa2c8bd57bbf88ac4e65b75bb74c71fa034a31f7b7dc03d8c42ec8e"
 dependencies = [
  "convert_case 0.4.0",
  "proc-macro2",
@@ -4103,9 +4104,9 @@ dependencies = [
 
 [[package]]
 name = "verus_state_machines_macros"
-version = "0.0.0-2026-11-08-0256"
+version = "0.0.0-2026-11-15-0327"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c09a37ece6bfbb23da8bf5f9b2566975a828fd3b04d4c7d4a7097e0b14f786be"
+checksum = "29db5473eca4e864de2b6168599167643a4aa80802be9ca048caa4ff9d01eda7"
 dependencies = [
  "indexmap 2.14.2",
  "proc-macro2",
@@ -4126,9 +4127,9 @@ dependencies = [
 
 [[package]]
 name = "vstd"
-version = "0.0.0-2026-11-08-0256"
+version = "0.0.0-2026-11-15-0327"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e53b72b31bc15ad62fce68bdf8740092de4a0412e09f2d4bd49af4d935372b0"
+checksum = "59784df6dbd9254f06928eca0434eac86c313534be7ef79604de53d10be72e03"
 dependencies = [
  "verus_builtin",
  "verus_builtin_macros",

@@ -125,11 +125,11 @@ minimum_test_timeout = 120
 #   median_ms `RUNS / 2 -> RUNS % 2`: both are 1 while RUNS is 3.
 #   nchwc scheduling, where every choice computes the same pixels:
 #     conv_with `c * chunk -> c / chunk` makes column chunks overlap and write
-#     identical values twice; Row::run `ox < lo -> <=` and `ox < hi -> >`, and
-#     depthwise_with `ox < lo -> <=`, hand interior columns to the checked
-#     path, which is correct anywhere. The `+= -> *=` in the same loops hang.
-#     Likewise Row::run and depthwise_with `ox < full -> >`, which skip the
-#     wide tiles and leave those columns to the single-pixel loops after them.
+#     identical values twice; write_tiled_rows' and write_tiled_row's
+#     `ox < lo -> <=` hand an interior column to the checked path, which is
+#     correct anywhere. The `+= -> *=` in the same loops hang. tools/verus's
+#     negative controls cover the mutants that leave columns unwritten or run
+#     unchecked code outside the interior, which this suite cannot see.
 #   ScrfdWeights::load `groups > 1 -> >=` and plan `run`'s `Slot::Data` output
 #     arm, for the shipped topology: no convolution has one output channel, and
 #     all nine outputs are merged class/box/keypoint heads, so always `Part`.

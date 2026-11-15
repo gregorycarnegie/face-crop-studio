@@ -24,12 +24,6 @@ pub(crate) fn chunk_span(index: usize, chunk: usize, length: usize) -> (usize, u
     (start, start + chunk.min(length - start))
 }
 
-/// End of complete tiles in start..end, with start <= end and tile > 0.
-#[inline]
-pub(crate) fn tile_end(start: usize, end: usize, tile: usize) -> usize {
-    start + (end - start) / tile * tile
-}
-
 /// Start of one output row in a representable NCHW allocation, for valid coordinates.
 #[inline]
 pub(crate) fn row_base(
@@ -48,7 +42,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jobs_and_tiles_write_every_output_exactly_once() {
+    fn jobs_write_every_output_exactly_once() {
         for width in [1usize, 2, 3, 4, 7, 11, 49] {
             for chunk in [1usize, 2, 3, 8, 48] {
                 let chunks = width.div_ceil(chunk);
@@ -58,14 +52,8 @@ mod tests {
                     let (first, last) = chunk_span(group, 4, 7);
                     let (start, end) = chunk_span(part, chunk, width);
                     for channel in first..last {
-                        let mut x = start;
-                        let full = tile_end(start, end, 3);
-                        while x < end {
-                            let count = if x < full { 3 } else { 1 };
-                            for p in 0..count {
-                                visits[row_base(n, channel, row, 7, 3, width) + x + p] += 1;
-                            }
-                            x += count;
+                        for x in start..end {
+                            visits[row_base(n, channel, row, 7, 3, width) + x] += 1;
                         }
                     }
                 }
@@ -79,6 +67,5 @@ mod tests {
             chunk_span(usize::MAX / 2, 2, usize::MAX),
             (usize::MAX - 1, usize::MAX)
         );
-        assert_eq!(tile_end(usize::MAX - 5, usize::MAX, 3), usize::MAX - 2);
     }
 }

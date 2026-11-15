@@ -12,55 +12,68 @@ function Update-SourceOnce([string] $source, [string] $before, [string] $after) 
     return $source.Replace($before, $after)
 }
 
-$sourcePath = Join-Path $root 'fcs-core/src/cpu/output.rs'
-$source = [IO.File]::ReadAllText($sourcePath).Replace("`r`n", "`n")
-$sourcePathForRust = $sourcePath.Replace('\', '/')
-$wrapperPath = Join-Path $cache 'output-wrapper.rs'
-$mutantPath = Join-Path $cache 'output-mutant.rs'
-$mutantWrapperPath = Join-Path $cache 'output-mutant-wrapper.rs'
+# Production files Verus checks, each through a module wrapper of its own.
+$files = @{
+    output = @('fcs-core/src/cpu/output.rs', 'cpu', 'output')
+    unpack = @('fcs-utils/src/image_utils/unpack.rs', 'image_utils', 'unpack')
+    planes = @('fcs-utils/src/image_utils/planes.rs', 'image_utils', 'planes')
+}
 $log = Join-Path $cache 'mutation.log'
-$mutantPathForRust = $mutantPath.Replace('\', '/')
-$wrapper = @"
-mod cpu {
-    #[path = "$sourcePathForRust"]
-    mod output;
+function Write-Wrapper([string] $name, [string] $modulePath) {
+    $parent, $module = $files[$name][1], $files[$name][2]
+    $wrapperPath = Join-Path $cache "$name-wrapper.rs"
+    $wrapper = @"
+mod $parent {
+    #[path = "$($modulePath.Replace('\', '/'))"]
+    mod $module;
 }
 "@
-[IO.File]::WriteAllText($wrapperPath, $wrapper)
+    [IO.File]::WriteAllText($wrapperPath, $wrapper)
+    return $wrapperPath
+}
 
 $previousRustupHome = $env:RUSTUP_HOME
 $previousToolchain = $env:RUSTUP_TOOLCHAIN
 try {
     $env:RUSTUP_HOME = Join-Path $cache 'rustup'
     $env:RUSTUP_TOOLCHAIN = '1.99.1-x86_64-pc-windows-msvc'
-    & $verus --crate-type lib --no-cheating $wrapperPath
-    if ($LASTEXITCODE -ne 0) { throw 'Production output-row verification failed' }
+    foreach ($name in $files.Keys) {
+        & $verus --crate-type lib --no-cheating (Write-Wrapper $name (Join-Path $root $files[$name][0]))
+        if ($LASTEXITCODE -ne 0) { throw "Production verification failed: $($files[$name][0])" }
+    }
 
-    $mutantWrapper = @"
-mod cpu {
-    #[path = "$mutantPathForRust"]
-    mod output;
-}
-"@
-    [IO.File]::WriteAllText($mutantWrapperPath, $mutantWrapper)
-    # Each broken writer must fail verification, not merely produce a Rust syntax error.
+    # Each broken function must fail verification, not merely produce a Rust syntax error.
     $mutants = @(
-        @('        x += 1;', '        x += 2;', 'upsampled row that skips output slots'),
-        @('e += 1;', 'e += 2;', 'indexed writer that skips output slots'),
-        @('ox += 4;', 'ox += 5;', 'tiled row that skips output slots'),
-        @('while 4 <= hi - ox', 'while ox < hi', 'tiled row that calls quad outside the interior')
+        @('output', '        x += 1;', '        x += 2;', 'upsampled row that skips output slots'),
+        @('output', 'e += 1;', 'e += 2;', 'indexed writer that skips output slots'),
+        @('output', 'ox += 4;', 'ox += 5;', 'tiled row that skips output slots'),
+        @('output', 'while 4 <= hi - ox', 'while ox < hi', 'tiled row that calls quad outside the interior'),
+        @('output', 'p += 1;', 'p += 2;', 'dense tile that skips output columns'),
+        @('output', 'while ox < len', 'while ox + 1 < len', 'dense row that skips its last column'),
+        @('output', 'while P <= hi - ox', 'while ox < hi', 'dense row that tiles outside the interior'),
+        @('output', 'while ox < hi', 'while ox < len', 'dense row that runs unchecked pixels outside the interior'),
+        @('unpack', 'if stride < row_bytes {', 'if false {', 'row copy that lets rows overlap'),
+        @('unpack', 'if height == 0 {', 'if height <= 1 {', 'row copy that skips a one-row image'),
+        @('unpack', 'y += 1;', 'y += 2;', 'row copy that skips rows'),
+        @('unpack', 'let at = y * stride;', 'let at = y * row_bytes;', 'row copy that ignores the stride'),
+        @('planes', 'x += 1;', 'x += 2;', 'plane writer that skips pixels'),
+        @('planes', 'third[x].write(v[2]);', 'third[x].write(v[1]);', 'plane writer that swaps channels'),
+        @('planes', '        second[x].write(v[1]);', '', 'plane writer that skips a plane')
     )
     foreach ($m in $mutants) {
-        [IO.File]::WriteAllText($mutantPath, (Update-SourceOnce $source $m[0] $m[1]))
+        $source = [IO.File]::ReadAllText((Join-Path $root $files[$m[0]][0])).Replace("`r`n", "`n")
+        $mutantPath = Join-Path $cache "$($m[0])-mutant.rs"
+        [IO.File]::WriteAllText($mutantPath, (Update-SourceOnce $source $m[1] $m[2]))
+        $mutantWrapperPath = Write-Wrapper $m[0] $mutantPath
         $ErrorActionPreference = 'Continue'
         & $verus --crate-type lib --no-cheating $mutantWrapperPath *> $log
         $ErrorActionPreference = 'Stop'
-        if ($LASTEXITCODE -eq 0) { throw "Verus accepted a $($m[2])" }
-        if (!(Select-String -Path $log -Pattern 'invariant not satisfied|postcondition not satisfied|callee\.requires' -Quiet)) {
+        if ($LASTEXITCODE -eq 0) { throw "Verus accepted a $($m[3])" }
+        if (!(Select-String -Path $log -Pattern 'invariant not satisfied|postcondition not satisfied|precondition not satisfied|assertion failed|callee\.requires' -Quiet)) {
             Get-Content $log
-            throw "Mutation failed for an unexpected reason: $($m[2])"
+            throw "Mutation failed for an unexpected reason: $($m[3])"
         }
-        Write-Output "Verus rejected the $($m[2])"
+        Write-Output "Verus rejected the $($m[3])"
     }
 } finally {
     $env:RUSTUP_HOME = $previousRustupHome

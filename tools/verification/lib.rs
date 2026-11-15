@@ -57,6 +57,9 @@ pub mod greedy;
 #[allow(dead_code)]
 pub mod heads;
 
+#[path = "../../fcs-utils/src/claim.rs"]
+pub mod claim;
+
 #[cfg(test)]
 mod tests {
     use super::region::CropRegion;
