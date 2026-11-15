@@ -54,8 +54,9 @@ impl Arena {
         self.free.push(tensor.data);
     }
 
-    /// Room for `len` elements: the smallest free buffer that fits, or a new one.
-    fn take(&mut self, len: usize) -> Vec<MaybeUninit<f32x8>> {
+    /// An empty buffer with room for `len` elements: the smallest free one that fits, or a new
+    /// one.
+    fn take(&mut self, len: usize) -> Vec<f32x8> {
         let fit = self
             .free
             .iter()
@@ -63,23 +64,12 @@ impl Arena {
             .filter(|(_, buffer)| buffer.capacity() >= len)
             .min_by_key(|(_, buffer)| buffer.capacity())
             .map(|(index, _)| index);
-        let buffer = match fit {
+        let mut buffer = match fit {
             Some(index) => self.free.swap_remove(index),
             None => Vec::with_capacity(len),
         };
-        let mut buffer = std::mem::ManuallyDrop::new(buffer);
-        // SAFETY: `MaybeUninit<f32x8>` has the layout of `f32x8`, and treating initialised
-        // contents as uninitialised only forgets what they were.
-        let mut data = unsafe {
-            Vec::from_raw_parts(
-                buffer.as_mut_ptr().cast::<MaybeUninit<f32x8>>(),
-                0,
-                buffer.capacity(),
-            )
-        };
-        // SAFETY: the capacity is at least `len`, and `MaybeUninit` needs no initialisation.
-        unsafe { data.set_len(len) };
-        data
+        buffer.clear();
+        buffer
     }
 }
 
@@ -122,15 +112,15 @@ impl Blocked {
         checked_allocation(len, std::mem::size_of::<f32x8>())
             .expect("blocked tensor allocation exceeds isize::MAX");
         let mut data = arena.take(len);
+        // Slicing panics, rather than overruns, should `take` ever return less room.
+        let room = &mut data.spare_capacity_mut()[..len];
         if cfg!(debug_assertions) {
-            data.fill(MaybeUninit::new(f32x8::splat(f32::NAN)));
+            room.fill(MaybeUninit::new(f32x8::splat(f32::NAN)));
         }
-        fill(&mut data);
-        let mut data = std::mem::ManuallyDrop::new(data);
-        // SAFETY: the caller wrote every element, and `MaybeUninit<f32x8>` has the layout of
-        // `f32x8`, so the allocation is handed over unchanged.
-        let data =
-            unsafe { Vec::from_raw_parts(data.as_mut_ptr().cast::<f32x8>(), len, data.capacity()) };
+        fill(room);
+        // SAFETY: `fill` wrote all `len` elements of the spare capacity (the caller's contract;
+        // the kernels' writers are verified by tools/verus), and `len` is within the capacity.
+        unsafe { data.set_len(len) };
         Self {
             batch,
             channels,
