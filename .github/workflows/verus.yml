@@ -1,4 +1,4 @@
-name: Verus Output Initialization
+name: Verus
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
       - Cargo.lock
       - fcs-core/Cargo.toml
       - fcs-core/src/cpu/**
+      - fcs-utils/Cargo.toml
+      - fcs-utils/src/image_utils/unpack.rs
       - tools/safety/**
       - tools/verus/**
       - .github/workflows/verus.yml
@@ -17,6 +19,8 @@ on:
       - Cargo.lock
       - fcs-core/Cargo.toml
       - fcs-core/src/cpu/**
+      - fcs-utils/Cargo.toml
+      - fcs-utils/src/image_utils/unpack.rs
       - tools/safety/**
       - tools/verus/**
       - .github/workflows/verus.yml

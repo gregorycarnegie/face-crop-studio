@@ -153,6 +153,8 @@ use rows::pack_rows;
 
 #[cfg(any(feature = "heic", test))]
 mod rows;
+mod unpack;
+pub use unpack::unpack_rows;
 
 /// Returns `true` if the given path's extension is in [`SUPPORTED_IMAGE_EXTENSIONS`].
 pub fn is_supported_image_path(path: &Path) -> bool {
