@@ -675,3 +675,30 @@ fn raster_mask_handles_a_zero_sized_image() {
     );
     assert_eq!(empty.dimensions(), (0, 4));
 }
+
+#[test]
+fn the_shape_catalogue_lists_every_shape_once_starting_from_a_rectangle() {
+    let catalogue = crate::shape::shape_catalogue();
+    let labels: Vec<_> = catalogue.iter().map(|(label, _)| *label).collect();
+    assert_eq!(
+        labels,
+        [
+            "Rectangle",
+            "Rounded rectangle",
+            "Chamfered rectangle",
+            "Ellipse",
+            "Polygon",
+            "Polygon (rounded)",
+            "Polygon (chamfered)",
+            "Polygon (bezier)",
+            "Star",
+            "Koch polygon",
+            "Koch rectangle",
+        ]
+    );
+    assert_eq!(catalogue[0].1, CropShape::Rectangle);
+    assert_eq!(
+        catalogue[1].1,
+        CropShape::RoundedRectangle { radius_pct: 0.12 }
+    );
+}

@@ -1,0 +1,12 @@
+# Overrides for the workspace config one level up, which cargo still reads here.
+
+[build]
+# Its own target dir: fcs-qt builds with different rustflags (dynamic CRT, see build.rs),
+# and sharing one with the workspace would rebuild every dependency on each switch.
+target-dir = "target"
+
+[env]
+# For `cargo test`, which never runs main's guard: without it, libheif loads every DLL in the
+# root of the current drive (see fcs_utils::process_env::confine_libheif_plugins). A folder
+# that doesn't exist.
+LIBHEIF_PLUGIN_PATH = { value = "target/libheif-plugins", relative = true, force = false }

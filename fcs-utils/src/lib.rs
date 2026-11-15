@@ -60,6 +60,8 @@ pub mod macros;
 pub mod output;
 /// 2D point geometry primitives.
 pub mod point;
+/// Setting environment variables the bundled C libraries can see.
+pub mod process_env;
 /// Image quality analysis (Laplacian variance blur detection).
 pub mod quality;
 /// Shape metadata and masking helpers for custom crop geometry.
@@ -98,12 +100,12 @@ pub use image_utils::{
 use log::LevelFilter;
 pub use output::{
     ImageFormatHint, MetadataContext, OutputClaims, OutputOptions, OverwritePolicy, PngCompression,
-    append_suffix_to_filename, save_dynamic_image,
+    append_suffix_to_filename, mapped_output_path, sanitize_relative_path, save_dynamic_image,
 };
 pub use quality::{Quality, QualityFilter, estimate_sharpness, laplacian_variance};
 pub use shape::{
     CropShape, PolygonCornerStyle, apply_shape_mask, apply_shape_mask_dynamic,
-    outline_points_for_rect,
+    outline_points_for_rect, shape_catalogue,
 };
 use std::path::{Path, PathBuf};
 pub use telemetry::{

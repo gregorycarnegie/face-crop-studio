@@ -154,6 +154,7 @@ impl ScrfdDetector {
             }
         };
         let Some(context) = context() else {
+            info!("SCRFD on {} from {}", cpu.engine(), path.display());
             return Some(cpu);
         };
         let gpu = match crate::gpu::GpuInferenceOps::new(context, None)

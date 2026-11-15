@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Face Crop Studio Qt, a preview of a new interface built on Qt Quick, ships beside the egui app
+  (fcs-gui), which stays the main one. It has the same detection, cropping and export features,
+  models and settings file, and
+  installs separately: `face-crop-studio-qt-*` assets, as a portable zip and an MSI on Windows, a
+  .dmg on macOS (Apple silicon), and an AppImage and a .deb on Linux (Ubuntu 24.04 or newer). It
+  bundles Qt 6.12 under the LGPL v3; the notices ship with it. See `fcs-qt/README.md`.
+
+### Security
+
+- On Windows, decoding a HEIC no longer loads every DLL in the root of the current drive
+  (`C:\*.dll`). vcpkg builds libheif with an empty plugin directory, which made it try each one
+  as a plugin; a DLL planted there would have run inside the app. fcs-cli and fcs-gui now point
+  `LIBHEIF_PLUGIN_PATH` at a `libheif-plugins` folder beside the executable at startup, unless
+  it is already set. The bundled libheif has its HEVC decoder built in, so it needs no plugins.
+  The visible symptom was `LoadLibraryA error: 193` on stderr.
+
 ### Changed
 
 - `docs/MODEL_COMPARISON.md` now explains why the eye refiner's median error rises from 1.18° on

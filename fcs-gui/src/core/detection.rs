@@ -3,7 +3,6 @@
 use crate::types::*;
 use fcs_utils::gpu::GpuStatusIndicator;
 use image::DynamicImage;
-use imageproc::geometric_transformations::{Border, Interpolation, rotate_about_center};
 
 use anyhow::{Context as AnyhowContext, Result};
 use fcs_core::FaceDetector;
@@ -211,17 +210,7 @@ pub(crate) fn color_image_from_dynamic(image: &DynamicImage) -> egui::ColorImage
 }
 
 fn rotate_image(image: Arc<DynamicImage>, rotation_deg: f32) -> Arc<DynamicImage> {
-    if rotation_deg.abs() < 0.01 {
-        return image;
-    }
-    let rgba = image.to_rgba8();
-    let rotated = rotate_about_center(
-        &rgba,
-        rotation_deg.to_radians(),
-        Interpolation::Bilinear,
-        Border::Constant(image::Rgba([0, 0, 0, 255])),
-    );
-    Arc::new(DynamicImage::ImageRgba8(rotated))
+    fcs_core::rotate_photo(&image, rotation_deg).map_or(image, Arc::new)
 }
 
 pub fn perform_detection(

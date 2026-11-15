@@ -280,7 +280,7 @@ fn batch_conflicts(files: &[BatchFile], output_dir: &Path, ext: &str) -> Vec<Pat
     for file in files {
         let (dir, stem, mapped) = match &file.output_override {
             Some(target) => {
-                let safe = sanitize_relative_path(target);
+                let safe = fcs_utils::sanitize_relative_path(target);
                 let stem = safe
                     .file_stem()
                     .and_then(|s| s.to_str())
@@ -808,7 +808,13 @@ fn build_output_path(
     let ext = output_extension(settings.crop.output_format);
 
     if let Some(custom) = output_override {
-        return resolve_override_path(output_dir, custom, ext, candidate.face_index, multi_face);
+        return fcs_utils::mapped_output_path(
+            output_dir,
+            custom,
+            ext,
+            candidate.face_index,
+            multi_face,
+        );
     }
 
     let source_stem = source_path
@@ -820,35 +826,6 @@ fn build_output_path(
         filename = append_suffix_to_filename(&filename, suffix);
     }
     output_dir.join(filename)
-}
-
-fn resolve_override_path(
-    output_dir: &Path,
-    override_target: &Path,
-    ext: &str,
-    face_index: usize,
-    multi_face: bool,
-) -> PathBuf {
-    let safe_target = sanitize_relative_path(override_target);
-    let parent = safe_target.parent().unwrap_or_else(|| Path::new(""));
-    let stem = safe_target
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("output");
-    let stem = if multi_face {
-        format!("{stem}_face{}", face_index + 1)
-    } else {
-        stem.to_string()
-    };
-    output_dir.join(parent).join(format!("{stem}.{ext}"))
-}
-
-fn sanitize_relative_path(path: &Path) -> PathBuf {
-    use std::path::Component;
-    path.components()
-        .filter(|component| matches!(component, Component::Normal(_)))
-        .collect()
 }
 
 fn quality_suffix(

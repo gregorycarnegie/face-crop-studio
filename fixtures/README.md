@@ -90,7 +90,6 @@ After an intentional change to the crop geometry, refresh and review the diff:
 ```powershell
 $env:UPDATE_GOLDEN = "1"; cargo test -p fcs-core --test golden_crop_regions
 ```
-
 ```bash
 UPDATE_GOLDEN=1 cargo test -p fcs-core --test golden_crop_regions
 ```
