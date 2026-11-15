@@ -89,6 +89,10 @@ Rectangle {
                         color: Theme.ink3
                         font.pixelSize: Theme.caption
                         elide: Text.ElideRight
+                        // A plain Text reaches screen readers with no name; this is the only
+                        // place detection progress is shown.
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text
                     }
                     AppButton {
                         visible: queueModel.count > 0
