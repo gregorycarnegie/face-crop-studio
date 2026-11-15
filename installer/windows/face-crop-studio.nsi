@@ -34,7 +34,8 @@ Unicode True
 ; The uninstaller deletes what this payload installed, file by file: fcs-qt's Qt DLLs, plugins
 ; and QML modules have no fixed names the uninstall section could list.
 !tempfile UNINSTALL_LIST
-!system 'powershell -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\uninstall_list.ps1" "${DIST_DIR}" "${UNINSTALL_LIST}"' = 0
+; makensis runs from this script's directory (${__FILEDIR__} is relative to the caller's).
+!system 'powershell -NoProfile -ExecutionPolicy Bypass -File uninstall_list.ps1 "${DIST_DIR}" "${UNINSTALL_LIST}"' = 0
 
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUT_FILE}"
