@@ -1110,3 +1110,15 @@ fn output_claims_follow_the_overwrite_policy_for_existing_files() {
     let fresh = dir.path().join("y.jpg");
     assert_eq!(keep.claim(fresh.clone(), Path::new("y.jpg")), fresh);
 }
+
+#[test]
+fn each_format_writes_an_extension_it_reads_back() {
+    use ImageFormatHint::*;
+    for format in [Png, Jpeg, Webp, Tiff, Bmp, Avif] {
+        assert_eq!(
+            ImageFormatHint::from_extension(format.extension()),
+            Some(format)
+        );
+    }
+    assert_eq!(Jpeg.extension(), "jpg");
+}

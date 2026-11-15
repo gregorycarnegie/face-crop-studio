@@ -80,7 +80,8 @@ pub fn apply_preset(crop: &mut fcs_utils::config::CropSettings, name: &str) {
     use fcs_utils::config::PositioningMode;
     crop.preset = name.to_string();
     crop.shape = fcs_utils::CropShape::Rectangle;
-    let Some(preset) = preset_by_name(name).filter(|p| p.width > 0 && p.height > 0) else {
+    // Only Custom has no size, and it is 0x0, so one dimension tells.
+    let Some(preset) = preset_by_name(name).filter(|p| p.width > 0) else {
         return;
     };
     crop.output_width = preset.width;
@@ -173,6 +174,17 @@ mod tests {
         assert_eq!(crop.preset, "Custom");
         assert_eq!(crop.output_width, before.output_width);
         assert_eq!(crop.face_height_pct, before.face_height_pct);
+    }
+
+    #[test]
+    fn apply_preset_frames_each_named_preset_its_own_way() {
+        use fcs_utils::config::{CropSettings, PositioningMode};
+        for (name, pct) in [("Passport", 75.0), ("ID Card", 62.0), ("Avatar", 70.0)] {
+            let mut crop = CropSettings::default();
+            apply_preset(&mut crop, name);
+            assert_eq!(crop.face_height_pct, pct, "{name}");
+            assert_eq!(crop.positioning_mode, PositioningMode::Center, "{name}");
+        }
     }
 
     #[test]

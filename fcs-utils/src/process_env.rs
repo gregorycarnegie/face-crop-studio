@@ -62,7 +62,9 @@ pub unsafe fn confine_libheif_plugins() {
     }
 }
 
-#[cfg(all(test, windows))]
+// Two attributes, not cfg(all(..)): cargo-mutants only skips code marked plainly cfg(test).
+#[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use super::*;
 
