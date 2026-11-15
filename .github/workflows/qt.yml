@@ -182,6 +182,11 @@ jobs:
         if: matrix.name == 'Linux'
         run: qmllint -I fcs-qt/src fcs-qt/src/fcs_qt/*.qml
 
+      # The screens against a mock Studio serving the real settings (fcs-qt/tests/qml).
+      - name: QML tests
+        if: matrix.name == 'Linux'
+        run: ./fcs-qt/tests/qml/run.sh
+
       # ── Packages ─────────────────────────────────────────────────────────
       # A release build plus Qt's deploy tool, then a 20 s run of the result with Qt off PATH.
       # Not on pull requests: it adds a release build per leg.
