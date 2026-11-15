@@ -35,6 +35,14 @@ fn main() {
     }
     qt.cargo_link_libraries(&mut build);
     build.compile("fcs_qt_image_provider");
+    // With --as-needed (rustc passes it on Linux) the linker drops a shared library nothing
+    // before it uses, and Qt's -l flags above come before this static library. The arm64
+    // release link lost Qt Quick that way; naming the libraries again after it keeps them.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        for module in ["Quick", "Qml", "Gui", "Core"] {
+            println!("cargo:rustc-link-lib=dylib=Qt6{module}");
+        }
+    }
 
     // The file icon Explorer shows, and the one Qt's windows start with. Host and target both
     // Windows, as in fcs-gui's build.rs: winresource runs the Windows resource compiler.
