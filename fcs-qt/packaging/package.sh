@@ -33,6 +33,8 @@ models() {
 case "$(uname -s)" in
 Linux)
     arch="$(uname -m)"
+    # File names follow fcs-gui's: arm64, not aarch64 (linuxdeploy's downloads keep uname's).
+    file_arch="${arch/aarch64/arm64}"
     tools="$qt/target/packaging-tools"
     mkdir -p "$tools"
     # shortcut: linuxdeploy only publishes moving "continuous" builds; pin a mirror if one breaks.
@@ -65,7 +67,7 @@ EOF
     (cd "$dist" && PATH="$tools:$PATH" QMAKE="$qmake" \
         LD_LIBRARY_PATH="$("$qmake" -query QT_INSTALL_LIBS):${LD_LIBRARY_PATH:-}" \
         QML_SOURCES_PATHS="$qt/src/fcs_qt" APPIMAGE_EXTRACT_AND_RUN=1 \
-        LDAI_OUTPUT="face-crop-studio-qt-$version-$arch.AppImage" \
+        LDAI_OUTPUT="face-crop-studio-qt-$version-$file_arch.AppImage" \
         "$tools/linuxdeploy-$arch.AppImage" --appdir "$appdir" \
             --executable "$qt/target/release/fcs-qt" \
             --desktop-file "$tools/fcs-qt.desktop" --icon-file "$tools/fcs-qt.png" \
@@ -103,7 +105,7 @@ Description: Face Crop Studio (Qt preview)
  Face detection and batch portrait cropping, with the Qt Quick interface. Installs
  beside the face-crop-studio package; Qt is bundled under /opt/face-crop-studio-qt.
 EOF
-    dpkg-deb --build --root-owner-group "$pkg" "$dist/face-crop-studio-qt-$version-$arch.deb"
+    dpkg-deb --build --root-owner-group "$pkg" "$dist/face-crop-studio-qt-$version-$file_arch.deb"
     rm -rf "$pkg"
     ;;
 Darwin)
