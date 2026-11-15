@@ -256,7 +256,8 @@ jobs:
           $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode) { throw "setup.exe failed ($($p.ExitCode))" }
           $dir = "$env:ProgramFiles\Face Crop Studio"
-          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Face Crop Studio\Face Crop Studio.lnk")) { throw 'no Start menu shortcut' }
+          # The NSIS script keeps the default shell context, so its shortcuts are the installing user's.
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Face Crop Studio\Face Crop Studio.lnk")) { throw 'no Start menu shortcut' }
           ./fcs-qt/packaging/smoke.ps1 "$dir\fcs-qt.exe"
           # NSIS's uninstaller copies itself to %TEMP% and returns at once; _?= keeps it in place.
           $p = Start-Process "$dir\Uninstall.exe" -ArgumentList '/S', "_?=$dir" -Wait -PassThru
