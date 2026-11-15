@@ -120,7 +120,7 @@ with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
 ./fcs-qt/packaging/package.ps1     # Windows: fcs-qt/dist/face-crop-studio-qt-windows-x86_64 folder + .zip
 ```
 ```bash
-./fcs-qt/packaging/package.sh      # Linux: an AppImage and .deb; macOS: a .app and .dmg
+./fcs-qt/packaging/package.sh      # Linux (x86_64, arm64): an AppImage and .deb; macOS: a .app and .dmg
 ```
 
 Each does a release build and deploys Qt beside it: `windeployqt`, linuxdeploy with its Qt
@@ -137,12 +137,26 @@ builds it, installs it, smoke-tests the installed copy and uninstalls it), and a
 AppImage's AppDir, under `/opt/face-crop-studio-qt` with its own Qt and a `Depends` line from
 `dpkg-shlibdeps` (the workflow installs it with apt and smoke-tests `fcs-qt` from PATH). Both
 are their own product ("Face Crop Studio Qt", `face-crop-studio-qt`), so they install beside
-fcs-gui's rather than replacing it. The .dmg holds the .app. Not done: NSIS and MSIX (the Store
-listing is fcs-gui's), and signing: the .exe and MSI are unsigned and the .app is signed ad hoc.
+fcs-gui's rather than replacing it. The .dmg holds the .app.
+
+fcs-gui's setup.exe and MSIX are built from fcs-qt's Windows folder too, by the same scripts
+(`installer/windows/face-crop-studio.nsi` with `GUI_EXE=fcs-qt.exe`, `build_msix.ps1
+-Executable fcs-qt.exe`), and the workflow installs, runs and removes each. They keep
+fcs-gui's install directory, registry keys and Store identity, so in 3.0 they upgrade an
+fcs-gui install in place; until then they are CI-only, not release assets. The MSIX is signed
+there with a throwaway certificate; the Store re-signs real uploads.
+
+Not done: signing. The .exe and MSI are unsigned and the .app is signed ad hoc.
 fcs-gui's release builds sign only when the repository has certificates (`CODE_SIGN_PFX`,
 `APPLE_DEVELOPER_ID_*`), and it has none yet. Adding them means adding fcs-qt's signing too, in
 `qt.yml` under `inputs.release`; check then whether the hardened runtime needs
 `com.apple.security.cs.allow-jit` for the QML engine.
+
+Tests beyond `cargo test`: `tests/qml/run.sh` runs the screens under `qmltestrunner` against a
+mock Studio serving the real factory settings (`tests/qml/fixture.js`, which a Rust test keeps
+current), on the Linux leg. `packaging/e2e.ps1` drives the packaged Windows app through UI
+Automation: six photos, every face found and exported through the real folder dialog, then a
+clean shutdown.
 
 Releases: `release.yml` runs `qt.yml` with `release: true` (`qt-release`), and its publish job
 waits for it and attaches the `face-crop-studio-qt-*` assets and `SHA256SUMS-qt-*.txt` beside
@@ -190,7 +204,11 @@ packages a 256 px PNG of it.
   from an in-memory store in [src/images.rs](src/images.rs). It gets the engine through the
   bridge's doc-hidden `QApp::qml_engine()`, which a later bridge release could change. The
   store holds a thumbnail per photo, canvas copies of the 8 most recent photos, and the
-  previews on screen. Nothing goes through the disk.
+  previews on screen. Nothing goes through the disk. The file also holds the other Qt calls
+  with no C entry point (`QClipboard::image`, `setWindowIcon`). It cannot become Rust or Zig:
+  both speak the C ABI, and overriding a C++ virtual means building a vtable per compiler ABI
+  (MSVC's differs from GCC/Clang's). What Qt does export as C is called from Rust directly
+  (`qVersion`, since 2026-11-15).
 - **Models are awkward.** `QListModel` exists but is a separate QObject with little
   documentation. Here QML mirrors the queue array into a `ListModel` with `set()`/`append()`,
   which keeps the list from resetting on each update.
@@ -282,8 +300,15 @@ packages a 256 px PNG of it.
    twice (to find faces as photos arrive, then to export), but the export itself is quicker
    since the faces are already found. The window answers within 20 ms throughout, apart from
    about 0.5 s while 1,000 photos are first added to the list.
-5. One release shipping both front ends before deciding; dropping egui would be the UI
-   overhaul the 3.0 version is reserved for. The release workflow builds and attaches fcs-qt
-   since 2026-11-14 (see Packaging); what remains is cutting that release from master.
+5. ~~One release shipping both front ends before deciding~~: 2.4.0, 2026-11-15. Dropping egui
+   would be the UI overhaul the 3.0 version is reserved for.
+6. The gaps fcs-gui still covered (closed 2026-11-15 unless noted): Linux arm64 packages; the
+   setup.exe and MSIX built from fcs-qt and install-tested in CI (see Packaging); Qt Quick
+   tests and a Windows end-to-end test (see Tests). Still open: a few weeks of 2.4.x in use,
+   and a manual check on a real Linux desktop (file dialogs, camera, a real GPU) and a real
+   Mac, which CI cannot stand in for.
+7. 3.0: fcs-cli and fcs-qt as the Windows payload of the zip, MSI, setup.exe and MSIX (fcs-qt's
+   own MSI goes, the shared one keeps fcs-gui's upgrade code), fcs-qt's packages on macOS and
+   Linux under fcs-gui's names, and fcs-gui removed.
 
 Also worth asking upstream for an image provider API in the bridge, so the C++ file can go.
