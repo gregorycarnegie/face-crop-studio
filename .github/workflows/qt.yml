@@ -5,7 +5,7 @@ name: fcs-qt
 # only matters when it or the crates it uses change.
 on:
   push:
-    branches: [ "master", "qt-bridge-ui" ]
+    branches: [ "master" ]
     paths: &paths
       - "fcs-qt/**"
       - "fcs-core/**"
@@ -192,6 +192,21 @@ jobs:
           ./fcs-qt/packaging/package.ps1
           ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
 
+      # The packaged app driven through UI Automation: six photos, every face found, all of them
+      # exported through the real folder dialog, and a clean shutdown.
+      - name: End-to-end (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: ./fcs-qt/packaging/e2e.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
+
+      - name: End-to-end screenshots
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcs-qt-e2e-failure
+          path: ${{ runner.temp }}/fcs-qt-e2e-*/failure-*.png
+          if-no-files-found: ignore
+
       # The MSI, from the folder above; then installed, smoke-tested from Program Files and
       # removed again. Unsigned, as fcs-gui's are while the repository has no certificates.
       - name: Installer (Windows)
@@ -215,6 +230,62 @@ jobs:
           $remove = Start-Process msiexec -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
           if ($remove.ExitCode) { throw "uninstall failed ($($remove.ExitCode))" }
           if (Test-Path $installed) { throw 'uninstall left fcs-qt.exe behind' }
+
+      # The setup.exe and Store packages fcs-gui ships, built from fcs-qt's folder by the same
+      # scripts, so 3.0 can swap the payload. CI-only for now: each is installed, run and removed.
+      # The MSIX is signed with a throwaway certificate named like the Store publisher; the
+      # Store re-signs real uploads.
+      - name: setup.exe and MSIX (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $dist = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64"
+
+          choco install nsis --no-progress -y
+          $setup = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64-setup.exe"
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /V2 "/DAPP_VERSION=$version" "/DDIST_DIR=$dist" `
+            "/DOUT_FILE=$setup" /DGUI_EXE=fcs-qt.exe "/DICON_FILE=$PWD\fcs-gui\assets\app_icon.ico" `
+            installer\windows\face-crop-studio.nsi
+          if ($LASTEXITCODE) { throw "makensis failed ($LASTEXITCODE)" }
+          $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode) { throw "setup.exe failed ($($p.ExitCode))" }
+          $dir = "$env:ProgramFiles\Face Crop Studio"
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Face Crop Studio\Face Crop Studio.lnk")) { throw 'no Start menu shortcut' }
+          ./fcs-qt/packaging/smoke.ps1 "$dir\fcs-qt.exe"
+          # NSIS's uninstaller copies itself to %TEMP% and returns at once; _?= keeps it in place.
+          $p = Start-Process "$dir\Uninstall.exe" -ArgumentList '/S', "_?=$dir" -Wait -PassThru
+          if ($p.ExitCode -or (Test-Path "$dir\fcs-qt.exe")) { throw 'uninstall left fcs-qt.exe behind' }
+          Remove-Item $setup
+
+          $payload = "$env:RUNNER_TEMP\msix-payload"
+          New-Item -ItemType Directory -Force $payload | Out-Null
+          New-Item -ItemType Junction -Path "$payload\x86_64" -Target $dist | Out-Null
+          ./installer/windows/msix/build_msix.ps1 -Version $version -PayloadRoot $payload `
+            -OutDir "$env:RUNNER_TEMP\msix" -Executable fcs-qt.exe
+          $msix = (Get-ChildItem "$env:RUNNER_TEMP\msix\*-x64.msix").FullName
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($msix)
+          $reader = New-Object IO.StreamReader(($zip.Entries | Where-Object FullName -eq 'AppxManifest.xml').Open())
+          $identity = ([xml]$reader.ReadToEnd()).Package.Identity
+          $reader.Close(); $zip.Dispose()
+          $cert = New-SelfSignedCertificate -Type Custom -Subject $identity.Publisher -KeyUsage DigitalSignature `
+            -CertStoreLocation Cert:\CurrentUser\My -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+          Export-Certificate -Cert $cert -FilePath "$env:RUNNER_TEMP\ci.cer" | Out-Null
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\ci.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint $msix
+          if ($LASTEXITCODE) { throw "signtool failed ($LASTEXITCODE)" }
+          Add-AppxPackage $msix
+          $package = Get-AppxPackage -Name $identity.Name
+          Start-Process "shell:AppsFolder\$($package.PackageFamilyName)!FaceCropStudio"
+          Start-Sleep 20
+          $running = Get-Process fcs-qt -ErrorAction SilentlyContinue
+          if (-not $running) { throw 'the installed MSIX did not start, or exited within 20 s' }
+          $running | Stop-Process -Force
+          Remove-AppxPackage $package.PackageFullName
+          'setup.exe and MSIX: ok'
 
       # xcb-cursor0 is installed so linuxdeploy bundles it: Qt's xcb plugin needs it and many
       # desktops lack it. xvfb gives the smoke run a display.

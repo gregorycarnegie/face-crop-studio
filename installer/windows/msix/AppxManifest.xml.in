@@ -74,7 +74,7 @@
     -->
     <Application
       Id="FaceCropStudio"
-      Executable="fcs-gui.exe"
+      Executable="@EXECUTABLE@"
       EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="Face Crop Studio"
@@ -82,6 +82,7 @@
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png" />
+      <!--CLI-->
       <Extensions>
         <uap5:Extension
           Category="windows.appExecutionAlias"
@@ -92,6 +93,7 @@
           </uap5:AppExecutionAlias>
         </uap5:Extension>
       </Extensions>
+      <!--/CLI-->
     </Application>
   </Applications>
 
