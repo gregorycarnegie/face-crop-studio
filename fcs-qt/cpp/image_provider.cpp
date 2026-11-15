@@ -84,12 +84,6 @@ extern "C" bool fcs_clipboard_image(void *ctx, FcsAlloc alloc)
     return true;
 }
 
-// The Qt the app runs on, for the About box (the LGPL notice names it).
-extern "C" const char *fcs_qt_version()
-{
-    return qVersion();
-}
-
 // Every window's icon (title bar, taskbar, X11; the Dock on macOS), from tightly packed RGBA.
 extern "C" void fcs_set_window_icon(const std::uint8_t *rgba, int width, int height)
 {
