@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-15
+
 ### Added
 
 - Face Crop Studio Qt, a preview of a new interface built on Qt Quick, ships beside the egui app
   (fcs-gui), which stays the main one. It has the same detection, cropping and export features,
-  models and settings file, and
-  installs separately: `face-crop-studio-qt-*` assets, as a portable zip and an MSI on Windows, a
-  .dmg on macOS (Apple silicon), and an AppImage and a .deb on Linux (Ubuntu 24.04 or newer). It
-  bundles Qt 6.12 under the LGPL v3; the notices ship with it. See `fcs-qt/README.md`.
+  models and settings file, and installs separately: `face-crop-studio-qt-*` assets, as a
+  portable zip and an MSI on Windows, a .dmg on macOS (Apple silicon), and an AppImage and a .deb
+  on Linux (Ubuntu 24.04 or newer). It bundles Qt 6.12 under the LGPL v3; the notices ship with
+  it. See `fcs-qt/README.md`.
 
 ### Security
 
@@ -2663,7 +2665,8 @@ First public release. Windows release binaries (`fcs-cli.exe`, `fcs-gui.exe`).
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.4...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.4...v2.4.0
 [2.3.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.1...v2.3.2

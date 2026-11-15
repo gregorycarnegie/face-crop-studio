@@ -1335,7 +1335,7 @@ checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
 name = "fcs-core"
-version = "2.3.4"
+version = "2.4.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-mapping"
-version = "2.3.4"
+version = "2.4.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-utils"
-version = "2.3.4"
+version = "2.4.0"
 dependencies = [
  "anyhow",
  "base64",
