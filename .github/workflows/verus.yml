@@ -10,6 +10,7 @@ on:
       - fcs-core/src/cpu/**
       - fcs-utils/Cargo.toml
       - fcs-utils/src/image_utils/unpack.rs
+      - fcs-utils/src/image_utils/planes.rs
       - tools/safety/**
       - tools/verus/**
       - .github/workflows/verus.yml
@@ -21,6 +22,7 @@ on:
       - fcs-core/src/cpu/**
       - fcs-utils/Cargo.toml
       - fcs-utils/src/image_utils/unpack.rs
+      - fcs-utils/src/image_utils/planes.rs
       - tools/safety/**
       - tools/verus/**
       - .github/workflows/verus.yml

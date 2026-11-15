@@ -25,6 +25,12 @@ the allocation and disjoint between jobs is Lean's (`decode_job_spec`,
 `chunks_disjoint`, `output_indices_unique`); that the job writes all of them is
 Verus's. Miri runs the kernel over those segments under tree borrows.
 
+[`fcs-utils/src/image_utils/planes.rs`](../../fcs-utils/src/image_utils/planes.rs)
+holds `write_planes`, which every row of the CPU preprocessors (`rgb_to_bgr_chw` and
+its letterboxed form) goes through: Verus proves it initializes every slot of the
+three plane rows with the closure's value for that pixel, which is what their
+uninitialized allocation's `set_len` relies on.
+
 [`fcs-utils/src/image_utils/unpack.rs`](../../fcs-utils/src/image_utils/unpack.rs)
 holds `unpack_rows`, which copies tightly packed pixel rows into a buffer with
 padded rows: fcs-qt's image provider uses it to fill each `QImage`. Verus proves
@@ -47,11 +53,11 @@ whose length is exactly twice the input length, Verus proves:
 - The output length is preserved. Empty rows are supported.
 
 The pinned `verus.exe` verifies the production source through a temporary Rust
-module wrapper per file with `--no-cheating`. The check then applies twelve
-mutants to temporary copies (skipped slots, columns or rows in each writer, the
-tiled rows running unchecked tiles or pixels outside `lo..hi`, and the row copy
-dropping its stride check or ignoring the stride) and requires Verus to reject
-each one. The
+module wrapper per file with `--no-cheating`. The check then applies fifteen
+mutants to temporary copies (skipped slots, columns, rows or planes in each
+writer, swapped channels, the tiled rows running unchecked tiles or pixels outside
+`lo..hi`, and the row copy dropping its stride check or ignoring the stride) and
+requires Verus to reject each one. The
 wrappers and mutation diagnostics stay in the ignored `cache/verus` directory.
 Normal Cargo builds use the pinned `vstd` crate dependency to expand `verus!`;
 the verifier uses the standard-library specifications bundled with its pinned

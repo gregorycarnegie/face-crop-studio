@@ -151,9 +151,11 @@ fn load_heic_image(path: &Path) -> Result<DynamicImage> {
 #[cfg(any(feature = "heic", test))]
 use rows::pack_rows;
 
+mod planes;
 #[cfg(any(feature = "heic", test))]
 mod rows;
 mod unpack;
+use planes::write_planes;
 pub use unpack::unpack_rows;
 
 /// Returns `true` if the given path's extension is in [`SUPPORTED_IMAGE_EXTENSIONS`].
@@ -616,19 +618,20 @@ pub fn rgb_to_bgr_chw(image: &RgbImage) -> Vec<f32> {
             .enumerate()
             .for_each(|(y, ((b_row, g_row), r_row))| {
                 let src_row = &pixels[y * row_stride..(y + 1) * row_stride];
-                for x in 0..w {
-                    // Optimized: x * 3 = (x << 1) + x
-                    let src = (x << 1) + x;
-                    b_row[x].write(f32::from(src_row[src + 2]));
-                    g_row[x].write(f32::from(src_row[src + 1]));
-                    r_row[x].write(f32::from(src_row[src]));
-                }
+                write_planes(b_row, g_row, r_row, |x| {
+                    let src = 3 * x;
+                    [
+                        f32::from(src_row[src + 2]),
+                        f32::from(src_row[src + 1]),
+                        f32::from(src_row[src]),
+                    ]
+                });
             });
     }
     // SAFETY: the three planes above partition all `total` elements, `par_chunks_mut(w)`
-    // covers each plane's `h` rows exactly, and the inner loop writes all `w` of every row,
-    // so every element is initialised. `f32` has no destructor, so an unwind out of the
-    // loop leaves a length-0 `Vec` with nothing to drop.
+    // covers each plane's `h` rows exactly, and `write_planes` (verified by tools/verus)
+    // writes all `w` of every row, so every element is initialised. `f32` has no destructor,
+    // so an unwind out of the loop leaves a length-0 `Vec` with nothing to drop.
     unsafe { data.set_len(total) };
     data
 }
@@ -676,31 +679,27 @@ pub fn rgb_to_bgr_chw_letterboxed(
             .for_each(|(y, ((b_row, g_row), r_row))| {
                 let src_y = y.wrapping_sub(origin_y);
                 if src_y >= drawn_h {
-                    for x in 0..target_w {
-                        b_row[x].write(LETTERBOX_PAD);
-                        g_row[x].write(LETTERBOX_PAD);
-                        r_row[x].write(LETTERBOX_PAD);
-                    }
+                    write_planes(b_row, g_row, r_row, |_| [LETTERBOX_PAD; 3]);
                     return;
                 }
                 let src_row = &pixels[src_y * row_stride..(src_y + 1) * row_stride];
-                for x in 0..target_w {
+                write_planes(b_row, g_row, r_row, |x| {
                     let src_x = x.wrapping_sub(origin_x);
                     if src_x >= drawn_w {
-                        b_row[x].write(LETTERBOX_PAD);
-                        g_row[x].write(LETTERBOX_PAD);
-                        r_row[x].write(LETTERBOX_PAD);
-                        continue;
+                        return [LETTERBOX_PAD; 3];
                     }
-                    let src = (src_x << 1) + src_x;
-                    b_row[x].write(f32::from(src_row[src + 2]));
-                    g_row[x].write(f32::from(src_row[src + 1]));
-                    r_row[x].write(f32::from(src_row[src]));
-                }
+                    let src = 3 * src_x;
+                    [
+                        f32::from(src_row[src + 2]),
+                        f32::from(src_row[src + 1]),
+                        f32::from(src_row[src]),
+                    ]
+                });
             });
     }
     // SAFETY: as in `rgb_to_bgr_chw` -- the three planes partition all `total` elements,
-    // every row is covered once, and each branch above writes all `target_w` of its row.
+    // every row is covered once, and `write_planes` (verified by tools/verus) writes all
+    // `target_w` of every row on both branches.
     unsafe { data.set_len(total) };
     data
 }

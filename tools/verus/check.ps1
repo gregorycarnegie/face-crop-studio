@@ -16,6 +16,7 @@ function Update-SourceOnce([string] $source, [string] $before, [string] $after) 
 $files = @{
     output = @('fcs-core/src/cpu/output.rs', 'cpu', 'output')
     unpack = @('fcs-utils/src/image_utils/unpack.rs', 'image_utils', 'unpack')
+    planes = @('fcs-utils/src/image_utils/planes.rs', 'image_utils', 'planes')
 }
 $log = Join-Path $cache 'mutation.log'
 function Write-Wrapper([string] $name, [string] $modulePath) {
@@ -54,7 +55,10 @@ try {
         @('unpack', 'if stride < row_bytes {', 'if false {', 'row copy that lets rows overlap'),
         @('unpack', 'if height == 0 {', 'if height <= 1 {', 'row copy that skips a one-row image'),
         @('unpack', 'y += 1;', 'y += 2;', 'row copy that skips rows'),
-        @('unpack', 'let at = y * stride;', 'let at = y * row_bytes;', 'row copy that ignores the stride')
+        @('unpack', 'let at = y * stride;', 'let at = y * row_bytes;', 'row copy that ignores the stride'),
+        @('planes', 'x += 1;', 'x += 2;', 'plane writer that skips pixels'),
+        @('planes', 'third[x].write(v[2]);', 'third[x].write(v[1]);', 'plane writer that swaps channels'),
+        @('planes', '        second[x].write(v[1]);', '', 'plane writer that skips a plane')
     )
     foreach ($m in $mutants) {
         $source = [IO.File]::ReadAllText((Join-Path $root $files[$m[0]][0])).Replace("`r`n", "`n")
