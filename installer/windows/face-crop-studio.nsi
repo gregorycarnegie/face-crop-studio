@@ -31,6 +31,11 @@ Unicode True
   !define ICON_FILE "${DIST_DIR}\app_icon.ico"
 !endif
 
+; The uninstaller deletes what this payload installed, file by file: fcs-qt's Qt DLLs, plugins
+; and QML modules have no fixed names the uninstall section could list.
+!tempfile UNINSTALL_LIST
+!system 'powershell -NoProfile -ExecutionPolicy Bypass -File "${__FILEDIR__}\uninstall_list.ps1" "${DIST_DIR}" "${UNINSTALL_LIST}"' = 0
+
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUT_FILE}"
 InstallDir "$PROGRAMFILES64\Face Crop Studio"
@@ -148,9 +153,11 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Face Crop Studio\Uninstall Face Crop Studio.lnk"
   RMDir "$SMPROGRAMS\Face Crop Studio"
 
-  ; Delete installed files by pattern so this section stays correct as binaries
-  ; and assets are added or renamed without needing manual updates here.
-  ; Wildcards cover all present and future executables / icons / docs.
+  ; Everything this payload installed (generated at compile time; RMDir without /r keeps
+  ; folders the user added files to).
+  !include "${UNINSTALL_LIST}"
+  !delfile "${UNINSTALL_LIST}"
+  ; The patterns below catch files an earlier version installed and this payload lacks.
   Delete "$INSTDIR\*.exe"     ; the front end, fcs-cli.exe, Uninstall.exe
   Delete "$INSTDIR\onnxruntime.dll" ; legacy installations
   Delete "$INSTDIR\*.ico"

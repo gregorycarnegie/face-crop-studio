@@ -261,7 +261,10 @@ jobs:
           ./fcs-qt/packaging/smoke.ps1 "$dir\fcs-qt.exe"
           # NSIS's uninstaller copies itself to %TEMP% and returns at once; _?= keeps it in place.
           $p = Start-Process "$dir\Uninstall.exe" -ArgumentList '/S', "_?=$dir" -Wait -PassThru
-          if ($p.ExitCode -or (Test-Path "$dir\fcs-qt.exe")) { throw 'uninstall left fcs-qt.exe behind' }
+          if ($p.ExitCode) { throw "uninstall failed ($($p.ExitCode))" }
+          # Run in place, the uninstaller cannot delete itself; anything else is left behind.
+          $left = Get-ChildItem $dir -Recurse -Force | Where-Object Name -ne 'Uninstall.exe'
+          if ($left) { throw "uninstall left $($left.Count) items behind, e.g. $($left[0].FullName)" }
           Remove-Item $setup
 
           $payload = "$env:RUNNER_TEMP\msix-payload"
