@@ -5,7 +5,7 @@ name: fcs-qt
 # only matters when it or the crates it uses change.
 on:
   push:
-    branches: [ "master", "qt-bridge-ui" ]
+    branches: [ "master" ]
     paths: &paths
       - "fcs-qt/**"
       - "fcs-core/**"
@@ -46,17 +46,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `slug` names the leg's checksums and artifact.
           - name: Windows
             os: windows-latest
             qt-arch: win64_msvc2022_64
+            slug: windows
           - name: macOS
             os: macos-latest
             qt-arch: clang_64
+            slug: macos
           # 24.04, not ci.yml's 22.04: this checks fcs-qt builds, not the release glibc baseline,
           # and Qt's own 6.10 Linux binaries target newer distributions.
           - name: Linux
             os: ubuntu-24.04
             qt-arch: linux_gcc_64
+            slug: linux
+          # As fcs-gui's arm64 Linux release. aqtinstall needs the host named; it would
+          # otherwise look for x86_64 binaries.
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            qt-host: linux_arm64
+            qt-arch: linux_gcc_arm64
+            slug: linux-arm64
 
     steps:
       - uses: actions/checkout@v7
@@ -84,6 +95,7 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt-host }}
           arch: ${{ matrix.qt-arch }}
           cache: true
           # aqtinstall 3.3.0, the latest release, cannot read Qt 6.11.2+'s repository layout;
@@ -143,7 +155,7 @@ jobs:
 
       # ── Checks ───────────────────────────────────────────────────────────
       - name: Format
-        if: runner.os == 'Linux'
+        if: matrix.name == 'Linux'
         run: cargo fmt --manifest-path fcs-qt/Cargo.toml -- --check
 
       - name: Test (Windows)
@@ -167,8 +179,13 @@ jobs:
       # Fails on errors only: qmllint exits 0 on warnings, and the expected ones are
       # "unqualified access" to Studio, the Rust singleton it cannot see.
       - name: QML lint
-        if: runner.os == 'Linux'
+        if: matrix.name == 'Linux'
         run: qmllint -I fcs-qt/src fcs-qt/src/fcs_qt/*.qml
+
+      # The screens against a mock Studio serving the real settings (fcs-qt/tests/qml).
+      - name: QML tests
+        if: matrix.name == 'Linux'
+        run: ./fcs-qt/tests/qml/run.sh
 
       # ── Packages ─────────────────────────────────────────────────────────
       # A release build plus Qt's deploy tool, then a 20 s run of the result with Qt off PATH.
@@ -179,6 +196,21 @@ jobs:
         run: |
           ./fcs-qt/packaging/package.ps1
           ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
+
+      # The packaged app driven through UI Automation: six photos, every face found, all of them
+      # exported through the real folder dialog, and a clean shutdown.
+      - name: End-to-end (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: ./fcs-qt/packaging/e2e.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
+
+      - name: End-to-end screenshots
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcs-qt-e2e-failure
+          path: ${{ runner.temp }}/fcs-qt-e2e-*/failure-*.png
+          if-no-files-found: ignore
 
       # The MSI, from the folder above; then installed, smoke-tested from Program Files and
       # removed again. Unsigned, as fcs-gui's are while the repository has no certificates.
@@ -203,6 +235,66 @@ jobs:
           $remove = Start-Process msiexec -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
           if ($remove.ExitCode) { throw "uninstall failed ($($remove.ExitCode))" }
           if (Test-Path $installed) { throw 'uninstall left fcs-qt.exe behind' }
+
+      # The setup.exe and Store packages fcs-gui ships, built from fcs-qt's folder by the same
+      # scripts, so 3.0 can swap the payload. CI-only for now: each is installed, run and removed.
+      # The MSIX is signed with a throwaway certificate named like the Store publisher; the
+      # Store re-signs real uploads.
+      - name: setup.exe and MSIX (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $dist = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64"
+
+          choco install nsis --no-progress -y
+          $setup = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64-setup.exe"
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /V2 "/DAPP_VERSION=$version" "/DDIST_DIR=$dist" `
+            "/DOUT_FILE=$setup" /DGUI_EXE=fcs-qt.exe "/DICON_FILE=$PWD\fcs-gui\assets\app_icon.ico" `
+            installer\windows\face-crop-studio.nsi
+          if ($LASTEXITCODE) { throw "makensis failed ($LASTEXITCODE)" }
+          $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode) { throw "setup.exe failed ($($p.ExitCode))" }
+          $dir = "$env:ProgramFiles\Face Crop Studio"
+          # The NSIS script keeps the default shell context, so its shortcuts are the installing user's.
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Face Crop Studio\Face Crop Studio.lnk")) { throw 'no Start menu shortcut' }
+          ./fcs-qt/packaging/smoke.ps1 "$dir\fcs-qt.exe"
+          # NSIS's uninstaller copies itself to %TEMP% and returns at once; _?= keeps it in place.
+          $p = Start-Process "$dir\Uninstall.exe" -ArgumentList '/S', "_?=$dir" -Wait -PassThru
+          if ($p.ExitCode) { throw "uninstall failed ($($p.ExitCode))" }
+          # Run in place, the uninstaller cannot delete itself; anything else is left behind.
+          $left = Get-ChildItem $dir -Recurse -Force | Where-Object Name -ne 'Uninstall.exe'
+          if ($left) { throw "uninstall left $($left.Count) items behind, e.g. $($left[0].FullName)" }
+          Remove-Item $setup
+
+          $payload = "$env:RUNNER_TEMP\msix-payload"
+          New-Item -ItemType Directory -Force $payload | Out-Null
+          New-Item -ItemType Junction -Path "$payload\x86_64" -Target $dist | Out-Null
+          ./installer/windows/msix/build_msix.ps1 -Version $version -PayloadRoot $payload `
+            -OutDir "$env:RUNNER_TEMP\msix" -Executable fcs-qt.exe
+          $msix = (Get-ChildItem "$env:RUNNER_TEMP\msix\*-x64.msix").FullName
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($msix)
+          $reader = New-Object IO.StreamReader(($zip.Entries | Where-Object FullName -eq 'AppxManifest.xml').Open())
+          $identity = ([xml]$reader.ReadToEnd()).Package.Identity
+          $reader.Close(); $zip.Dispose()
+          $cert = New-SelfSignedCertificate -Type Custom -Subject $identity.Publisher -KeyUsage DigitalSignature `
+            -CertStoreLocation Cert:\CurrentUser\My -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3', '2.5.29.19={text}')
+          Export-Certificate -Cert $cert -FilePath "$env:RUNNER_TEMP\ci.cer" | Out-Null
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\ci.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint $msix
+          if ($LASTEXITCODE) { throw "signtool failed ($LASTEXITCODE)" }
+          Add-AppxPackage $msix
+          $package = Get-AppxPackage -Name $identity.Name
+          Start-Process "shell:AppsFolder\$($package.PackageFamilyName)!FaceCropStudio"
+          Start-Sleep 20
+          $running = Get-Process fcs-qt -ErrorAction SilentlyContinue
+          if (-not $running) { throw 'the installed MSIX did not start, or exited within 20 s' }
+          $running | Stop-Process -Force
+          Remove-AppxPackage $package.PackageFullName
+          'setup.exe and MSIX: ok'
 
       # xcb-cursor0 is installed so linuxdeploy bundles it: Qt's xcb plugin needs it and many
       # desktops lack it. xvfb gives the smoke run a display.
@@ -238,7 +330,7 @@ jobs:
           shopt -s nullglob
           # Git Bash on Windows has only sha256sum, macOS only shasum.
           sum="$(command -v sha256sum || echo 'shasum -a 256')"
-          $sum *.zip *.msi *.AppImage *.deb *.dmg > "SHA256SUMS-qt-$(echo "$RUNNER_OS" | tr '[:upper:]' '[:lower:]').txt"
+          $sum *.zip *.msi *.AppImage *.deb *.dmg > "SHA256SUMS-qt-${{ matrix.slug }}.txt"
           cat SHA256SUMS-qt-*.txt
 
       # release.yml's publish job collects every "*-release-artifacts*" upload.
@@ -246,7 +338,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.release && format('qt-release-artifacts-{0}', runner.os) || format('fcs-qt-{0}', runner.os) }}
+          name: ${{ inputs.release && format('qt-release-artifacts-{0}', matrix.slug) || format('fcs-qt-{0}', matrix.slug) }}
           path: |
             fcs-qt/dist/SHA256SUMS-qt-*.txt
             fcs-qt/dist/*.zip

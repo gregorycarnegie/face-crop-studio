@@ -158,7 +158,7 @@ parquet = { version = "60.1.0", default-features = false, features = [
 # `hooks` is not a default feature and is what `Connection::authorizer` lives behind.
 # It is the read-only guard for user-supplied SQL in fcs-mapping: an allowlist SQLite
 # enforces while it compiles the statement, rather than a keyword denylist of ours.
-rusqlite = { version = "0.42.0", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.43.0", features = ["bundled", "hooks"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

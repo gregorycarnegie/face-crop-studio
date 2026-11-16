@@ -36,6 +36,10 @@ param(
     [Parameter(Mandatory = $true)][string]$PayloadRoot,
     [string]$OutDir = "dist/msix",
 
+    # The front end the Start menu entry runs: fcs-qt.exe for fcs-qt's payload. The CLI alias is
+    # declared only when the payload ships fcs-cli.exe.
+    [string]$Executable = "fcs-gui.exe",
+
     # Partner Center identity. Defaults are the committed production values;
     # override them to build a package for a different Store listing.
     [string]$IdentityName = $env:MSIX_IDENTITY_NAME,
@@ -122,13 +126,16 @@ foreach ($slug in $ArchMap.Keys | Sort-Object) {
     Remove-Item (Join-Path $stage "app_icon.ico") -Force -ErrorAction SilentlyContinue
     Copy-Item -Recurse -Force $AssetsDir (Join-Path $stage "Assets")
 
-    foreach ($exe in @("fcs-gui.exe", "fcs-cli.exe")) {
-        if (-not (Test-Path (Join-Path $stage $exe))) {
-            throw "Payload for $slug is missing $exe"
-        }
+    if (-not (Test-Path (Join-Path $stage $Executable))) {
+        throw "Payload for $slug is missing $Executable"
+    }
+    $manifest = Get-Content -Raw $ManifestTemplate
+    if (-not (Test-Path (Join-Path $stage "fcs-cli.exe"))) {
+        $manifest = $manifest -replace '(?s)\s*<!--CLI-->.*?<!--/CLI-->', ''
     }
 
-    (Get-Content -Raw $ManifestTemplate).
+    $manifest.
+        Replace("@EXECUTABLE@", $Executable).
         Replace("@IDENTITY_NAME@", $IdentityName).
         Replace("@PUBLISHER@", $Publisher).
         Replace("@PUBLISHER_DISPLAY_NAME@", $PublisherDisplayName).

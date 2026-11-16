@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Face Crop Studio Qt for Linux on arm64: `face-crop-studio-qt-*-arm64.AppImage` and `.deb`,
+  as fcs-gui already had.
+
+### Fixed
+
+- Face Crop Studio Qt could write past the end of an image buffer when showing a picture whose
+  pixel buffer was longer than its pixels, and crashed outright on a zero-pixel-wide one. The
+  copy into Qt is now a function proved, with Verus, to copy exactly the image's rows and
+  nothing past either buffer.
+- Closing Face Crop Studio Qt no longer prints `QDxgiVSyncService not destroyed in time` and
+  three `QThreadStorage` warnings: Qt is now shut down before the process exits.
+- The status line in Face Crop Studio Qt's photo list ("Finding faces · N to go", "All photos
+  ready") is now announced by screen readers; it had no accessible name.
+
 ## [2.4.0] - 2026-11-15
 
 ### Added

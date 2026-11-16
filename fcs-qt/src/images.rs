@@ -98,8 +98,10 @@ pub unsafe extern "C" fn fcs_image_request(
 unsafe extern "C" {
     /// cpp/image_provider.cpp: the clipboard's image as RGBA, sized through `alloc`.
     fn fcs_clipboard_image(ctx: *mut c_void, alloc: Alloc) -> bool;
-    /// cpp/image_provider.cpp: `qVersion()`, a static NUL-terminated string.
-    fn fcs_qt_version() -> *const std::ffi::c_char;
+    /// Qt Core's own C function (`qtversion.h` declares it `extern "C"`): a static,
+    /// NUL-terminated string.
+    #[link_name = "qVersion"]
+    fn q_version() -> *const std::ffi::c_char;
     /// cpp/image_provider.cpp: `QGuiApplication::setWindowIcon` from packed RGBA.
     fn fcs_set_window_icon(rgba: *const u8, width: i32, height: i32);
 }
@@ -130,7 +132,7 @@ pub fn install_app_icon() {
 /// The version of the Qt libraries loaded at run time.
 pub fn qt_version() -> String {
     // SAFETY: qVersion returns a static, NUL-terminated string.
-    unsafe { std::ffi::CStr::from_ptr(fcs_qt_version()) }
+    unsafe { std::ffi::CStr::from_ptr(q_version()) }
         .to_string_lossy()
         .into_owned()
 }
@@ -249,6 +251,11 @@ mod tests {
         remove("test/rgb");
         assert!(request("test/rgb").is_none());
         assert!(request("test/never").is_none());
+    }
+
+    #[test]
+    fn qt_reports_its_own_version() {
+        assert!(qt_version().starts_with("6."), "{}", qt_version());
     }
 
     #[test]

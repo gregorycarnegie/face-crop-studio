@@ -20,6 +20,23 @@ Unicode True
   !error "OUT_FILE define is required"
 !endif
 
+; The front end the shortcuts start. fcs-qt's payload passes fcs-qt.exe, and an icon, since it
+; ships no app_icon.ico. Install directory and registry keys stay the same either way, so one
+; installer upgrades the other in place.
+!ifndef GUI_EXE
+  !define GUI_EXE "fcs-gui.exe"
+!endif
+
+!ifndef ICON_FILE
+  !define ICON_FILE "${DIST_DIR}\app_icon.ico"
+!endif
+
+; The uninstaller deletes what this payload installed, file by file: fcs-qt's Qt DLLs, plugins
+; and QML modules have no fixed names the uninstall section could list.
+!tempfile UNINSTALL_LIST
+; makensis runs from this script's directory (${__FILEDIR__} is relative to the caller's).
+!system 'powershell -NoProfile -ExecutionPolicy Bypass -File uninstall_list.ps1 "${DIST_DIR}" "${UNINSTALL_LIST}"' = 0
+
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUT_FILE}"
 InstallDir "$PROGRAMFILES64\Face Crop Studio"
@@ -31,8 +48,8 @@ RequestExecutionLevel admin
 !include "WinMessages.nsh"
 !include "Sections.nsh"
 !include "FileFunc.nsh"
-!define MUI_ICON "${DIST_DIR}\app_icon.ico"
-!define MUI_UNICON "${DIST_DIR}\app_icon.ico"
+!define MUI_ICON "${ICON_FILE}"
+!define MUI_UNICON "${ICON_FILE}"
 !define MUI_LICENSEPAGE_TEXT_TOP "Face Crop Studio is dual-licensed (MIT OR Apache-2.0). Review the terms below."
 !define MUI_LICENSEPAGE_CHECKBOX
 
@@ -81,7 +98,7 @@ Section "Application Files (required)" SecMain
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\Face Crop Studio"
-  CreateShortCut "$SMPROGRAMS\Face Crop Studio\Face Crop Studio.lnk" "$INSTDIR\fcs-gui.exe" "" "$INSTDIR\fcs-gui.exe" 0
+  CreateShortCut "$SMPROGRAMS\Face Crop Studio\Face Crop Studio.lnk" "$INSTDIR\${GUI_EXE}" "" "$INSTDIR\${GUI_EXE}" 0
   CreateShortCut "$SMPROGRAMS\Face Crop Studio\Uninstall Face Crop Studio.lnk" "$INSTDIR\Uninstall.exe" "" "$INSTDIR\Uninstall.exe" 0
 
   WriteRegStr HKLM "Software\Face Crop Studio" "Install_Dir" "$INSTDIR"
@@ -91,7 +108,7 @@ Section "Application Files (required)" SecMain
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "Publisher" "${APP_PUBLISHER}"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "UninstallString" '"$INSTDIR\Uninstall.exe"'
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "DisplayIcon" "$INSTDIR\fcs-gui.exe"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "DisplayIcon" "$INSTDIR\${GUI_EXE}"
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "NoModify" 1
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FaceCropStudio" "NoRepair" 1
 
@@ -102,7 +119,7 @@ Section "Application Files (required)" SecMain
 SectionEnd
 
 Section "Desktop Shortcut" SecDesktop
-  CreateShortCut "$DESKTOP\Face Crop Studio.lnk" "$INSTDIR\fcs-gui.exe" "" "$INSTDIR\fcs-gui.exe" 0
+  CreateShortCut "$DESKTOP\Face Crop Studio.lnk" "$INSTDIR\${GUI_EXE}" "" "$INSTDIR\${GUI_EXE}" 0
 SectionEnd
 
 Section /o "Add install directory to PATH (Current user)" SecPathUser
@@ -137,10 +154,12 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\Face Crop Studio\Uninstall Face Crop Studio.lnk"
   RMDir "$SMPROGRAMS\Face Crop Studio"
 
-  ; Delete installed files by pattern so this section stays correct as binaries
-  ; and assets are added or renamed without needing manual updates here.
-  ; Wildcards cover all present and future executables / icons / docs.
-  Delete "$INSTDIR\*.exe"     ; fcs-gui.exe, fcs-cli.exe, Uninstall.exe
+  ; Everything this payload installed (generated at compile time; RMDir without /r keeps
+  ; folders the user added files to).
+  !include "${UNINSTALL_LIST}"
+  !delfile "${UNINSTALL_LIST}"
+  ; The patterns below catch files an earlier version installed and this payload lacks.
+  Delete "$INSTDIR\*.exe"     ; the front end, fcs-cli.exe, Uninstall.exe
   Delete "$INSTDIR\onnxruntime.dll" ; legacy installations
   Delete "$INSTDIR\*.ico"
   Delete "$INSTDIR\*.md"
@@ -166,7 +185,7 @@ SectionEnd
 
 ; ── Section descriptions (shown on the Components page) ───────────────────────
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain}       "Core application files — fcs-gui.exe, fcs-cli.exe, bundled model, and required assets. Cannot be deselected."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain}       "Core application files — ${GUI_EXE}, fcs-cli.exe when shipped, bundled models, and required assets. Cannot be deselected."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop}    "Place a shortcut to Face Crop Studio on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPathUser}   "Append the install directory to the current user's PATH so fcs-cli is available in new terminals."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPathSystem} "Append the install directory to the system PATH (all users). Requires administrator rights — mutually exclusive with the per-user option."
