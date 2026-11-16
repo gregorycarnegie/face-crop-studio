@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three `QThreadStorage` warnings: Qt is now shut down before the process exits.
 - The status line in Face Crop Studio Qt's photo list ("Finding faces · N to go", "All photos
   ready") is now announced by screen readers; it had no accessible name.
+- Uninstalling with the Windows setup.exe left `LICENSE`, and so the install folder, behind.
+  The uninstaller now removes every file its installer copied, each listed when setup.exe is
+  built, plus the files earlier versions installed.
 
 ## [2.4.0] - 2026-11-15
 

@@ -253,9 +253,15 @@ jobs:
             "/DOUT_FILE=$setup" /DGUI_EXE=fcs-qt.exe "/DICON_FILE=$PWD\fcs-gui\assets\app_icon.ico" `
             installer\windows\face-crop-studio.nsi
           if ($LASTEXITCODE) { throw "makensis failed ($LASTEXITCODE)" }
+          $dir = "$env:ProgramFiles\Face Crop Studio"
+          # Installed over fcs-gui 2.x's files (release.yml's layout), as the 3.0 upgrade will be:
+          # its uninstaller must remove those too.
+          New-Item -ItemType Directory -Force "$dir\samples" | Out-Null
+          foreach ($f in 'fcs-gui.exe', 'fcs-cli.exe', 'app_icon.ico', 'README.md', 'LICENSE', 'LICENSE-MIT', 'samples\sample_01.jpg', 'samples\README.md') {
+            Set-Content "$dir\$f" 'fcs-gui 2.x'
+          }
           $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode) { throw "setup.exe failed ($($p.ExitCode))" }
-          $dir = "$env:ProgramFiles\Face Crop Studio"
           # The NSIS script keeps the default shell context, so its shortcuts are the installing user's.
           if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Face Crop Studio\Face Crop Studio.lnk")) { throw 'no Start menu shortcut' }
           ./fcs-qt/packaging/smoke.ps1 "$dir\fcs-qt.exe"

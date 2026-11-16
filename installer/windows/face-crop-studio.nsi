@@ -159,10 +159,13 @@ Section "Uninstall"
   !include "${UNINSTALL_LIST}"
   !delfile "${UNINSTALL_LIST}"
   ; The patterns below catch files an earlier version installed and this payload lacks.
+  ; shortcut: they know fcs-gui's layout, not Qt's, so going back from fcs-qt to an fcs-gui
+  ; installer leaves Qt's files at uninstall; record each payload's list if that is supported.
   Delete "$INSTDIR\*.exe"     ; the front end, fcs-cli.exe, Uninstall.exe
   Delete "$INSTDIR\onnxruntime.dll" ; legacy installations
   Delete "$INSTDIR\*.ico"
   Delete "$INSTDIR\*.md"
+  Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\LICENSE-*"
   ; Remove only the bundled models; RMDir (no /r) leaves the directory intact
   ; if the user placed additional models there.
