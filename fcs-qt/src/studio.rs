@@ -315,6 +315,21 @@ impl Default for Studio {
     }
 }
 
+impl Drop for Studio {
+    /// The engine outlives the process. Dropping the Studio (main's `drop(app)`) closes the
+    /// job channel, so the detection workers wake and drop their handles on the engine; the
+    /// last one would destroy the GPU device on a worker thread while the main thread is
+    /// already in `exit`. With NVIDIA on Linux that raced the driver's own teardown: `free():
+    /// invalid pointer` or a segfault in libnvidia-glcore, about one close in four on a GTX
+    /// 1080 Ti. Export, preview and camera threads hold the engine too, so joining the workers
+    /// would not be enough (and would hang a close mid-export). The OS reclaims the device.
+    fn drop(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            std::mem::forget(engine);
+        }
+    }
+}
+
 #[qobject(Singleton)]
 impl Studio {
     qproperty!("ready", Member = ready, Notify = engine_changed);
@@ -2307,10 +2322,8 @@ mod tests {
     /// tests see the data the app does. Rewrite it with FCS_UPDATE_QML_FIXTURE=1.
     #[test]
     fn the_qml_test_fixture_matches_a_fresh_studio() {
-        let mut studio = Studio {
-            settings: AppSettings::default(),
-            ..Studio::default()
-        };
+        let mut studio = Studio::default();
+        studio.settings = AppSettings::default();
         studio.sync_settings();
         let data = json!({
             "settings": studio.settings_json,
