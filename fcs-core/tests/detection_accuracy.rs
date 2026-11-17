@@ -71,23 +71,31 @@ fn score(
     (matched, unmatched)
 }
 
-#[test]
-fn the_detector_finds_the_annotated_faces() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    let model = root.join("models/scrfd80k_500m_640.onnx");
-    let Some(detector) =
-        ScrfdDetector::load_from_with_gpu(&model, &fcs_utils::GpuContextOptions::disabled())
-    else {
+fn root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+/// The shipped model on the CPU graph, or `None` (a skip, failed under FCS_STRICT_TESTS).
+fn detector() -> Option<ScrfdDetector> {
+    let model = root().join("models/scrfd80k_500m_640.onnx");
+    let detector =
+        ScrfdDetector::load_from_with_gpu(&model, &fcs_utils::GpuContextOptions::disabled());
+    if detector.is_none() {
         assert!(
             std::env::var_os("FCS_STRICT_TESTS").is_none(),
             "FCS_STRICT_TESTS: SCRFD did not load from {}",
             model.display()
         );
         eprintln!("skipped: SCRFD did not load from {}", model.display());
-        return;
-    };
+    }
+    detector
+}
 
-    let images = root.join("fixtures/images");
+#[test]
+fn the_detector_finds_the_annotated_faces() {
+    let Some(detector) = detector() else { return };
+
+    let images = root().join("fixtures/images");
     let truth: serde_json::Value = serde_json::from_slice(
         &std::fs::read(images.join("ground_truth.json")).expect("fixtures/images is committed"),
     )
@@ -121,4 +129,26 @@ fn the_detector_finds_the_annotated_faces() {
         unmatched <= MAX_UNMATCHED,
         "{unmatched} unmatched detections, at most {MAX_UNMATCHED} expected"
     );
+}
+
+/// Every release bundles `samples/` for a first try, and each is one synthetic portrait: at the
+/// default thresholds each must give exactly one face, scored well clear of the threshold.
+/// fcs-gui's batch export test was the only one to run the detector on a sample, so this keeps
+/// that check when fcs-gui goes.
+#[test]
+fn each_bundled_sample_has_one_face() {
+    let Some(detector) = detector() else { return };
+    for n in 1..=6 {
+        let name = format!("sample_{n:02}.jpg");
+        let image = image::open(root().join("samples").join(&name)).expect("sample decodes");
+        let detections = detector
+            .detect(&image, DEFAULT_CONFIDENCE, DEFAULT_NMS_THRESHOLD)
+            .expect("detection runs");
+        let scores: Vec<f32> = detections.iter().map(|d| d.score).collect();
+        eprintln!("{name}: {scores:?}");
+        assert_eq!(scores.len(), 1, "{name}: {scores:?}");
+        // Measured 0.767 (sample_06) to 0.835 (sample_03) on the CPU graph. A clean portrait
+        // falling towards the 0.5 threshold is a regression even while it is still found.
+        assert!(scores[0] >= 0.7, "{name}: score {}", scores[0]);
+    }
 }
