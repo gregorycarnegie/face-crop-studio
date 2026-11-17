@@ -62,7 +62,7 @@ thiserror = "2.0.21"
 
 # CLI and desktop UI
 arboard = "3.7.0"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.8", features = ["derive"] }
 eframe = { version = "0.37.0", features = ["wgpu"] }
 egui = "0.37.0"
 egui_extras = "0.37.0"
@@ -121,7 +121,7 @@ vstd = "=0.0.0-2026-11-15-0327"
 cudarc = { version = "0.19.10", default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-12000"] }
 metal = "0.33.0"
 naga = { version = "30.0.2", features = ["wgsl-in", "spv-out", "msl-out"] }
-pollster = "1.0.1"
+pollster = "1.0.2"
 wgpu = "30.0.2"
 wesl = "0.6.0"
 
@@ -187,4 +187,4 @@ rstest = { version = "0.28.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.6.0", default-features = false }
+zip = { version = "9.6.1", default-features = false }
