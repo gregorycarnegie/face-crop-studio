@@ -531,6 +531,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    /// A saved CUDA opt-in with the GPU switched off loads on the GPU-less path, so a missing
+    /// model is reported as such rather than as a CUDA failure. Ported from fcs-gui's
+    /// `a_disabled_gpu_overrides_a_saved_cuda_opt_in`.
+    #[test]
+    fn a_disabled_gpu_overrides_a_saved_cuda_opt_in() {
+        let mut settings = AppSettings {
+            model_path: Some("missing.onnx".into()),
+            ..AppSettings::default()
+        };
+        settings.gpu.enabled = false;
+        settings.gpu.experimental_cuda = true;
+        let error = format!("{:#}", Engine::load(&settings).err().expect("no model"));
+        assert!(!error.contains("CUDA"), "{error}");
+        assert!(error.contains("missing.onnx"), "{error}");
+    }
+
     /// HEIC (libheif) and AVIF (dav1d) decode in this build, whose C libraries have to come
     /// from vcpkg's dynamic-CRT triplet. Both files are sample_01 at 512 px.
     #[test]
