@@ -305,7 +305,11 @@ packages a 256 px PNG of it.
   the closed job channel, dropped the last handle on the engine and destroyed the Vulkan
   device while the main thread was in `exit`, racing NVIDIA's driver teardown (`free():
   invalid pointer` or a segfault in libnvidia-glcore). The Studio now leaks the engine on
-  drop; 20 closes in a row under gdb were clean.
+  drop; 20 closes in a row under gdb were clean. Closing while an engine was loading, or the
+  CUDA probe was running, crashed 11 times in 12 (a gdb breakpoint on `Engine::load` quit
+  the app): the loader dropped its unwanted engine, or was still creating its Vulkan
+  instance, during `exit`. Those threads now hold a lock the Studio's drop waits for; 20 in a
+  row were clean.
 
   Not checked on Linux: the file and folder dialogs (Qt Quick's own, non-native, unless a
   platform theme provides one). qtbridge calls macOS (arm64) experimental.

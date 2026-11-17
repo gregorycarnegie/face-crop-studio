@@ -136,6 +136,10 @@ pub struct Studio {
     /// The engine detection jobs run on, read as each job starts, so a backend switch takes
     /// effect for photos already queued.
     engine_slot: Arc<RwLock<Option<Arc<Engine>>>>,
+    /// Read-held by each thread that opens or drops GPU driver state behind the Studio's back:
+    /// engine loads and the CUDA probe. Drop takes it for writing, so the process never exits
+    /// with one still running (see `Drop for Studio`).
+    gpu_work: Arc<RwLock<()>>,
     jobs: Option<mpsc::Sender<DetectJob>>,
     entries: Vec<Entry>,
     next_uid: u64,
@@ -237,6 +241,7 @@ impl Default for Studio {
             settings_path,
             engine: None,
             engine_slot: Arc::new(RwLock::new(None)),
+            gpu_work: Arc::new(RwLock::new(())),
             jobs: None,
             entries: Vec::new(),
             next_uid: 0,
@@ -316,14 +321,21 @@ impl Default for Studio {
 }
 
 impl Drop for Studio {
-    /// The engine outlives the process. Dropping the Studio (main's `drop(app)`) closes the
+    /// No thread may touch GPU driver state while the main thread is in `exit`: with NVIDIA on
+    /// Linux that races the driver's own teardown (`free(): invalid pointer`, a segfault in
+    /// libnvidia-glcore, or a pure virtual call from a driver's static destructors).
+    ///
+    /// First, wait for engine loads and the CUDA probe. A load that finishes after Qt has gone
+    /// has its result dropped, engine and all, on the loader thread, and one still running is
+    /// mid `vkCreateInstance`. Closing during a load waits for it, about a second.
+    ///
+    /// Then the engine outlives the process. Dropping the Studio (main's `drop(app)`) closes the
     /// job channel, so the detection workers wake and drop their handles on the engine; the
-    /// last one would destroy the GPU device on a worker thread while the main thread is
-    /// already in `exit`. With NVIDIA on Linux that raced the driver's own teardown: `free():
-    /// invalid pointer` or a segfault in libnvidia-glcore, about one close in four on a GTX
-    /// 1080 Ti. Export, preview and camera threads hold the engine too, so joining the workers
-    /// would not be enough (and would hang a close mid-export). The OS reclaims the device.
+    /// last one would destroy the GPU device on a worker thread during `exit`. Export, preview
+    /// and camera threads hold the engine too, so joining the workers would not be enough (and
+    /// would hang a close mid-export). The OS reclaims the device.
     fn drop(&mut self) {
+        drop(self.gpu_work.write().unwrap_or_else(|e| e.into_inner()));
         if let Some(engine) = self.engine.take() {
             std::mem::forget(engine);
         }
@@ -467,14 +479,20 @@ impl Studio {
         }
         let handle = self.get_thread_handle();
         let settings = self.settings.clone();
+        let gpu_work = self.gpu_work.clone();
         thread::spawn(move || {
+            // Held until the engine is handed over (or dropped, if Qt is gone): see Drop.
+            let _busy = gpu_work.read().unwrap_or_else(|e| e.into_inner());
             let engine = Engine::load(&settings).map_err(|err| format!("{err:#}"));
             handle.invoke_mut(move |studio| studio.engine_loaded(engine));
         });
         // The probe compiles PTX and opens a driver context, so it runs once, off this thread,
         // and the backend picker learns the answer when it arrives.
         let handle = self.get_thread_handle();
+        let gpu_work = self.gpu_work.clone();
         thread::spawn(move || {
+            // The probe has dropped its context once it has a verdict.
+            let _busy = gpu_work.read().unwrap_or_else(|e| e.into_inner());
             let verdict = loop {
                 if let Some(verdict) = fcs_utils::cuda::availability() {
                     break verdict.clone();
@@ -1386,7 +1404,9 @@ impl Studio {
         self.engine_changed();
         let settings = self.settings.clone();
         let handle = self.get_thread_handle();
+        let gpu_work = self.gpu_work.clone();
         thread::spawn(move || {
+            let _busy = gpu_work.read().unwrap_or_else(|e| e.into_inner());
             let engine = Engine::load(&settings).map_err(|err| format!("{err:#}"));
             handle.invoke_mut(move |studio| studio.engine_rebuilt(engine, previous));
         });
