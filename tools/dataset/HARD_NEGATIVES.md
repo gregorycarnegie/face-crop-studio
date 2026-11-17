@@ -103,6 +103,10 @@ than removing it. Candidate causes worth isolating before any more data work:
 * **Capacity and receptive field** at the largest scale, versus a bigger SCRFD variant or a
   wider stride-32 head.
 
+Any further retrain is judged by `detector_gate.zig` (November 2026): thresholds tuned on one
+half of each held-out set, gates read on the other, one PASS/FAIL. Its header holds the command,
+the gates, their tolerances and the baselines; attempt 1's model fails its large-face gate.
+
 Everything here is reproducible from the commands in each tool's header; the run folders are
 `Downloads\face-data\zig_runs\oi80k_negatives` (attempt 1) and `zig_runs\ft_experiment` (attempt
 2, with `run_arm.sh`, `run_arm_hi.sh` and `summarise.py`).

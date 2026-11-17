@@ -51,11 +51,11 @@ const FLOOR: f32 = 0.02; // proposal floor, as in October
 const BUDGETS = [_]f64{ 0.05, 0.1, 0.2, 0.5 };
 // COCO's no-person images hold few detections at the frozen thresholds (0.005-0.03 each), so
 // its budgets start lower than October's.
-const COCO_BUDGETS = [_]f64{ 0.01, 0.02, 0.05, 0.1 };
+pub const COCO_BUDGETS = [_]f64{ 0.01, 0.02, 0.05, 0.1 };
 const BUCKETS = [_][]const u8{ "0-8", "8-16", "16-32", "32+" };
 const BUCKET_LO = [_]f64{ 0, 8, 16, 32 };
 
-const Kind = enum { scrfd, retinaface };
+pub const Kind = enum { scrfd, retinaface };
 const Spec = struct { label: []const u8, file: []const u8, kind: Kind, refined: bool, frozen: f64 };
 /// FROZEN, in its order; `refined` marks the two detectors the crop pipeline was measured with.
 const MODELS = [_]Spec{
@@ -63,32 +63,32 @@ const MODELS = [_]Spec{
     .{ .label = "RetinaFace R34", .file = "retinaface_r34.onnx", .kind = .retinaface, .refined = true, .frozen = 0.9807 },
     .{ .label = "Public SCRFD-500M", .file = "scrfd_500m.onnx", .kind = .scrfd, .refined = false, .frozen = 0.6415 },
 };
-const SHA256 = [_][2][]const u8{
+pub const SHA256 = [_][2][]const u8{
     .{ "scrfd80k_500m_640.onnx", "2437def9510f2af6431a5b2090ae9f357bc189cb0223be1b6c4d4ff085798e64" },
     .{ "retinaface_r34.onnx", "bd0263dc2a465d32859555cb1741f2d98991eb0053696e8ee33fec583d30e630" },
     .{ "scrfd_500m.onnx", "5e4447f50245bbd7966bd6c0fa52938c61474a04ec7def48753668a9d8b4ea3a" },
     .{ "eye_refiner.onnx", "16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976" },
 };
 
-const Det = struct { box: [4]f64, score: f64, eyes: [4]f64, refined: ?[4]f64 = null };
-const ByImage = std.StringArrayHashMapUnmanaged([]const Det);
+pub const Det = struct { box: [4]f64, score: f64, eyes: [4]f64, refined: ?[4]f64 = null };
+pub const ByImage = std.StringArrayHashMapUnmanaged([]const Det);
 const Row = detector.Row; // box, score, five points
 const nms = detector.nms;
 
-fn fail(comptime fmt: []const u8, args: anytype) noreturn {
+pub fn fail(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.print(fmt ++ "\n", args);
     std.process.exit(1);
 }
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
-const Model = struct {
+pub const Model = struct {
     oracle: ort.Oracle,
     input: [:0]const u8,
     outputs: []const [:0]const u8,
     priors: []const [4]f32 = &.{},
 
-    fn open(gpa: std.mem.Allocator, io: Io, runtime: []const u8, dir: []const u8, file: []const u8) !Model {
+    pub fn open(gpa: std.mem.Allocator, io: Io, runtime: []const u8, dir: []const u8, file: []const u8) !Model {
         const data = try u.readFile(gpa, io, try std.fs.path.join(gpa, &.{ dir, file }));
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(data, &digest, .{});
@@ -102,7 +102,7 @@ const Model = struct {
     }
 
     /// A candidate model, which by definition has no recorded SHA-256 to check.
-    fn unchecked(gpa: std.mem.Allocator, io: Io, runtime: []const u8, path: []const u8) !Model {
+    pub fn unchecked(gpa: std.mem.Allocator, io: Io, runtime: []const u8, path: []const u8) !Model {
         const data = try u.readFile(gpa, io, path);
         const names = try ort.graphNames(gpa, data);
         return .{ .oracle = try ort.Oracle.open(gpa, runtime, data), .input = names.inputs[0], .outputs = names.outputs };
@@ -167,7 +167,7 @@ fn scrfd(gpa: std.mem.Allocator, model: *Model, canvas: img.Image) ![]Row {
     return rows.toOwnedSlice(gpa);
 }
 
-fn retinaPriors(gpa: std.mem.Allocator) ![]const [4]f32 {
+pub fn retinaPriors(gpa: std.mem.Allocator) ![]const [4]f32 {
     var priors: std.ArrayList([4]f32) = .empty;
     for ([_]usize{ 8, 16, 32 }, [_][2]f64{ .{ 16, 32 }, .{ 64, 128 }, .{ 256, 512 } }) |step, sizes| {
         const side = SIZE / step;
@@ -212,9 +212,27 @@ fn retinaface(gpa: std.mem.Allocator, model: *Model, canvas: img.Image) ![]Row {
     return rows.toOwnedSlice(gpa);
 }
 
+/// One decoded image through a detector: letterbox, run, decode, back to source pixels, NMS.
+/// The kept rows, best score first.
+pub fn detect(gpa: std.mem.Allocator, model: *Model, kind: Kind, image: img.Image) ![]Row {
+    const canvas, const scale = try letterbox(gpa, image);
+    const rows = try switch (kind) {
+        .scrfd => scrfd(gpa, model, canvas),
+        .retinaface => retinaface(gpa, model, canvas),
+    };
+    const s: f32 = @floatCast(scale);
+    for (rows) |*r| for (0..15) |c| if (c != 4) {
+        r[c] /= s;
+    };
+    const kept = try nms(gpa, rows);
+    const out = try gpa.alloc(Row, kept.len);
+    for (out, kept) |*o, k| o.* = rows[k];
+    return out;
+}
+
 /// fcs-core::eye_refiner: a 112 crop of the box grown 1.25x, eyes as fractions. NumPy's scalar
 /// promotion is followed: float32 box values, float64 wherever a Python number joins in.
-fn refine(gpa: std.mem.Allocator, model: *Model, image: img.Image, box: [4]f32) ![4]f64 {
+pub fn refine(gpa: std.mem.Allocator, model: *Model, image: img.Image, box: [4]f32) ![4]f64 {
     const cx = @as(f64, box[0] + box[2]) / 2;
     const cy = @as(f64, box[1] + box[3]) / 2;
     const scale = 112 / (@as(f64, @max(box[2] - box[0], box[3] - box[1])) * 1.25);
@@ -234,7 +252,7 @@ fn refine(gpa: std.mem.Allocator, model: *Model, image: img.Image, box: [4]f32) 
     return out;
 }
 
-fn writeDets(w: *Io.Writer, out: ByImage) !void {
+pub fn writeDets(w: *Io.Writer, out: ByImage) !void {
     try w.writeAll("{");
     for (out.keys(), out.values(), 0..) |name, dets, n| {
         if (n > 0) try w.writeAll(", ");
@@ -273,7 +291,7 @@ fn four(v: json.Value) [4]f64 {
     return .{ u.num(a[0]), u.num(a[1]), u.num(a[2]), u.num(a[3]) };
 }
 
-fn readDets(gpa: std.mem.Allocator, io: Io, path: []const u8) !ByImage {
+pub fn readDets(gpa: std.mem.Allocator, io: Io, path: []const u8) !ByImage {
     const doc = try u.readJson(gpa, io, path);
     var out: ByImage = .empty;
     for (doc.object.keys(), doc.object.values()) |name, list| {
@@ -317,19 +335,9 @@ fn detectAll(ctx: Ctx, names: []const []const u8, images_dir: []const u8, models
             defer arena.deinit();
             const tmp = arena.allocator();
             const image = img.load(tmp, ctx.io, try std.fs.path.join(tmp, &.{ images_dir, name }), .apply_exif) catch continue;
-            const canvas, const scale = try letterbox(tmp, image);
-            const rows = try switch (spec.kind) {
-                .scrfd => scrfd(tmp, &model, canvas),
-                .retinaface => retinaface(tmp, &model, canvas),
-            };
-            const s: f32 = @floatCast(scale);
-            for (rows) |*r| for (0..15) |c| if (c != 4) {
-                r[c] /= s;
-            };
-            const kept = try nms(tmp, rows);
-            const dets = try gpa.alloc(Det, kept.len);
-            for (dets, kept) |*d, k| {
-                const r = rows[k];
+            const rows = try detect(tmp, &model, spec.kind, image);
+            const dets = try gpa.alloc(Det, rows.len);
+            for (dets, rows) |*d, r| {
                 d.* = .{ .box = .{ r[0], r[1], r[2], r[3] }, .score = r[4], .eyes = .{ r[5], r[6], r[7], r[8] } }; // viewer's left first, as fcs-core
                 if (spec.refined and @as(f64, r[4]) >= spec.frozen) d.refined = try refine(tmp, &refiner, image, r[0..4].*);
             }
@@ -366,16 +374,9 @@ fn retinaOnly(ctx: Ctx, list: []const u8, images_dir: []const u8, models_dir: []
         defer arena.deinit();
         const tmp = arena.allocator();
         const image = img.load(tmp, ctx.io, try std.fs.path.join(tmp, &.{ images_dir, name }), .apply_exif) catch continue;
-        const canvas, const scale = try letterbox(tmp, image);
-        const rows = try retinaface(tmp, &model, canvas);
-        const s: f32 = @floatCast(scale);
-        for (rows) |*r| for (0..15) |c| if (c != 4) {
-            r[c] /= s;
-        };
-        const kept = try nms(tmp, rows);
-        const dets = try gpa.alloc(Det, kept.len);
-        for (dets, kept) |*d, k| {
-            const r = rows[k];
+        const rows = try detect(tmp, &model, .retinaface, image);
+        const dets = try gpa.alloc(Det, rows.len);
+        for (dets, rows) |*d, r| {
             d.* = .{ .box = .{ r[0], r[1], r[2], r[3] }, .score = r[4], .eyes = .{ r[5], r[6], r[7], r[8] } };
         }
         try out.put(gpa, try gpa.dupe(u8, name), dets);
@@ -400,7 +401,7 @@ fn iou(a: [4]f64, b: [4]f64) f64 {
 }
 
 /// The lowest threshold leaving at most `budget` unmatched detections per image.
-fn budgetThreshold(gpa: std.mem.Allocator, unmatched: []const f64, images: usize, budget: f64) !f64 {
+pub fn budgetThreshold(gpa: std.mem.Allocator, unmatched: []const f64, images: usize, budget: f64) !f64 {
     const allowed: usize = @intFromFloat(@trunc(budget * @as(f64, @floatFromInt(images)) + 1e-9));
     const scores = try gpa.dupe(f64, unmatched);
     std.mem.sort(f64, scores, {}, std.sort.desc(f64));
@@ -420,7 +421,7 @@ fn eyeAngle(right: [2]f64, left: [2]f64) f64 {
     return std.math.atan2(left[1] - right[1], left[0] - right[0]);
 }
 
-fn angleError(truth: [2][2]f64, pred: [2][2]f64) f64 {
+pub fn angleError(truth: [2][2]f64, pred: [2][2]f64) f64 {
     const difference = @mod(@abs((eyeAngle(truth[0], truth[1]) - eyeAngle(pred[0], pred[1])) * (180.0 / std.math.pi)), 360);
     return @min(difference, 360 - difference);
 }
@@ -519,7 +520,7 @@ fn labelNoise(gpa: std.mem.Allocator, w: *Io.Writer, rows: []const Residuals) !v
 }
 
 /// `f"{v:>{width}.{n}f}"` and `f"{v:>{width}.{n}%}"`.
-fn col(gpa: std.mem.Allocator, w: *Io.Writer, v: f64, width: usize, comptime n: u8, comptime percent: bool) !void {
+pub fn col(gpa: std.mem.Allocator, w: *Io.Writer, v: f64, width: usize, comptime n: u8, comptime percent: bool) !void {
     const s = try u.fixedAlloc(gpa, if (percent) v * 100 else v, n);
     try u.padLeft(w, if (percent) try std.fmt.allocPrint(gpa, "{s}%", .{s}) else s, width);
 }
@@ -534,16 +535,21 @@ fn lines(text: []const u8) std.mem.SplitIterator(u8, .scalar) {
     return std.mem.splitScalar(u8, text, '\n');
 }
 
-fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir: []const u8, cache: []const u8) !void {
-    const gpa = ctx.gpa;
-    var images: std.ArrayList([]const u8) = .empty;
-    var faces: std.StringHashMapUnmanaged(std.ArrayList([4]f64)) = .empty;
-    // Clicked eyes, subject's right first, aligned with `faces`; null where none were clicked.
-    var eyes: std.StringHashMapUnmanaged(std.ArrayList(?[2][2]f64)) = .empty;
-    var ignore: std.StringHashMapUnmanaged(std.ArrayList([4]f64)) = .empty;
-    var widths: std.StringHashMapUnmanaged(f64) = .empty; // image width, for face size as a fraction
+/// A labelv2 file: per image its face boxes, clicked eyes and ignore regions.
+pub const OiLabels = struct {
+    images: std.ArrayList([]const u8) = .empty,
+    faces: std.StringHashMapUnmanaged(std.ArrayList([4]f64)) = .empty,
+    /// Clicked eyes, subject's right first, aligned with `faces`; null where none were clicked.
+    eyes: std.StringHashMapUnmanaged(std.ArrayList(?[2][2]f64)) = .empty,
+    ignore: std.StringHashMapUnmanaged(std.ArrayList([4]f64)) = .empty,
+    widths: std.StringHashMapUnmanaged(f64) = .empty, // image width, for face size as a fraction
+};
+
+pub fn readOiLabels(gpa: std.mem.Allocator, io: Io, labels_path: []const u8) !OiLabels {
+    var l: OiLabels = .{};
+    const images, const faces, const eyes, const ignore, const widths = .{ &l.images, &l.faces, &l.eyes, &l.ignore, &l.widths };
     var name: []const u8 = "";
-    var it = lines(try u.readFile(gpa, ctx.io, labels_path));
+    var it = lines(try u.readFile(gpa, io, labels_path));
     while (it.next()) |raw| {
         const line = std.mem.trimEnd(u8, raw, "\r");
         if (std.mem.startsWith(u8, line, "#")) {
@@ -569,7 +575,44 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
             }
         }
     }
+    return l;
+}
 
+/// One image's detections against its face boxes, one-to-one in score order at IoU >= 0.5.
+/// Returns the detection matched to each face; an unmatched one goes to `unmatched` unless it
+/// overlaps an ignore region at IoU > 0.3.
+pub fn matchOi(gpa: std.mem.Allocator, dets: []const Det, truths: []const [4]f64, ignore: []const [4]f64, unmatched: *std.ArrayList(f64)) ![]?Det {
+    const taken = try gpa.alloc(bool, truths.len);
+    @memset(taken, false);
+    const slots = try gpa.alloc(?Det, truths.len);
+    @memset(slots, null);
+    for (dets) |det| {
+        var best: ?usize = null;
+        var best_iou: f64 = 0.5;
+        for (truths, 0..) |truth, i| {
+            const overlap = iou(det.box, truth);
+            if (!taken[i] and overlap >= best_iou) {
+                best = i;
+                best_iou = overlap;
+            }
+        }
+        if (best) |b| {
+            taken[b] = true;
+            slots[b] = det;
+        } else {
+            const hit = for (ignore) |region| {
+                if (iou(det.box, region) > 0.3) break true;
+            } else false;
+            if (!hit) try unmatched.append(gpa, det.score);
+        }
+    }
+    return slots;
+}
+
+fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir: []const u8, cache: []const u8) !void {
+    const gpa = ctx.gpa;
+    const labels = try readOiLabels(gpa, ctx.io, labels_path);
+    const images, const faces, const eyes, const ignore, const widths = .{ labels.images, labels.faces, labels.eyes, labels.ignore, labels.widths };
     const results = try detectAll(ctx, images.items, images_dir, models_dir, cache);
     var total: usize = 0;
     var regions: usize = 0;
@@ -594,33 +637,9 @@ fn scoreOi(ctx: Ctx, labels_path: []const u8, images_dir: []const u8, models_dir
         var matched: std.ArrayList(f64) = .empty;
         var unmatched: std.ArrayList(f64) = .empty;
         for (images.items) |n| {
-            const truths = faces.get(n).?.items;
-            const taken = try gpa.alloc(bool, truths.len);
-            @memset(taken, false);
-            const slots = try gpa.alloc(?Det, truths.len);
-            @memset(slots, null);
+            const slots = try matchOi(gpa, by_image.get(n) orelse &.{}, faces.get(n).?.items, ignore.get(n).?.items, &unmatched);
             try hits[m].put(gpa, n, slots);
-            for (by_image.get(n) orelse &.{}) |det| {
-                var best: ?usize = null;
-                var best_iou: f64 = 0.5;
-                for (truths, 0..) |truth, i| {
-                    const overlap = iou(det.box, truth);
-                    if (!taken[i] and overlap >= best_iou) {
-                        best = i;
-                        best_iou = overlap;
-                    }
-                }
-                if (best) |b| {
-                    taken[b] = true;
-                    slots[b] = det;
-                    try matched.append(gpa, det.score);
-                } else {
-                    const hit = for (ignore.get(n).?.items) |region| {
-                        if (iou(det.box, region) > 0.3) break true;
-                    } else false;
-                    if (!hit) try unmatched.append(gpa, det.score);
-                }
-            }
+            for (slots) |s| if (s) |d| try matched.append(gpa, d.score);
         }
         try u.padRight(w, spec.label, 20);
         try w.writeAll(" ");
@@ -699,7 +718,7 @@ const KeyContext = struct {
         return a.index == b.index and std.mem.eql(u8, a.file, b.file);
     }
 };
-const Found = std.HashMapUnmanaged(Key, Det, KeyContext, 80);
+pub const Found = std.HashMapUnmanaged(Key, Det, KeyContext, 80);
 
 fn bucket(iod: f64) usize {
     var b: usize = 0;
@@ -709,6 +728,43 @@ fn bucket(iod: f64) usize {
 
 fn point(v: json.Value) [2]f64 {
     return .{ u.num(v.array.items[0]), u.num(v.array.items[1]) };
+}
+
+/// One manifest record's detections, in score order: each takes the nearest untaken face whose
+/// eyes it contains and that is at most 8 eye separations wide (into `found`). A miss on a
+/// no-person image goes to `false_neg`, one outside every person box to `false_out`.
+pub fn matchCoco(gpa: std.mem.Allocator, dets: []const Det, record: json.Value, found: *Found, false_neg: *std.ArrayList(f64), false_out: *std.ArrayList(f64)) !void {
+    const file = u.str(u.field(record, "file"));
+    const record_faces = u.field(record, "faces").array.items;
+    const record_people = u.field(record, "people").array.items;
+    const taken = try gpa.alloc(bool, record_faces.len);
+    @memset(taken, false);
+    for (dets) |det| {
+        const x1, const y1, const x2, const y2 = det.box;
+        const centre = [2]f64{ (x1 + x2) / 2, (y1 + y2) / 2 };
+        var best: ?struct { f64, usize } = null;
+        for (record_faces, 0..) |f, i| {
+            const right = point(u.field(f, "right"));
+            const left = point(u.field(f, "left"));
+            const inside_r = x1 <= right[0] and right[0] <= x2 and y1 <= right[1] and right[1] <= y2;
+            const inside_l = x1 <= left[0] and left[0] <= x2 and y1 <= left[1] and left[1] <= y2;
+            if (taken[i] or !inside_r or !inside_l or !(x2 - x1 <= 8 * @max(u.num(u.field(f, "iod")), 1.0))) continue;
+            const d = dist(centre, .{ (right[0] + left[0]) / 2, (right[1] + left[1]) / 2 });
+            if (best == null or d < best.?[0]) best = .{ d, i }; // min((distance, index))
+        }
+        if (best) |b| {
+            taken[b[1]] = true;
+            try found.put(gpa, .{ .file = file, .index = b[1] }, det);
+        } else if (record_people.len == 0) {
+            try false_neg.append(gpa, det.score);
+        } else {
+            const on_person = for (record_people) |pv| {
+                const p = pv.array.items;
+                if (u.num(p[0]) <= centre[0] and centre[0] <= u.num(p[2]) and u.num(p[1]) <= centre[1] and centre[1] <= u.num(p[3])) break true;
+            } else false;
+            if (!on_person) try false_out.append(gpa, det.score);
+        }
+    }
 }
 
 fn scoreCoco(ctx: Ctx, data: []const u8, models_dir: []const u8, cache: []const u8) !void {
@@ -741,39 +797,7 @@ fn scoreCoco(ctx: Ctx, data: []const u8, models_dir: []const u8, cache: []const 
     var false_neg: [MODELS.len]std.ArrayList(f64) = @splat(.empty);
     var false_out: [MODELS.len]std.ArrayList(f64) = @splat(.empty);
     for (results, 0..) |by_image, m| {
-        for (manifest) |record| {
-            const file = u.str(u.field(record, "file"));
-            const record_faces = u.field(record, "faces").array.items;
-            const record_people = u.field(record, "people").array.items;
-            const taken = try gpa.alloc(bool, record_faces.len);
-            @memset(taken, false);
-            for (by_image.get(file) orelse &.{}) |det| {
-                const x1, const y1, const x2, const y2 = det.box;
-                const centre = [2]f64{ (x1 + x2) / 2, (y1 + y2) / 2 };
-                var best: ?struct { f64, usize } = null;
-                for (record_faces, 0..) |f, i| {
-                    const right = point(u.field(f, "right"));
-                    const left = point(u.field(f, "left"));
-                    const inside_r = x1 <= right[0] and right[0] <= x2 and y1 <= right[1] and right[1] <= y2;
-                    const inside_l = x1 <= left[0] and left[0] <= x2 and y1 <= left[1] and left[1] <= y2;
-                    if (taken[i] or !inside_r or !inside_l or !(x2 - x1 <= 8 * @max(u.num(u.field(f, "iod")), 1.0))) continue;
-                    const d = dist(centre, .{ (right[0] + left[0]) / 2, (right[1] + left[1]) / 2 });
-                    if (best == null or d < best.?[0]) best = .{ d, i }; // min((distance, index))
-                }
-                if (best) |b| {
-                    taken[b[1]] = true;
-                    try found[m].put(gpa, .{ .file = file, .index = b[1] }, det);
-                } else if (record_people.len == 0) {
-                    try false_neg[m].append(gpa, det.score);
-                } else {
-                    const on_person = for (record_people) |pv| {
-                        const p = pv.array.items;
-                        if (u.num(p[0]) <= centre[0] and centre[0] <= u.num(p[2]) and u.num(p[1]) <= centre[1] and centre[1] <= u.num(p[3])) break true;
-                    } else false;
-                    if (!on_person) try false_out[m].append(gpa, det.score);
-                }
-            }
-        }
+        for (manifest) |record| try matchCoco(gpa, by_image.get(u.str(u.field(record, "file"))) orelse &.{}, record, &found[m], &false_neg[m], &false_out[m]);
     }
 
     var counts: [BUCKETS.len]usize = @splat(0);
