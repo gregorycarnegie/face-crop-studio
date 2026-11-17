@@ -341,11 +341,17 @@ jobs:
         #
         # `|| status=$?` rather than letting the pipeline fail outright, so the job summary
         # still records the number on the very run that tripped the gate.
+        #
+        # RAYON_NUM_THREADS=1: coverage counters are plain shared globals, so rayon workers
+        # running the same CPU kernel fight over their cache lines. detection_accuracy took
+        # 1.7 s uninstrumented, 31 s instrumented on 1 thread, 103 s on 4, 172 s on 32, and
+        # timed out at 300 s here. nextest already runs tests in parallel processes.
         shell: bash
         env:
           FCS_STRICT_TESTS: "1"
           FCS_REQUIRE_GPU: "1"
           NEXTEST_PROFILE: ci
+          RAYON_NUM_THREADS: "1"
         run: |
           status=0
           cargo llvm-cov nextest --workspace --all-features \
