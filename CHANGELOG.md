@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing past either buffer.
 - Closing Face Crop Studio Qt no longer prints `QDxgiVSyncService not destroyed in time` and
   three `QThreadStorage` warnings: Qt is now shut down before the process exits.
+- Closing Face Crop Studio Qt on Linux with an NVIDIA GPU crashed about one time in four
+  (`free(): invalid pointer` or a segfault): the detection workers tore down the GPU device
+  while the process was already exiting. The device is now left for the OS to reclaim.
 - The status line in Face Crop Studio Qt's photo list ("Finding faces · N to go", "All photos
   ready") is now announced by screen readers; it had no accessible name.
 - Uninstalling with the Windows setup.exe left `LICENSE`, and so the install folder, behind.

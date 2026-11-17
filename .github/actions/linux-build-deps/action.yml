@@ -98,7 +98,10 @@ runs:
         curl -fsSL -o /tmp/libde265.tar.gz \
           "https://github.com/strukturag/libde265/releases/download/v${DE265_VERSION}/libde265-${DE265_VERSION}.tar.gz"
         tar -xf /tmp/libde265.tar.gz -C /tmp
+        # CMake 4 refuses libde265 1.0.15's cmake_minimum_required without the policy floor
+        # (macos-build-deps passes it too); CMake 3 ignores it.
         cmake -S "/tmp/libde265-${DE265_VERSION}" -B "/tmp/libde265-${DE265_VERSION}/build" \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
           -DCMAKE_INSTALL_PREFIX=/usr/local \
           -DCMAKE_BUILD_TYPE=Release \
           -DBUILD_SHARED_LIBS=OFF \

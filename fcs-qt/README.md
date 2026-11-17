@@ -101,18 +101,48 @@ builds install Qt 6.12.0 with it:
 **Qt 6.12 needs Visual Studio 2022** (MSVC 19.30+) on Windows; with VS 2019 it stops at
 `#error` in `qcompilerdetection.h`.
 
-**Linux** (checked on Ubuntu 26.04 in WSL2, Qt 6.10.2 from apt):
+**Linux** (checked on Ubuntu 26.04, in WSL2 and on a GNOME 50 Wayland desktop, Qt 6.10.2 from
+apt):
 
 ```bash
-sudo apt install cmake libclang-dev qt6-base-dev qt6-declarative-dev \
-  qt6-base-private-dev qt6-declarative-private-dev \
+sudo apt install cmake libclang-dev pkg-config libdav1d-dev qt6-wayland \
+  qt6-base-dev qt6-declarative-dev qt6-base-private-dev qt6-declarative-private-dev \
   qml6-module-qtquick-{controls,dialogs,layouts,shapes,effects}
-# then libde265 + libheif built into /usr/local, as .github/actions/linux-build-deps does
+```
+
+libheif-sys needs libheif 1.23 or newer, and apt has 1.21, so build libde265 and libheif from
+source with linux-build-deps' flags. Without sudo they go in `~/.local/fcs-native`:
+
+```bash
+prefix=~/.local/fcs-native; src=$(mktemp -d)
+curl -fsSL https://github.com/strukturag/libde265/releases/download/v1.0.15/libde265-1.0.15.tar.gz | tar -xz -C "$src"
+curl -fsSL https://github.com/strukturag/libheif/releases/download/v1.23.0/libheif-1.23.0.tar.gz | tar -xz -C "$src"
+cmake -S "$src/libde265-1.0.15" -B "$src/de265" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF -DENABLE_DECODER=ON -DENABLE_ENCODER=OFF -DENABLE_SDL=OFF
+cmake --build "$src/de265" --parallel && cmake --install "$src/de265"
+cmake -S "$src/libheif-1.23.0" -B "$src/heif" -DCMAKE_PREFIX_PATH="$prefix" \
+  -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF -DWITH_EXAMPLES=OFF -DWITH_LIBDE265=ON -DWITH_X265=OFF \
+  -DWITH_AOM_ENCODER=OFF -DWITH_AOM_DECODER=OFF -DENABLE_PLUGIN_LOADING=OFF -DWITH_LIBSHARPYUV=OFF
+cmake --build "$src/heif" --parallel && cmake --install "$src/heif"
+
 ./fcs-qt/dev.sh run -- samples        # or: test, clippy --all-targets
 ```
 
-`dev.sh` finds `qmake6` and, when `/usr/local/lib/libheif.a` exists, links it statically
-with libde265 using the same `SYSTEM_DEPS_LIBHEIF_*` variables as CI.
+The configure step should print `libde265 HEVC decoder : + built-in`. The models are not in
+the repository: fetch them into `models/` from the release assets named by `SCRFD_URL` and
+`EYE_REFINER_URL` in `.github/workflows/ci.yml`, and check them against the digests in
+`models/README.md`. Without them the app runs but finds no faces.
+
+`dev.sh` finds `qmake6` and links libheif statically with libde265, through the same
+`SYSTEM_DEPS_LIBHEIF_*` variables as CI, from the first of `$FCS_NATIVE_PREFIX`, `/usr/local`
+and `~/.local/fcs-native` that has `lib/libheif.a`. Run from a terminal inside a snap (VS
+Code's snap, for one), it also drops the snap's GTK and GSettings variables: with them, Qt's
+GTK3 platform theme starts the system GTK against the snap's schemas, and on GNOME 50 GTK
+aborts at startup (`Settings schema 'org.gnome.settings-daemon.plugins.xsettings' does not
+contain a key named 'antialiasing'`). Launching the built binary directly from such a terminal
+needs the same: `env -u GSETTINGS_SCHEMA_DIR -u GTK_PATH ...`, or a terminal outside the snap.
 
 ## Packaging
 
@@ -267,9 +297,18 @@ packages a 256 px PNG of it.
   `__yield()` without declaring it, and the runner's Xcode clang rejects that. Qt 6.12 uses
   `__builtin_arm_yield` instead, which is why CI moved to 6.12.
 
+  On a real desktop (2026-11-16, Ubuntu 26.04, GNOME 50 on Wayland, GTX 1080 Ti on driver
+  580): faces are detected on the GPU (WGSL on Vulkan, 8 ms against the CPU graph's 18), and
+  the camera opens, shows faces live and adds frames. CUDA is offered only from compute
+  capability 8.0, so a Pascal card shows it greyed out with that reason, as intended. That
+  desktop also found a crash on close, about one in four: the detection workers, woken by
+  the closed job channel, dropped the last handle on the engine and destroyed the Vulkan
+  device while the main thread was in `exit`, racing NVIDIA's driver teardown (`free():
+  invalid pointer` or a segfault in libnvidia-glcore). The Studio now leaks the engine on
+  drop; 20 closes in a row under gdb were clean.
+
   Not checked on Linux: the file and folder dialogs (Qt Quick's own, non-native, unless a
-  platform theme provides one), the camera (no webcam in WSL), and a real GPU (WSL's Vulkan
-  is llvmpipe). qtbridge calls macOS (arm64) experimental.
+  platform theme provides one). qtbridge calls macOS (arm64) experimental.
 
 **Before fcs-qt could replace fcs-gui** (agreed 2026-11-13: keep both until then), in order:
 
@@ -305,8 +344,8 @@ packages a 256 px PNG of it.
 6. The gaps fcs-gui still covered (closed 2026-11-15 unless noted): Linux arm64 packages; the
    setup.exe and MSIX built from fcs-qt and install-tested in CI (see Packaging); Qt Quick
    tests and a Windows end-to-end test (see Tests). Still open: a few weeks of 2.4.x in use,
-   and a manual check on a real Linux desktop (file dialogs, camera, a real GPU) and a real
-   Mac, which CI cannot stand in for.
+   the file dialogs on a real Linux desktop (its camera and GPU were checked 2026-11-16), and a
+   real Mac, which CI cannot stand in for.
 7. 3.0: fcs-cli and fcs-qt as the Windows payload of the zip, MSI, setup.exe and MSIX (fcs-qt's
    own MSI goes, the shared one keeps fcs-gui's upgrade code), fcs-qt's packages on macOS and
    Linux under fcs-gui's names, and fcs-gui removed.

@@ -62,7 +62,8 @@ Install the usual Rust and Windows build tools first:
   `target/*/.fingerprint/mozjpeg-sys-*` -- `cargo clean -p mozjpeg-sys` does not
   re-run the build script.
 - `pkg-config` and `dav1d` for AVIF support.
-- `libheif` (>= 1.17) for HEIC/HEIF support, located via `pkg-config`.
+- `libheif` (>= 1.23, which `libheif-sys` requires) for HEIC/HEIF support, located via
+  `pkg-config`.
 
 On Windows, the project CI uses `pkgconfiglite` and vcpkg:
 
