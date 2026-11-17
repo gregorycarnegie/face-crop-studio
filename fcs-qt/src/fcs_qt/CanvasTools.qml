@@ -103,13 +103,13 @@ Rectangle {
                     Row {
                         width: parent.width
                         Text {
-                            width: parent.width - value.width
+                            width: parent.width - tiltLabel.width
                             text: qsTr("Straighten")
                             color: Theme.ink2
                             font.pixelSize: Theme.body - 1
                         }
                         Text {
-                            id: value
+                            id: tiltLabel
                             text: Math.round(tiltSlider.value * 10) / 10 + "°"
                             color: Theme.ink
                             font.pixelSize: Theme.body - 1

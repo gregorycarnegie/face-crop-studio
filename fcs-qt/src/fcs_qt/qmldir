@@ -1,5 +1,6 @@
 module fcs_qt
 prefer :/qt/qml/fcs_qt/
+typeinfo Studio.qmltypes
 singleton Theme 1.0 Theme.qml
 singleton Icons 1.0 Icons.qml
 singleton UiState 1.0 UiState.qml

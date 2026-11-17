@@ -18,7 +18,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         // The app is dark whatever the OS is set to; this also darkens the window frame.
-        Qt.styleHints.colorScheme = Qt.ColorScheme.Dark
+        Qt.styleHints.colorScheme = Qt.ColorScheme.Dark // qmllint disable missing-property
         Studio.start()
     }
 

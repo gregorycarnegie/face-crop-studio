@@ -1,0 +1,198 @@
+import QtQuick.tooling 1.2
+
+// The Studio singleton (src/studio.rs) for qmllint and qmlls only: qtbridge registers it at
+// runtime and writes no type info. Keep in step with its #[qobject] impl.
+// serde_json::Value is QVariant, Vec<Value> QVariantList, Vec<String> QStringList.
+Module {
+    Component {
+        file: "studio.rs"
+        name: "Studio"
+        accessSemantics: "reference"
+        prototype: "QObject"
+        exports: ["fcs_qt/Studio 1.0"]
+        isCreatable: false
+        isSingleton: true
+        exportMetaObjectRevisions: [256]
+        Property { name: "ready"; type: "bool"; read: "ready"; notify: "engineChanged"; isReadonly: true }
+        Property { name: "engineLabel"; type: "QString"; read: "engineLabel"; notify: "engineChanged"; isReadonly: true }
+        Property { name: "engineError"; type: "QString"; read: "engineError"; notify: "engineChanged"; isReadonly: true }
+        Property { name: "switching"; type: "bool"; read: "switching"; notify: "engineChanged"; isReadonly: true }
+        Property { name: "cudaStatus"; type: "QString"; read: "cudaStatus"; notify: "engineChanged"; isReadonly: true }
+        Property { name: "cudaAvailable"; type: "bool"; read: "cudaAvailable"; notify: "engineChanged"; isReadonly: true }
+        Property { name: "cudaWarning"; type: "QString"; read: "cudaWarning"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "version"; type: "QString"; read: "version"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "qtVersion"; type: "QString"; read: "qtVersion"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "pending"; type: "int"; read: "pending"; notify: "summaryChanged"; isReadonly: true }
+        Property { name: "queue"; type: "QVariantList"; read: "queue"; notify: "queueChanged"; isReadonly: true }
+        Property { name: "selectedTotal"; type: "int"; read: "selectedTotal"; notify: "summaryChanged"; isReadonly: true }
+        Property { name: "selectedPhotos"; type: "int"; read: "selectedPhotos"; notify: "summaryChanged"; isReadonly: true }
+        Property { name: "currentRow"; type: "QVariant"; read: "currentRow"; notify: "summaryChanged"; isReadonly: true }
+        Property { name: "current"; type: "int"; read: "current"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "imageUrl"; type: "QString"; read: "imageUrl"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "imageWidth"; type: "int"; read: "imageWidth"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "imageHeight"; type: "int"; read: "imageHeight"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "faces"; type: "QVariantList"; read: "faces"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "canUndo"; type: "bool"; read: "canUndo"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "canRedo"; type: "bool"; read: "canRedo"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "quarterTurns"; type: "int"; read: "quarterTurns"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "tilt"; type: "double"; read: "tilt"; notify: "imageChanged"; isReadonly: true }
+        Property { name: "previews"; type: "QVariantList"; read: "previews"; notify: "previewsChanged"; isReadonly: true }
+        Property { name: "presets"; type: "QVariantList"; read: "presets"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "imageFilter"; type: "QString"; read: "imageFilter"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "shapes"; type: "QVariantList"; read: "shapes"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "settings"; type: "QVariant"; read: "settings"; notify: "settingsChanged"; isReadonly: true }
+        Property { name: "presetName"; type: "QString"; read: "presetName"; notify: "settingsChanged"; isReadonly: true }
+        Property { name: "shapeOutline"; type: "QVariantList"; read: "shapeOutline"; notify: "settingsChanged"; isReadonly: true }
+        Property { name: "exporting"; type: "bool"; read: "exporting"; notify: "exportChanged"; isReadonly: true }
+        Property { name: "hasReport"; type: "bool"; read: "hasReport"; notify: "exportChanged"; isReadonly: true }
+        Property { name: "exportProgress"; type: "double"; read: "exportProgress"; notify: "exportChanged"; isReadonly: true }
+        Property { name: "log"; type: "QVariantList"; read: "log"; notify: "logChanged"; isReadonly: true }
+        Property { name: "mapping"; type: "QVariant"; read: "mapping"; notify: "mappingChanged"; isReadonly: true }
+        Property { name: "cameraOpen"; type: "bool"; read: "cameraOpen"; notify: "cameraChanged"; isReadonly: true }
+        Property { name: "cameraLive"; type: "bool"; read: "cameraLive"; notify: "cameraChanged"; isReadonly: true }
+        Property { name: "cameraStatus"; type: "QString"; read: "cameraStatus"; notify: "cameraChanged"; isReadonly: true }
+        Property { name: "cameras"; type: "QVariantList"; read: "cameras"; notify: "cameraChanged"; isReadonly: true }
+        Property { name: "cameraUrl"; type: "QString"; read: "cameraUrl"; notify: "cameraFrameChanged"; isReadonly: true }
+        Property { name: "cameraFaces"; type: "QVariantList"; read: "cameraFaces"; notify: "cameraFrameChanged"; isReadonly: true }
+
+        Signal { name: "engineChanged" }
+        Signal { name: "queueChanged" }
+        Signal {
+            name: "queueRowChanged"
+            Parameter { name: "row"; type: "int" }
+            Parameter { name: "item"; type: "QVariant" }
+        }
+        Signal {
+            name: "queueRowRemoved"
+            Parameter { name: "row"; type: "int" }
+        }
+        Signal { name: "summaryChanged" }
+        Signal { name: "imageChanged" }
+        Signal { name: "previewsChanged" }
+        Signal { name: "settingsChanged" }
+        Signal { name: "exportChanged" }
+        Signal { name: "logChanged" }
+        Signal { name: "mappingChanged" }
+        Signal { name: "cameraChanged" }
+        Signal { name: "cameraFrameChanged" }
+        Signal {
+            name: "toast"
+            Parameter { name: "message"; type: "QString" }
+            Parameter { name: "url"; type: "QString" }
+        }
+
+        Method { name: "start" }
+        Method {
+            name: "addFiles"
+            Parameter { name: "urls"; type: "QStringList" }
+        }
+        Method {
+            name: "select"
+            Parameter { name: "index"; type: "int" }
+        }
+        Method {
+            name: "remove"
+            Parameter { name: "index"; type: "int" }
+        }
+        Method { name: "clearQueue" }
+        Method {
+            name: "toggleFace"
+            Parameter { name: "face"; type: "int" }
+        }
+        Method {
+            name: "selectAllFaces"
+            Parameter { name: "on"; type: "bool" }
+        }
+        Method {
+            name: "setPreset"
+            Parameter { name: "name"; type: "QString" }
+        }
+        Method {
+            name: "setFaceBox"
+            Parameter { name: "index"; type: "int" }
+            Parameter { name: "x"; type: "double" }
+            Parameter { name: "y"; type: "double" }
+            Parameter { name: "w"; type: "double" }
+            Parameter { name: "h"; type: "double" }
+        }
+        Method {
+            name: "addFace"
+            Parameter { name: "x"; type: "double" }
+            Parameter { name: "y"; type: "double" }
+            Parameter { name: "w"; type: "double" }
+            Parameter { name: "h"; type: "double" }
+        }
+        Method {
+            name: "deleteFace"
+            Parameter { name: "index"; type: "int" }
+        }
+        Method {
+            name: "resetFace"
+            Parameter { name: "index"; type: "int" }
+        }
+        Method { name: "undo" }
+        Method { name: "redo" }
+        Method {
+            name: "rotate"
+            Parameter { name: "quarters"; type: "int" }
+        }
+        Method {
+            name: "setTilt"
+            Parameter { name: "degrees"; type: "double" }
+        }
+        Method {
+            name: "update"
+            Parameter { name: "patch"; type: "QVariant" }
+        }
+        Method { name: "restoreDefaults" }
+        Method { name: "restoreEnhance" }
+        Method {
+            name: "conflicts"
+            type: "int"
+            Parameter { name: "folderUrl"; type: "QString" }
+        }
+        Method {
+            name: "exportTo"
+            Parameter { name: "folderUrl"; type: "QString" }
+            Parameter { name: "policy"; type: "QString" }
+            Parameter { name: "report"; type: "QString" }
+        }
+        Method {
+            name: "saveReport"
+            Parameter { name: "url"; type: "QString" }
+        }
+        Method {
+            name: "saveQueueList"
+            Parameter { name: "url"; type: "QString" }
+        }
+        Method {
+            name: "loadMapping"
+            Parameter { name: "url"; type: "QString" }
+        }
+        Method {
+            name: "setMappingSheet"
+            Parameter { name: "sheet"; type: "QString" }
+        }
+        Method {
+            name: "setMappingTable"
+            Parameter { name: "table"; type: "QString" }
+        }
+        Method {
+            name: "setMappingColumns"
+            Parameter { name: "source"; type: "int" }
+            Parameter { name: "output"; type: "int" }
+        }
+        Method { name: "clearMapping" }
+        Method {
+            name: "openCamera"
+            Parameter { name: "device"; type: "int" }
+        }
+        Method {
+            name: "setCameraLive"
+            Parameter { name: "on"; type: "bool" }
+        }
+        Method { name: "snapshot" }
+        Method { name: "paste" }
+        Method { name: "closeCamera" }
+    }
+}
