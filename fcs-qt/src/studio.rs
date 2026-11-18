@@ -706,30 +706,27 @@ impl Studio {
         } else {
             &[""]
         };
-        let mut count = 0;
+        // A set: a mapped name takes no suffix, so every suffix gives the same path.
+        let mut paths = std::collections::BTreeSet::new();
         for job in self.export_jobs() {
             for (index, _) in &job.faces {
-                count += suffixes
-                    .iter()
-                    .filter(|suffix| {
-                        let naming = pipeline::Naming {
-                            mapped: job.mapped.as_deref(),
-                            multi_face: job.faces.len() > 1,
-                            suffix,
-                        };
-                        pipeline::face_path(
-                            job.source.name(),
-                            *index,
-                            &naming,
-                            &self.settings,
-                            &out_dir,
-                        )
-                        .exists()
-                    })
-                    .count() as i32;
+                for suffix in suffixes {
+                    let naming = pipeline::Naming {
+                        mapped: job.mapped.as_deref(),
+                        multi_face: job.faces.len() > 1,
+                        suffix,
+                    };
+                    paths.insert(pipeline::face_path(
+                        job.source.name(),
+                        *index,
+                        &naming,
+                        &self.settings,
+                        &out_dir,
+                    ));
+                }
             }
         }
-        count
+        paths.iter().filter(|path| path.exists()).count() as i32
     }
 
     /// Save every selected face of every finished photo into `folder_url`. `policy` is
@@ -2335,6 +2332,50 @@ mod tests {
             (Some(1), Some(1))
         );
         assert_eq!(json["images"][1]["error"], "unreadable");
+        let _ = fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn conflicts_counts_each_existing_name_of_a_selected_finished_face_once() {
+        let out = std::env::temp_dir().join(format!("fcs-qt-conflicts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(&out).unwrap();
+        let mut studio = Studio::default();
+        studio.settings = AppSettings::default();
+        studio.settings.crop.quality_rules.quality_suffix = false;
+        let ext = studio.settings.crop.output_format.extension();
+        let entry = |uid, name: &str, status, selected: Vec<bool>, mapped: Option<&str>| Entry {
+            uid,
+            source: Source::File(PathBuf::from(name)),
+            turn: Turn::default(),
+            rev: 0,
+            status,
+            size: (100, 100),
+            faces: selected
+                .iter()
+                .map(|_| Face::manual(clamped_box((100, 100), 0.1, 0.1, 0.5, 0.5)))
+                .collect(),
+            selected,
+            mapped: mapped.map(String::from),
+        };
+        studio.entries = vec![
+            entry(1, "a.jpg", Status::Done, vec![true, false, true], None),
+            entry(2, "b.jpg", Status::Queued, vec![true], None),
+            entry(3, "c.jpg", Status::Done, vec![true], Some("emp42")),
+        ];
+        let touch = |name: String| fs::write(out.join(name), b"").unwrap();
+        touch(format!("a_face_01.{ext}")); // selected: counts
+        touch(format!("a_face_02.{ext}")); // not selected
+        touch(format!("b_face_01.{ext}")); // not detected yet
+        touch(format!("emp42.{ext}")); // the mapped name: counts
+        let url = out.to_string_lossy().into_owned();
+        assert_eq!(studio.conflicts(url.clone()), 2);
+
+        // With suffixes, a_face_01 no longer clashes but a_face_03_lowq does; a mapped name
+        // takes no suffix, so it is one file, not one per suffix.
+        studio.settings.crop.quality_rules.quality_suffix = true;
+        touch(format!("a_face_03_lowq.{ext}"));
+        assert_eq!(studio.conflicts(url), 2);
         let _ = fs::remove_dir_all(&out);
     }
 
