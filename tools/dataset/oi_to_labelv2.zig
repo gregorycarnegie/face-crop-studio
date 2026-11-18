@@ -1,7 +1,7 @@
 //! Write SCRFD labelv2 files that box *every* face Open Images drew, not just the clicked ones.
 //!
 //!   zig run -O ReleaseFast tools/dataset/oi_to_labelv2.zig -- <openimages_dir> train [--detections det.json] [--manifest train_manifest.csv] [--out file]
-//!   zig run -O ReleaseFast tools/dataset/oi_to_labelv2.zig -- <openimages_dir> test  [--out file]
+//!   zig run -O ReleaseFast tools/dataset/oi_to_labelv2.zig -- <openimages_dir> test  [--large 0.45] [--out file]
 //!
 //! Why this exists: `to_labelv2` builds from the eye-labelling JSON, which holds one entry per
 //! *clicked* face. So `labelv2_train.txt` carried 2,500 boxes for 2,482 images whose Open Images
@@ -27,6 +27,12 @@
 //!
 //! The test file gets no YuNet-derived regions, deliberately: it is the ruler, and a ruler built
 //! from the incumbent's own output would flatter the incumbent.
+//!
+//! `test --large F` writes the large-face held-out file instead (default `labelv2_large_heldout.txt`):
+//! every validation+test photo *outside* `labelv2_test.txt` with a real face at least F of the
+//! width, `Rotation` recorded as 0.0 (as for the training selection), same box rules. It fails if
+//! any of them is in `train_manifest.csv`, `train_large_manifest.csv` or `negatives_pool.txt`.
+//! `detector_gate.zig` reads it to measure large-face recall on ~10x the faces.
 const std = @import("std");
 const u = @import("util.zig");
 const json = std.json;
@@ -105,6 +111,7 @@ pub fn main(init: std.process.Init) !void {
     var detections_path: ?[]const u8 = null;
     var out_arg: ?[]const u8 = null;
     var manifest: []const u8 = "train_manifest.csv";
+    var large: ?f64 = null;
     var i: usize = 1;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--detections") and i + 1 < argv.len) {
@@ -113,6 +120,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, argv[i], "--manifest") and i + 1 < argv.len) {
             i += 1;
             manifest = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--large") and i + 1 < argv.len) {
+            i += 1;
+            large = try std.fmt.parseFloat(f64, argv[i]);
         } else if (std.mem.eql(u8, argv[i], "--out") and i + 1 < argv.len) {
             i += 1;
             out_arg = argv[i];
@@ -122,6 +132,7 @@ pub fn main(init: std.process.Init) !void {
     const sp = split orelse return error.Usage;
     const is_train = std.mem.eql(u8, sp, "train");
     if (!is_train and !std.mem.eql(u8, sp, "test")) return error.Usage;
+    if (large != null and is_train) return error.Usage;
     if (detections_path != null and !is_train) {
         std.debug.print("the test file must not carry YuNet-derived regions\n", .{});
         std.process.exit(2);
@@ -147,6 +158,36 @@ pub fn main(init: std.process.Init) !void {
         const m = try u.Csv.load(gpa, io, try std.fs.path.join(gpa, &.{ dir, manifest }));
         const c = m.col("ImageID");
         for (m.rows) |r| try images.append(gpa, r[c]);
+    } else if (large) |min_width| { // held-out photos outside the clicked test set
+        var rotated_ok: std.StringHashMapUnmanaged(void) = .empty;
+        for ([_][]const u8{ "validation-images-with-rotation.csv", "test-images-with-rotation.csv" }) |name| {
+            const csv = try u.Csv.load(gpa, io, try std.fs.path.join(gpa, &.{ dir, name }));
+            const c_id, const c_rot = .{ csv.col("ImageID"), csv.col("Rotation") };
+            for (csv.rows) |r| if (std.mem.eql(u8, r[c_rot], "0.0")) try rotated_ok.put(gpa, r[c_id], {});
+        }
+        var trained: std.StringHashMapUnmanaged(void) = .empty;
+        for ([_][]const u8{ "train_manifest.csv", "train_large_manifest.csv" }) |name| {
+            const csv = try u.Csv.load(gpa, io, try std.fs.path.join(gpa, &.{ dir, name }));
+            for (csv.rows) |r| try trained.put(gpa, r[csv.col("ImageID")], {});
+        }
+        var pool = std.mem.tokenizeAny(u8, try u.readFile(gpa, io, try std.fs.path.join(gpa, &.{ dir, "negatives_pool.txt" })), " \r\n");
+        while (pool.next()) |name| try trained.put(gpa, stemOf(name), {});
+        const hc0 = box_csvs.items[0];
+        var it = boxes.iterator();
+        while (it.next()) |e| {
+            if (clicked.contains(e.key_ptr.*) or !rotated_ok.contains(e.key_ptr.*)) continue;
+            const big = for (e.value_ptr.items) |r| {
+                if (std.mem.eql(u8, r[hc0.col("IsGroupOf")], "0") and std.mem.eql(u8, r[hc0.col("IsDepiction")], "0") and
+                    try std.fmt.parseFloat(f64, r[hc0.col("XMax")]) - try std.fmt.parseFloat(f64, r[hc0.col("XMin")]) >= min_width) break true;
+            } else false;
+            if (!big) continue;
+            if (trained.contains(e.key_ptr.*)) {
+                std.debug.print("{s} is in the training data or the negatives pool\n", .{e.key_ptr.*});
+                std.process.exit(1);
+            }
+            try images.append(gpa, e.key_ptr.*);
+        }
+        std.mem.sort([]const u8, images.items, {}, u.lessStr);
     } else { // the existing test images
         try images.appendSlice(gpa, clicked.keys());
         std.mem.sort([]const u8, images.items, {}, u.lessStr);
@@ -236,7 +277,7 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
-    const out_path = out_arg orelse try std.fmt.allocPrint(gpa, "{s}/labelv2_{s}_all.txt", .{ dir, sp });
+    const out_path = out_arg orelse if (large != null) try std.fmt.allocPrint(gpa, "{s}/labelv2_large_heldout.txt", .{dir}) else try std.fmt.allocPrint(gpa, "{s}/labelv2_{s}_all.txt", .{ dir, sp });
     if (out.written().len == 0) try w.writeAll("\n");
     try u.writeFile(io, out_path, out.written());
 

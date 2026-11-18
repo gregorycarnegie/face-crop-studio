@@ -110,3 +110,141 @@ the gates, their tolerances and the baselines; attempt 1's model fails its large
 Everything here is reproducible from the commands in each tool's header; the run folders are
 `Downloads\face-data\zig_runs\oi80k_negatives` (attempt 1) and `zig_runs\ft_experiment` (attempt
 2, with `run_arm.sh`, `run_arm_hi.sh` and `summarise.py`).
+
+## Diagnostics, 2026-11-18
+
+Why does attempt 1 lose large faces? Inference and data statistics only, no training. Tools:
+`large_face_diag.zig` (modes `scale`, `aug`, `audit`, `sheet`; commands in its header),
+`oi_to_labelv2 test --large 0.45` and `detector_gate`'s new optional large-face input. Outputs
+are in `Downloads\face-data\zig_runs\diagnostics` (`scale_table.sh` there joins the scale runs).
+"Attempt 1" is `oi80k_negatives\scrfd80k_neg_640.onnx`; thresholds are each model's gate
+threshold (shipped 0.5026, attempt 1 0.4876, RetinaFace 0.9763).
+
+### A bigger large-face test set
+
+1,058 Open Images validation+test photographs outside the gate's held-out set, each with a real
+face at least 45% of the width, `Rotation` 0.0, boxed by the same rules (1,118 faces, 1,074 of
+them >= 45%; 5 ignore regions). None is in the 80k, the extra large-face positives or the
+negatives pool (the tool checks). The gate pools its test half with the held-out set's:
+**622 large test faces instead of 94**, shipped's bootstrap SE 1.45 pt, so the large-face
+tolerance becomes **2.4 pt** (1.645 x SE) when the file is given.
+
+| Large-face recall, test half | Shipped | Attempt 1 | Public SCRFD-500M | RetinaFace R34 |
+|---|---:|---:|---:|---:|
+| New set alone (528 faces) | 86.7 | 62.9 | 56.1 | 80.1 |
+| Pooled, the gate (622) | **86.5** | 62.1 (-24.4, FAIL) | 55.0 | 80.1 (-6.4, **now FAILS**) |
+
+**About a fifth of these labels are not a detectable real face.** A contact sheet of 90 random
+photos (`label_sheet_*.jpg`) shows 19 clear errors: 7 extreme eye close-ups boxed as a whole
+face, 7 unflagged depictions (paintings, a statue, a doll, anime), 4 crowds or groups under one
+box not marked group-of, one forehead; about 6 more are partial (mouth only, eyes only). No large
+face was missing a box. The gate's own held-out set follows the same Open Images rules. Shipped,
+trained on Open Images labels, has learned some of these (it finds 72% of faces >= 80% wide,
+RetinaFace 46%), so part of RetinaFace's gap is RetinaFace being right. The tables below
+therefore also show the **clean subset**: the 860 large faces RetinaFace itself finds.
+
+### 1. Scale test: the faces come back when they are presented smaller
+
+Each large face of the new set, natively and then with the photo shrunk into a black canvas so
+the face spans 45/30/20/10% of the canvas width. Recall %, shipped / attempt 1:
+
+| Presented at | All 1,074 | Clean 860 | Clean, native 45-60% (517) | 60-80% (241) | >= 80% (102) |
+|---|---:|---:|---:|---:|---:|
+| native | 87.1 / **61.2** | 98.6 / **74.8** | 98.5 / 93.4 | 99.2 / **62.2** | 98.0 / **9.8** |
+| 45% of width | 86.5 / 82.0 | 98.7 / 98.1 | 98.6 / 98.3 | 99.2 / 98.3 | 98.0 / 97.1 |
+| 30% | 83.1 / 81.9 | 98.3 / 97.8 | 98.6 / 98.5 | 99.2 / 97.5 | 94.1 / 95.1 |
+| 20% | 82.0 / 80.8 | 97.4 / 96.6 | 98.3 / 97.9 | 97.9 / 96.7 | 92.2 / 90.2 |
+| 10% | 73.4 / 69.3 | 88.7 / 85.0 | 91.9 / 90.3 | 88.4 / 83.0 | 73.5 / 62.7 |
+
+A clean face filling 80% of the frame is found 9.8% of the time natively and 97.1% of the time
+at 45%. The loss grows with the presented size (-5, -37, -88 points by band) and vanishes once
+the face is no wider than ~45% of the input. Attempt 1 still knows a face; it rejects one that
+fills the frame. (RetinaFace, all 1,074: 80.1 / 79.7 / 78.1 / 76.5 / 62.1.)
+
+### 4. Head attribution: it is the stride-32 head
+
+The SCRFD exports keep each stride's raw outputs, so per face: the best raw score among each
+head's anchors that decode onto it (IoU >= 0.5), and which stride ATSS would train on it.
+Every large face but 9 is owned by stride 32 (4-6 positives, essentially none at stride 16).
+All 282 faces shipped finds and attempt 1 misses are stride-32 faces:
+
+| Mean best raw score, stride 8 / 16 / 32 | Shipped | Attempt 1 |
+|---|---:|---:|
+| The 282 faces attempt 1 misses | 0.000 / 0.002 / **0.688** | 0.000 / 0.002 / **0.142** |
+| All 1,065 stride-32 large faces | 0.000 / 0.023 / 0.704 | 0.000 / 0.027 / 0.535 |
+
+No other head picks them up. Shrunk to 45% of the width, 97% of them are still stride-32 faces
+(at 30%, 44%; by 20%, stride 16 owns all) and attempt 1 finds them, so the stride-32 head fails
+at the *top* of its range, not throughout. Of 30 photos where
+shipped finds the face and attempt 1 does not (`missed_sheet_1.jpg`), about 20 are plainly real,
+frame-filling faces, 6 eye close-ups or depictions, 4 partial: attempt 1 is mostly losing real
+faces.
+
+### 2. Augmentation: face-like content gains on real faces fastest at the largest sizes
+
+The trainer's own `RandomSquareCrop` draws (`scrfd_augment.drawPatch`, 3 per photo, seed 0),
+no pixels. Width as a fraction of the crop (the 640 input), share of crops in %:
+
+| | < 0.30 | 0.30-0.45 | 0.45-0.60 | 0.60-0.80 | >= 0.80 |
+|---|---:|---:|---:|---:|---:|
+| Positives: widest face / image width, before cropping | 85.3 | 9.9 | 3.2 | 1.2 | 0.4 |
+| Positives: widest kept face / crop | 72.2 | 13.7 | 6.6 | 4.3 | 3.3 |
+| Negatives: largest Open Images object / crop | 18.6 | 13.2 | 14.8 | 17.2 | 36.2 |
+| Hard negatives: widest SCRFD-80k hit (>= 0.3) / crop | 65.1 | 8.5 | 6.8 | 7.3 | 12.4 |
+
+Per epoch (80,000 positive photos, 20,000 negatives):
+
+| Crops with ... at least this wide | >= 0.45 | >= 0.60 | >= 0.80 |
+|---|---:|---:|---:|
+| a real face (positives) | 11,294 | 6,023 | 2,613 |
+| a face-like SCRFD hit (negatives) | 4,023 | 2,994 | 1,880 |
+| face-like : real | 0.36 | 0.50 | **0.72** |
+| any Open Images object (negatives; cat, dog, tree, toy lead) | 13,642 | 10,679 | 7,236 |
+
+The crop already enlarges faces (4.9% of photos hold a face >= 45% wide, 14.1% of crops do),
+but negatives get an unconstrained crop of mostly close-up subjects: frame-filling content is in
+68% of negative crops against 14% of positive ones, and the face-like share climbs with size to
+0.72 face-like crops per real one at >= 80% -- the band attempt 1 loses almost entirely. At the
+anchor level, the anchors ATSS would give each face-like hit (all trained as background) per
+epoch are 7.3k / 24.0k / 29.6k at stride 8 / 16 / 32, against 305k / 492k / 179k positives from
+real faces: **2.4% / 4.9% / 16.5%** of the positive signal, seven times the pressure at stride
+32 that stride 8 sees. Also measured, and small: 3,189 real faces per epoch at least 30% visible
+whose centre falls outside the crop and so train as background (250 of them >= 0.3 of the crop).
+
+### 3. Label audit: unlabelled training faces are too few and too small
+
+RetinaFace >= 0.9 on 2,000 random 80k training photos (6,099 labelled faces): 5,294 confident
+detections, **114 on no face box or ignore region** (IoU < 0.3; ignore IoU or IoF > 0.3), in 82
+photos. 93% are under 10% of the image width and none is 45% or more. By eye (`audit_1.jpg`,
+100 tiles) about 80% are real but tiny, blurred or dark background faces; the rest skulls,
+prints, masks. That is ~0.045 unlabelled real faces per photo, ~3,500 over the 80k against
+244,683 labelled (1.4%), all small. It cannot teach the model to reject large faces; at most it
+nudges small-face confidence.
+
+### Conclusion, ranked
+
+1. **Supported: the stride-32 head learns that frame-filling, face-like content is background.**
+   The loss is confined to the stride-32 head (raw score 0.69 -> 0.14 on the missed faces), grows
+   with presented size, and disappears when the same faces are presented at <= 45% of the width
+   (clean subset 74.8% -> 98.1%). It tracks the training mix: face-like negatives per real face
+   rise from 0.36 to 0.72 across the >= 45/60/80% bands, and their background pressure is 16.5%
+   of the positive signal at stride 32 against 2.4% at stride 8.
+2. **Ruled out: lost face semantics.** The same faces, smaller, are found at the shipped rate.
+3. **Ruled out as the cause: unlabelled faces in training backgrounds** (1.4%, all small).
+4. **Not needed to explain it: capacity.** The same 0.5 GFLOP architecture (shipped) finds
+   98-99% of clean large faces in every size band; nothing here shows the stride-32 head *cannot*
+   hold both, only that the data asked it not to. Per journal:SCRFD-2:0006 that does not justify a
+   bigger model yet; it stays the fallback if a size-balanced mix still fails.
+5. **Measurement caveat:** a fifth of Open Images' >= 45% boxes are not detectable faces, which
+   shipped partly learned; read large-face gaps on the clean subset too, and note RetinaFace now
+   fails the tightened large-face gate (-6.4).
+
+**For the training design (journal:SCRFD-2:0004):** balance by apparent size, per band, at the
+crop the trainer actually produces, not by photo counts. Either (a) constrain negative crops so a
+face-like hit rarely exceeds ~45% of the crop, or mark hits that do as ignore regions, and/or
+(b) add face-centred zoom crops so real faces >= 60% and >= 80% of the crop clearly outnumber
+face-like negatives in every band (today 2,613 against 1,880 at >= 80%). First check whether the
+COCO false positives attempt 1 removed are themselves frame-filling; if they are, (a) hands some
+of the fix back. Score per size band, on the clean subset as well as the gate. An inference-side
+fallback, untested for false positives: a second pass with the photo shrunk to half size recovers
+attempt 1's clean large faces (98.1% at 45%) for about twice the CPU time.

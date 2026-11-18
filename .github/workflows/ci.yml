@@ -85,6 +85,7 @@ jobs:
           zig test -lc tools/dataset/image.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/detector_gate.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/large_face_diag.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/eval_refiner_vs_yunet.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/refiner_contact_sheet.zig tools/dataset/vendor/stb.c
           zig test -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c

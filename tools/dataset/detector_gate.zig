@@ -4,6 +4,11 @@
 //!   zig run -O ReleaseFast -lc tools/dataset/detector_gate.zig tools/dataset/vendor/stb.c -- \
 //!       <labelv2_test_all.txt> <oi_images_dir> <coco_dir> <models_dir> <cache_dir> <candidate.onnx>
 //!
+//! An optional 7th argument, `$D/zig_runs/diagnostics/labelv2_large_heldout.txt`
+//! (`oi_to_labelv2 test --large 0.45`: 1,058 more Open Images val+test photos with a face >= 45%
+//! of the width, never trained on), joins the large-face gate: its test half is pooled with the
+//! held-out set's (94 + 528 = 622 faces) and the tolerance drops to TOL_LARGE_HELD. Use it.
+//!
 //! Run from the repo root (it reads samples/). `coco_dir` is detector_bench's `fetch` output,
 //! `models_dir` holds the four SHA-checked models detector_bench names. ORT_DYLIB_PATH as there.
 //! Detections are cached per model file as `<cache_dir>/<sha256[0..16]>-{oi,coco}.json`, so a
@@ -50,6 +55,11 @@
 //! the full set). Read the printed paired SE(d) beside it: two models on the same images differ
 //! by less noise than that (2.8-4.9 pt here), and a bigger large-face test set is the real fix.
 //! COCO's "beat" has no tolerance, as ruled; its paired SE is 0.25-0.42 pt.
+//! With the large-face file (2026-11-17): shipped SE 1.45 pt on 622 faces -> TOL_LARGE_HELD 2.4 pt;
+//! pooled large-face recall test half: shipped 86.5, RetinaFace 80.1 (-6.4, SE 1.14: now FAILS),
+//! attempt 1 62.1 (-24.4), public 55.0. About a fifth of OI's >= 45% boxes are not detectable real
+//! faces (eye close-ups, unflagged depictions and groups; HARD_NEGATIVES.md "Diagnostics"), which
+//! a detector trained on OI labels learns and RetinaFace does not: read the gap to RetinaFace so.
 //!
 //! **Baselines** (2026-11-17, Windows, Ryzen 9 7950X, ORT 1.24.4, stb decode; this gate's runs in
 //! Downloads/face-data/zig_runs/gate_runs). Recall %, tune/test; COCO and eye line test half;
@@ -84,6 +94,8 @@ const SAMPLE_MIN: f64 = 0.5;
 const REFINE_FLOOR: f64 = 0.2;
 const TOL_OI: f64 = 0.02;
 const TOL_LARGE: f64 = 0.06;
+/// With the large-face held-out file: 1.645 x shipped's 1.45 pt SE on the pooled 622 test faces.
+const TOL_LARGE_HELD: f64 = 0.024;
 const TOL_EYE = [2]f64{ 0.10, 0.07 }; // OI, COCO
 const BOOT = 1000;
 const TIMED = 48;
@@ -387,6 +399,7 @@ const Model = struct {
     key: []const u8 = "",
     oi: Run = undefined,
     coco: Run = undefined,
+    held: Run = undefined,
     oi_t: f64 = 0,
     coco_t: [RATES.len]f64 = undefined,
     oi_eye: []?f64 = &.{},
@@ -471,7 +484,25 @@ fn tableRow(gpa: std.mem.Allocator, w: *Io.Writer, name: []const u8, models: []c
     try w.writeAll("\n");
 }
 
-const Both = struct { oi: Corpus, coco: Corpus, rate: usize = 0 };
+const Both = struct { oi: Corpus, coco: Corpus, held: ?Corpus = null, rate: usize = 0 };
+
+/// Large-face units of `half`: the OI held-out faces >= LARGE, plus the large-face set's if given.
+fn largeUnits(gpa: std.mem.Allocator, b: Both, half: bool, x: Model, tx: f64, y: Model, ty: f64) ![][3]f64 {
+    const own = try units(gpa, b.oi, b.oi.large, half, x.oi, tx, y.oi, ty);
+    const held = b.held orelse return own;
+    return std.mem.concat(gpa, [3]f64, &.{ own, try units(gpa, held, held.large, half, x.held, tx, y.held, ty) });
+}
+
+/// Pooled recall of column k (0 = first model, 1 = second) over per-image units.
+fn pooled(xs: []const [3]f64, k: usize) f64 {
+    var hits: f64 = 0;
+    var n: f64 = 0;
+    for (xs) |x| {
+        hits += x[k];
+        n += x[2];
+    }
+    return if (n > 0) hits / n else 0;
+}
 
 const Rows = struct {
     fn oiT(_: std.mem.Allocator, _: Both, m: Model, half: bool) !?f64 {
@@ -485,6 +516,13 @@ const Rows = struct {
     }
     fn oiLarge(gpa: std.mem.Allocator, b: Both, m: Model, half: bool) !?f64 {
         return pct(try recall(gpa, b.oi, b.oi.large, half, m.oi, m.oi_t));
+    }
+    fn heldLarge(gpa: std.mem.Allocator, b: Both, m: Model, half: bool) !?f64 {
+        const held = b.held orelse return null;
+        return pct(try recall(gpa, held, held.large, half, m.held, m.oi_t));
+    }
+    fn allLarge(gpa: std.mem.Allocator, b: Both, m: Model, half: bool) !?f64 {
+        return pct(pooled(try largeUnits(gpa, b, half, m, m.oi_t, m, m.oi_t), 0));
     }
     fn cocoT(_: std.mem.Allocator, b: Both, m: Model, half: bool) !?f64 {
         return if (half) null else m.coco_t[b.rate];
@@ -522,7 +560,7 @@ pub fn main(init: std.process.Init) !void {
         } else try positional.append(gpa, args[i]);
     }
     const p = positional.items;
-    if (p.len != 6) bench.fail("usage: detector_gate <labelv2_test_all.txt> <oi_images> <coco_dir> <models_dir> <cache_dir> <candidate.onnx> [--ort path]", .{});
+    if (p.len != 6 and p.len != 7) bench.fail("usage: detector_gate <labelv2_test_all.txt> <oi_images> <coco_dir> <models_dir> <cache_dir> <candidate.onnx> [labelv2_large_heldout.txt] [--ort path]", .{});
     const labels_path, const oi_images, const coco_dir, const models_dir, const cache, const candidate = .{ p[0], p[1], p[2], p[3], p[4], p[5] };
     var out: u.Stdout = undefined;
     out.init(init.io);
@@ -532,7 +570,8 @@ pub fn main(init: std.process.Init) !void {
 
     const labels = try bench.readOiLabels(gpa, init.io, labels_path);
     const manifest = (try u.readJson(gpa, init.io, try std.fs.path.join(gpa, &.{ coco_dir, "manifest.json" }))).array.items;
-    const both: Both = .{ .oi = try oiCorpus(gpa, labels), .coco = try cocoCorpus(gpa, manifest) };
+    const held_labels: ?bench.OiLabels = if (p.len == 7) try bench.readOiLabels(gpa, init.io, p[6]) else null;
+    const both: Both = .{ .oi = try oiCorpus(gpa, labels), .coco = try cocoCorpus(gpa, manifest), .held = if (held_labels) |l| try oiCorpus(gpa, l) else null };
     const coco_images = try std.fs.path.join(gpa, &.{ coco_dir, "images" });
 
     // samples/sample_0*.jpg, sorted
@@ -562,6 +601,8 @@ pub fn main(init: std.process.Init) !void {
         m.key = loaded.key;
         m.oi = try oiRun(gpa, labels, try detections(&g, &loaded, m.label, "oi", both.oi.images, oi_images));
         m.coco = try cocoRun(gpa, manifest, try detections(&g, &loaded, m.label, "coco", both.coco.images, coco_images));
+        // shortcut: the cache is keyed by model only, so delete *-oilarge.json if the large-face file changes.
+        if (held_labels) |l| m.held = try oiRun(gpa, l, try detections(&g, &loaded, m.label, "oilarge", both.held.?.images, oi_images));
         m.oi_t = try tune(gpa, both.oi, m.oi, OI_BUDGET);
         for (&m.coco_t, RATES) |*t, rate| t.* = try tune(gpa, both.coco, m.coco, rate);
         m.oi_eye = try eyeErrors(gpa, both.oi, m.oi, m.oi_t);
@@ -594,6 +635,10 @@ pub fn main(init: std.process.Init) !void {
     try tableRow(gpa, w, "OI recall %", &models, Rows.oiRecall, both, 1);
     try tableRow(gpa, w, "OI unmatched/image", &models, Rows.oiFalse, both, 3);
     try tableRow(gpa, w, "OI recall %, faces >= 45% width", &models, Rows.oiLarge, both, 1);
+    if (both.held != null) {
+        try tableRow(gpa, w, "large-face set recall %, >= 45%", &models, Rows.heldLarge, both, 1);
+        try tableRow(gpa, w, "both pooled, >= 45% (the gate)", &models, Rows.allLarge, both, 1);
+    }
     for (RATES, 0..) |rate, k| {
         var b = both;
         b.rate = k;
@@ -617,9 +662,10 @@ pub fn main(init: std.process.Init) !void {
         const xs = try units(gpa, both.oi, both.oi.pool, true, c.oi, c.oi_t, s.oi, s.oi_t);
         const a, const b = .{ pct(try recall(gpa, both.oi, both.oi.pool, true, c.oi, c.oi_t)), pct(try recall(gpa, both.oi, both.oi.pool, true, s.oi, s.oi_t)) };
         try gateRow(gpa, w, &v, "OI recall % @0.1 unmatched/img", a, b, pct(seRecall(xs)), try std.fmt.allocPrint(gpa, "vs shipped, >= -{s}", .{try u.fixedAlloc(gpa, pct(TOL_OI), 1)}), a - b >= -pct(TOL_OI) - 1e-9, false, true);
-        const ys = try units(gpa, both.oi, both.oi.large, true, c.oi, c.oi_t, s.oi, s.oi_t);
-        const la, const lb = .{ pct(try recall(gpa, both.oi, both.oi.large, true, c.oi, c.oi_t)), pct(try recall(gpa, both.oi, both.oi.large, true, s.oi, s.oi_t)) };
-        try gateRow(gpa, w, &v, "OI recall %, faces >= 45% width", la, lb, pct(seRecall(ys)), try std.fmt.allocPrint(gpa, "vs shipped, >= -{s}", .{try u.fixedAlloc(gpa, pct(TOL_LARGE), 1)}), la - lb >= -pct(TOL_LARGE) - 1e-9, false, true);
+        const ys = try largeUnits(gpa, both, true, c, c.oi_t, s, s.oi_t);
+        const la, const lb = .{ pct(pooled(ys, 0)), pct(pooled(ys, 1)) };
+        const tol = if (both.held != null) TOL_LARGE_HELD else TOL_LARGE;
+        try gateRow(gpa, w, &v, if (both.held != null) "OI + large set recall %, >= 45% width" else "OI recall %, faces >= 45% width", la, lb, pct(seRecall(ys)), try std.fmt.allocPrint(gpa, "vs shipped, >= -{s}", .{try u.fixedAlloc(gpa, pct(tol), 1)}), la - lb >= -pct(tol) - 1e-9, false, true);
     }
     for ([_]usize{ PUBLIC, RETINA }) |k| for (RATES, 0..) |rate, j| {
         const o = models[k];
@@ -649,9 +695,12 @@ pub fn main(init: std.process.Init) !void {
     // The noise the tolerances were set from: the shipped model's own bootstrap SE on the test half.
     {
         const xs = try units(gpa, both.oi, both.oi.pool, true, s.oi, s.oi_t, s.oi, std.math.inf(f64));
-        const ys = try units(gpa, both.oi, both.oi.large, true, s.oi, s.oi_t, s.oi, std.math.inf(f64));
+        const ys = try largeUnits(gpa, both, true, s, s.oi_t, s, std.math.inf(f64));
         var large_faces: usize = 0;
         for (both.oi.large, both.oi.face_test) |l, t| large_faces += @intFromBool(l and t);
+        if (both.held) |h| for (h.large, h.face_test) |l, t| {
+            large_faces += @intFromBool(l and t);
+        };
         const oi_pairs = try eyePairs(gpa, both.oi, s.oi_eye, s.oi_eye);
         const coco_pairs = try eyePairs(gpa, both.coco, s.coco_eye, s.coco_eye);
         try w.print("\nShipped's own bootstrap SE on the test half (sets the tolerances): OI recall {s} pt, large faces {s} pt ({d} faces), eye line OI {s} deg, COCO {s} deg\n", .{

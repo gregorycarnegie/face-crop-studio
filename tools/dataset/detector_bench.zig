@@ -122,7 +122,7 @@ fn letterbox(gpa: std.mem.Allocator, image: img.Image) !struct { img.Image, f64 
 }
 
 /// CHW floats, `(x - mean) * scale` per channel; `order` picks RGB (0,1,2) or BGR (2,1,0).
-fn blob(gpa: std.mem.Allocator, image: img.Image, order: [3]usize, mean: [3]f32, scale: f32) ![]f32 {
+pub fn blob(gpa: std.mem.Allocator, image: img.Image, order: [3]usize, mean: [3]f32, scale: f32) ![]f32 {
     const plane = image.width * image.height;
     const out = try gpa.alloc(f32, 3 * plane);
     for (0..3) |c| for (0..plane) |p| {
