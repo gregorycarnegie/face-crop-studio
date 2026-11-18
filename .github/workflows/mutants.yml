@@ -71,13 +71,13 @@ jobs:
       - name: Fetch ONNX Runtime
         run: |
           set -euo pipefail
-          Name="onnxruntime-linux-x64-${ORT_VERSION}"
-          curl -fsSL -o "$RUNNER_TEMP/onnxruntime.tgz" \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${Name}.tgz"
-          mkdir -p "$RUNNER_TEMP/ort"
-          tar -xzf "$RUNNER_TEMP/onnxruntime.tgz" -C "$RUNNER_TEMP/ort"
-          test -f "$RUNNER_TEMP/ort/$Name/lib/libonnxruntime.so"
-          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/ort/$Name/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+          # NuGet, not GitHub releases: the GitHub download 404'd (2026-11).
+          curl -fsSL -o "$RUNNER_TEMP/onnxruntime.nupkg" \
+            "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg"
+          Lib="runtimes/linux-x64/native/libonnxruntime.so"
+          unzip -q -o "$RUNNER_TEMP/onnxruntime.nupkg" "$Lib" -d "$RUNNER_TEMP/ort"
+          test -f "$RUNNER_TEMP/ort/$Lib"
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/ort/$Lib" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
