@@ -181,6 +181,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # First, so an unreachable download fails the job in seconds, not after the native builds.
+      - name: Fetch ONNX Runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # NuGet, not GitHub releases: the GitHub download 404'd (2026-11).
+          $Zip = "$env:RUNNER_TEMP/onnxruntime.zip"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/$env:ORT_VERSION/microsoft.ml.onnxruntime.$env:ORT_VERSION.nupkg" -OutFile $Zip
+          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP/ort" -Force
+          $Lib = "$env:RUNNER_TEMP/ort/runtimes/win-x64/native/onnxruntime.dll"
+          if (-not (Test-Path $Lib)) { throw "ONNX Runtime missing at $Lib" }
+          "ORT_DYLIB_PATH=$Lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Fetch ONNX Runtime (macOS / Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ORT_PLATFORM: ${{ matrix.ort-platform }}
+          ORT_LIBRARY: ${{ matrix.ort-library }}
+        run: |
+          set -euo pipefail
+          # NuGet, not GitHub releases: the GitHub download 404'd (2026-11).
+          curl -fsSL -o "$RUNNER_TEMP/onnxruntime.nupkg" \
+            "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg"
+          Lib="runtimes/${ORT_PLATFORM}/native/${ORT_LIBRARY}"
+          unzip -q -o "$RUNNER_TEMP/onnxruntime.nupkg" "$Lib" -d "$RUNNER_TEMP/ort"
+          Lib="$RUNNER_TEMP/ort/$Lib"
+          test -f "$Lib"
+          echo "ORT_DYLIB_PATH=$Lib" >> "$GITHUB_ENV"
+
       - name: Download models
         uses: actions/download-artifact@v8
         with:
@@ -257,35 +287,6 @@ jobs:
       - name: Install lavapipe (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1
-
-      - name: Fetch ONNX Runtime (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # NuGet, not GitHub releases: the GitHub download 404'd (2026-11).
-          $Zip = "$env:RUNNER_TEMP/onnxruntime.zip"
-          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/$env:ORT_VERSION/microsoft.ml.onnxruntime.$env:ORT_VERSION.nupkg" -OutFile $Zip
-          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP/ort" -Force
-          $Lib = "$env:RUNNER_TEMP/ort/runtimes/win-x64/native/onnxruntime.dll"
-          if (-not (Test-Path $Lib)) { throw "ONNX Runtime missing at $Lib" }
-          "ORT_DYLIB_PATH=$Lib" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Fetch ONNX Runtime (macOS / Linux)
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          ORT_PLATFORM: ${{ matrix.ort-platform }}
-          ORT_LIBRARY: ${{ matrix.ort-library }}
-        run: |
-          set -euo pipefail
-          # NuGet, not GitHub releases: the GitHub download 404'd (2026-11).
-          curl -fsSL -o "$RUNNER_TEMP/onnxruntime.nupkg" \
-            "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ORT_VERSION}/microsoft.ml.onnxruntime.${ORT_VERSION}.nupkg"
-          Lib="runtimes/${ORT_PLATFORM}/native/${ORT_LIBRARY}"
-          unzip -q -o "$RUNNER_TEMP/onnxruntime.nupkg" "$Lib" -d "$RUNNER_TEMP/ort"
-          Lib="$RUNNER_TEMP/ort/$Lib"
-          test -f "$Lib"
-          echo "ORT_DYLIB_PATH=$Lib" >> "$GITHUB_ENV"
 
       # ── Toolchain ────────────────────────────────────────────────────────
       - uses: mlugg/setup-zig@v2
