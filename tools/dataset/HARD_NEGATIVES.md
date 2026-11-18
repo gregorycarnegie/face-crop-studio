@@ -248,3 +248,52 @@ COCO false positives attempt 1 removed are themselves frame-filling; if they are
 of the fix back. Score per size band, on the clean subset as well as the gate. An inference-side
 fallback, untested for false positives: a second pass with the photo shrunk to half size recovers
 attempt 1's clean large faces (98.1% at 45%) for about twice the CPU time.
+
+## Proxy validation, 2026-11-18
+
+Is there a short from-scratch run whose outcome predicts the ~22 h one, so training designs can
+be compared cheaply? Two arms, seed 0, batch 64, identical schedules, `train_scrfd --recipe 80k
+--epochs 25 --steps 17,21` (the 100/69/85 recipe at a quarter): **A** attempt 1's data (the 80k
+plus its 20,000 negatives), **B** the 80k alone. Fixed before running: the proxy is valid only if
+A minus B reproduces the full runs' direction and rough size on the gate (with the large-face
+set) -- large-face recall at least 10 points down, COCO recall at 0.01 FP per photo at least 3
+up, and the stride-32 raw score on large faces at least 0.08 down. One variation allowed: 50
+epochs (`--steps 34,42`), B first, A only if B reached 72 on large faces. Runs, scripts
+(`score_arm.sh`, `compare.sh`) and gate reports are in `Downloads\face-data\zig_runs\proxy`.
+
+| Test half | Shipped (MMDetection, 100 ep) | Attempt 1 (native, 100 ep, negatives) | A: 25 ep, negatives | B: 25 ep, no negatives | B: 50 ep, no negatives |
+|---|---:|---:|---:|---:|---:|
+| OI recall at 0.1 unmatched/image | 78.2 | 78.3 | 74.4 | 72.2 | 76.2 |
+| **Large faces, pooled 622 (the gate)** | **86.5** | **62.1** | 61.3 | 58.4 | **61.1** |
+| Large-face set, native, 1,074 | 87.1 | 61.2 | 60.7 | 58.5 | 61.0 |
+| Stride-32 raw score, stride-32 large faces | 0.704 | 0.535 | 0.515 | 0.516 | 0.536 |
+| Faces shipped finds and this misses: n, stride-32 raw | | 282, 0.142 | 284, 0.171 | 311, 0.201 | 283, 0.164 |
+| COCO recall at 0.01 / 0.02 / 0.05 / 0.1 FP per photo | 81.9 / 84.2 / 86.9 / 88.9 | 88.6 / 90.1 / 91.9 / 92.5 | 80.3 / 82.3 / 84.6 / 86.9 | 72.4 / 77.0 / 80.1 / 83.5 | 79.3 / 81.3 / 85.9 / 88.0 |
+| GPU hours (RTX 4090) | | ~22 | 5.5 | 4.3 | 7.1 (epochs 11-50, resumed from B's epoch 10) |
+
+**The proxy is not valid**, and it found something more important. A minus B at 25 epochs:
+large faces +2.9 (needed -10 or less), stride-32 raw score 0.000 (needed -0.08), COCO +7.9 at
+0.01 (passes; full runs +6.7). The negatives' false-positive gain shows up at a quarter of the
+schedule, the large-face loss does not -- because **the control without negatives loses the
+large faces too.** At 50 epochs B has 61.1% on large faces and a stride-32 score of 0.536, which
+is attempt 1 to within a point (62.1, 0.535), including the 283 faces shipped finds and B misses,
+whose stride-32 score drops 0.685 -> 0.164 just as attempt 1's did. A 50-epoch A arm was not run:
+B stayed under 72, so no A could have shown a 10-point gap.
+
+So the full runs' large-face "delta" compares two different things: shipped was trained by
+MMDetection, attempt 1 natively, and no native 80k run *without* negatives has been trained to
+100 epochs. Two checks narrow it:
+
+* **The native trainer learns large faces on the curve recipe.** curve_1988 (1,988 labels, batch
+  8, 640 epochs, no ignore regions) native vs MMDetection: 84.6 vs 84.1 pooled, stride-32 score
+  0.491 vs 0.511.
+* **Training noise is small next to the gap.** A's epoch 10 against attempt 1's epoch 10 (same
+  data, seed and schedule): large faces within 2 points, stride-32 score within 0.003.
+
+Either the native 80k recipe only learns frame-filling faces between epochs 50 and 100 (the
+step at 69), or it never does, and something in the 80k path (batch 64, ignore regions at IoF
+0.5, which the curve recipe does not use) differs from MMDetection's. Both mean the diagnostics
+above attribute to negatives a loss that a negative-free native run shows as well. Until a
+native 80k control is trained to 100 epochs, no short run can be validated, and no training
+design can be credited or blamed for large faces. That run costs ~11.7 h, resuming B's 50-epoch
+run from its epoch 30 (still at lr 1e-2, the full recipe's schedule).
