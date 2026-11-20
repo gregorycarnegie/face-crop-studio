@@ -41,7 +41,7 @@ name, the eight in `fixtures/oracle/` skipped, the first 60 taken. To rebuild it
 then re-measure the bounds in `detection_accuracy.rs`:
 
 ```bash
-zig run -O ReleaseFast -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c -- \n    C:/Users/grego/Downloads/face-data/openimages fixtures/images
+zig run -O ReleaseFast -lc tools/dataset/make_accuracy_fixtures.zig -- \n    C:/Users/grego/Downloads/face-data/openimages fixtures/images
 ```
 
 It selects the same images and writes the same boxes and attribution as the Python

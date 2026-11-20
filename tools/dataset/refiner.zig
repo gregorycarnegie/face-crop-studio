@@ -92,7 +92,7 @@ pub const Refiner = struct {
 /// The refiner's read of one detection, as the evaluation tools crop it: the box centre (float32,
 /// as NumPy held it), the longer side grown 1.25x, scaled to the crop without rotation. Returns
 /// the subject's right then left eye in image pixels, in float32 like torch's output.
-/// `oracle` runs the exported graph (`export_eye_refiner.buildOnnx`); link `-lc vendor/stb.c`.
+/// `oracle` runs the exported graph (`export_eye_refiner.buildOnnx`); link `-lc` on Unix for the dynamic loader.
 pub fn readEyes(gpa: Allocator, oracle: anytype, frame: img.Image, centre: [2]f32, side: f64) ![2][2]f32 {
     var m = img.rotationMatrix(centre[0], centre[1], 0, size / side);
     m[2] += size / 2.0 - @as(f64, centre[0]);

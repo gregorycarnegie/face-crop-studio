@@ -1,6 +1,6 @@
 //! Score face detectors on COCO 2017, a labelled corpus none of them was trained on.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c -- fetch <annotations_trainval2017.zip> <out_dir> [--negatives 2000]
+//!   zig run -O ReleaseFast -lc tools/dataset/detector_bench.zig -- fetch <annotations_trainval2017.zip> <out_dir> [--negatives 2000]
 //!   zig run ... -- oi <labelv2_test_all.txt> <images_dir> <models_dir> <cache_dir>
 //!   zig run ... -- coco <out_dir from fetch> <models_dir> <cache_dir>
 //!   zig run ... -- retina <names.txt> <images_dir> <models_dir> <out.json>   (RetinaFace only; see `retinaOnly`)

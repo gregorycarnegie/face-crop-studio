@@ -1,6 +1,6 @@
 //! Train a small model that takes a face crop and returns its two eye points, on an NVIDIA GPU.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c -- <data_dir> [--epochs 300] [--out eye_refiner.pt]
+//!   zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig -- <data_dir> [--epochs 300] [--out eye_refiner.pt]
 //!       [--batch 64] [--angle-weight 0.5] [--val-fraction 0.15] [--seed 0] [--check]
 //!
 //! The label-count curve (CURVE_RESULTS.md) found that training a whole detector on 2,482 images

@@ -82,22 +82,22 @@ jobs:
           zig test tools/dataset/ort.zig
           zig test tools/dataset/export_eye_refiner.zig
           zig test tools/dataset/compare_detectors.zig
-          zig test -lc tools/dataset/image.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/detector_gate.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/large_face_diag.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/eval_refiner_vs_yunet.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/refiner_contact_sheet.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c
+          zig test tools/dataset/image.zig
+          zig test -lc tools/dataset/detector_bench.zig
+          zig test -lc tools/dataset/detector_gate.zig
+          zig test -lc tools/dataset/large_face_diag.zig
+          zig test -lc tools/dataset/eval_refiner_vs_yunet.zig
+          zig test -lc tools/dataset/refiner_contact_sheet.zig
+          zig test -lc tools/dataset/make_accuracy_fixtures.zig
           zig test tools/dataset/scrfd.zig
           zig test tools/dataset/export_scrfd.zig
-          zig test -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c
-          zig test -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/scrfd_detect.zig
+          zig test -lc tools/dataset/eval_eye_error.zig
+          zig test -lc tools/dataset/train_eye_refiner.zig
           zig test tools/dataset/scrfd_targets.zig
-          zig test -lc tools/dataset/scrfd_augment.zig tools/dataset/vendor/stb.c
+          zig test tools/dataset/scrfd_augment.zig
           zig test tools/dataset/scrfd_net.zig
-          zig test -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c
+          zig test -lc tools/dataset/train_scrfd.zig
           zig test tools/dataset/oi_negatives.zig
       - name: Check the committed PTX matches its Zig kernels
         run: |

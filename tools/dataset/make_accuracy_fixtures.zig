@@ -17,7 +17,7 @@
 //!
 //! Run from the repository root:
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/make_accuracy_fixtures.zig tools/dataset/vendor/stb.c -- \
+//!   zig run -O ReleaseFast -lc tools/dataset/make_accuracy_fixtures.zig -- \
 //!       <Downloads/face-data/openimages> fixtures/images [--count 60] [--side 640] [--quality 85]
 //!
 //! The committed images were encoded by OpenCV (libjpeg); stb's encoder writes different bytes for

@@ -1,6 +1,6 @@
 //! Aligned crops, YuNet's eye line beside the refiner's, for judging by eye.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/refiner_contact_sheet.zig tools/dataset/vendor/stb.c -- <detections.json> <eye_refiner.pt> <out.html> [--count 40] [--min-box 80] [--ort path]
+//!   zig run -O ReleaseFast -lc tools/dataset/refiner_contact_sheet.zig -- <detections.json> <eye_refiner.pt> <out.html> [--count 40] [--min-box 80] [--ort path]
 //!
 //! Every number measured so far comes from Open Images photos with clicked eye points. A real
 //! corpus has neither, so this compares the two on images that do not belong to the test set at

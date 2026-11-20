@@ -90,14 +90,27 @@ Python. This does not regenerate or replace the shipped model or its published c
 
 ## Images and the detector benchmark
 
-`image.zig` decodes and encodes with stb (`vendor/`, public domain, pinned in `vendor/stb.c`)
+`image.zig` imports the Zig port of stb's active codecs (`vendor/stb.zig`, MIT/public domain)
 and reimplements OpenCV's fixed-point `resize` (INTER_LINEAR, INTER_AREA) and `warpAffine`.
-Tools that use it link the C file:
+JPEG, PNG and BMP decoding and JPEG/PNG encoding need no C source, headers or libc. Tools
+that load ONNX Runtime still link `-lc` on Unix for the dynamic loader:
 
 ```sh
-zig run -O ReleaseFast -lc tools/dataset/detector_bench.zig tools/dataset/vendor/stb.c -- coco <data> <models> <cache>
-zig test -lc tools/dataset/image.zig tools/dataset/vendor/stb.c
+zig run -O ReleaseFast -lc tools/dataset/detector_bench.zig -- coco <data> <models> <cache>
+zig test tools/dataset/image.zig
 ```
+
+The port retains stb_image 2.30 / stb_image_write 1.16's scalar codec arithmetic from commit
+`013ac3beddff3dbffafd5177e7972067cd2b5083`; `vendor/LICENSE` preserves the upstream licence.
+Zig allocators own all codec storage. PNG compression uses `std.compress.flate`, so compressed
+PNG bytes differ while decoded pixels stay exact. JPEG re-encoding can differ slightly from
+the C build's floating-point contraction. The scalar port does not retain stb's SSE2/NEON
+kernels; its throughput has not been benchmarked.
+
+The original C decoder and the port produced identical RGB pixels on all 68 committed JPEG
+photographs and 17 synthetic format fixtures. Native regression tests cover grayscale and
+CMYK JPEG, progressive scans, packed/16-bit PNG, Adam7, transparency, BMP row orientation,
+truncated input, invalid encoder dimensions and allocation-failure cleanup.
 
 Against `cv2` 4.10 on Open Images photographs, given the same pixels: letterbox resizing,
 halving, INTER_AREA and `warpAffine` are bit-identical; upscaling differs by one level on 0.02%
@@ -134,8 +147,8 @@ unless ONNX Runtime matches the unfolded forward pass (default tolerance `1e-4`)
 
 ```sh
 zig run -O ReleaseFast -lc tools/dataset/export_scrfd.zig -- epoch_100.pth scrfd.onnx
-zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c -- epoch_100.pth <images> out.json
-zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c -- epoch_100.pth <openimages> --thresh 0.02
+zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig -- epoch_100.pth <images> out.json
+zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig -- epoch_100.pth <openimages> --thresh 0.02
 ```
 
 Exported from `work_dirs/oi80k/epoch_100.pth`, all 120 weights are bit-identical to the shipped
@@ -159,8 +172,8 @@ capability 8.0+). No CUDA toolkit, cuDNN, Python or torch. CI regenerates the PT
 source and fails if the committed file differs.
 
 ```sh
-zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c -- --check
-zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig tools/dataset/vendor/stb.c -- <openimages> --out eye_refiner.pt
+zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig -- --check
+zig run -O ReleaseFast -lc tools/dataset/train_eye_refiner.zig -- <openimages> --out eye_refiner.pt
 ```
 
 The recipe is the PyTorch original's: the same image-level validation split (Python's
@@ -203,8 +216,8 @@ resumed; it restarts. The shipped model is unchanged.
 the original pipeline). Their settings are its two recipes:
 
 ```sh
-zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c --     <openimages> <openimages>/labelv2_train_1988.txt --recipe curve --out work_dirs/curve_1988
-zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c --     <openimages> <openimages>/labelv2_train_all.txt --recipe 80k --out work_dirs/oi80k
+zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig --     <openimages> <openimages>/labelv2_train_1988.txt --recipe curve --out work_dirs/curve_1988
+zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig --     <openimages> <openimages>/labelv2_train_all.txt --recipe 80k --out work_dirs/oi80k
 ```
 
 `curve` is the label-count recipe (batch 8, 640 epochs, LR x0.1 at 440 and 544); `80k` is the

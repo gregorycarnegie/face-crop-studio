@@ -1,7 +1,7 @@
 //! The detector release gate: one PASS/FAIL verdict for a candidate face detector, its operating
 //! thresholds chosen on one half of each held-out set and its results read on the other.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/detector_gate.zig tools/dataset/vendor/stb.c -- \
+//!   zig run -O ReleaseFast -lc tools/dataset/detector_gate.zig -- \
 //!       <labelv2_test_all.txt> <oi_images_dir> <coco_dir> <models_dir> <cache_dir> <candidate.onnx>
 //!
 //! An optional 7th argument, `$D/zig_runs/diagnostics/labelv2_large_heldout.txt`

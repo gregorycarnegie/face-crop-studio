@@ -1,6 +1,6 @@
 //! Does the refiner give a better eye line than YuNet's own landmarks, on YuNet's own boxes?
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/eval_refiner_vs_yunet.zig tools/dataset/vendor/stb.c -- <data_dir> <eye_refiner.pt> [detections.json] [--ort path]
+//!   zig run -O ReleaseFast -lc tools/dataset/eval_refiner_vs_yunet.zig -- <data_dir> <eye_refiner.pt> [detections.json] [--ort path]
 //!
 //! `train_eye_refiner.zig` scores itself against ground-truth boxes, which measures the refiner in
 //! isolation. This measures what would actually ship: YuNet detects a face, the refiner re-reads

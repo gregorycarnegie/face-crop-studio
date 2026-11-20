@@ -1,6 +1,6 @@
 //! Train SCRFD-500M natively on an NVIDIA GPU, reproducing the MMDetection recipes.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c -- //!       <openimages_dir> <labelv2.txt> [--recipe curve|80k] [--out dir] [--resume checkpoint.pth]
+//!   zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig -- //!       <openimages_dir> <labelv2.txt> [--recipe curve|80k] [--out dir] [--resume checkpoint.pth]
 //!
 //! `curve` is `scrfd_fcs_500m.py` (the label-count curve: batch 8, 640 epochs, LR steps at
 //! 440/544); `80k` is `scrfd_fcs80k_500m.py` (batch 64, 100 epochs, steps at 69/85, ignore

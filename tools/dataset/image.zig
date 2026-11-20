@@ -3,15 +3,11 @@
 //! the Zig ports feed the models what the Python versions did. Decoding is stb's, not libjpeg's,
 //! so pixels can differ from `cv2.imread` by a level or two; the geometry is OpenCV's exactly.
 //!
-//! Link with `-lc tools/dataset/vendor/stb.c`.
+//! The codecs are imported from `vendor/stb.zig`; no C source or libc is needed.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-extern fn stbi_load_from_memory(buffer: [*]const u8, len: c_int, x: *c_int, y: *c_int, comp: *c_int, req_comp: c_int) ?[*]u8;
-extern fn stbi_image_free(retval_from_stbi_load: ?*anyopaque) void;
-const WriteFn = *const fn (?*anyopaque, ?*anyopaque, c_int) callconv(.c) void;
-extern fn stbi_write_jpg_to_func(func: WriteFn, context: ?*anyopaque, w: c_int, h: c_int, comp: c_int, data: *const anyopaque, quality: c_int) c_int;
-extern fn stbi_write_png_to_func(func: WriteFn, context: ?*anyopaque, w: c_int, h: c_int, comp: c_int, data: *const anyopaque, stride: c_int) c_int;
+const stb = @import("vendor/stb.zig");
 
 /// Interleaved RGB, row-major. (OpenCV's BGR order is swapped wherever a model wants BGR.)
 pub const Image = struct {
@@ -41,14 +37,18 @@ pub const Orientation = enum {
     as_stored,
 };
 
-/// Decode a JPEG or PNG. `error.UndecodableImage` where `cv2.imread` would return None.
+/// Decode a JPEG, PNG or BMP. `error.UndecodableImage` where `cv2.imread` would return None.
 pub fn decode(gpa: Allocator, data: []const u8, orientation: Orientation) !Image {
+    const previous_allocator = stb.allocator;
+    stb.allocator = gpa;
+    defer stb.allocator = previous_allocator;
     var w: c_int = 0;
     var h: c_int = 0;
     var channels: c_int = 0;
     const len = std.math.cast(c_int, data.len) orelse return error.UndecodableImage;
-    const raw = stbi_load_from_memory(data.ptr, len, &w, &h, &channels, 3) orelse return error.UndecodableImage;
-    defer stbi_image_free(raw);
+    const raw = stb.stbi_load_from_memory(data.ptr, len, &w, &h, &channels, 3);
+    if (raw == null) return error.UndecodableImage;
+    defer stb.stbi_image_free(raw);
     const width: usize = @intCast(w);
     const height: usize = @intCast(h);
     const stored: Image = .{ .width = width, .height = height, .pixels = try gpa.dupe(u8, raw[0 .. width * height * 3]) };
@@ -138,17 +138,33 @@ const Sink = struct {
 };
 
 pub fn encodeJpeg(gpa: Allocator, img: Image, quality: u8) ![]u8 {
+    try validateForEncoding(img);
+    const previous_allocator = stb.allocator;
+    stb.allocator = gpa;
+    defer stb.allocator = previous_allocator;
     var sink: Sink = .{ .gpa = gpa };
     errdefer sink.bytes.deinit(gpa);
-    if (stbi_write_jpg_to_func(Sink.write, &sink, try dim(img.width), try dim(img.height), 3, img.pixels.ptr, quality) == 0 or sink.failed) return error.EncodeFailed;
+    if (stb.stbi_write_jpg_to_func(Sink.write, &sink, try dim(img.width), try dim(img.height), 3, img.pixels.ptr, quality) == 0 or sink.failed) return error.EncodeFailed;
     return sink.bytes.toOwnedSlice(gpa);
 }
 
 pub fn encodePng(gpa: Allocator, img: Image) ![]u8 {
+    try validateForEncoding(img);
+    const previous_allocator = stb.allocator;
+    stb.allocator = gpa;
+    defer stb.allocator = previous_allocator;
     var sink: Sink = .{ .gpa = gpa };
     errdefer sink.bytes.deinit(gpa);
-    if (stbi_write_png_to_func(Sink.write, &sink, try dim(img.width), try dim(img.height), 3, img.pixels.ptr, try dim(img.width * 3)) == 0 or sink.failed) return error.EncodeFailed;
+    if (stb.stbi_write_png_to_func(Sink.write, &sink, try dim(img.width), try dim(img.height), 3, img.pixels.ptr, try dim(img.width * 3)) == 0 or sink.failed) return error.EncodeFailed;
     return sink.bytes.toOwnedSlice(gpa);
+}
+
+fn validateForEncoding(img: Image) !void {
+    if (img.width == 0 or img.height == 0) return error.EmptyImage;
+    const count = std.math.mul(usize, img.width, img.height) catch return error.ImageTooLarge;
+    const bytes = std.math.mul(usize, count, 3) catch return error.ImageTooLarge;
+    _ = try dim(std.math.add(usize, bytes, img.height) catch return error.ImageTooLarge);
+    if (img.pixels.len != bytes) return error.InvalidImage;
 }
 
 fn dim(n: usize) !c_int {
@@ -507,4 +523,86 @@ test "EXIF orientation: tag read from either byte order, and pixels turned as Op
     defer turned.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), turned.width);
     try std.testing.expectEqualSlices(u8, &.{ 1, 1, 1, 2, 2, 2 }, turned.pixels);
+}
+
+test "Zig codecs decode synthetic color, alpha, 16-bit and Adam7 images" {
+    const gpa = std.testing.allocator;
+    inline for (.{ "rgb.png", "rgba.png", "rgb16.png", "adam7.png", "rgb.bmp", "rgba.bmp", "topdown.bmp" }) |name| {
+        const decoded = try decode(gpa, @embedFile("testdata/codecs/" ++ name), .as_stored);
+        defer decoded.deinit(gpa);
+        try std.testing.expectEqual(@as(usize, 13), decoded.width);
+        try std.testing.expectEqual(@as(usize, 9), decoded.height);
+        for (0..9) |y| for (0..13) |x| {
+            try std.testing.expectEqualSlices(u8, &.{ @intCast((x * 19 + y * 7) % 256), @intCast((x * 5 + y * 29) % 256), @intCast((x * 31 + y * 11) % 256) }, decoded.at(x, y));
+        };
+    }
+}
+
+test "Zig codecs expand packed grayscale, palettes and grayscale alpha" {
+    const gpa = std.testing.allocator;
+    inline for (.{ .{ "gray1.png", 1 }, .{ "gray2.png", 2 }, .{ "gray4.png", 4 }, .{ "gray8.png", 8 }, .{ "gray16.png", 16 }, .{ "gray-alpha.png", 0 }, .{ "palette.png", 3 } }) |fixture| {
+        const decoded = try decode(gpa, @embedFile("testdata/codecs/" ++ fixture[0]), .as_stored);
+        defer decoded.deinit(gpa);
+        for (0..9) |y| for (0..13) |x| {
+            const expected: [3]u8 = switch (fixture[1]) {
+                0 => @splat(@intCast((x * 17 + y * 5) % 256)),
+                3 => ([_][3]u8{ .{ 255, 0, 0 }, .{ 0, 255, 0 }, .{ 0, 0, 255 }, .{ 20, 40, 60 } })[(x + y) % 4],
+                16 => @splat(@intCast(((x * 3781 + y * 97) % 65536) >> 8)),
+                else => @splat(@intCast(((x + y) % (1 << fixture[1])) * (255 / ((1 << fixture[1]) - 1)))),
+            };
+            try std.testing.expectEqualSlices(u8, &expected, decoded.at(x, y));
+        };
+    }
+}
+
+test "Zig codecs decode grayscale, CMYK and progressive JPEG scans" {
+    const gpa = std.testing.allocator;
+    inline for (.{ "gray.jpg", "progressive.jpg", "cmyk.jpg" }) |name| {
+        const decoded = try decode(gpa, @embedFile("testdata/codecs/" ++ name), .as_stored);
+        defer decoded.deinit(gpa);
+        try std.testing.expectEqual(@as(usize, 8), decoded.width);
+        try std.testing.expectEqual(@as(usize, 8), decoded.height);
+        for (decoded.pixels) |value| try std.testing.expectEqual(@as(u8, if (std.mem.eql(u8, name, "cmyk.jpg")) 64 else 128), value);
+    }
+}
+
+test "encoding validates image dimensions and pixel storage" {
+    const gpa = std.testing.allocator;
+    var pixel = [_]u8{ 1, 2, 3 };
+    const empty: Image = .{ .width = 0, .height = 1, .pixels = &pixel };
+    try std.testing.expectError(error.EmptyImage, encodePng(gpa, empty));
+    try std.testing.expectError(error.EmptyImage, encodeJpeg(gpa, empty, 90));
+    const short: Image = .{ .width = 2, .height = 1, .pixels = &pixel };
+    try std.testing.expectError(error.InvalidImage, encodePng(gpa, short));
+    try std.testing.expectError(error.InvalidImage, encodeJpeg(gpa, short, 90));
+    const huge: Image = .{ .width = std.math.maxInt(usize), .height = 2, .pixels = &pixel };
+    try std.testing.expectError(error.ImageTooLarge, encodePng(gpa, huge));
+    try std.testing.expectError(error.ImageTooLarge, encodeJpeg(gpa, huge, 90));
+}
+
+fn codecAllocationCheck(gpa: Allocator) !void {
+    const decoded = decode(gpa, @embedFile("testdata/codecs/rgb.png"), .as_stored) catch return error.OutOfMemory;
+    defer decoded.deinit(gpa);
+    const png = encodePng(gpa, decoded) catch return error.OutOfMemory;
+    defer gpa.free(png);
+    const jpeg = encodeJpeg(gpa, decoded, 95) catch return error.OutOfMemory;
+    defer gpa.free(jpeg);
+}
+
+test "codec allocation failures release temporary storage" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, codecAllocationCheck, .{});
+}
+
+test "truncated codec inputs either decode or return an error without leaking" {
+    const gpa = std.testing.allocator;
+    inline for (.{ "rgb.png", "adam7.png", "palette.png", "gray16.png", "rgb.bmp", "gray.jpg", "progressive.jpg", "cmyk.jpg" }) |name| {
+        const data = @embedFile("testdata/codecs/" ++ name);
+        for (0..data.len) |len| {
+            const decoded = decode(gpa, data[0..len], .as_stored) catch |err| {
+                try std.testing.expectEqual(error.UndecodableImage, err);
+                continue;
+            };
+            decoded.deinit(gpa);
+        }
+    }
 }

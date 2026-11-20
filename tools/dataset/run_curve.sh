@@ -18,7 +18,7 @@ mkdir -p "$OUT"
 
 for N in 400 800 1600 1988; do
     echo "=== size ${N}: starting $(date -Is)"
-    zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig tools/dataset/vendor/stb.c -- \
+    zig run -O ReleaseFast -lc tools/dataset/train_scrfd.zig -- \
         "$DATA" "${DATA}/labelv2_train_${N}.txt" --recipe curve --out "${OUT}/curve_${N}" \
         > "${OUT}/curve_${N}.log" 2>&1
     status=$?

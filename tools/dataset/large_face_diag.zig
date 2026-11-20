@@ -1,7 +1,7 @@
 //! Why are large faces fragile once face-free negatives join training? Inference and data
 //! statistics only (HARD_NEGATIVES.md, "Diagnostics"). Four modes:
 //!
-//!   zig build-exe -O ReleaseFast -lc tools/dataset/large_face_diag.zig tools/dataset/vendor/stb.c
+//!   zig build-exe -O ReleaseFast -lc tools/dataset/large_face_diag.zig
 //!   large_face_diag scale <labels.txt> <images_dir> <model.onnx> <out.tsv>
 //!   large_face_diag aug   <labelv2_train_all.txt> <labelv2_negatives.txt> <negatives_oi_boxes.csv> <negatives_scrfd.json> <class-descriptions-boxable.csv>
 //!   large_face_diag audit <labelv2_train_all.txt> <images_dir> <retinaface_r34.onnx> <count> <out_prefix>

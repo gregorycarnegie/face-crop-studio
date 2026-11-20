@@ -1,6 +1,6 @@
 //! Measure a trained SCRFD model's eye-point error on the held-out test set.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c -- <checkpoint.pth> <data_dir> [--thresh 0.5] [--limit N] [--all-boxes labelv2.txt] [--ort path]
+//!   zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig -- <checkpoint.pth> <data_dir> [--thresh 0.5] [--limit N] [--all-boxes labelv2.txt] [--ort path]
 //!
 //! Sweeps the score threshold and reports, at each one, detection recall, false positives per
 //! image and eye-line angle error against face_keypoints_test.json, so models trained on

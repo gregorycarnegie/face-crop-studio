@@ -1,6 +1,6 @@
 //! Run a trained SCRFD checkpoint over a folder, writing fcs-cli's detection JSON format.
 //!
-//!   zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig tools/dataset/vendor/stb.c -- <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--list names.txt] [--ort path]
+//!   zig run -O ReleaseFast -lc tools/dataset/scrfd_detect.zig -- <checkpoint.pth> <image_dir> <out.json> [--thresh 0.4] [--list names.txt] [--ort path]
 //!
 //! `--list` limits the run to the named files of `image_dir`. Each record also carries the decoded
 //! image's `width` and `height` (EXIF orientation applied), which fcs-cli's own records lack.

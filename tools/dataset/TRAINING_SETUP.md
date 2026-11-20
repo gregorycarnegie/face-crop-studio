@@ -150,7 +150,7 @@ cd <scrfd>
 
 `eval_eye_error.zig <checkpoint.pth> <data_dir> --thresh 0.02` reports detection recall and
 eye-point error against `face_keypoints_test.json` (run it with
-`zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig tools/dataset/vendor/stb.c -- ...`
+`zig run -O ReleaseFast -lc tools/dataset/eval_eye_error.zig -- ...`
 and `ORT_DYLIB_PATH` set; it needs neither torch nor a GPU). Three things about it are worth
 knowing before reading any number it prints.
 
