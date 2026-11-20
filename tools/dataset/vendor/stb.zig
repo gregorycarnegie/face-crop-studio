@@ -23,12 +23,14 @@ fn free(ptr: ?*anyopaque) void {
 }
 fn realloc(ptr: ?*anyopaque, size: usize) ?*anyopaque {
     const old = ptr orelse return malloc(size);
-    const raw: [*]u8 = @ptrCast(old);
-    const header: *Header = @ptrCast(@alignCast(raw - @sizeOf(Header)));
-    const fresh = malloc(size) orelse return null;
-    @memcpy(@as([*]u8, @ptrCast(fresh))[0..@min(size, header.size)], raw[0..@min(size, header.size)]);
-    free(old);
-    return fresh;
+    const total = std.math.add(usize, size, @sizeOf(Header)) catch return null;
+    const raw: [*]align(16) u8 = @alignCast(@as([*]u8, @ptrCast(old)) - @sizeOf(Header));
+    const header: *Header = @ptrCast(raw);
+    const old_slice: []align(16) u8 = raw[0 .. header.size + @sizeOf(Header)];
+    const resized = allocator.realloc(old_slice, total) catch return null;
+    const new_header: *Header = @ptrCast(resized.ptr);
+    new_header.* = .{ .size = size };
+    return resized.ptr + @sizeOf(Header);
 }
 const stbi_io_callbacks = extern struct {
     read: ?*const fn (user: ?*anyopaque, data: [*c]u8, size: i32) callconv(.c) i32 = null,
@@ -1328,182 +1330,120 @@ fn stbi__clamp(x: i32) callconv(.c) u8 {
     }
     return @bitCast(@as(i8, @truncate(x)));
 }
+inline fn idctF2F(comptime x: f32) @Vector(8, i32) {
+    return @splat(@as(i32, @intFromFloat(@as(f64, @floatCast(x * @as(f32, 4096.0))) + 0.5)));
+}
+
+inline fn transpose8x8(rows: [8]@Vector(8, i32)) [8]@Vector(8, i32) {
+    const V8 = @Vector(8, i32);
+    // Stage 1: interleave adjacent pairs (2x2 blocks)
+    const t0 = @shuffle(i32, rows[0], rows[1], [8]i32{ 0, ~@as(i32, 0), 1, ~@as(i32, 1), 4, ~@as(i32, 4), 5, ~@as(i32, 5) });
+    const t1 = @shuffle(i32, rows[0], rows[1], [8]i32{ 2, ~@as(i32, 2), 3, ~@as(i32, 3), 6, ~@as(i32, 6), 7, ~@as(i32, 7) });
+    const t2 = @shuffle(i32, rows[2], rows[3], [8]i32{ 0, ~@as(i32, 0), 1, ~@as(i32, 1), 4, ~@as(i32, 4), 5, ~@as(i32, 5) });
+    const t3 = @shuffle(i32, rows[2], rows[3], [8]i32{ 2, ~@as(i32, 2), 3, ~@as(i32, 3), 6, ~@as(i32, 6), 7, ~@as(i32, 7) });
+    const t4 = @shuffle(i32, rows[4], rows[5], [8]i32{ 0, ~@as(i32, 0), 1, ~@as(i32, 1), 4, ~@as(i32, 4), 5, ~@as(i32, 5) });
+    const t5 = @shuffle(i32, rows[4], rows[5], [8]i32{ 2, ~@as(i32, 2), 3, ~@as(i32, 3), 6, ~@as(i32, 6), 7, ~@as(i32, 7) });
+    const t6 = @shuffle(i32, rows[6], rows[7], [8]i32{ 0, ~@as(i32, 0), 1, ~@as(i32, 1), 4, ~@as(i32, 4), 5, ~@as(i32, 5) });
+    const t7 = @shuffle(i32, rows[6], rows[7], [8]i32{ 2, ~@as(i32, 2), 3, ~@as(i32, 3), 6, ~@as(i32, 6), 7, ~@as(i32, 7) });
+    // Stage 2: interleave 2-element groups (4x4 blocks)
+    const s0 = @shuffle(i32, t0, t2, [8]i32{ 0, 1, ~@as(i32, 0), ~@as(i32, 1), 4, 5, ~@as(i32, 4), ~@as(i32, 5) });
+    const s1 = @shuffle(i32, t0, t2, [8]i32{ 2, 3, ~@as(i32, 2), ~@as(i32, 3), 6, 7, ~@as(i32, 6), ~@as(i32, 7) });
+    const s2 = @shuffle(i32, t1, t3, [8]i32{ 0, 1, ~@as(i32, 0), ~@as(i32, 1), 4, 5, ~@as(i32, 4), ~@as(i32, 5) });
+    const s3 = @shuffle(i32, t1, t3, [8]i32{ 2, 3, ~@as(i32, 2), ~@as(i32, 3), 6, 7, ~@as(i32, 6), ~@as(i32, 7) });
+    const s4 = @shuffle(i32, t4, t6, [8]i32{ 0, 1, ~@as(i32, 0), ~@as(i32, 1), 4, 5, ~@as(i32, 4), ~@as(i32, 5) });
+    const s5 = @shuffle(i32, t4, t6, [8]i32{ 2, 3, ~@as(i32, 2), ~@as(i32, 3), 6, 7, ~@as(i32, 6), ~@as(i32, 7) });
+    const s6 = @shuffle(i32, t5, t7, [8]i32{ 0, 1, ~@as(i32, 0), ~@as(i32, 1), 4, 5, ~@as(i32, 4), ~@as(i32, 5) });
+    const s7 = @shuffle(i32, t5, t7, [8]i32{ 2, 3, ~@as(i32, 2), ~@as(i32, 3), 6, 7, ~@as(i32, 6), ~@as(i32, 7) });
+    // Stage 3: combine halves (8x8)
+    return [8]V8{
+        @shuffle(i32, s0, s4, [8]i32{ 0, 1, 2, 3, ~@as(i32, 0), ~@as(i32, 1), ~@as(i32, 2), ~@as(i32, 3) }),
+        @shuffle(i32, s1, s5, [8]i32{ 0, 1, 2, 3, ~@as(i32, 0), ~@as(i32, 1), ~@as(i32, 2), ~@as(i32, 3) }),
+        @shuffle(i32, s2, s6, [8]i32{ 0, 1, 2, 3, ~@as(i32, 0), ~@as(i32, 1), ~@as(i32, 2), ~@as(i32, 3) }),
+        @shuffle(i32, s3, s7, [8]i32{ 0, 1, 2, 3, ~@as(i32, 0), ~@as(i32, 1), ~@as(i32, 2), ~@as(i32, 3) }),
+        @shuffle(i32, s0, s4, [8]i32{ 4, 5, 6, 7, ~@as(i32, 4), ~@as(i32, 5), ~@as(i32, 6), ~@as(i32, 7) }),
+        @shuffle(i32, s1, s5, [8]i32{ 4, 5, 6, 7, ~@as(i32, 4), ~@as(i32, 5), ~@as(i32, 6), ~@as(i32, 7) }),
+        @shuffle(i32, s2, s6, [8]i32{ 4, 5, 6, 7, ~@as(i32, 4), ~@as(i32, 5), ~@as(i32, 6), ~@as(i32, 7) }),
+        @shuffle(i32, s3, s7, [8]i32{ 4, 5, 6, 7, ~@as(i32, 4), ~@as(i32, 5), ~@as(i32, 6), ~@as(i32, 7) }),
+    };
+}
+
+inline fn idct1D(s0: @Vector(8, i32), s1: @Vector(8, i32), s2: @Vector(8, i32), s3: @Vector(8, i32), s4: @Vector(8, i32), s5: @Vector(8, i32), s6: @Vector(8, i32), s7: @Vector(8, i32), comptime bias: i32, comptime shift: u5) [8]@Vector(8, i32) {
+    const V8 = @Vector(8, i32);
+    const p1_e = (s2 +% s6) *% idctF2F(0.541196);
+    const t2_e = p1_e +% s6 *% idctF2F(-1.847759);
+    const t3_e = p1_e +% s2 *% idctF2F(0.765367);
+    const t0_e = (s0 +% s4) *% @as(V8, @splat(4096));
+    const t1_e = (s0 -% s4) *% @as(V8, @splat(4096));
+    const b: V8 = @splat(bias);
+    const x0 = t0_e +% t3_e +% b;
+    const x3 = t0_e -% t3_e +% b;
+    const x1 = t1_e +% t2_e +% b;
+    const x2 = t1_e -% t2_e +% b;
+
+    const p3 = s7 +% s3;
+    const p4 = s5 +% s1;
+    const p1 = s7 +% s1;
+    const p2 = s5 +% s3;
+    const p5 = (p3 +% p4) *% idctF2F(1.175876);
+    var t0 = s7 *% idctF2F(0.298631);
+    var t1 = s5 *% idctF2F(2.05312);
+    var t2 = s3 *% idctF2F(3.072711);
+    var t3 = s1 *% idctF2F(1.501321);
+    const p1_o = p5 +% p1 *% idctF2F(-0.899976);
+    const p2_o = p5 +% p2 *% idctF2F(-2.562916);
+    const p3_o = p3 *% idctF2F(-1.961571);
+    const p4_o = p4 *% idctF2F(-0.390181);
+    t3 +%= p1_o +% p4_o;
+    t2 +%= p2_o +% p3_o;
+    t1 +%= p2_o +% p4_o;
+    t0 +%= p1_o +% p3_o;
+
+    const sh: @Vector(8, u5) = @splat(shift);
+    return .{
+        (x0 +% t3) >> sh,
+        (x1 +% t2) >> sh,
+        (x2 +% t1) >> sh,
+        (x3 +% t0) >> sh,
+        (x3 -% t0) >> sh,
+        (x2 -% t1) >> sh,
+        (x1 -% t2) >> sh,
+        (x0 -% t3) >> sh,
+    };
+}
+
 fn stbi__idct_block(out: [*c]u8, out_stride: i32, data: [*c]i16) callconv(.c) void {
-    var i: i32 = undefined;
-    var val: [64]i32 = undefined;
-    var v: [*c]i32 = @ptrCast(@alignCast(&val));
-    var o: [*c]u8 = undefined;
-    var d: [*c]i16 = data;
-    {
-        i = 0;
-        while (i < @as(i32, 8)) : ({
-            i += 1;
-            d += 1;
-            v += 1;
-        }) {
-            if (((((((@as(i32, d[@as(i32, 8)]) == @as(i32, 0)) and (@as(i32, d[@as(i32, 16)]) == @as(i32, 0))) and (@as(i32, d[@as(i32, 24)]) == @as(i32, 0))) and (@as(i32, d[@as(i32, 32)]) == @as(i32, 0))) and (@as(i32, d[@as(i32, 40)]) == @as(i32, 0))) and (@as(i32, d[@as(i32, 48)]) == @as(i32, 0))) and (@as(i32, d[@as(i32, 56)]) == @as(i32, 0))) {
-                const dcterm: i32 = @as(i32, d[@as(i32, 0)]) * @as(i32, 4);
-                v[@as(i32, 0)] = blk: {
-                    const tmp = blk_1: {
-                        const tmp_2 = blk_2: {
-                            const tmp_3 = blk_3: {
-                                const tmp_4 = blk_4: {
-                                    const tmp_5 = blk_5: {
-                                        const tmp_6 = blk_6: {
-                                            const tmp_7 = dcterm;
-                                            v[@as(i32, 56)] = tmp_7;
-                                            break :blk_6 tmp_7;
-                                        };
-                                        v[@as(i32, 48)] = tmp_6;
-                                        break :blk_5 tmp_6;
-                                    };
-                                    v[@as(i32, 40)] = tmp_5;
-                                    break :blk_4 tmp_5;
-                                };
-                                v[@as(i32, 32)] = tmp_4;
-                                break :blk_3 tmp_4;
-                            };
-                            v[@as(i32, 24)] = tmp_3;
-                            break :blk_2 tmp_3;
-                        };
-                        v[@as(i32, 16)] = tmp_2;
-                        break :blk_1 tmp_2;
-                    };
-                    v[@as(i32, 8)] = tmp;
-                    break :blk tmp;
-                };
-            } else {
-                var t0: i32 = undefined;
-                var t1: i32 = undefined;
-                var t2: i32 = undefined;
-                var t3: i32 = undefined;
-                var p1: i32 = undefined;
-                var p2: i32 = undefined;
-                var p3: i32 = undefined;
-                var p4: i32 = undefined;
-                var p5: i32 = undefined;
-                var x0: i32 = undefined;
-                var x1: i32 = undefined;
-                var x2: i32 = undefined;
-                var x3: i32 = undefined;
-                p2 = d[@as(i32, 16)];
-                p3 = d[@as(i32, 48)];
-                p1 = (p2 + p3) * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 0.541196) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                t2 = p1 + (p3 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 1.847759) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-                t3 = p1 + (p2 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 0.765367) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-                p2 = d[@as(i32, 0)];
-                p3 = d[@as(i32, 32)];
-                t0 = (p2 + p3) * @as(i32, 4096);
-                t1 = (p2 - p3) * @as(i32, 4096);
-                x0 = t0 + t3;
-                x3 = t0 - t3;
-                x1 = t1 + t2;
-                x2 = t1 - t2;
-                t0 = d[@as(i32, 56)];
-                t1 = d[@as(i32, 40)];
-                t2 = d[@as(i32, 24)];
-                t3 = d[@as(i32, 8)];
-                p3 = t0 + t2;
-                p4 = t1 + t3;
-                p1 = t0 + t3;
-                p2 = t1 + t2;
-                p5 = (p3 + p4) * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 1.175876) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                t0 = t0 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 0.298631) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                t1 = t1 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 2.05312) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                t2 = t2 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 3.072711) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                t3 = t3 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 1.501321) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                p1 = p5 + (p1 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 0.899976) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-                p2 = p5 + (p2 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 2.562916) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-                p3 = p3 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 1.961571) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                p4 = p4 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 0.390181) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-                t3 += p1 + p4;
-                t2 += p2 + p3;
-                t1 += p2 + p4;
-                t0 += p1 + p3;
-                x0 += 512;
-                x1 += 512;
-                x2 += 512;
-                x3 += 512;
-                v[@as(i32, 0)] = (x0 + t3) >> @intCast(@as(i32, 10));
-                v[@as(i32, 56)] = (x0 - t3) >> @intCast(@as(i32, 10));
-                v[@as(i32, 8)] = (x1 + t2) >> @intCast(@as(i32, 10));
-                v[@as(i32, 48)] = (x1 - t2) >> @intCast(@as(i32, 10));
-                v[@as(i32, 16)] = (x2 + t1) >> @intCast(@as(i32, 10));
-                v[@as(i32, 40)] = (x2 - t1) >> @intCast(@as(i32, 10));
-                v[@as(i32, 24)] = (x3 + t0) >> @intCast(@as(i32, 10));
-                v[@as(i32, 32)] = (x3 - t0) >> @intCast(@as(i32, 10));
-            }
-        }
+    const V8 = @Vector(8, i32);
+    const d: [*]const i16 = @ptrCast(data);
+    var r: [8]V8 = undefined;
+    inline for (0..8) |i| {
+        const row16: @Vector(8, i16) = d[i * 8 ..][0..8].*;
+        r[i] = row16;
     }
-    {
-        i = 0;
-        v = @ptrCast(@alignCast(&val));
-        o = out;
-        while (i < @as(i32, 8)) : ({
-            i += 1;
-            v += @as(usize, @bitCast(@as(isize, @intCast(@as(i32, 8)))));
-            o += @as(usize, @bitCast(@as(isize, @intCast(out_stride))));
-        }) {
-            var t0: i32 = undefined;
-            var t1: i32 = undefined;
-            var t2: i32 = undefined;
-            var t3: i32 = undefined;
-            var p1: i32 = undefined;
-            var p2: i32 = undefined;
-            var p3: i32 = undefined;
-            var p4: i32 = undefined;
-            var p5: i32 = undefined;
-            var x0: i32 = undefined;
-            var x1: i32 = undefined;
-            var x2: i32 = undefined;
-            var x3: i32 = undefined;
-            p2 = v[@as(i32, 2)];
-            p3 = v[@as(i32, 6)];
-            p1 = (p2 + p3) * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 0.541196) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            t2 = p1 + (p3 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 1.847759) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-            t3 = p1 + (p2 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 0.765367) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-            p2 = v[@as(i32, 0)];
-            p3 = v[@as(i32, 4)];
-            t0 = (p2 + p3) * @as(i32, 4096);
-            t1 = (p2 - p3) * @as(i32, 4096);
-            x0 = t0 + t3;
-            x3 = t0 - t3;
-            x1 = t1 + t2;
-            x2 = t1 - t2;
-            t0 = v[@as(i32, 7)];
-            t1 = v[@as(i32, 5)];
-            t2 = v[@as(i32, 3)];
-            t3 = v[@as(i32, 1)];
-            p3 = t0 + t2;
-            p4 = t1 + t3;
-            p1 = t0 + t3;
-            p2 = t1 + t2;
-            p5 = (p3 + p4) * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 1.175876) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            t0 = t0 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 0.298631) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            t1 = t1 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 2.05312) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            t2 = t2 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 3.072711) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            t3 = t3 * @as(i32, @intFromFloat(@as(f64, @floatCast(@as(f32, 1.501321) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            p1 = p5 + (p1 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 0.899976) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-            p2 = p5 + (p2 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 2.562916) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5))));
-            p3 = p3 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 1.961571) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            p4 = p4 * @as(i32, @intFromFloat(@as(f64, @floatCast(-@as(f32, 0.390181) * @as(f32, @floatFromInt(@as(i32, 4096))))) + @as(f64, 0.5)));
-            t3 += p1 + p4;
-            t2 += p2 + p3;
-            t1 += p2 + p4;
-            t0 += p1 + p3;
-            x0 += @as(i32, 65536) + (@as(i32, 128) << @intCast(@as(i32, 17)));
-            x1 += @as(i32, 65536) + (@as(i32, 128) << @intCast(@as(i32, 17)));
-            x2 += @as(i32, 65536) + (@as(i32, 128) << @intCast(@as(i32, 17)));
-            x3 += @as(i32, 65536) + (@as(i32, 128) << @intCast(@as(i32, 17)));
-            o[@as(i32, 0)] = stbi__clamp((x0 + t3) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 7)] = stbi__clamp((x0 - t3) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 1)] = stbi__clamp((x1 + t2) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 6)] = stbi__clamp((x1 - t2) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 2)] = stbi__clamp((x2 + t1) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 5)] = stbi__clamp((x2 - t1) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 3)] = stbi__clamp((x3 + t0) >> @intCast(@as(i32, 17)));
-            o[@as(i32, 4)] = stbi__clamp((x3 - t0) >> @intCast(@as(i32, 17)));
-        }
+    // Pass 1: 8 columns in parallel (matches scalar DC-only shortcut bit-for-bit).
+    const ac_or = r[1] | r[2] | r[3] | r[4] | r[5] | r[6] | r[7];
+    const col_out = if (@reduce(.Or, ac_or) == 0) blk: {
+        const dc = r[0] *% @as(V8, @splat(4));
+        break :blk [8]V8{ dc, dc, dc, dc, dc, dc, dc, dc };
+    } else blk: {
+        const raw = idct1D(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], 512, 10);
+        const dc = r[0] *% @as(V8, @splat(4));
+        const is_dc = ac_or == @as(V8, @splat(0));
+        var masked: [8]V8 = undefined;
+        inline for (0..8) |i| masked[i] = @select(i32, is_dc, dc, raw[i]);
+        break :blk masked;
+    };
+    // Transpose 8x8 so pass 2 operates on all 8 rows in parallel.
+    const t = transpose8x8(col_out);
+    const row_out = transpose8x8(idct1D(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], 65536 + (128 << 17), 17));
+    const zero: V8 = @splat(0);
+    const maxv: V8 = @splat(255);
+    const stride: usize = @intCast(out_stride);
+    var o: [*]u8 = @ptrCast(out);
+    inline for (0..8) |i| {
+        const clamped = @min(@max(row_out[i], zero), maxv);
+        const bytes: @Vector(8, u8) = @intCast(clamped);
+        o[0..8].* = bytes;
+        o += stride;
     }
 }
 fn stbi__get_marker(j: [*c]stbi__jpeg) callconv(.c) u8 {
@@ -2141,72 +2081,109 @@ fn resample_row_1(out: [*c]u8, in_near: [*c]u8, in_far: [*c]u8, w: i32, hs: i32)
     return in_near;
 }
 fn stbi__resample_row_v_2(arg_out: [*c]u8, in_near: [*c]u8, in_far: [*c]u8, w: i32, hs: i32) callconv(.c) [*c]u8 {
-    var out = arg_out;
-    var i: i32 = undefined;
-    _ = @sizeOf(@TypeOf(hs));
-    {
-        i = 0;
-        while (i < w) : (i += 1) {
-            out[@bitCast(@as(isize, @intCast(i)))] = @as(u8, @bitCast(@as(i8, @truncate((((@as(i32, 3) * @as(i32, in_near[@bitCast(@as(isize, @intCast(i)))])) + @as(i32, in_far[@bitCast(@as(isize, @intCast(i)))])) + @as(i32, 2)) >> @intCast(@as(i32, 2))))));
-        }
+    _ = hs;
+    const out: [*]u8 = @ptrCast(arg_out);
+    const near: [*]const u8 = @ptrCast(in_near);
+    const far: [*]const u8 = @ptrCast(in_far);
+    const n: usize = @intCast(w);
+    const V16 = @Vector(16, u16);
+    var i: usize = 0;
+    while (i + 16 <= n) : (i += 16) {
+        const vn: V16 = near[i..][0..16].*;
+        const vf: V16 = far[i..][0..16].*;
+        const res = (vn * @as(V16, @splat(3)) + vf + @as(V16, @splat(2))) >> @splat(2);
+        out[i..][0..16].* = @as(@Vector(16, u8), @intCast(res));
     }
-    return out;
+    while (i < n) : (i += 1) {
+        out[i] = @intCast((@as(u16, 3) * near[i] + far[i] + 2) >> 2);
+    }
+    return arg_out;
 }
 fn stbi__resample_row_h_2(arg_out: [*c]u8, in_near: [*c]u8, in_far: [*c]u8, w: i32, hs: i32) callconv(.c) [*c]u8 {
-    var out = arg_out;
-    var i: i32 = undefined;
-    const input: [*c]u8 = in_near;
-    if (w == @as(i32, 1)) {
-        out[@as(i32, 0)] = blk: {
-            const tmp = input[@as(i32, 0)];
-            out[@as(i32, 1)] = tmp;
-            break :blk tmp;
-        };
-        return out;
+    _ = in_far;
+    _ = hs;
+    const out: [*]u8 = @ptrCast(arg_out);
+    const input: [*]const u8 = @ptrCast(in_near);
+    const n: usize = @intCast(w);
+    if (n == 1) {
+        out[0] = input[0];
+        out[1] = input[0];
+        return arg_out;
     }
-    out[@as(i32, 0)] = input[@as(i32, 0)];
-    out[@as(i32, 1)] = @as(u8, @bitCast(@as(i8, @truncate((((@as(i32, input[@as(i32, 0)]) * @as(i32, 3)) + @as(i32, input[@as(i32, 1)])) + @as(i32, 2)) >> @intCast(@as(i32, 2))))));
-    {
-        i = 1;
-        while (i < (w - @as(i32, 1))) : (i += 1) {
-            const n: i32 = (@as(i32, 3) * @as(i32, input[@bitCast(@as(isize, @intCast(i)))])) + @as(i32, 2);
-            out[@bitCast(@as(isize, @intCast((i * @as(i32, 2)) + @as(i32, 0))))] = @as(u8, @bitCast(@as(i8, @truncate((n + @as(i32, input[@bitCast(@as(isize, @intCast(i - @as(i32, 1))))])) >> @intCast(@as(i32, 2))))));
-            out[@bitCast(@as(isize, @intCast((i * @as(i32, 2)) + @as(i32, 1))))] = @as(u8, @bitCast(@as(i8, @truncate((n + @as(i32, input[@bitCast(@as(isize, @intCast(i + @as(i32, 1))))])) >> @intCast(@as(i32, 2))))));
+    out[0] = input[0];
+    out[1] = @intCast((@as(u16, input[0]) * 3 + input[1] + 2) >> 2);
+    const V16 = @Vector(16, u16);
+    const interleave = comptime blk: {
+        var mask: [32]i32 = undefined;
+        for (0..16) |k| {
+            mask[k * 2] = @intCast(k);
+            mask[k * 2 + 1] = ~@as(i32, @intCast(k));
         }
+        break :blk mask;
+    };
+    var i: usize = 1;
+    while (i + 16 < n) : (i += 16) {
+        const cur: V16 = input[i..][0..16].*;
+        const prev: V16 = input[i - 1 ..][0..16].*;
+        const next: V16 = input[i + 1 ..][0..16].*;
+        const base = cur * @as(V16, @splat(3)) + @as(V16, @splat(2));
+        const even: @Vector(16, u8) = @intCast((base + prev) >> @splat(2));
+        const odd: @Vector(16, u8) = @intCast((base + next) >> @splat(2));
+        out[i * 2 ..][0..32].* = @shuffle(u8, even, odd, interleave);
     }
-    out[@bitCast(@as(isize, @intCast((i * @as(i32, 2)) + @as(i32, 0))))] = @as(u8, @bitCast(@as(i8, @truncate((((@as(i32, input[@bitCast(@as(isize, @intCast(w - @as(i32, 2))))]) * @as(i32, 3)) + @as(i32, input[@bitCast(@as(isize, @intCast(w - @as(i32, 1))))])) + @as(i32, 2)) >> @intCast(@as(i32, 2))))));
-    out[@bitCast(@as(isize, @intCast((i * @as(i32, 2)) + @as(i32, 1))))] = input[@bitCast(@as(isize, @intCast(w - @as(i32, 1))))];
-    _ = @sizeOf(@TypeOf(in_far));
-    _ = @sizeOf(@TypeOf(hs));
-    return out;
+    while (i < n - 1) : (i += 1) {
+        const base: u16 = @as(u16, 3) * input[i] + 2;
+        out[i * 2] = @intCast((base + input[i - 1]) >> 2);
+        out[i * 2 + 1] = @intCast((base + input[i + 1]) >> 2);
+    }
+    out[(n - 1) * 2] = @intCast((@as(u16, input[n - 2]) * 3 + input[n - 1] + 2) >> 2);
+    out[(n - 1) * 2 + 1] = input[n - 1];
+    return arg_out;
 }
 fn stbi__resample_row_hv_2(arg_out: [*c]u8, in_near: [*c]u8, in_far: [*c]u8, w: i32, hs: i32) callconv(.c) [*c]u8 {
-    var out = arg_out;
-    var i: i32 = undefined;
-    var t0: i32 = undefined;
-    var t1: i32 = undefined;
-    if (w == @as(i32, 1)) {
-        out[@as(i32, 0)] = blk: {
-            const tmp = @as(u8, @bitCast(@as(i8, @truncate((((@as(i32, 3) * @as(i32, in_near[@as(i32, 0)])) + @as(i32, in_far[@as(i32, 0)])) + @as(i32, 2)) >> @intCast(@as(i32, 2))))));
-            out[@as(i32, 1)] = tmp;
-            break :blk tmp;
-        };
-        return out;
+    _ = hs;
+    const out: [*]u8 = @ptrCast(arg_out);
+    const near: [*]const u8 = @ptrCast(in_near);
+    const far: [*]const u8 = @ptrCast(in_far);
+    const n: usize = @intCast(w);
+    if (n == 1) {
+        const tmp: u8 = @intCast((@as(u16, 3) * near[0] + far[0] + 2) >> 2);
+        out[0] = tmp;
+        out[1] = tmp;
+        return arg_out;
     }
-    t1 = (@as(i32, 3) * @as(i32, in_near[@as(i32, 0)])) + @as(i32, in_far[@as(i32, 0)]);
-    out[@as(i32, 0)] = @as(u8, @bitCast(@as(i8, @truncate((t1 + @as(i32, 2)) >> @intCast(@as(i32, 2))))));
-    {
-        i = 1;
-        while (i < w) : (i += 1) {
-            t0 = t1;
-            t1 = (@as(i32, 3) * @as(i32, in_near[@bitCast(@as(isize, @intCast(i)))])) + @as(i32, in_far[@bitCast(@as(isize, @intCast(i)))]);
-            out[@bitCast(@as(isize, @intCast((i * @as(i32, 2)) - @as(i32, 1))))] = @as(u8, @bitCast(@as(i8, @truncate((((@as(i32, 3) * t0) + t1) + @as(i32, 8)) >> @intCast(@as(i32, 4))))));
-            out[@bitCast(@as(isize, @intCast(i * @as(i32, 2))))] = @as(u8, @bitCast(@as(i8, @truncate((((@as(i32, 3) * t1) + t0) + @as(i32, 8)) >> @intCast(@as(i32, 4))))));
+    var t1: u16 = @as(u16, 3) * near[0] + far[0];
+    out[0] = @intCast((t1 + 2) >> 2);
+    const V16 = @Vector(16, u16);
+    const interleave = comptime blk: {
+        var mask: [32]i32 = undefined;
+        for (0..16) |k| {
+            mask[k * 2] = @intCast(k);
+            mask[k * 2 + 1] = ~@as(i32, @intCast(k));
         }
+        break :blk mask;
+    };
+    var i: usize = 1;
+    while (i + 16 <= n) : (i += 16) {
+        const n0: V16 = near[i - 1 ..][0..16].*;
+        const f0: V16 = far[i - 1 ..][0..16].*;
+        const n1: V16 = near[i..][0..16].*;
+        const f1: V16 = far[i..][0..16].*;
+        const vt0 = n0 * @as(V16, @splat(3)) + f0;
+        const vt1 = n1 * @as(V16, @splat(3)) + f1;
+        const left: @Vector(16, u8) = @intCast((vt0 * @as(V16, @splat(3)) + vt1 + @as(V16, @splat(8))) >> @splat(4));
+        const right: @Vector(16, u8) = @intCast((vt1 * @as(V16, @splat(3)) + vt0 + @as(V16, @splat(8))) >> @splat(4));
+        out[i * 2 - 1 ..][0..32].* = @shuffle(u8, left, right, interleave);
     }
-    out[@bitCast(@as(isize, @intCast((w * @as(i32, 2)) - @as(i32, 1))))] = @as(u8, @bitCast(@as(i8, @truncate((t1 + @as(i32, 2)) >> @intCast(@as(i32, 2))))));
-    _ = @sizeOf(@TypeOf(hs));
-    return out;
+    t1 = @as(u16, 3) * near[i - 1] + far[i - 1];
+    while (i < n) : (i += 1) {
+        const t0 = t1;
+        t1 = @as(u16, 3) * near[i] + far[i];
+        out[i * 2 - 1] = @intCast((3 * t0 + t1 + 8) >> 4);
+        out[i * 2] = @intCast((3 * t1 + t0 + 8) >> 4);
+    }
+    out[n * 2 - 1] = @intCast((t1 + 2) >> 2);
+    return arg_out;
 }
 fn stbi__resample_row_generic(arg_out: [*c]u8, in_near: [*c]u8, in_far: [*c]u8, w: i32, hs: i32) callconv(.c) [*c]u8 {
     var out = arg_out;
@@ -2225,50 +2202,70 @@ fn stbi__resample_row_generic(arg_out: [*c]u8, in_near: [*c]u8, in_far: [*c]u8, 
     return out;
 }
 fn stbi__YCbCr_to_RGB_row(arg_out: [*c]u8, y: [*c]const u8, pcb: [*c]const u8, pcr: [*c]const u8, count: i32, step: i32) callconv(.c) void {
-    var out = arg_out;
-    var i: i32 = undefined;
-    {
-        i = 0;
-        while (i < count) : (i += 1) {
-            const y_fixed: i32 = (@as(i32, y[@bitCast(@as(isize, @intCast(i)))]) << @intCast(@as(i32, 20))) + (@as(i32, 1) << @intCast(@as(i32, 19)));
-            var r: i32 = undefined;
-            var g: i32 = undefined;
-            var b: i32 = undefined;
-            const cr: i32 = @as(i32, pcr[@bitCast(@as(isize, @intCast(i)))]) - @as(i32, 128);
-            const cb: i32 = @as(i32, pcb[@bitCast(@as(isize, @intCast(i)))]) - @as(i32, 128);
-            r = y_fixed + (cr * (@as(i32, @intFromFloat((@as(f32, 1.402) * @as(f32, 4096.0)) + @as(f32, 0.5))) << @intCast(@as(i32, 8))));
-            g = @bitCast(@as(u32, @truncate(@as(u32, @bitCast(@as(i32, y_fixed + (cr * -(@as(i32, @intFromFloat((@as(f32, 0.71414) * @as(f32, 4096.0)) + @as(f32, 0.5))) << @intCast(@as(i32, 8))))))) +% (@as(u32, @bitCast(@as(i32, cb * -(@as(i32, @intFromFloat((@as(f32, 0.34414) * @as(f32, 4096.0)) + @as(f32, 0.5))) << @intCast(@as(i32, 8)))))) & @as(u32, 4294901760)))));
-            b = y_fixed + (cb * (@as(i32, @intFromFloat((@as(f32, 1.772) * @as(f32, 4096.0)) + @as(f32, 0.5))) << @intCast(@as(i32, 8))));
-            r >>= @intCast(@as(i32, 20));
-            g >>= @intCast(@as(i32, 20));
-            b >>= @intCast(@as(i32, 20));
-            if (@as(u32, @bitCast(@as(i32, r))) > @as(u32, 255)) {
-                if (r < @as(i32, 0)) {
-                    r = 0;
-                } else {
-                    r = 255;
-                }
+    var out: [*]u8 = @ptrCast(arg_out);
+    const yp: [*]const u8 = @ptrCast(y);
+    const cbp: [*]const u8 = @ptrCast(pcb);
+    const crp: [*]const u8 = @ptrCast(pcr);
+    const n: usize = @intCast(count);
+    const st: usize = @intCast(step);
+    const k_r_s: i32 = @as(i32, @intFromFloat((@as(f32, 1.402) * @as(f32, 4096.0)) + @as(f32, 0.5))) << 8;
+    const k_g_cr_s: i32 = -(@as(i32, @intFromFloat((@as(f32, 0.71414) * @as(f32, 4096.0)) + @as(f32, 0.5))) << 8);
+    const k_g_cb_s: i32 = -(@as(i32, @intFromFloat((@as(f32, 0.34414) * @as(f32, 4096.0)) + @as(f32, 0.5))) << 8);
+    const k_b_s: i32 = @as(i32, @intFromFloat((@as(f32, 1.772) * @as(f32, 4096.0)) + @as(f32, 0.5))) << 8;
+    const V8 = @Vector(8, i32);
+    const U8 = @Vector(8, u32);
+    const k_r: V8 = @splat(k_r_s);
+    const k_g_cr: V8 = @splat(k_g_cr_s);
+    const k_g_cb: V8 = @splat(k_g_cb_s);
+    const k_b: V8 = @splat(k_b_s);
+    const c128: V8 = @splat(128);
+    const bias: V8 = @splat(@as(i32, 1) << 19);
+    const zero: V8 = @splat(0);
+    const maxv: V8 = @splat(255);
+    const mask: U8 = @splat(0xffff0000);
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const vy: V8 = @as(@Vector(8, u8), yp[i..][0..8].*);
+        const vcb: V8 = @as(V8, @as(@Vector(8, u8), cbp[i..][0..8].*)) -% c128;
+        const vcr: V8 = @as(V8, @as(@Vector(8, u8), crp[i..][0..8].*)) -% c128;
+        const y_fixed = (vy << @splat(20)) +% bias;
+        const r = @min(@max((y_fixed +% vcr *% k_r) >> @splat(20), zero), maxv);
+        const cb_term: V8 = @bitCast(@as(U8, @bitCast(vcb *% k_g_cb)) & mask);
+        const g = @min(@max((y_fixed +% vcr *% k_g_cr +% cb_term) >> @splat(20), zero), maxv);
+        const b = @min(@max((y_fixed +% vcb *% k_b) >> @splat(20), zero), maxv);
+        const rb: [8]u8 = @as(@Vector(8, u8), @intCast(r));
+        const gb: [8]u8 = @as(@Vector(8, u8), @intCast(g));
+        const bb: [8]u8 = @as(@Vector(8, u8), @intCast(b));
+        if (st == 3) {
+            inline for (0..8) |k| {
+                out[k * 3] = rb[k];
+                out[k * 3 + 1] = gb[k];
+                out[k * 3 + 2] = bb[k];
             }
-            if (@as(u32, @bitCast(@as(i32, g))) > @as(u32, 255)) {
-                if (g < @as(i32, 0)) {
-                    g = 0;
-                } else {
-                    g = 255;
-                }
+            out += 24;
+        } else {
+            inline for (0..8) |k| {
+                out[0] = rb[k];
+                out[1] = gb[k];
+                out[2] = bb[k];
+                out[3] = 255;
+                out += st;
             }
-            if (@as(u32, @bitCast(@as(i32, b))) > @as(u32, 255)) {
-                if (b < @as(i32, 0)) {
-                    b = 0;
-                } else {
-                    b = 255;
-                }
-            }
-            out[@as(i32, 0)] = @bitCast(@as(i8, @truncate(r)));
-            out[@as(i32, 1)] = @bitCast(@as(i8, @truncate(g)));
-            out[@as(i32, 2)] = @bitCast(@as(i8, @truncate(b)));
-            out[@as(i32, 3)] = 255;
-            out += @as(usize, @bitCast(@as(isize, @intCast(step))));
         }
+    }
+    while (i < n) : (i += 1) {
+        const y_fixed: i32 = (@as(i32, yp[i]) << 20) +% (@as(i32, 1) << 19);
+        const cr: i32 = @as(i32, crp[i]) - 128;
+        const cb: i32 = @as(i32, cbp[i]) - 128;
+        const r = std.math.clamp((y_fixed +% cr *% k_r_s) >> 20, 0, 255);
+        const cb_term: i32 = @bitCast(@as(u32, @bitCast(cb *% k_g_cb_s)) & 0xffff0000);
+        const g = std.math.clamp((y_fixed +% cr *% k_g_cr_s +% cb_term) >> 20, 0, 255);
+        const b = std.math.clamp((y_fixed +% cb *% k_b_s) >> 20, 0, 255);
+        out[0] = @intCast(r);
+        out[1] = @intCast(g);
+        out[2] = @intCast(b);
+        if (st >= 4) out[3] = 255;
+        out += st;
     }
 }
 fn stbi__setup_jpeg(j: [*c]stbi__jpeg) callconv(.c) void {
@@ -3091,7 +3088,7 @@ var first_row_filter: [5]u8 = [5]u8{
     STBI__F_avg_first,
     STBI__F_sub,
 };
-fn stbi__paeth(a: i32, b: i32, c: i32) callconv(.c) i32 {
+inline fn stbi__paeth(a: i32, b: i32, c: i32) i32 {
     const thresh: i32 = (c * @as(i32, 3)) - (a + b);
     const lo: i32 = if (a < b) a else b;
     const hi: i32 = if (a < b) b else a;
@@ -3200,9 +3197,18 @@ fn stbi__create_png_image_raw(a: [*c]stbi__png, arg_raw: [*c]u8, raw_len: u32, o
                     },
                     STBI__F_up => {
                         {
-                            k = 0;
-                            while (k < nk) : (k += 1) {
-                                cur[@bitCast(@as(isize, @intCast(k)))] = @as(u8, @bitCast(@as(i8, @truncate((@as(i32, raw[@bitCast(@as(isize, @intCast(k)))]) + @as(i32, prior[@bitCast(@as(isize, @intCast(k)))])) & @as(i32, 255)))));
+                            const cur_p: [*]u8 = @ptrCast(cur);
+                            const raw_p: [*]const u8 = @ptrCast(raw);
+                            const pri_p: [*]const u8 = @ptrCast(prior);
+                            const nk_u: usize = @intCast(nk);
+                            var u: usize = 0;
+                            while (u + 16 <= nk_u) : (u += 16) {
+                                const rv: @Vector(16, u8) = raw_p[u..][0..16].*;
+                                const pv: @Vector(16, u8) = pri_p[u..][0..16].*;
+                                cur_p[u..][0..16].* = rv +% pv;
+                            }
+                            while (u < nk_u) : (u += 1) {
+                                cur_p[u] = raw_p[u] +% pri_p[u];
                             }
                         }
                         break :blk;

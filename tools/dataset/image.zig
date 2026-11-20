@@ -608,6 +608,26 @@ test "PNG round-trips exactly and JPEG closely through stb" {
     try std.testing.expectEqual(@as(usize, 16), lossy.width);
     for (src.pixels, lossy.pixels) |a, b| try std.testing.expect(@abs(@as(i32, a) - b) <= 12);
     try std.testing.expectError(error.UndecodableImage, decode(gpa, "not an image", .apply_exif));
+
+    // Larger smooth image to exercise 16-wide SIMD chroma upsampling, YCbCr, IDCT, and PNG unfiltering.
+    const big = try Image.init(gpa, 67, 51);
+    defer big.deinit(gpa);
+    for (0..51) |y| for (0..67) |x| {
+        big.at(x, y).* = .{ @intCast(x * 3), @intCast(y * 4), @intCast((x + y) * 2) };
+    };
+    const big_png = try encodePng(gpa, big);
+    defer gpa.free(big_png);
+    const big_png_back = try decode(gpa, big_png, .as_stored);
+    defer big_png_back.deinit(gpa);
+    try std.testing.expectEqualSlices(u8, big.pixels, big_png_back.pixels);
+    // stb's writer subsamples chroma 2x2 only at quality <= 90; above that the upsamplers never run.
+    const big_jpg = try encodeJpeg(gpa, big, 90);
+    defer gpa.free(big_jpg);
+    const big_jpg_back = try decode(gpa, big_jpg, .as_stored);
+    defer big_jpg_back.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 67), big_jpg_back.width);
+    try std.testing.expectEqual(@as(usize, 51), big_jpg_back.height);
+    for (big.pixels, big_jpg_back.pixels) |a, b| try std.testing.expect(@abs(@as(i32, a) - b) <= 16);
 }
 
 test "cvRound ties to even" {
