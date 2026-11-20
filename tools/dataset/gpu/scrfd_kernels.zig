@@ -3,13 +3,14 @@
 //!   zig build-obj -target nvptx64-cuda -mcpu=sm_80 -O ReleaseFast tools/dataset/gpu/scrfd_kernels.zig \
 //!       -fno-emit-bin -femit-asm=tools/dataset/gpu/scrfd_kernels.ptx
 //!
-//! Float32 NCHW. Convolutions are general: any odd kernel, stride, padding and group count, with
-//! an optional bias -- SCRFD has full, depthwise and pointwise convolutions, some with bias.
+//! Float32 NCHW. Convolutions have specialized paths for 1x1 pointwise (16x16 shared-memory
+//! tiled GEMM) and 3x3 depthwise, plus a general fallback for odd kernels/strides/groups.
 //! Backward kernels *accumulate* into their input gradients (a feature can feed several layers);
-//! the trainer zeroes gradients each step. Reductions use `lanes` partial sums per channel and
-//! one atomic add each. No libdevice: exp goes through PTX's ex2.approx.
+//! the trainer zeroes gradients each step. Reductions use one 256-thread block per channel/weight
+//! with shared-memory tree reduction. No libdevice: exp goes through PTX's ex2.approx.
 
-const lanes = 256;
+const block_size = 256;
+const tile_dim = 16;
 const eps: f32 = 1e-5; // nn.BatchNorm2d's default
 
 inline fn index() u32 {
@@ -18,6 +19,33 @@ inline fn index() u32 {
 
 inline fn add(p: *f32, v: f32) void {
     _ = @atomicRmw(f32, p, .Add, v, .monotonic);
+}
+
+inline fn barrier() void {
+    asm volatile ("bar.sync 0;" ::: .{ .memory = true });
+}
+
+inline fn warpReduce(val: f32) f32 {
+    var v = val;
+    inline for (.{ 16, 8, 4, 2, 1 }) |offset| {
+        v += asm ("shfl.sync.bfly.b32 %[r], %[x], %[o], 31, 0xffffffff;"
+            : [r] "=f" (-> f32),
+            : [x] "f" (v),
+              [o] "n" (offset),
+        );
+    }
+    return v;
+}
+
+/// Reduce `val` across a 256-thread block and return the sum uniformly to all threads.
+inline fn blockReduce(smem: *addrspace(.shared) [block_size / 32]f32, tid: u32, val: f32) f32 {
+    const wsum = warpReduce(val);
+    if ((tid & 31) == 0) smem[tid >> 5] = wsum;
+    barrier();
+    var total: f32 = 0;
+    inline for (0..block_size / 32) |w| total += smem[w];
+    barrier();
+    return total;
 }
 
 fn exp(v: f32) f32 {
@@ -36,6 +64,144 @@ fn log(v: f32) f32 {
 
 const Conv = extern struct { n: u32, cin: u32, h: u32, w: u32, cout: u32, oh: u32, ow: u32, k: u32, stride: u32, pad: u32, groups: u32 };
 
+/// 1x1 stride-1 pad-0 groups-1 pointwise convolution as a 16x16 shared-memory tiled GEMM.
+/// Launch with grid (ceil(hw/16), ceil(cout/16), n), block (16, 16, 1).
+export fn conv1x1_fwd(n: u32, cin: u32, cout: u32, hw: u32, x: [*]const f32, wt: [*]const f32, bias: ?[*]const f32, y: [*]f32) callconv(.kernel) void {
+    const S = struct {
+        var sw: [tile_dim][tile_dim]f32 addrspace(.shared) = undefined;
+        var sx: [tile_dim][tile_dim]f32 addrspace(.shared) = undefined;
+    };
+    const tx = @workItemId(0);
+    const ty = @workItemId(1);
+    const p = @workGroupId(0) * tile_dim + tx;
+    const co = @workGroupId(1) * tile_dim + ty;
+    const b = @workGroupId(2);
+    if (b >= n) return;
+    var sum: f32 = 0;
+    var t: u32 = 0;
+    while (t < cin) : (t += tile_dim) {
+        S.sw[ty][tx] = if (co < cout and t + tx < cin) wt[co * cin + t + tx] else 0;
+        S.sx[ty][tx] = if (t + ty < cin and p < hw) x[(b * cin + t + ty) * hw + p] else 0;
+        barrier();
+        inline for (0..tile_dim) |k| {
+            sum += S.sw[ty][k] * S.sx[k][tx];
+        }
+        barrier();
+    }
+    if (co < cout and p < hw) {
+        y[(b * cout + co) * hw + p] = sum + (if (bias) |bs| bs[co] else 0);
+    }
+}
+
+/// 1x1 stride-1 pad-0 groups-1 backward data: dx += W^T * dy, 16x16 shared-memory tiled GEMM.
+/// Launch with grid (ceil(hw/16), ceil(cin/16), n), block (16, 16, 1).
+export fn conv1x1_bwd_data(n: u32, cin: u32, cout: u32, hw: u32, dy: [*]const f32, wt: [*]const f32, dx: [*]f32) callconv(.kernel) void {
+    const S = struct {
+        var sw: [tile_dim][tile_dim]f32 addrspace(.shared) = undefined;
+        var sy: [tile_dim][tile_dim]f32 addrspace(.shared) = undefined;
+    };
+    const tx = @workItemId(0);
+    const ty = @workItemId(1);
+    const p = @workGroupId(0) * tile_dim + tx;
+    const ci_base = @workGroupId(1) * tile_dim;
+    const ci = ci_base + ty;
+    const b = @workGroupId(2);
+    if (b >= n) return;
+    var sum: f32 = 0;
+    var t: u32 = 0;
+    while (t < cout) : (t += tile_dim) {
+        const w_co = t + ty;
+        const w_ci = ci_base + tx;
+        S.sw[ty][tx] = if (w_co < cout and w_ci < cin) wt[w_co * cin + w_ci] else 0;
+        S.sy[ty][tx] = if (w_co < cout and p < hw) dy[(b * cout + w_co) * hw + p] else 0;
+        barrier();
+        inline for (0..tile_dim) |k| {
+            sum += S.sw[k][ty] * S.sy[k][tx];
+        }
+        barrier();
+    }
+    if (ci < cin and p < hw) {
+        dx[(b * cin + ci) * hw + p] += sum;
+    }
+}
+
+/// 3x3 pad-1 depthwise convolution (groups == cin == cout), unrolled 3x3 inner loop.
+export fn conv3x3_dw_fwd(n: u32, c: u32, h: u32, w: u32, oh: u32, ow: u32, stride: u32, x: [*]const f32, wt: [*]const f32, bias: ?[*]const f32, y: [*]f32) callconv(.kernel) void {
+    const i = index();
+    if (i >= n * c * oh * ow) return;
+    const ox = i % ow;
+    const oy = (i / ow) % oh;
+    const ch = (i / (ow * oh)) % c;
+    const b = i / (ow * oh * c);
+    const plane = x + (b * c + ch) * h * w;
+    const kern = wt + ch * 9;
+    const ih: i32 = @intCast(h);
+    const iw: i32 = @intCast(w);
+    const base_y: i32 = @as(i32, @intCast(oy * stride)) - 1;
+    const base_x: i32 = @as(i32, @intCast(ox * stride)) - 1;
+    var sum: f32 = if (bias) |bs| bs[ch] else 0;
+    inline for (0..3) |ky| {
+        const iy = base_y + @as(i32, ky);
+        if (iy >= 0 and iy < ih) {
+            const row = plane + @as(u32, @intCast(iy)) * w;
+            inline for (0..3) |kx| {
+                const ix = base_x + @as(i32, kx);
+                if (ix >= 0 and ix < iw) {
+                    sum += row[@as(u32, @intCast(ix))] * kern[ky * 3 + kx];
+                }
+            }
+        }
+    }
+    y[i] = sum;
+}
+
+/// 3x3 pad-1 depthwise backward data, unrolled 3x3 inner loop.
+export fn conv3x3_dw_bwd_data(n: u32, c: u32, h: u32, w: u32, oh: u32, ow: u32, stride: u32, dy: [*]const f32, wt: [*]const f32, dx: [*]f32) callconv(.kernel) void {
+    const i = index();
+    if (i >= n * c * h * w) return;
+    const ix = i % w;
+    const iy = (i / w) % h;
+    const ch = (i / (w * h)) % c;
+    const b = i / (w * h * c);
+    const plane = dy + (b * c + ch) * oh * ow;
+    const kern = wt + ch * 9;
+    const ty = iy + 1;
+    const tx = ix + 1;
+    var sum: f32 = 0;
+    if (stride == 1) {
+        inline for (0..3) |ky| {
+            if (ty >= ky) {
+                const oy = ty - ky;
+                if (oy < oh) {
+                    const row = plane + oy * ow;
+                    inline for (0..3) |kx| {
+                        if (tx >= kx) {
+                            const ox = tx - kx;
+                            if (ox < ow) sum += row[ox] * kern[ky * 3 + kx];
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        inline for (0..3) |ky| {
+            if (ty >= ky and (ty - ky) % stride == 0) {
+                const oy = (ty - ky) / stride;
+                if (oy < oh) {
+                    const row = plane + oy * ow;
+                    inline for (0..3) |kx| {
+                        if (tx >= kx and (tx - kx) % stride == 0) {
+                            const ox = (tx - kx) / stride;
+                            if (ox < ow) sum += row[ox] * kern[ky * 3 + kx];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    dx[i] += sum;
+}
+
 export fn conv_fwd(c: Conv, x: [*]const f32, wt: [*]const f32, bias: ?[*]const f32, y: [*]f32) callconv(.kernel) void {
     const i = index();
     if (i >= c.n * c.cout * c.oh * c.ow) return;
@@ -52,10 +218,11 @@ export fn conv_fwd(c: Conv, x: [*]const f32, wt: [*]const f32, bias: ?[*]const f
         for (0..c.k) |ky| {
             const iy = @as(i32, @intCast(oy * c.stride + ky)) - @as(i32, @intCast(c.pad));
             if (iy < 0 or iy >= c.h) continue;
+            const row = plane + @as(u32, @intCast(iy)) * c.w;
             for (0..c.k) |kx| {
                 const ix = @as(i32, @intCast(ox * c.stride + kx)) - @as(i32, @intCast(c.pad));
                 if (ix < 0 or ix >= c.w) continue;
-                sum += plane[@as(u32, @intCast(iy)) * c.w + @as(u32, @intCast(ix))] * kern[ky * c.k + kx];
+                sum += row[@as(u32, @intCast(ix))] * kern[ky * c.k + kx];
             }
         }
     }
@@ -84,114 +251,183 @@ export fn conv_bwd_data(c: Conv, dy: [*]const f32, wt: [*]const f32, dx: [*]f32)
             if (ty < ky or (ty - ky) % c.stride != 0) continue;
             const oy = (ty - ky) / c.stride;
             if (oy >= c.oh) continue;
+            const row = plane + oy * c.ow;
             for (0..c.k) |kx| {
                 const tx = ix + c.pad;
                 if (tx < kx or (tx - kx) % c.stride != 0) continue;
                 const ox = (tx - kx) / c.stride;
                 if (ox >= c.ow) continue;
-                sum += plane[oy * c.ow + ox] * kern[ky * c.k + kx];
+                sum += row[ox] * kern[ky * c.k + kx];
             }
         }
     }
     dx[i] += sum;
 }
 
-/// One thread per (weight, sample, band of `rows` output rows), added atomically into `dw`.
+/// One 256-thread block per (weight, band): coalesced reads over (b, oy, ox), shared-memory
+/// reduction, and a single atomic add (or plain add when bands == 1) per block.
+/// Launch with grid (weights, bands, 1), block (256, 1, 1).
 export fn conv_bwd_weight(c: Conv, rows: u32, bands: u32, x: [*]const f32, dy: [*]const f32, dw: [*]f32) callconv(.kernel) void {
-    const i = index();
+    const S = struct {
+        var smem: [block_size / 32]f32 addrspace(.shared) = undefined;
+    };
     const in_g = c.cin / c.groups;
     const weights = c.cout * in_g * c.k * c.k;
-    if (i >= weights * c.n * bands) return;
-    const wi = i % weights;
-    const b = (i / weights) % c.n;
-    const band = i / (weights * c.n);
+    const wi = @workGroupId(0);
+    const band = @workGroupId(1);
+    if (wi >= weights or band >= bands) return;
+    const tid = @workItemId(0);
     const kx = wi % c.k;
     const ky = (wi / c.k) % c.k;
     const cl = (wi / (c.k * c.k)) % in_g;
     const co = wi / (c.k * c.k * in_g);
     const ci = (co / (c.cout / c.groups)) * in_g + cl;
-    const plane = x + (b * c.cin + ci) * c.h * c.w;
-    const grad = dy + (b * c.cout + co) * c.oh * c.ow;
-    var sum: f32 = 0;
     const first = band * rows;
     const last = @min(c.oh, first + rows);
-    var oy = first;
-    while (oy < last) : (oy += 1) {
-        const iy = @as(i32, @intCast(oy * c.stride + ky)) - @as(i32, @intCast(c.pad));
-        if (iy < 0 or iy >= c.h) continue;
-        for (0..c.ow) |ox| {
-            const ix = @as(i32, @intCast(ox * c.stride + kx)) - @as(i32, @intCast(c.pad));
-            if (ix < 0 or ix >= c.w) continue;
-            sum += plane[@as(u32, @intCast(iy)) * c.w + @as(u32, @intCast(ix))] * grad[oy * c.ow + ox];
+    const band_rows = last - first;
+    const band_hw = band_rows * c.ow;
+    const total = c.n * band_hw;
+    const hw_in = c.h * c.w;
+    const hw_out = c.oh * c.ow;
+    const ih: i32 = @intCast(c.h);
+    const iw: i32 = @intCast(c.w);
+    const pad: i32 = @intCast(c.pad);
+    var sum: f32 = 0;
+    var e = tid;
+    while (e < total) : (e += block_size) {
+        const b = e / band_hw;
+        const rem = e % band_hw;
+        const oy = first + rem / c.ow;
+        const ox = rem % c.ow;
+        const iy = @as(i32, @intCast(oy * c.stride + ky)) - pad;
+        const ix = @as(i32, @intCast(ox * c.stride + kx)) - pad;
+        if (iy >= 0 and iy < ih and ix >= 0 and ix < iw) {
+            const x_idx = (b * c.cin + ci) * hw_in + @as(u32, @intCast(iy)) * c.w + @as(u32, @intCast(ix));
+            const dy_idx = (b * c.cout + co) * hw_out + oy * c.ow + ox;
+            sum += x[x_idx] * dy[dy_idx];
         }
     }
-    add(&dw[wi], sum);
-}
-
-/// `out[c] += sum of x` over batch and space (also a bias gradient), or of (x - mean[c])^2.
-export fn channel_sum(n: u32, c: u32, hw: u32, x: [*]const f32, mean: ?[*]const f32, out: [*]f32) callconv(.kernel) void {
-    const i = index();
-    if (i >= c * lanes) return;
-    const ch = i / lanes;
-    var e = i % lanes;
-    var sum: f32 = 0;
-    const centre = if (mean) |m| m[ch] else 0;
-    while (e < n * hw) : (e += lanes) {
-        const v = x[((e / hw) * c + ch) * hw + e % hw];
-        sum += if (mean != null) (v - centre) * (v - centre) else v;
+    const reduced = blockReduce(&S.smem, tid, sum);
+    if (tid == 0) {
+        if (bands == 1) {
+            dw[wi] += reduced;
+        } else {
+            add(&dw[wi], reduced);
+        }
     }
-    add(&out[ch], sum);
 }
 
-export fn scale(count: u32, factor: f32, x: [*]f32) callconv(.kernel) void {
-    const i = index();
-    if (i < count) x[i] *= factor;
-}
-
-/// Batch variance from the squared deviations, and the running averages (momentum 0.1,
-/// unbiased running variance).
-export fn bn_stats(c: u32, m: f32, sqdev: [*]const f32, mean: [*]const f32, variance: [*]f32, running_mean: [*]f32, running_var: [*]f32) callconv(.kernel) void {
-    const ch = index();
+/// One 256-thread block per channel: reduces bias gradient without global atomics.
+/// Launch with grid (c, 1, 1), block (256, 1, 1).
+export fn bias_bwd(n: u32, c: u32, hw: u32, g: [*]const f32, out: [*]f32) callconv(.kernel) void {
+    const S = struct {
+        var smem: [block_size / 32]f32 addrspace(.shared) = undefined;
+    };
+    const ch = @workGroupId(0);
     if (ch >= c) return;
-    const v = sqdev[ch] / m;
-    variance[ch] = v;
-    running_mean[ch] = 0.9 * running_mean[ch] + 0.1 * mean[ch];
-    running_var[ch] = 0.9 * running_var[ch] + 0.1 * v * m / (m - 1);
+    const tid = @workItemId(0);
+    const total = n * hw;
+    var sum: f32 = 0;
+    var e = tid;
+    while (e < total) : (e += block_size) {
+        sum += g[((e / hw) * c + ch) * hw + e % hw];
+    }
+    const reduced = blockReduce(&S.smem, tid, sum);
+    if (tid == 0) out[ch] += reduced;
 }
 
-export fn bn_relu(total: u32, c: u32, hw: u32, x: [*]const f32, mean: [*]const f32, variance: [*]const f32, gamma: [*]const f32, beta: [*]const f32, y: [*]f32) callconv(.kernel) void {
+/// Single-kernel BatchNorm training statistics: one 256-thread block per channel computes mean,
+/// variance, running averages (momentum 0.1, unbiased running variance), and `bn_scale = gamma/std`.
+/// Launch with grid (c, 1, 1), block (256, 1, 1).
+export fn bn_fwd_stats(n: u32, c: u32, hw: u32, x: [*]const f32, gamma: [*]const f32, mean: [*]f32, variance: [*]f32, running_mean: [*]f32, running_var: [*]f32, bn_scale: [*]f32) callconv(.kernel) void {
+    const S = struct {
+        var smem: [block_size / 32]f32 addrspace(.shared) = undefined;
+    };
+    const ch = @workGroupId(0);
+    if (ch >= c) return;
+    const tid = @workItemId(0);
+    const total = n * hw;
+    const m: f32 = @floatFromInt(total);
+
+    var sum: f32 = 0;
+    var e = tid;
+    while (e < total) : (e += block_size) {
+        sum += x[((e / hw) * c + ch) * hw + e % hw];
+    }
+    const total_sum = blockReduce(&S.smem, tid, sum);
+    const mu = total_sum / m;
+    if (tid == 0) mean[ch] = mu;
+
+    var sq: f32 = 0;
+    e = tid;
+    while (e < total) : (e += block_size) {
+        const d = x[((e / hw) * c + ch) * hw + e % hw] - mu;
+        sq += d * d;
+    }
+    const total_sq = blockReduce(&S.smem, tid, sq);
+    if (tid == 0) {
+        const v = total_sq / m;
+        variance[ch] = v;
+        running_mean[ch] = 0.9 * running_mean[ch] + 0.1 * mu;
+        running_var[ch] = 0.9 * running_var[ch] + 0.1 * v * m / (m - 1);
+        bn_scale[ch] = gamma[ch] / @sqrt(v + eps);
+    }
+}
+
+/// Precompute `gamma / sqrt(running_var + eps)` per channel for eval-mode BatchNorm.
+export fn bn_eval_params(c: u32, running_var: [*]const f32, gamma: [*]const f32, bn_scale: [*]f32) callconv(.kernel) void {
+    const ch = index();
+    if (ch < c) bn_scale[ch] = gamma[ch] / @sqrt(running_var[ch] + eps);
+}
+
+/// BatchNorm with precomputed `bn_scale = gamma / sqrt(var + eps)`, then ReLU.
+export fn bn_relu(total: u32, c: u32, hw: u32, x: [*]const f32, mean: [*]const f32, bn_scale: [*]const f32, beta: [*]const f32, y: [*]f32) callconv(.kernel) void {
     const i = index();
     if (i >= total) return;
     const ch = (i / hw) % c;
-    y[i] = @max(0, (x[i] - mean[ch]) / @sqrt(variance[ch] + eps) * gamma[ch] + beta[ch]);
+    y[i] = @max(0, (x[i] - mean[ch]) * bn_scale[ch] + beta[ch]);
 }
 
-export fn bn_bwd_reduce(n: u32, c: u32, hw: u32, x: [*]const f32, y: [*]const f32, dy: [*]const f32, mean: [*]const f32, variance: [*]const f32, dgamma: [*]f32, dbeta: [*]f32) callconv(.kernel) void {
-    const i = index();
-    if (i >= c * lanes) return;
-    const ch = i / lanes;
+/// One 256-thread block per channel: reduces dbeta and dgamma without global atomics,
+/// and caches `invstd = 1 / sqrt(var + eps)` for `bn_bwd_dx`.
+/// Launch with grid (c, 1, 1), block (256, 1, 1).
+export fn bn_bwd_reduce(n: u32, c: u32, hw: u32, x: [*]const f32, y: [*]const f32, dy: [*]const f32, mean: [*]const f32, variance: [*]const f32, dgamma: [*]f32, dbeta: [*]f32, invstd_out: [*]f32) callconv(.kernel) void {
+    const S = struct {
+        var smem_b: [block_size / 32]f32 addrspace(.shared) = undefined;
+        var smem_g: [block_size / 32]f32 addrspace(.shared) = undefined;
+    };
+    const ch = @workGroupId(0);
+    if (ch >= c) return;
+    const tid = @workItemId(0);
     const invstd = 1 / @sqrt(variance[ch] + eps);
-    var e = i % lanes;
+    const mu = mean[ch];
+    const total = n * hw;
     var sb: f32 = 0;
     var sg: f32 = 0;
-    while (e < n * hw) : (e += lanes) {
+    var e = tid;
+    while (e < total) : (e += block_size) {
         const at = ((e / hw) * c + ch) * hw + e % hw;
         const dz = if (y[at] > 0) dy[at] else 0;
         sb += dz;
-        sg += dz * (x[at] - mean[ch]) * invstd;
+        sg += dz * (x[at] - mu) * invstd;
     }
-    add(&dbeta[ch], sb);
-    add(&dgamma[ch], sg);
+    const rb = blockReduce(&S.smem_b, tid, sb);
+    const rg = blockReduce(&S.smem_g, tid, sg);
+    if (tid == 0) {
+        dbeta[ch] += rb;
+        dgamma[ch] += rg;
+        invstd_out[ch] = invstd;
+    }
 }
 
-export fn bn_bwd_dx(total: u32, c: u32, hw: u32, m: f32, x: [*]const f32, y: [*]const f32, dy: [*]const f32, mean: [*]const f32, variance: [*]const f32, gamma: [*]const f32, dgamma: [*]const f32, dbeta: [*]const f32, dx: [*]f32) callconv(.kernel) void {
+export fn bn_bwd_dx(total: u32, c: u32, hw: u32, m: f32, x: [*]const f32, y: [*]const f32, dy: [*]const f32, mean: [*]const f32, invstd: [*]const f32, gamma: [*]const f32, dgamma: [*]const f32, dbeta: [*]const f32, dx: [*]f32) callconv(.kernel) void {
     const i = index();
     if (i >= total) return;
     const ch = (i / hw) % c;
-    const invstd = 1 / @sqrt(variance[ch] + eps);
+    const istd = invstd[ch];
     const dz = if (y[i] > 0) dy[i] else 0;
-    const xhat = (x[i] - mean[ch]) * invstd;
-    dx[i] = gamma[ch] * invstd / m * (m * dz - dbeta[ch] - xhat * dgamma[ch]);
+    const xhat = (x[i] - mean[ch]) * istd;
+    dx[i] = gamma[ch] * istd / m * (m * dz - dbeta[ch] - xhat * dgamma[ch]);
 }
 
 /// Nearest-neighbour 2x: (oh, ow) is the output size.
@@ -269,20 +505,28 @@ fn bce(x: f32, t: f32) f32 {
 
 /// Quality Focal Loss for every anchor of one level as a negative (target score 0), weighted
 /// by its label weight (0 for ignored anchors) over `samples`; overwrites the class gradient.
-/// `cls` is the level's (n, 2, H, W) logit map; `label_weight` is per image and global anchor.
+/// Uses shared-memory block reduction so each 256-thread block issues only 1 global atomicAdd.
 export fn qfl_negative(n: u32, h: u32, w: u32, level_offset: u32, anchors: u32, cls: [*]const f32, grad: [*]f32, label_weight: [*]const u8, inv_samples: f32, stats: [*]f32) callconv(.kernel) void {
+    const S = struct {
+        var smem: [block_size / 32]f32 addrspace(.shared) = undefined;
+    };
     const i = index();
-    if (i >= n * 2 * h * w) return;
-    const x = i % w;
-    const y = (i / w) % h;
-    const a = (i / (w * h)) % 2;
-    const b = i / (w * h * 2);
-    const lw: f32 = @floatFromInt(label_weight[b * anchors + level_offset + (y * w + x) * 2 + a]);
-    const logit = cls[i];
-    const s = sigmoid(logit);
-    const sp = log(1 + exp(-@abs(logit))) + @max(logit, 0); // softplus = BCE(x, 0)
-    grad[i] = lw * inv_samples * (s * s * s + 2 * s * s * (1 - s) * sp);
-    add(&stats[i % slots], lw * inv_samples * sp * s * s);
+    const tid = @workItemId(0);
+    var term: f32 = 0;
+    if (i < n * 2 * h * w) {
+        const x = i % w;
+        const y = (i / w) % h;
+        const a = (i / (w * h)) % 2;
+        const b = i / (w * h * 2);
+        const lw: f32 = @floatFromInt(label_weight[b * anchors + level_offset + (y * w + x) * 2 + a]);
+        const logit = cls[i];
+        const s = sigmoid(logit);
+        const sp = log(1 + exp(-@abs(logit))) + @max(logit, 0); // softplus = BCE(x, 0)
+        grad[i] = lw * inv_samples * (s * s * s + 2 * s * s * (1 - s) * sp);
+        term = lw * inv_samples * sp * s * s;
+    }
+    const reduced = blockReduce(&S.smem, tid, term);
+    if (tid == 0) add(&stats[@workGroupId(0) % slots], reduced);
 }
 
 const Decoded = struct { cls_at: u32, map: u32, centre: [2]f32, pred: [4]f32, target: [4]f32 };

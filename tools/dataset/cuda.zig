@@ -21,6 +21,8 @@ const Api = struct {
     get_function: *const fn (*?Function, Module, [*:0]const u8) callconv(.c) Result,
     alloc: *const fn (*Ptr, usize) callconv(.c) Result,
     free: *const fn (Ptr) callconv(.c) Result,
+    alloc_host: *const fn (*?*anyopaque, usize) callconv(.c) Result,
+    free_host: *const fn (?*anyopaque) callconv(.c) Result,
     upload: *const fn (Ptr, *const anyopaque, usize) callconv(.c) Result,
     download: *const fn (*anyopaque, Ptr, usize) callconv(.c) Result,
     copy: *const fn (Ptr, Ptr, usize) callconv(.c) Result,
@@ -35,7 +37,8 @@ const symbols = .{
     .{ "device_name", "cuDeviceGetName" },      .{ "retain_primary", "cuDevicePrimaryCtxRetain" },
     .{ "set_current", "cuCtxSetCurrent" },      .{ "load_module", "cuModuleLoadDataEx" },
     .{ "get_function", "cuModuleGetFunction" }, .{ "alloc", "cuMemAlloc_v2" },
-    .{ "free", "cuMemFree_v2" },                .{ "upload", "cuMemcpyHtoD_v2" },
+    .{ "free", "cuMemFree_v2" },                .{ "alloc_host", "cuMemAllocHost_v2" },
+    .{ "free_host", "cuMemFreeHost" },          .{ "upload", "cuMemcpyHtoD_v2" },
     .{ "download", "cuMemcpyDtoH_v2" },         .{ "copy", "cuMemcpyDtoD_v2" },
     .{ "memset32", "cuMemsetD32_v2" },          .{ "launch", "cuLaunchKernel" },
     .{ "synchronize", "cuCtxSynchronize" },     .{ "error_name", "cuGetErrorName" },
@@ -104,6 +107,18 @@ pub const Device = struct {
         _ = self.api.free(buffer.ptr);
     }
 
+    /// Page-locked host buffer for faster DMA transfers via `upload` / `download`.
+    pub fn allocHost(self: *const Device, comptime T: type, count: usize) ![]T {
+        var ptr: ?*anyopaque = null;
+        try self.check(self.api.alloc_host(&ptr, @max(1, count) * @sizeOf(T)));
+        const typed: [*]T = @ptrCast(@alignCast(ptr orelse return error.CudaFailed));
+        return typed[0..count];
+    }
+
+    pub fn freeHost(self: *const Device, slice: anytype) void {
+        _ = self.api.free_host(@ptrCast(slice.ptr));
+    }
+
     pub fn upload(self: *const Device, comptime T: type, dst: Buffer(T), src: []const T) !void {
         if (src.len > dst.len) return error.BufferTooSmall;
         if (src.len > 0) try self.check(self.api.upload(dst.ptr, src.ptr, src.len * @sizeOf(T)));
@@ -128,6 +143,14 @@ pub const Device = struct {
     /// parameters: u32/i32/f32 scalars and `Buffer`s, which pass as device pointers.
     pub fn launch(self: *const Device, f: Function, threads: usize, args: anytype) !void {
         if (threads == 0) return;
+        const block = 256;
+        const grid = std.math.cast(c_uint, (threads + block - 1) / block) orelse return error.LaunchTooLarge;
+        return self.launchGrid(f, .{ grid, 1, 1 }, .{ block, 1, 1 }, args);
+    }
+
+    /// Launch `f` with an explicit 3D grid and block shape.
+    pub fn launchGrid(self: *const Device, f: Function, grid: [3]c_uint, block: [3]c_uint, args: anytype) !void {
+        if (grid[0] == 0 or grid[1] == 0 or grid[2] == 0) return;
         const Args = @TypeOf(args);
         const info = @typeInfo(Args).@"struct";
         var values: Lowered(Args) = undefined;
@@ -137,9 +160,7 @@ pub const Device = struct {
             values[i] = if (comptime isBuffer(T)) v.ptr else v;
             pointers[i] = @ptrCast(&values[i]);
         }
-        const block = 256;
-        const grid = std.math.cast(c_uint, (threads + block - 1) / block) orelse return error.LaunchTooLarge;
-        try self.check(self.api.launch(f, grid, 1, 1, block, 1, 1, 0, null, &pointers, null));
+        try self.check(self.api.launch(f, grid[0], grid[1], grid[2], block[0], block[1], block[2], 0, null, &pointers, null));
     }
 
     pub fn synchronize(self: *const Device) !void {

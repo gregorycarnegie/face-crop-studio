@@ -27,31 +27,40 @@ pub const Row = [15]f32;
 /// The SCRFD wrapper's own NMS, kept identical so scores are comparable with upstream. Returns
 /// the kept rows' indices, best score first.
 pub fn nms(gpa: std.mem.Allocator, rows: []const Row) ![]usize {
-    var order: std.ArrayList(usize) = .empty;
-    defer order.deinit(gpa);
-    for (0..rows.len) |i| try order.append(gpa, rows.len - 1 - i);
-    std.sort.block(usize, order.items, rows, struct {
+    const n = rows.len;
+    if (n == 0) return gpa.alloc(usize, 0);
+    const order = try gpa.alloc(usize, n);
+    defer gpa.free(order);
+    const areas = try gpa.alloc(f32, n);
+    defer gpa.free(areas);
+    const suppressed = try gpa.alloc(bool, n);
+    defer gpa.free(suppressed);
+    @memset(suppressed, false);
+    for (0..n) |i| {
+        order[i] = n - 1 - i;
+        const r = rows[i];
+        areas[i] = (r[2] - r[0] + 1) * (r[3] - r[1] + 1);
+    }
+    std.sort.block(usize, order, rows, struct {
         fn higher(r: []const Row, a: usize, b: usize) bool {
             return r[a][4] > r[b][4];
         }
     }.higher);
     var keep: std.ArrayList(usize) = .empty;
-    var next: std.ArrayList(usize) = .empty;
-    defer next.deinit(gpa);
-    while (order.items.len > 0) {
-        const i = order.items[0];
+    for (order, 0..) |i, oi| {
+        if (suppressed[oi]) continue;
         try keep.append(gpa, i);
         const a = rows[i];
-        const area_i = (a[2] - a[0] + 1) * (a[3] - a[1] + 1);
-        next.clearRetainingCapacity();
-        for (order.items[1..]) |j| {
+        const area_i = areas[i];
+        for (order[oi + 1 ..], oi + 1..) |j, oj| {
+            if (suppressed[oj]) continue;
             const b = rows[j];
             const w = @max(0, @min(a[2], b[2]) - @max(a[0], b[0]) + 1);
             const h = @max(0, @min(a[3], b[3]) - @max(a[1], b[1]) + 1);
-            const area_j = (b[2] - b[0] + 1) * (b[3] - b[1] + 1);
-            if ((w * h) / (area_i + area_j - w * h) <= @as(f32, 0.4)) try next.append(gpa, j);
+            const inter = w * h;
+            // Upstream keeps `ovr <= thresh`, so a NaN overlap (degenerate boxes) is dropped.
+            if (!(inter / (area_i + areas[j] - inter) <= @as(f32, 0.4))) suppressed[oj] = true;
         }
-        std.mem.swap(std.ArrayList(usize), &order, &next);
     }
     return keep.toOwnedSlice(gpa);
 }
@@ -84,9 +93,17 @@ pub const Detector = struct {
         const input = try gpa.alloc(f32, 3 * plane);
         defer gpa.free(input);
         @memset(input, (0 - 127.5) / 128.0);
-        for (0..new_h) |y| for (0..new_w) |x| for (0..3) |c| {
-            input[c * plane + y * size + x] = (@as(f32, @floatFromInt(resized.pixels[(y * new_w + x) * 3 + c])) - 127.5) / 128.0;
-        };
+        const inv: f32 = 1.0 / 128.0;
+        for (0..new_h) |y| {
+            const dst_row = y * size;
+            const src_row = resized.pixels[y * new_w * 3 ..][0 .. new_w * 3];
+            for (0..new_w) |x| {
+                const base = x * 3;
+                input[dst_row + x] = (@as(f32, @floatFromInt(src_row[base])) - 127.5) * inv;
+                input[plane + dst_row + x] = (@as(f32, @floatFromInt(src_row[base + 1])) - 127.5) * inv;
+                input[2 * plane + dst_row + x] = (@as(f32, @floatFromInt(src_row[base + 2])) - 127.5) * inv;
+            }
+        }
 
         var names: [9][:0]const u8 = undefined;
         for (&names, 0..) |*n, i| n.* = try std.fmt.allocPrintSentinel(gpa, "out_{d}", .{i}, 0);

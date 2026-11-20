@@ -44,7 +44,8 @@ const net = @import("refiner.zig");
 const size = net.size;
 const pixels = size * size * 3;
 const ptx = @embedFile("gpu/refiner_kernels.ptx");
-const lanes = 256; // gpu/refiner_kernels.zig
+const block_size = 256; // gpu/refiner_kernels.zig
+const tile_dim = 16; // gpu/refiner_kernels.zig
 const Buf = cuda.Buffer(f32);
 const trainer = "tools/dataset/train_eye_refiner.zig"; // recorded in the checkpoint as `trained_by`
 
@@ -134,9 +135,41 @@ fn cutCrop(gpa: std.mem.Allocator, frame: img.Image, face: Face, rng: ?std.Rando
     target.* = .{ @floatCast(points[0][0] / size), @floatCast(points[0][1] / size), @floatCast(points[1][0] / size), @floatCast(points[1][1] / size) };
 }
 
+/// Decoded image cache for training epochs: avoids re-reading and re-decoding the same JPEGs
+/// 300 times. Capped at 2 GiB of raw pixels; any image beyond the cap is loaded on demand.
+const FrameCache = struct {
+    map: std.StringHashMapUnmanaged(img.Image) = .empty,
+
+    fn preload(gpa: std.mem.Allocator, io: std.Io, images: []const u8, faces: []const Face) !FrameCache {
+        var self: FrameCache = .{};
+        var bytes: usize = 0;
+        const limit: usize = 2 * 1024 * 1024 * 1024;
+        for (faces) |face| {
+            if (self.map.contains(face.name)) continue;
+            const path = try std.fs.path.join(gpa, &.{ images, face.name });
+            defer gpa.free(path);
+            const frame = try img.load(gpa, io, path, .apply_exif);
+            if (bytes + frame.pixels.len > limit) {
+                frame.deinit(gpa);
+                break;
+            }
+            bytes += frame.pixels.len;
+            try self.map.put(gpa, face.name, frame);
+        }
+        return self;
+    }
+
+    fn deinit(self: *FrameCache, gpa: std.mem.Allocator) void {
+        var it = self.map.valueIterator();
+        while (it.next()) |frame| frame.deinit(gpa);
+        self.map.deinit(gpa);
+    }
+};
+
 const CropJob = struct {
     io: std.Io,
     images: []const u8,
+    cache: ?*const FrameCache,
     faces: []const Face,
     order: []const usize,
     seed: u64,
@@ -147,37 +180,93 @@ const CropJob = struct {
     failed: std.atomic.Value(bool) = .init(false),
 };
 
-fn cropWorker(job: *CropJob) void {
-    while (true) {
-        const slot = job.next.fetchAdd(1, .monotonic);
-        if (slot >= job.order.len) return;
+fn runCropSlot(arena: *std.heap.ArenaAllocator, job: *CropJob, slot: usize) bool {
+    _ = arena.reset(.retain_capacity);
+    const gpa = arena.allocator();
+    const face = job.faces[job.order[slot]];
+    const frame = if (job.cache) |c| c.map.get(face.name) else null;
+    const loaded = frame orelse blk: {
+        // A missing file must not silently become a black face.
+        const path = std.fs.path.join(gpa, &.{ job.images, face.name }) catch return false;
+        break :blk img.load(gpa, job.io, path, .apply_exif) catch |e| {
+            std.debug.print("cannot read {s}: {s}\n", .{ face.name, @errorName(e) });
+            return false;
+        };
+    };
+    var prng: std.Random.DefaultPrng = .init(job.seed ^ (@as(u64, slot) *% 0x9E3779B97F4A7C15));
+    cutCrop(gpa, loaded, face, if (job.augment) prng.random() else null, job.crops[slot * pixels ..][0..pixels], &job.targets[slot]) catch return false;
+    return true;
+}
+
+/// Persistent worker pool reusing OS threads and per-thread arenas across epochs. Idle threads
+/// sleep on futexes (`generation` for new work, `remaining` for the run finishing), not spin.
+const CropPool = struct {
+    io: std.Io,
+    threads: [64]std.Thread = undefined,
+    count: u32 = 0,
+    job: ?*CropJob = null,
+    generation: std.atomic.Value(u32) = .init(0),
+    remaining: std.atomic.Value(u32) = .init(0),
+    stop: std.atomic.Value(bool) = .init(false),
+
+    fn init(self: *CropPool) !void {
+        errdefer self.deinit();
+        for (self.threads[0..@min(self.threads.len, @max(1, std.Thread.getCpuCount() catch 4))]) |*t| {
+            t.* = try std.Thread.spawn(.{}, workerMain, .{self});
+            self.count += 1;
+        }
+    }
+
+    fn deinit(self: *CropPool) void {
+        self.stop.store(true, .release);
+        _ = self.generation.fetchAdd(1, .release);
+        self.io.futexWake(u32, &self.generation.raw, std.math.maxInt(u32));
+        for (self.threads[0..self.count]) |t| t.join();
+    }
+
+    fn workerMain(self: *CropPool) void {
         var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
         defer arena.deinit();
-        const gpa = arena.allocator();
-        const face = job.faces[job.order[slot]];
-        // A missing file must not silently become a black face.
-        const frame = img.load(gpa, job.io, std.fs.path.join(gpa, &.{ job.images, face.name }) catch return fail(job), .apply_exif) catch |e| {
-            std.debug.print("cannot read {s}: {s}\n", .{ face.name, @errorName(e) });
-            return fail(job);
-        };
-        var prng: std.Random.DefaultPrng = .init(job.seed ^ (@as(u64, slot) *% 0x9E3779B97F4A7C15));
-        cutCrop(gpa, frame, face, if (job.augment) prng.random() else null, job.crops[slot * pixels ..][0..pixels], &job.targets[slot]) catch return fail(job);
+        var seen: u32 = 0;
+        while (true) {
+            var gen = self.generation.load(.acquire);
+            while (gen == seen) {
+                self.io.futexWaitUncancelable(u32, &self.generation.raw, seen);
+                gen = self.generation.load(.acquire);
+            }
+            if (self.stop.load(.acquire)) return;
+            seen = gen;
+            const job = self.job.?;
+            while (true) {
+                const slot = job.next.fetchAdd(1, .monotonic);
+                if (slot >= job.order.len) break;
+                if (!runCropSlot(&arena, job, slot)) {
+                    fail(job);
+                    break;
+                }
+            }
+            if (self.remaining.fetchSub(1, .acq_rel) == 1) self.io.futexWake(u32, &self.remaining.raw, 1);
+        }
     }
-}
+
+    fn run(self: *CropPool, images: []const u8, cache: ?*const FrameCache, faces: []const Face, order: []const usize, seed: u64, augment: bool, crops: []u8, targets: [][4]f32) !void {
+        var job: CropJob = .{ .io = self.io, .images = images, .cache = cache, .faces = faces, .order = order, .seed = seed, .augment = augment, .crops = crops, .targets = targets };
+        self.job = &job;
+        self.remaining.store(self.count, .release);
+        _ = self.generation.fetchAdd(1, .release);
+        self.io.futexWake(u32, &self.generation.raw, std.math.maxInt(u32));
+        while (true) {
+            const left = self.remaining.load(.acquire);
+            if (left == 0) break;
+            self.io.futexWaitUncancelable(u32, &self.remaining.raw, left);
+        }
+        if (job.failed.load(.monotonic)) return error.CropFailed;
+    }
+};
 
 fn fail(job: *CropJob) void {
     job.failed.store(true, .monotonic);
     job.next.store(job.order.len, .monotonic);
-}
-
-/// Cut `order`'s faces in parallel, slot i holding face order[i].
-fn cutAll(io: std.Io, images: []const u8, faces: []const Face, order: []const usize, seed: u64, augment: bool, crops: []u8, targets: [][4]f32) !void {
-    var job: CropJob = .{ .io = io, .images = images, .faces = faces, .order = order, .seed = seed, .augment = augment, .crops = crops, .targets = targets };
-    var threads: [64]std.Thread = undefined;
-    const count = @min(threads.len, @max(1, std.Thread.getCpuCount() catch 4));
-    for (threads[0..count]) |*t| t.* = try std.Thread.spawn(.{}, cropWorker, .{&job});
-    for (threads[0..count]) |t| t.join();
-    if (job.failed.load(.monotonic)) return error.CropFailed;
 }
 
 // ── Network on the GPU ────────────────────────────────────────────────────────
@@ -188,14 +277,6 @@ const Param = struct {
     m: Buf,
     v: Buf,
     shape: []const usize,
-
-    fn init(dev: *const cuda.Device, gpa: std.mem.Allocator, shape: []const usize, host: []const f32) !Param {
-        const p: Param = .{ .value = try dev.alloc(f32, host.len), .grad = try dev.alloc(f32, host.len), .m = try dev.alloc(f32, host.len), .v = try dev.alloc(f32, host.len), .shape = try gpa.dupe(usize, shape) };
-        try dev.upload(f32, p.value, host);
-        try dev.zero(p.m);
-        try dev.zero(p.v);
-        return p;
-    }
 };
 
 const Layer = struct {
@@ -211,18 +292,19 @@ const Layer = struct {
     running_var: Buf,
     mean: Buf,
     variance: Buf,
-    sqdev: Buf,
+    bn_scale: Buf, // gamma / sqrt(var + eps) for forward, invstd for backward
     z: Buf, // convolution output
     y: Buf, // after BatchNorm and ReLU
 };
 
 const Kernels = struct {
-    conv_fwd: cuda.Function,
-    conv_bwd_data: cuda.Function,
+    conv_fwd_s1: cuda.Function,
+    conv_fwd_s2: cuda.Function,
+    conv_bwd_data_s1: cuda.Function,
+    conv_bwd_data_s2: cuda.Function,
     conv_bwd_weight: cuda.Function,
-    channel_sum: cuda.Function,
-    bn_stats: cuda.Function,
-    scale: cuda.Function,
+    bn_fwd_stats: cuda.Function,
+    bn_eval_params: cuda.Function,
     bn_relu: cuda.Function,
     bn_bwd_reduce: cuda.Function,
     bn_bwd_dx: cuda.Function,
@@ -261,6 +343,11 @@ const Net = struct {
     fc1_b: Param,
     fc2_w: Param,
     fc2_b: Param,
+    /// Contiguous backing storage for all 34 parameters: enables a single `adamw` launch per step.
+    all_value: Buf,
+    all_grad: Buf,
+    all_m: Buf,
+    all_v: Buf,
     crops: cuda.Buffer(u8),
     input: Buf,
     pooled: Buf,
@@ -286,6 +373,41 @@ const Net = struct {
         self.k = k;
         self.batch = batch;
         self.batches = 0;
+
+        // First compute total parameter count so all 34 parameters share contiguous device buffers.
+        var total_params: usize = 128 * 256 + 128 + 4 * 128 + 4;
+        for (0..10) |i| {
+            const cin = net.channels[i];
+            const cout = net.channels[i + 1];
+            total_params += cout * cin * 9 + cout + cout;
+        }
+        self.all_value = try dev.alloc(f32, total_params);
+        self.all_grad = try dev.alloc(f32, total_params);
+        self.all_m = try dev.alloc(f32, total_params);
+        self.all_v = try dev.alloc(f32, total_params);
+        try dev.zero(self.all_m);
+        try dev.zero(self.all_v);
+
+        var param_offset: usize = 0;
+        const Alloc = struct {
+            fn slice(base: Buf, offset: usize, len: usize) Buf {
+                return .{ .ptr = base.ptr + offset * @sizeOf(f32), .len = len };
+            }
+            fn param(s: *Net, g: std.mem.Allocator, offset: *usize, shape: []const usize, host: []const f32) !Param {
+                const len = host.len;
+                const p: Param = .{
+                    .value = slice(s.all_value, offset.*, len),
+                    .grad = slice(s.all_grad, offset.*, len),
+                    .m = slice(s.all_m, offset.*, len),
+                    .v = slice(s.all_v, offset.*, len),
+                    .shape = try g.dupe(usize, shape),
+                };
+                try s.dev.upload(f32, p.value, host);
+                offset.* += len;
+                return p;
+            }
+        };
+
         var side: u32 = size;
         var largest: usize = 0;
         for (&self.layers, 0..) |*l, i| {
@@ -301,14 +423,14 @@ const Net = struct {
                 .stride = stride,
                 .side_in = side,
                 .side_out = out_side,
-                .weight = try Param.init(dev, gpa, &.{ cout, cin, 3, 3 }, try uniformInit(gpa, r, cout * cin * 9, cin * 9)),
-                .gamma = try Param.init(dev, gpa, &.{cout}, try filled(gpa, cout, 1)),
-                .beta = try Param.init(dev, gpa, &.{cout}, try filled(gpa, cout, 0)),
+                .weight = try Alloc.param(&self, gpa, &param_offset, &.{ cout, cin, 3, 3 }, try uniformInit(gpa, r, cout * cin * 9, cin * 9)),
+                .gamma = try Alloc.param(&self, gpa, &param_offset, &.{cout}, try filled(gpa, cout, 1)),
+                .beta = try Alloc.param(&self, gpa, &param_offset, &.{cout}, try filled(gpa, cout, 0)),
                 .running_mean = try dev.alloc(f32, cout),
                 .running_var = try dev.alloc(f32, cout),
                 .mean = try dev.alloc(f32, cout),
                 .variance = try dev.alloc(f32, cout),
-                .sqdev = try dev.alloc(f32, cout),
+                .bn_scale = try dev.alloc(f32, cout),
                 .z = try dev.alloc(f32, activation),
                 .y = try dev.alloc(f32, activation),
             };
@@ -316,10 +438,11 @@ const Net = struct {
             try dev.upload(f32, l.running_var, try filled(gpa, cout, 1));
             side = out_side;
         }
-        self.fc1_w = try Param.init(dev, gpa, &.{ 128, 256 }, try uniformInit(gpa, r, 128 * 256, 256));
-        self.fc1_b = try Param.init(dev, gpa, &.{128}, try uniformInit(gpa, r, 128, 256));
-        self.fc2_w = try Param.init(dev, gpa, &.{ 4, 128 }, try uniformInit(gpa, r, 4 * 128, 128));
-        self.fc2_b = try Param.init(dev, gpa, &.{4}, try uniformInit(gpa, r, 4, 128));
+        self.fc1_w = try Alloc.param(&self, gpa, &param_offset, &.{ 128, 256 }, try uniformInit(gpa, r, 128 * 256, 256));
+        self.fc1_b = try Alloc.param(&self, gpa, &param_offset, &.{128}, try uniformInit(gpa, r, 128, 256));
+        self.fc2_w = try Alloc.param(&self, gpa, &param_offset, &.{ 4, 128 }, try uniformInit(gpa, r, 4 * 128, 128));
+        self.fc2_b = try Alloc.param(&self, gpa, &param_offset, &.{4}, try uniformInit(gpa, r, 4, 128));
+        std.debug.assert(param_offset == total_params);
         self.crops = try dev.alloc(u8, batch * pixels);
         self.input = try dev.alloc(f32, batch * pixels);
         self.pooled = try dev.alloc(f32, batch * 256);
@@ -354,18 +477,18 @@ const Net = struct {
         for (&self.layers) |*l| {
             const hw = l.side_out * l.side_out;
             const total = n * l.cout * hw;
-            try d.launch(self.k.conv_fwd, total, .{ n, l.cin, l.side_in, l.side_in, l.cout, l.side_out, l.side_out, l.stride, x, l.weight.value, l.z });
-            if (train) {
-                const m: f32 = @floatFromInt(n * hw);
-                try d.zero(l.mean);
-                try d.launch(self.k.channel_sum, l.cout * lanes, .{ n, l.cout, hw, l.z, @as(cuda.Ptr, 0), l.mean });
-                try d.launch(self.k.scale, l.cout, .{ l.cout, 1 / m, l.mean });
-                try d.zero(l.sqdev);
-                try d.launch(self.k.channel_sum, l.cout * lanes, .{ n, l.cout, hw, l.z, l.mean, l.sqdev });
-                try d.launch(self.k.bn_stats, l.cout, .{ l.cout, m, l.sqdev, l.mean, l.variance, l.running_mean, l.running_var });
-                try d.launch(self.k.bn_relu, total, .{ total, l.cout, hw, l.z, l.mean, l.variance, l.gamma.value, l.beta.value, l.y });
+            if (l.stride == 1) {
+                const gx: c_uint = (l.side_out + tile_dim - 1) / tile_dim;
+                try d.launchGrid(self.k.conv_fwd_s1, .{ n * l.cout, gx, gx }, .{ tile_dim, tile_dim, 1 }, .{ n, l.cin, l.side_in, l.side_in, l.cout, x, l.weight.value, l.z });
             } else {
-                try d.launch(self.k.bn_relu, total, .{ total, l.cout, hw, l.z, l.running_mean, l.running_var, l.gamma.value, l.beta.value, l.y });
+                try d.launch(self.k.conv_fwd_s2, total, .{ n, l.cin, l.side_in, l.side_in, l.cout, l.side_out, l.side_out, x, l.weight.value, l.z });
+            }
+            if (train) {
+                try d.launchGrid(self.k.bn_fwd_stats, .{ l.cout, 1, 1 }, .{ block_size, 1, 1 }, .{ n, l.cout, hw, l.z, l.gamma.value, l.mean, l.variance, l.running_mean, l.running_var, l.bn_scale });
+                try d.launch(self.k.bn_relu, total, .{ total, l.cout, hw, l.z, l.mean, l.bn_scale, l.beta.value, l.y });
+            } else {
+                try d.launch(self.k.bn_eval_params, l.cout, .{ l.cout, l.running_var, l.gamma.value, l.bn_scale });
+                try d.launch(self.k.bn_relu, total, .{ total, l.cout, hw, l.z, l.running_mean, l.bn_scale, l.beta.value, l.y });
             }
             x = l.y;
         }
@@ -380,7 +503,6 @@ const Net = struct {
     fn backward(self: *Net, n: u32, g_pred: []const f32) !void {
         const d = self.dev;
         try d.upload(f32, self.g_pred, g_pred);
-        for (self.paramList()) |p| try d.zero(p.grad);
         try d.launch(self.k.linear_bwd_weight, 4 * 128 + 4, .{ n, @as(u32, 128), @as(u32, 4), self.act, self.g_pred, self.fc2_w.grad, self.fc2_b.grad });
         try d.launch(self.k.linear_bwd_data, n * 128, .{ n, @as(u32, 128), @as(u32, 4), self.g_pred, self.fc2_w.value, self.g_act });
         try d.launch(self.k.relu_bwd, n * 128, .{ n * 128, self.act, self.g_act, self.g_hidden });
@@ -395,21 +517,26 @@ const Net = struct {
             const total = n * l.cout * hw;
             const m: f32 = @floatFromInt(n * hw);
             // g_a: gradient into this layer's output; g_b: into its convolution's output.
-            try d.launch(self.k.bn_bwd_reduce, l.cout * lanes, .{ n, l.cout, hw, l.z, l.y, self.g_a, l.mean, l.variance, l.gamma.grad, l.beta.grad });
-            try d.launch(self.k.bn_bwd_dx, total, .{ total, l.cout, hw, m, l.z, l.y, self.g_a, l.mean, l.variance, l.gamma.value, l.gamma.grad, l.beta.grad, self.g_b });
+            try d.launchGrid(self.k.bn_bwd_reduce, .{ l.cout, 1, 1 }, .{ block_size, 1, 1 }, .{ n, l.cout, hw, l.z, l.y, self.g_a, l.mean, l.variance, l.gamma.grad, l.beta.grad, l.bn_scale });
+            try d.launch(self.k.bn_bwd_dx, total, .{ total, l.cout, hw, m, l.z, l.y, self.g_a, l.mean, l.bn_scale, l.gamma.value, l.gamma.grad, l.beta.grad, self.g_b });
             const x = if (i == 0) self.input else self.layers[i - 1].y;
-            try d.launch(self.k.conv_bwd_weight, l.cout * l.cin * 9 * n, .{ n, l.cin, l.side_in, l.side_in, l.cout, l.side_out, l.side_out, l.stride, x, self.g_b, l.weight.grad });
-            if (i > 0) try d.launch(self.k.conv_bwd_data, n * l.cin * l.side_in * l.side_in, .{ n, l.cin, l.side_in, l.side_in, l.cout, l.side_out, l.side_out, l.stride, self.g_b, l.weight.value, self.g_a });
+            try d.launchGrid(self.k.conv_bwd_weight, .{ l.cout * l.cin * 9, 1, 1 }, .{ block_size, 1, 1 }, .{ n, l.cin, l.side_in, l.side_in, l.cout, l.side_out, l.side_out, l.stride, x, self.g_b, l.weight.grad });
+            if (i > 0) {
+                if (l.stride == 1) {
+                    const gx: c_uint = (l.side_in + tile_dim - 1) / tile_dim;
+                    try d.launchGrid(self.k.conv_bwd_data_s1, .{ n * l.cin, gx, gx }, .{ tile_dim, tile_dim, 1 }, .{ n, l.cin, l.side_in, l.side_in, l.cout, self.g_b, l.weight.value, self.g_a });
+                } else {
+                    try d.launch(self.k.conv_bwd_data_s2, n * l.cin * l.side_in * l.side_in, .{ n, l.cin, l.side_in, l.side_in, l.cout, l.side_out, l.side_out, self.g_b, l.weight.value, self.g_a });
+                }
+            }
         }
     }
 
     fn step(self: *Net, lr: f64, beta1: f64, t: u64) !void {
         const bc1: f32 = @floatCast(1 - std.math.pow(f64, beta1, @floatFromInt(t)));
         const bc2: f32 = @floatCast(@sqrt(1 - std.math.pow(f64, 0.999, @floatFromInt(t))));
-        for (self.paramList()) |p| {
-            const count: u32 = @intCast(p.value.len);
-            try self.dev.launch(self.k.adamw, count, .{ count, p.value, p.grad, p.m, p.v, @as(f32, @floatCast(lr)), @as(f32, @floatCast(beta1)), @as(f32, 0.999), @as(f32, 1e-4), bc1, bc2 });
-        }
+        const count: u32 = @intCast(self.all_value.len);
+        try self.dev.launch(self.k.adamw, count, .{ count, self.all_value, self.all_grad, self.all_m, self.all_v, @as(f32, @floatCast(lr)), @as(f32, @floatCast(beta1)), @as(f32, 0.999), @as(f32, 1e-4), bc1, bc2 });
     }
 
     fn predictions(self: *Net, n: usize, out: []f32) !void {
@@ -745,6 +872,10 @@ pub fn main(init: std.process.Init) !void {
     try w.print("{s} M parameters\n", .{try u.fixedAlloc(gpa, @as(f64, @floatFromInt(parameters)) / 1e6, 2)});
     try w.flush();
 
+    var pool: CropPool = .{ .io = io };
+    try pool.init();
+    defer pool.deinit();
+
     // Validation and test crops never change, so they are cut once.
     const Fixed = struct { crops: []u8, targets: [][4]f32 };
     var fixed: [2]Fixed = undefined;
@@ -753,10 +884,14 @@ pub fn main(init: std.process.Init) !void {
         f.targets = try gpa.alloc([4]f32, faces.len);
         const order = try gpa.alloc(usize, faces.len);
         for (order, 0..) |*o, k| o.* = k;
-        try cutAll(io, images, faces, order, 0, false, f.crops, f.targets);
+        try pool.run(images, null, faces, order, 0, false, f.crops, f.targets);
     }
 
-    const crops = try gpa.alloc(u8, batches * batch * pixels);
+    var cache = try FrameCache.preload(std.heap.smp_allocator, io, images, fit);
+    defer cache.deinit(std.heap.smp_allocator);
+
+    const crops = try dev.allocHost(u8, batches * batch * pixels);
+    defer dev.freeHost(crops);
     const targets = try gpa.alloc([4]f32, batches * batch);
     const order = try gpa.alloc(usize, fit.len);
     for (order, 0..) |*o, k| o.* = k;
@@ -769,7 +904,7 @@ pub fn main(init: std.process.Init) !void {
     const started = std.Io.Timestamp.now(io, .awake);
     for (1..epochs + 1) |epoch| {
         shuffler.random().shuffle(usize, order);
-        try cutAll(io, images, fit, order[0 .. batches * batch], seed *% 1000003 +% epoch, true, crops, targets);
+        try pool.run(images, &cache, fit, order[0 .. batches * batch], seed *% 1000003 +% epoch, true, crops, targets);
         var total: f64 = 0;
         for (0..batches) |b| {
             const lr, const beta1 = oneCycle(t, total_steps, 3e-3);

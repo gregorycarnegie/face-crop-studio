@@ -16,8 +16,13 @@ pub const Image = struct {
     pixels: []u8,
 
     pub fn init(gpa: Allocator, width: usize, height: usize) !Image {
+        const img_out = try initUndefined(gpa, width, height);
+        @memset(img_out.pixels, 0);
+        return img_out;
+    }
+
+    pub fn initUndefined(gpa: Allocator, width: usize, height: usize) !Image {
         const pixels = try gpa.alloc(u8, try std.math.mul(usize, try std.math.mul(usize, width, height), 3));
-        @memset(pixels, 0);
         return .{ .width = width, .height = height, .pixels = pixels };
     }
 
@@ -106,20 +111,55 @@ fn orient(gpa: Allocator, src: Image, exif: u16) !Image {
     const w = src.width;
     const h = src.height;
     const swap = exif >= 5;
-    const out = try Image.init(gpa, if (swap) h else w, if (swap) w else h);
-    for (0..out.height) |y| for (0..out.width) |x| {
-        const sx, const sy = switch (exif) {
-            2 => .{ w - 1 - x, y },
-            3 => .{ w - 1 - x, h - 1 - y },
-            4 => .{ x, h - 1 - y },
-            5 => .{ y, x },
-            6 => .{ y, h - 1 - x },
-            7 => .{ w - 1 - y, h - 1 - x },
-            8 => .{ w - 1 - y, x },
-            else => .{ x, y },
-        };
-        out.at(x, y).* = src.at(sx, sy).*;
-    };
+    const out = try Image.initUndefined(gpa, if (swap) h else w, if (swap) w else h);
+    const tile = 32;
+    switch (exif) {
+        2 => {
+            for (0..h) |y| {
+                const dst_row = out.pixels[y * w * 3 ..][0 .. w * 3];
+                const src_row = src.pixels[y * w * 3 ..][0 .. w * 3];
+                for (0..w) |x| dst_row[x * 3 ..][0..3].* = src_row[(w - 1 - x) * 3 ..][0..3].*;
+            }
+        },
+        3 => {
+            for (0..h) |y| {
+                const dst_row = out.pixels[y * w * 3 ..][0 .. w * 3];
+                const src_row = src.pixels[(h - 1 - y) * w * 3 ..][0 .. w * 3];
+                for (0..w) |x| dst_row[x * 3 ..][0..3].* = src_row[(w - 1 - x) * 3 ..][0..3].*;
+            }
+        },
+        4 => {
+            for (0..h) |y| {
+                @memcpy(out.pixels[y * w * 3 ..][0 .. w * 3], src.pixels[(h - 1 - y) * w * 3 ..][0 .. w * 3]);
+            }
+        },
+        5, 6, 7, 8 => {
+            var ty: usize = 0;
+            while (ty < out.height) : (ty += tile) {
+                const ty_end = @min(ty + tile, out.height);
+                var tx: usize = 0;
+                while (tx < out.width) : (tx += tile) {
+                    const tx_end = @min(tx + tile, out.width);
+                    switch (exif) {
+                        5 => for (ty..ty_end) |y| for (tx..tx_end) |x| {
+                            out.at(x, y).* = src.at(y, x).*;
+                        },
+                        6 => for (ty..ty_end) |y| for (tx..tx_end) |x| {
+                            out.at(x, y).* = src.at(y, h - 1 - x).*;
+                        },
+                        7 => for (ty..ty_end) |y| for (tx..tx_end) |x| {
+                            out.at(x, y).* = src.at(w - 1 - y, h - 1 - x).*;
+                        },
+                        8 => for (ty..ty_end) |y| for (tx..tx_end) |x| {
+                            out.at(x, y).* = src.at(w - 1 - y, x).*;
+                        },
+                        else => unreachable,
+                    }
+                }
+            }
+        },
+        else => @memcpy(out.pixels, src.pixels),
+    }
     return out;
 }
 
@@ -221,21 +261,70 @@ pub fn resizeLinear(gpa: Allocator, src: Image, width: usize, height: usize) !Im
     defer gpa.free(xs);
     const ys = try linearTaps(gpa, src.height, height, scale_y);
     defer gpa.free(ys);
-    const out = try Image.init(gpa, width, height);
-    const row0 = try gpa.alloc(i32, width * 3);
+    const out = try Image.initUndefined(gpa, width, height);
+    errdefer out.deinit(gpa);
+    const row_len = width * 3;
+    var row0 = try gpa.alloc(i32, row_len);
     defer gpa.free(row0);
-    const row1 = try gpa.alloc(i32, width * 3);
+    var row1 = try gpa.alloc(i32, row_len);
     defer gpa.free(row1);
-    for (ys, 0..) |ty, y| {
-        for ([_][]i32{ row0, row1 }, [_]usize{ ty.first, ty.second }) |row, sy| {
-            const line = src.pixels[sy * src.width * 3 ..][0 .. src.width * 3];
-            for (xs, 0..) |tx, x| for (0..3) |c| {
-                row[x * 3 + c] = @as(i32, line[tx.first * 3 + c]) * tx.a0 + @as(i32, line[tx.second * 3 + c]) * tx.a1;
-            };
+    const HResample = struct {
+        fn run(src_pixels: []const u8, src_w: usize, taps: []const Tap, sy: usize, dst_row: []i32) void {
+            const line = src_pixels[sy * src_w * 3 ..][0 .. src_w * 3];
+            for (taps, 0..) |tx, x| {
+                const p0 = line[tx.first * 3 ..][0..3];
+                const p1 = line[tx.second * 3 ..][0..3];
+                const d = dst_row[x * 3 ..][0..3];
+                d[0] = @as(i32, p0[0]) * tx.a0 + @as(i32, p1[0]) * tx.a1;
+                d[1] = @as(i32, p0[1]) * tx.a0 + @as(i32, p1[1]) * tx.a1;
+                d[2] = @as(i32, p0[2]) * tx.a0 + @as(i32, p1[2]) * tx.a1;
+            }
         }
-        const dst = out.pixels[y * width * 3 ..][0 .. width * 3];
+    };
+    var prev_y0: usize = std.math.maxInt(usize);
+    var prev_y1: usize = std.math.maxInt(usize);
+    for (ys, 0..) |ty, y| {
+        if (ty.first == prev_y0 and ty.second == prev_y1) {
+            // Both horizontal rows already cached.
+        } else if (ty.first == prev_y1) {
+            std.mem.swap([]i32, &row0, &row1);
+            prev_y0 = ty.first;
+            if (ty.second == ty.first) {
+                @memcpy(row1, row0);
+            } else {
+                HResample.run(src.pixels, src.width, xs, ty.second, row1);
+            }
+            prev_y1 = ty.second;
+        } else {
+            if (ty.first != prev_y0) {
+                HResample.run(src.pixels, src.width, xs, ty.first, row0);
+                prev_y0 = ty.first;
+            }
+            if (ty.second == ty.first) {
+                @memcpy(row1, row0);
+            } else if (ty.second != prev_y1) {
+                HResample.run(src.pixels, src.width, xs, ty.second, row1);
+            }
+            prev_y1 = ty.second;
+        }
+        const dst = out.pixels[y * row_len ..][0..row_len];
         // VResizeLinear<uchar>: the >>4 / >>16 split keeps the products inside 32 bits.
-        for (dst, row0, row1) |*d, s0, s1| d.* = @truncate(@as(u32, @bitCast((((ty.a0 * (s0 >> 4)) >> 16) + ((ty.a1 * (s1 >> 4)) >> 16) + 2) >> 2)));
+        const V8 = @Vector(8, i32);
+        const va0: V8 = @splat(ty.a0);
+        const va1: V8 = @splat(ty.a1);
+        const two: V8 = @splat(2);
+        var i: usize = 0;
+        while (i + 8 <= row_len) : (i += 8) {
+            const s0: V8 = row0[i..][0..8].*;
+            const s1: V8 = row1[i..][0..8].*;
+            const v = (((va0 * (s0 >> @splat(4))) >> @splat(16)) + ((va1 * (s1 >> @splat(4))) >> @splat(16)) + two) >> @splat(2);
+            const u: @Vector(8, u32) = @bitCast(v);
+            const b: @Vector(8, u8) = @truncate(u);
+            dst[i..][0..8].* = b;
+        }
+        while (i < row_len) : (i += 1) {
+            dst[i] = @truncate(@as(u32, @bitCast((((ty.a0 * (row0[i] >> 4)) >> 16) + ((ty.a1 * (row1[i] >> 4)) >> 16) + 2) >> 2)));
+        }
     }
     return out;
 }
@@ -274,16 +363,64 @@ pub fn resizeLinearF32(gpa: Allocator, src: []const f32, sw: usize, sh: usize, d
     const ys = try taps(gpa, sh, dh, scale_y);
     defer gpa.free(ys);
     const out = try gpa.alloc(f32, dw * dh * 3);
-    const rows = try gpa.alloc(f32, dw * 3 * 2);
-    defer gpa.free(rows);
-    for (ys, 0..) |ty, y| {
-        for ([_]usize{ ty.first, ty.second }, 0..) |sy, k| {
-            const line = src[sy * sw * 3 ..][0 .. sw * 3];
-            for (xs, 0..) |tx, x| for (0..3) |c| {
-                rows[k * dw * 3 + x * 3 + c] = line[tx.first * 3 + c] * tx.a0 + line[tx.second * 3 + c] * tx.a1;
-            };
+    errdefer gpa.free(out);
+    const row_len = dw * 3;
+    var row0 = try gpa.alloc(f32, row_len);
+    defer gpa.free(row0);
+    var row1 = try gpa.alloc(f32, row_len);
+    defer gpa.free(row1);
+    const HResampleF32 = struct {
+        fn run(src_pixels: []const f32, src_w: usize, x_taps: []const Weights, sy: usize, dst_row: []f32) void {
+            const line = src_pixels[sy * src_w * 3 ..][0 .. src_w * 3];
+            for (x_taps, 0..) |tx, x| {
+                const p0 = line[tx.first * 3 ..][0..3];
+                const p1 = line[tx.second * 3 ..][0..3];
+                const d = dst_row[x * 3 ..][0..3];
+                d[0] = p0[0] * tx.a0 + p1[0] * tx.a1;
+                d[1] = p0[1] * tx.a0 + p1[1] * tx.a1;
+                d[2] = p0[2] * tx.a0 + p1[2] * tx.a1;
+            }
         }
-        for (out[y * dw * 3 ..][0 .. dw * 3], rows[0 .. dw * 3], rows[dw * 3 ..]) |*d, r0, r1| d.* = r0 * ty.a0 + r1 * ty.a1;
+    };
+    var prev_y0: usize = std.math.maxInt(usize);
+    var prev_y1: usize = std.math.maxInt(usize);
+    for (ys, 0..) |ty, y| {
+        if (ty.first == prev_y0 and ty.second == prev_y1) {
+            // Both horizontal rows already cached.
+        } else if (ty.first == prev_y1) {
+            std.mem.swap([]f32, &row0, &row1);
+            prev_y0 = ty.first;
+            if (ty.second == ty.first) {
+                @memcpy(row1, row0);
+            } else {
+                HResampleF32.run(src, sw, xs, ty.second, row1);
+            }
+            prev_y1 = ty.second;
+        } else {
+            if (ty.first != prev_y0) {
+                HResampleF32.run(src, sw, xs, ty.first, row0);
+                prev_y0 = ty.first;
+            }
+            if (ty.second == ty.first) {
+                @memcpy(row1, row0);
+            } else if (ty.second != prev_y1) {
+                HResampleF32.run(src, sw, xs, ty.second, row1);
+            }
+            prev_y1 = ty.second;
+        }
+        const dst = out[y * row_len ..][0..row_len];
+        const V8 = @Vector(8, f32);
+        const va0: V8 = @splat(ty.a0);
+        const va1: V8 = @splat(ty.a1);
+        var i: usize = 0;
+        while (i + 8 <= row_len) : (i += 8) {
+            const r0: V8 = row0[i..][0..8].*;
+            const r1: V8 = row1[i..][0..8].*;
+            dst[i..][0..8].* = r0 * va0 + r1 * va1;
+        }
+        while (i < row_len) : (i += 1) {
+            dst[i] = row0[i] * ty.a0 + row1[i] * ty.a1;
+        }
     }
     return out;
 }
@@ -315,7 +452,8 @@ pub fn resizeArea(gpa: Allocator, src: Image, width: usize, height: usize) !Imag
     if (width == src.width and height == src.height) return .{ .width = width, .height = height, .pixels = try gpa.dupe(u8, src.pixels) };
     const scale_x = 1 / (@as(f64, @floatFromInt(width)) / @as(f64, @floatFromInt(src.width)));
     const scale_y = 1 / (@as(f64, @floatFromInt(height)) / @as(f64, @floatFromInt(src.height)));
-    const out = try Image.init(gpa, width, height);
+    const out = try Image.initUndefined(gpa, width, height);
+    errdefer out.deinit(gpa);
     const ix: usize = @intFromFloat(@round(scale_x));
     const iy: usize = @intFromFloat(@round(scale_y));
     if (@abs(scale_x - @as(f64, @floatFromInt(ix))) < std.math.floatEps(f64) and @abs(scale_y - @as(f64, @floatFromInt(iy))) < std.math.floatEps(f64)) {
@@ -392,31 +530,59 @@ pub fn warpAffine(gpa: Allocator, src: Image, m: Affine, width: usize, height: u
 
     const ab_scale = 1024.0; // AB_BITS = 10; INTER_BITS = 5
     const round_delta = 16; // AB_SCALE / INTER_TAB_SIZE / 2
-    const out = try Image.init(gpa, width, height);
+    const out = try Image.initUndefined(gpa, width, height);
+    errdefer out.deinit(gpa);
+    const adeltax = try gpa.alloc(i32, width);
+    defer gpa.free(adeltax);
+    const adeltay = try gpa.alloc(i32, width);
+    defer gpa.free(adeltay);
+    for (0..width) |x| {
+        const fx: f64 = @floatFromInt(x);
+        adeltax[x] = saturateInt(inv[0] * fx * ab_scale);
+        adeltay[x] = saturateInt(inv[3] * fx * ab_scale);
+    }
     const sw: i64 = @intCast(src.width);
     const sh: i64 = @intCast(src.height);
+    const src_stride = src.width * 3;
     for (0..height) |y| {
         const fy: f64 = @floatFromInt(y);
         const x0 = saturateInt((inv[1] * fy + inv[2]) * ab_scale) +% round_delta;
         const y0 = saturateInt((inv[4] * fy + inv[5]) * ab_scale) +% round_delta;
+        const dst_row = out.pixels[y * width * 3 ..][0 .. width * 3];
         for (0..width) |x| {
-            const fx: f64 = @floatFromInt(x);
-            const xx = (x0 +% saturateInt(inv[0] * fx * ab_scale)) >> 5;
-            const yy = (y0 +% saturateInt(inv[3] * fx * ab_scale)) >> 5;
+            const xx = (x0 +% adeltax[x]) >> 5;
+            const yy = (y0 +% adeltay[x]) >> 5;
             const sx: i64 = std.math.clamp(xx >> 5, -32768, 32767);
             const sy: i64 = std.math.clamp(yy >> 5, -32768, 32767);
             const ax: i32 = xx & 31;
             const ay: i32 = yy & 31;
             // initInterTab2D's linear weights: exact multiples of 32, summing to 32768.
-            const w = [4]i32{ (32 - ay) * (32 - ax) * 32, (32 - ay) * ax * 32, ay * (32 - ax) * 32, ay * ax * 32 };
-            const px = [4]i64{ sx, sx + 1, sx, sx + 1 };
-            const py = [4]i64{ sy, sy, sy + 1, sy + 1 };
-            for (0..3) |c| {
-                var acc: i32 = 0;
-                for (w, px, py) |wk, xk, yk| {
-                    if (xk >= 0 and xk < sw and yk >= 0 and yk < sh) acc += wk * @as(i32, src.at(@intCast(xk), @intCast(yk))[c]);
+            const w0 = (32 - ay) * (32 - ax) * 32;
+            const w1 = (32 - ay) * ax * 32;
+            const w2 = ay * (32 - ax) * 32;
+            const w3 = ay * ax * 32;
+            const dst_px = dst_row[x * 3 ..][0..3];
+            if (sx >= 0 and sx + 1 < sw and sy >= 0 and sy + 1 < sh) {
+                const ux: usize = @intCast(sx);
+                const uy: usize = @intCast(sy);
+                const row_top = src.pixels[uy * src_stride + ux * 3 ..][0..6];
+                const row_bot = src.pixels[(uy + 1) * src_stride + ux * 3 ..][0..6];
+                inline for (0..3) |c| {
+                    const acc = w0 * @as(i32, row_top[c]) + w1 * @as(i32, row_top[3 + c]) +
+                        w2 * @as(i32, row_bot[c]) + w3 * @as(i32, row_bot[3 + c]);
+                    dst_px[c] = @intCast(std.math.clamp((acc + (1 << 14)) >> 15, 0, 255));
                 }
-                out.at(x, y)[c] = @intCast(std.math.clamp((acc + (1 << 14)) >> 15, 0, 255));
+            } else {
+                const w = [4]i32{ w0, w1, w2, w3 };
+                const px = [4]i64{ sx, sx + 1, sx, sx + 1 };
+                const py = [4]i64{ sy, sy, sy + 1, sy + 1 };
+                inline for (0..3) |c| {
+                    var acc: i32 = 0;
+                    for (w, px, py) |wk, xk, yk| {
+                        if (xk >= 0 and xk < sw and yk >= 0 and yk < sh) acc += wk * @as(i32, src.at(@intCast(xk), @intCast(yk))[c]);
+                    }
+                    dst_px[c] = @intCast(std.math.clamp((acc + (1 << 14)) >> 15, 0, 255));
+                }
             }
         }
     }

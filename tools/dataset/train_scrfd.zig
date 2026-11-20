@@ -314,54 +314,109 @@ const Prep = struct {
     failed: std.atomic.Value(bool) = .init(false),
 };
 
-fn prepWorker(job: *Prep) void {
-    const all = comptime targets.anchors();
-    const plane = targets.size * targets.size;
-    while (true) {
-        const slot = job.next.fetchAdd(1, .monotonic);
-        if (slot >= job.order.len) return;
-        var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
-        defer arena.deinit();
-        const g = arena.allocator();
-        const e = job.entries[job.order[slot]];
-        var prng: std.Random.DefaultPrng = .init(job.seed ^ (@as(u64, slot) *% 0x9E3779B97F4A7C15));
-        const done = blk: {
-            const decoded = img.load(g, job.io, std.fs.path.join(g, &.{ job.images, e.name }) catch break :blk false, .as_stored) catch |err| {
-                std.debug.print("cannot read {s}: {s}\n", .{ e.name, @errorName(err) });
-                break :blk false;
-            };
-            const src = aug.fromRgb8(g, decoded) catch break :blk false;
-            const faces = g.dupe(targets.Face, e.faces) catch break :blk false;
-            const im, const ann = aug.apply(g, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces, job.zoom)) catch break :blk false;
-            aug.normalise(im, job.batch.input[slot * 3 * plane ..][0 .. 3 * plane]);
-            const tg = targets.targets(g, &all, ann.faces, ann.ignores, job.ignore_iof) catch break :blk false;
-            @memcpy(job.batch.label_weight[slot * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
-            var list: std.ArrayList(gpu.Positive) = .empty;
-            gpuPositives(std.heap.smp_allocator, &list, @intCast(slot), tg.positives) catch break :blk false;
-            const owned = list.toOwnedSlice(std.heap.smp_allocator) catch break :blk false;
-            std.heap.smp_allocator.free(job.batch.positives[slot]);
-            job.batch.positives[slot] = owned;
-            job.batch.counts[slot] = tg.positives.len;
-            break :blk true;
-        };
-        if (!done) {
-            job.failed.store(true, .monotonic);
-            return;
+/// Persistent prep workers. Idle threads sleep on futexes (`generation` for new work,
+/// `remaining` for the batch finishing) rather than spinning while the GPU trains.
+const PrepPool = struct {
+    io: std.Io,
+    threads: [64]std.Thread = undefined,
+    count: u32 = 0,
+    job: ?*Prep = null,
+    generation: std.atomic.Value(u32) = .init(0),
+    remaining: std.atomic.Value(u32) = .init(0),
+    stop: std.atomic.Value(bool) = .init(false),
+
+    fn init(self: *PrepPool, workers: usize) !void {
+        if (workers == 0) return error.NoWorkers;
+        errdefer self.deinit();
+        for (self.threads[0..@min(self.threads.len, workers)]) |*t| {
+            t.* = try std.Thread.spawn(.{}, workerMain, .{self});
+            self.count += 1;
         }
     }
-}
 
-fn prepare(job: *Prep, workers: usize) !void {
-    var threads: [64]std.Thread = undefined;
-    if (workers == 0) return error.NoWorkers;
-    const count = @min(threads.len, workers);
-    for (threads[0..count]) |*t| t.* = try std.Thread.spawn(.{}, prepWorker, .{job});
-    for (threads[0..count]) |t| t.join();
-    if (job.failed.load(.monotonic)) return error.BatchFailed;
-}
+    fn deinit(self: *PrepPool) void {
+        self.waitIdle(); // any in-flight batch still points into the caller's buffers
+        self.stop.store(true, .release);
+        _ = self.generation.fetchAdd(1, .release);
+        self.io.futexWake(u32, &self.generation.raw, std.math.maxInt(u32));
+        for (self.threads[0..self.count]) |t| t.join();
+    }
 
-fn allocBatch(gpa: std.mem.Allocator, n: usize) !Batch {
-    const b: Batch = .{ .input = try gpa.alloc(f32, n * 3 * targets.size * targets.size), .label_weight = try gpa.alloc(u8, n * targets.anchor_count), .positives = try gpa.alloc([]gpu.Positive, n), .counts = try gpa.alloc(usize, n) };
+    fn start(self: *PrepPool, job: *Prep) void {
+        self.job = job;
+        self.remaining.store(self.count, .release);
+        _ = self.generation.fetchAdd(1, .release);
+        self.io.futexWake(u32, &self.generation.raw, std.math.maxInt(u32));
+    }
+
+    fn waitIdle(self: *PrepPool) void {
+        while (true) {
+            const left = self.remaining.load(.acquire);
+            if (left == 0) return;
+            self.io.futexWaitUncancelable(u32, &self.remaining.raw, left);
+        }
+    }
+
+    fn wait(self: *PrepPool) !void {
+        self.waitIdle();
+        if (self.job) |j| {
+            self.job = null;
+            if (j.failed.load(.monotonic)) return error.BatchFailed;
+        }
+    }
+
+    fn workerMain(self: *PrepPool) void {
+        const all = comptime targets.anchors();
+        const plane = targets.size * targets.size;
+        var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+        defer arena.deinit();
+        var seen: u32 = 0;
+        while (true) {
+            var gen = self.generation.load(.acquire);
+            while (gen == seen) {
+                self.io.futexWaitUncancelable(u32, &self.generation.raw, seen);
+                gen = self.generation.load(.acquire);
+            }
+            if (self.stop.load(.acquire)) return;
+            seen = gen;
+            const job = self.job.?;
+            while (true) {
+                const slot = job.next.fetchAdd(1, .monotonic);
+                if (slot >= job.order.len) break;
+                _ = arena.reset(.retain_capacity);
+                const g = arena.allocator();
+                const e = job.entries[job.order[slot]];
+                var prng: std.Random.DefaultPrng = .init(job.seed ^ (@as(u64, slot) *% 0x9E3779B97F4A7C15));
+                const done = blk: {
+                    const decoded = img.load(g, job.io, std.fs.path.join(g, &.{ job.images, e.name }) catch break :blk false, .as_stored) catch |err| {
+                        std.debug.print("cannot read {s}: {s}\n", .{ e.name, @errorName(err) });
+                        break :blk false;
+                    };
+                    const faces = g.dupe(targets.Face, e.faces) catch break :blk false;
+                    const im, const ann = aug.applyRgb8(g, decoded, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), decoded, e.faces, job.zoom)) catch break :blk false;
+                    aug.normalise(im, job.batch.input[slot * 3 * plane ..][0 .. 3 * plane]);
+                    const tg = targets.targets(g, &all, ann.faces, ann.ignores, job.ignore_iof) catch break :blk false;
+                    @memcpy(job.batch.label_weight[slot * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
+                    var list: std.ArrayList(gpu.Positive) = .empty;
+                    gpuPositives(std.heap.smp_allocator, &list, @intCast(slot), tg.positives) catch break :blk false;
+                    const owned = list.toOwnedSlice(std.heap.smp_allocator) catch break :blk false;
+                    std.heap.smp_allocator.free(job.batch.positives[slot]);
+                    job.batch.positives[slot] = owned;
+                    job.batch.counts[slot] = tg.positives.len;
+                    break :blk true;
+                };
+                if (!done) {
+                    job.failed.store(true, .monotonic);
+                    break;
+                }
+            }
+            if (self.remaining.fetchSub(1, .acq_rel) == 1) self.io.futexWake(u32, &self.remaining.raw, 1);
+        }
+    }
+};
+
+fn allocBatch(gpa: std.mem.Allocator, dev: *const cuda.Device, n: usize) !Batch {
+    const b: Batch = .{ .input = try dev.allocHost(f32, n * 3 * targets.size * targets.size), .label_weight = try gpa.alloc(u8, n * targets.anchor_count), .positives = try gpa.alloc([]gpu.Positive, n), .counts = try gpa.alloc(usize, n) };
     for (b.positives) |*p| p.* = &.{};
     return b;
 }
@@ -440,7 +495,14 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
     try w.print("{d} training images ({d} face-free), batch {d}, {d} iterations per epoch, epochs {d}..{d}, on {s}\n", .{ entries.len, negatives.len, n, per_epoch, start_epoch + 1, o.recipe.epochs, dev.deviceName() });
     try w.flush();
 
-    var batches = [2]Batch{ try allocBatch(gpa, n), try allocBatch(gpa, n) };
+    var batches = [2]Batch{ try allocBatch(gpa, dev, n), try allocBatch(gpa, dev, n) };
+    defer {
+        dev.freeHost(batches[0].input);
+        dev.freeHost(batches[1].input);
+    }
+    var pool: PrepPool = .{ .io = io };
+    try pool.init(o.workers);
+    defer pool.deinit();
     const order = try gpa.alloc(usize, per_epoch * n);
     const started = std.Io.Timestamp.now(io, .awake);
     var sums = [3]f64{ 0, 0, 0 };
@@ -454,17 +516,21 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
         shuffler.random().shuffle(usize, order[0..entries.len]);
         for (order[entries.len..]) |*v| v.* = shuffler.random().uintLessThan(usize, entries.len);
         var jobs: [2]Prep = undefined;
-        var pending: ?std.Thread = null;
-        // On any early return the prefetch thread still points into `jobs` and `batches`.
-        defer if (pending) |t| t.join();
+        var has_pending = false;
+        // On any early return, wait for the pool before `jobs` goes out of scope.
+        defer if (has_pending) {
+            pool.wait() catch {};
+        };
         jobs[0] = .{ .io = io, .images = images, .entries = entries, .order = order[0..n], .seed = o.seed *% 1000003 +% epoch *% 7919, .ignore_iof = o.recipe.ignore_iof, .zoom = o.zoom, .batch = &batches[0] };
-        try prepare(&jobs[0], o.workers);
+        pool.start(&jobs[0]);
+        try pool.wait();
         for (0..per_epoch) |k| {
             const cur = k % 2;
             if (k + 1 < per_epoch) {
                 const nxt = (k + 1) % 2;
                 jobs[nxt] = .{ .io = io, .images = images, .entries = entries, .order = order[(k + 1) * n ..][0..n], .seed = (o.seed *% 1000003 +% epoch *% 7919) ^ ((k + 1) *% 104729), .ignore_iof = o.recipe.ignore_iof, .zoom = o.zoom, .batch = &batches[nxt] };
-                pending = try std.Thread.spawn(.{}, prepare, .{ &jobs[nxt], o.workers });
+                pool.start(&jobs[nxt]);
+                has_pending = true;
             }
             const b = &batches[cur];
             var positives: std.ArrayList(gpu.Positive) = .empty;
@@ -490,10 +556,9 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
                 std.debug.print("loss became non-finite at iteration {d}\n", .{iter});
                 return error.Diverged;
             }
-            if (pending) |t| {
-                t.join();
-                pending = null;
-                if (jobs[(k + 1) % 2].failed.load(.monotonic)) return error.BatchFailed;
+            if (has_pending) {
+                has_pending = false;
+                try pool.wait();
             }
             if (iter % 50 == 0 or k + 1 == per_epoch) {
                 const secs = @as(f64, @floatFromInt(started.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds)) / std.time.ns_per_s;

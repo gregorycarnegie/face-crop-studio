@@ -56,6 +56,21 @@ pub const Tensor = struct {
         if (last >= self.storage.count) return error.InvalidTensor;
     }
 
+    fn isContiguous(self: Tensor) bool {
+        if (self.elements <= 1) return true;
+        var expected: usize = 1;
+        var axis = self.shape.len;
+        while (axis > 0) {
+            axis -= 1;
+            const dim = self.shape[axis];
+            if (dim > 1) {
+                if (self.strides[axis] != expected) return false;
+                expected *= dim;
+            }
+        }
+        return true;
+    }
+
     fn element(self: Tensor, flat: usize) []const u8 {
         std.debug.assert(flat < self.elements);
         var index = flat;
@@ -73,12 +88,27 @@ pub const Tensor = struct {
     pub fn floats(self: Tensor, gpa: Allocator) ![]f32 {
         if (self.storage.dtype != .float32) return error.ExpectedFloatTensor;
         const values = try gpa.alloc(f32, self.elements);
+        if (self.elements == 0) return values;
+        if (self.isContiguous()) {
+            const raw = self.storage.bytes[self.offset * 4 ..][0 .. self.elements * 4];
+            if (@import("builtin").cpu.arch.endian() == .little) {
+                @memcpy(std.mem.sliceAsBytes(values), raw);
+            } else {
+                for (values, 0..) |*v, i| v.* = @bitCast(std.mem.readInt(u32, raw[i * 4 ..][0..4], .little));
+            }
+            return values;
+        }
         for (values, 0..) |*v, i| v.* = @bitCast(std.mem.readInt(u32, self.element(i)[0..4], .little));
         return values;
     }
 
     pub fn sha256(self: Tensor) [32]u8 {
         var hash: std.crypto.hash.sha2.Sha256 = .init(.{});
+        if (self.elements > 0 and self.isContiguous()) {
+            const size = self.storage.dtype.size();
+            hash.update(self.storage.bytes[self.offset * size ..][0 .. self.elements * size]);
+            return hash.finalResult();
+        }
         for (0..self.elements) |i| hash.update(self.element(i));
         return hash.finalResult();
     }
@@ -89,23 +119,37 @@ const Sequence = std.ArrayList(Value);
 pub const Entry = struct { key: Value, value: Value };
 pub const Dict = struct {
     items: std.ArrayList(Entry) = .empty,
+    str_index: std.StringHashMapUnmanaged(usize) = .empty,
+    int_index: std.AutoHashMapUnmanaged(i64, usize) = .empty,
     attributes: ?*Value = null,
 
     pub fn get(self: Dict, key: []const u8) ?Value {
-        for (self.items.items) |e| if (e.key == .string and std.mem.eql(u8, e.key.string, key)) return e.value;
+        if (self.str_index.get(key)) |idx| return self.items.items[idx].value;
         return null;
     }
 
     fn put(self: *Dict, gpa: Allocator, key: Value, value: Value) !void {
-        if (key != .string and key != .integer) return error.InvalidDictionaryKey;
-        for (self.items.items) |*e| {
-            const equal = if (key == .string) e.key == .string and std.mem.eql(u8, e.key.string, key.string) else e.key == .integer and e.key.integer == key.integer;
-            if (equal) {
-                e.value = value;
-                return;
-            }
+        switch (key) {
+            .string => |s| {
+                const gop = try self.str_index.getOrPut(gpa, s);
+                if (gop.found_existing) {
+                    self.items.items[gop.value_ptr.*].value = value;
+                } else {
+                    gop.value_ptr.* = self.items.items.len;
+                    try self.items.append(gpa, .{ .key = key, .value = value });
+                }
+            },
+            .integer => |n| {
+                const gop = try self.int_index.getOrPut(gpa, n);
+                if (gop.found_existing) {
+                    self.items.items[gop.value_ptr.*].value = value;
+                } else {
+                    gop.value_ptr.* = self.items.items.len;
+                    try self.items.append(gpa, .{ .key = key, .value = value });
+                }
+            },
+            else => return error.InvalidDictionaryKey,
         }
-        try self.items.append(gpa, .{ .key = key, .value = value });
     }
 };
 

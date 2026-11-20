@@ -76,10 +76,10 @@ pub fn assign(gpa: Allocator, all: []const Box, gts: []const Box, ignores: []con
     const ignored = try gpa.alloc(bool, all.len);
     defer gpa.free(ignored);
     @memset(ignored, false);
-    if (ignore_iof > 0) for (all, 0..) |a, i| {
+    if (ignore_iof > 0 and ignores.len > 0) for (all, 0..) |a, i| {
         var best: f32 = -std.math.inf(f32);
         for (ignores) |g| best = @max(best, overlap(a, g, true));
-        if (ignores.len > 0 and best > ignore_iof) {
+        if (best > ignore_iof) {
             ignored[i] = true;
             assigned[i] = -1;
         }
@@ -89,55 +89,72 @@ pub fn assign(gpa: Allocator, all: []const Box, gts: []const Box, ignores: []con
     const best_iou = try gpa.alloc(f32, all.len);
     defer gpa.free(best_iou);
     @memset(best_iou, -inf);
-    const candidates = try gpa.alloc(usize, topk * strides.len);
+    const max_cand = topk * strides.len;
+    const candidates = try gpa.alloc(usize, max_cand);
     defer gpa.free(candidates);
-    const distances = try gpa.alloc(f32, level_counts[0]);
-    defer gpa.free(distances);
-    const order = try gpa.alloc(usize, level_counts[0]);
-    defer gpa.free(order);
+    const cand_ious = try gpa.alloc(f32, max_cand);
+    defer gpa.free(cand_ious);
+    const top_d = try gpa.alloc(f32, topk);
+    defer gpa.free(top_d);
+    const top_i = try gpa.alloc(usize, topk);
+    defer gpa.free(top_i);
 
     for (gts, 0..) |g, gi| {
         const gc = centre(g);
         var count: usize = 0;
         var start: usize = 0;
         for (level_counts) |n| {
-            const d = distances[0..n];
-            for (d, 0..) |*v, k| {
-                if (ignored[start + k]) {
-                    v.* = inf;
-                } else {
+            const k_level = @min(topk, n);
+            var filled: usize = 0;
+            // Maintain the k_level nearest anchors by squared distance (ties to lower index).
+            for (0..n) |k| {
+                const d2: f32 = if (ignored[start + k]) std.math.inf(f32) else blk: {
                     const ac = centre(all[start + k]);
-                    v.* = @sqrt((ac[0] - gc[0]) * (ac[0] - gc[0]) + (ac[1] - gc[1]) * (ac[1] - gc[1]));
+                    const dx = ac[0] - gc[0];
+                    const dy = ac[1] - gc[1];
+                    break :blk dx * dx + dy * dy;
+                };
+                if (filled < k_level) {
+                    var pos = filled;
+                    while (pos > 0 and d2 < top_d[pos - 1]) : (pos -= 1) {
+                        top_d[pos] = top_d[pos - 1];
+                        top_i[pos] = top_i[pos - 1];
+                    }
+                    top_d[pos] = d2;
+                    top_i[pos] = k;
+                    filled += 1;
+                } else if (d2 < top_d[k_level - 1]) {
+                    var pos = k_level - 1;
+                    while (pos > 0 and d2 < top_d[pos - 1]) : (pos -= 1) {
+                        top_d[pos] = top_d[pos - 1];
+                        top_i[pos] = top_i[pos - 1];
+                    }
+                    top_d[pos] = d2;
+                    top_i[pos] = k;
                 }
             }
-            const k_level = @min(topk, n);
-            // The k nearest, ties to the lower index (a stable partial selection).
-            const idx = order[0..n];
-            for (idx, 0..) |*o, k| o.* = k;
-            std.sort.block(usize, idx, d, struct {
-                fn nearer(dist: []const f32, a: usize, b: usize) bool {
-                    return dist[a] < dist[b];
-                }
-            }.nearer);
-            for (idx[0..k_level]) |k| {
+            for (top_i[0..k_level]) |k| {
                 candidates[count] = start + k;
                 count += 1;
             }
             start += n;
         }
         const cand = candidates[0..count];
+        const ious = cand_ious[0..count];
         var mean: f32 = 0;
-        for (cand) |c| mean += overlap(all[c], g, false);
+        for (cand, ious) |c, *v| {
+            v.* = overlap(all[c], g, false);
+            mean += v.*;
+        }
         mean /= @floatFromInt(count);
         var sq: f32 = 0;
-        for (cand) |c| {
-            const v = overlap(all[c], g, false) - mean;
+        for (ious) |iou| {
+            const v = iou - mean;
             sq += v * v;
         }
         const threshold = mean + @sqrt(sq / @as(f32, @floatFromInt(count - 1)));
         const gt_area = @sqrt(@max((g[2] - g[0]) * (g[3] - g[1]), 1e-4));
-        for (cand) |c| {
-            const iou = overlap(all[c], g, false);
+        for (cand, ious) |c, iou| {
             if (!(iou >= threshold)) continue;
             const ac = centre(all[c]);
             const inside = @min(@min(ac[0] - g[0], ac[1] - g[1]), @min(g[2] - ac[0], g[3] - ac[1])) / gt_area;

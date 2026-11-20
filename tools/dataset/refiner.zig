@@ -102,9 +102,16 @@ pub fn readEyes(gpa: Allocator, oracle: anytype, frame: img.Image, centre: [2]f3
     const plane = size * size;
     const input = try gpa.alloc(f32, 3 * plane);
     defer gpa.free(input);
-    for (0..3) |c| for (0..plane) |p| {
-        input[c * plane + p] = (@as(f32, @floatFromInt(crop.pixels[p * 3 + c])) - 127.5) / 128.0;
-    };
+    const inv: f32 = 1.0 / 128.0;
+    const in0 = input[0..plane];
+    const in1 = input[plane .. 2 * plane];
+    const in2 = input[2 * plane .. 3 * plane];
+    for (0..plane) |p| {
+        const base = p * 3;
+        in0[p] = (@as(f32, @floatFromInt(crop.pixels[base])) - 127.5) * inv;
+        in1[p] = (@as(f32, @floatFromInt(crop.pixels[base + 1])) - 127.5) * inv;
+        in2[p] = (@as(f32, @floatFromInt(crop.pixels[base + 2])) - 127.5) * inv;
+    }
     const out = try oracle.run(gpa, input, &.{ 1, 3, size, size }, "crop", "eyes");
     if (out.data.len != 4) return error.InvalidOutputShape;
     const half: f32 = size / 2.0;

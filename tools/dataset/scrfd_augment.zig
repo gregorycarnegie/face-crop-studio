@@ -138,6 +138,21 @@ fn clipShift(b: t.Box, p: Patch) t.Box {
     return .{ @max(b[0], l) - l, @max(b[1], tp) - tp, @min(b[2], r) - l, @min(b[3], bt) - tp };
 }
 
+fn cropAnnotation(gpa: Allocator, ann: Annotation, p: Patch) !Annotation {
+    var faces: std.ArrayList(t.Face) = .empty;
+    for (ann.faces) |f| if (centreInside(f.box, p)) {
+        var out: t.Face = .{ .box = clipShift(f.box, p), .kps = f.kps };
+        for (&out.kps) |*k| {
+            k[0] = @max(@min(k[0], @as(f32, @floatFromInt(p.left + p.side))), @as(f32, @floatFromInt(p.left))) - @as(f32, @floatFromInt(p.left));
+            k[1] = @max(@min(k[1], @as(f32, @floatFromInt(p.top + p.side))), @as(f32, @floatFromInt(p.top))) - @as(f32, @floatFromInt(p.top));
+        }
+        try faces.append(gpa, out);
+    };
+    var ignores: std.ArrayList(t.Box) = .empty;
+    for (ann.ignores) |b| if (centreInside(b, p)) try ignores.append(gpa, clipShift(b, p));
+    return .{ .faces = try faces.toOwnedSlice(gpa), .ignores = try ignores.toOwnedSlice(gpa) };
+}
+
 /// Apply a patch: keep boxes whose centre is inside, clip them to it, move to its origin; copy
 /// the image into a grey (128) square.
 pub fn crop(gpa: Allocator, src: Image, ann: Annotation, p: Patch) !struct { Image, Annotation } {
@@ -157,18 +172,31 @@ pub fn crop(gpa: Allocator, src: Image, ann: Annotation, p: Patch) !struct { Ima
             @memcpy(pixels[@intCast(((y - p.top) * p.side + (x0 - p.left)) * 3)..][0..from.len], from);
         }
     }
-    var faces: std.ArrayList(t.Face) = .empty;
-    for (ann.faces) |f| if (centreInside(f.box, p)) {
-        var out: t.Face = .{ .box = clipShift(f.box, p), .kps = f.kps };
-        for (&out.kps) |*k| {
-            k[0] = @max(@min(k[0], @as(f32, @floatFromInt(p.left + p.side))), @as(f32, @floatFromInt(p.left))) - @as(f32, @floatFromInt(p.left));
-            k[1] = @max(@min(k[1], @as(f32, @floatFromInt(p.top + p.side))), @as(f32, @floatFromInt(p.top))) - @as(f32, @floatFromInt(p.top));
+    return .{ .{ .width = side, .height = side, .pixels = pixels }, try cropAnnotation(gpa, ann, p) };
+}
+
+/// Same as `crop`, converting only the cropped rectangle from RGB u8 to f32 (avoids converting
+/// the entire decoded image to float32 before cropping).
+pub fn cropRgb8(gpa: Allocator, src: img.Image, ann: Annotation, p: Patch) !struct { Image, Annotation } {
+    const side: usize = @intCast(p.side);
+    const pixels = try gpa.alloc(f32, side * side * 3);
+    @memset(pixels, 128);
+    const w: i64 = @intCast(src.width);
+    const h: i64 = @intCast(src.height);
+    const x0 = @max(0, p.left);
+    const y0 = @max(0, p.top);
+    const x1 = @min(w, p.left + p.side);
+    const y1 = @min(h, p.top + p.side);
+    if (x1 > x0) {
+        const span: usize = @intCast((x1 - x0) * 3);
+        var y = y0;
+        while (y < y1) : (y += 1) {
+            const from = src.pixels[@intCast((y * w + x0) * 3)..][0..span];
+            const dst = pixels[@intCast(((y - p.top) * p.side + (x0 - p.left)) * 3)..][0..span];
+            for (dst, from) |*d, s| d.* = @floatFromInt(s);
         }
-        try faces.append(gpa, out);
-    };
-    var ignores: std.ArrayList(t.Box) = .empty;
-    for (ann.ignores) |b| if (centreInside(b, p)) try ignores.append(gpa, clipShift(b, p));
-    return .{ .{ .width = side, .height = side, .pixels = pixels }, .{ .faces = try faces.toOwnedSlice(gpa), .ignores = try ignores.toOwnedSlice(gpa) } };
+    }
+    return .{ .{ .width = side, .height = side, .pixels = pixels }, try cropAnnotation(gpa, ann, p) };
 }
 
 /// `Resize((640, 640), keep_ratio=False)`: bilinear, boxes and points scaled by float32
@@ -269,7 +297,8 @@ fn toBgr(hsv: [3]f32) [3]f32 {
 }
 
 /// Apply the draws in MMDetection's order, on RGB storage (the HSV round trip treats it as the
-/// BGR it was in OpenCV).
+/// BGR it was in OpenCV). The round trip runs even with no saturation or hue draw, as
+/// MMDetection's does: it is not the identity on the negative values brightness can produce.
 pub fn photometric(im: Image, p: Photo) void {
     const px = std.mem.bytesAsSlice([3]f32, std.mem.sliceAsBytes(im.pixels));
     for (px) |*rgb| {
@@ -302,9 +331,17 @@ pub fn photometric(im: Image, p: Photo) void {
 /// `Normalize` into the network's CHW input.
 pub fn normalise(im: Image, out: []f32) void {
     const plane = im.width * im.height;
-    for (0..plane) |p| for (0..3) |c| {
-        out[c * plane + p] = (im.pixels[p * 3 + c] - 127.5) / 128.0;
-    };
+    const inv: f32 = 1.0 / 128.0;
+    const out0 = out[0..plane];
+    const out1 = out[plane .. 2 * plane];
+    const out2 = out[2 * plane .. 3 * plane];
+    const px = im.pixels;
+    for (0..plane) |p| {
+        const base = p * 3;
+        out0[p] = (px[base] - 127.5) * inv;
+        out1[p] = (px[base + 1] - 127.5) * inv;
+        out2[p] = (px[base + 2] - 127.5) * inv;
+    }
 }
 
 pub const Draws = struct { patch: Patch, flip: bool, photo: Photo };
@@ -313,7 +350,7 @@ pub const Draws = struct { patch: Patch, flip: bool, photo: Photo };
 /// from `img.shape`, not from the label header. With probability `zoom` (journal:SCRFD-2:0067,
 /// arm Z) the crop is a `zoomPatch` instead, if that is at least 160 px; `zoom == 0` draws
 /// exactly what MMDetection draws.
-pub fn draw(r: std.Random, im: Image, faces: []const t.Face, zoom: f64) Draws {
+pub fn draw(r: std.Random, im: anytype, faces: []const t.Face, zoom: f64) Draws {
     const zoomed: ?Patch = if (zoom > 0 and faces.len > 0 and r.float(f64) < zoom) zoomPatch(r, faces) else null;
     // At most 4x upscaling into 640: a zoom on a tiny face is blur no real large face has.
     const patch = if (zoomed != null and zoomed.?.side >= 160) zoomed.? else drawPatch(r, im.width, im.height, faces);
@@ -362,6 +399,16 @@ pub fn apply(gpa: Allocator, src: Image, ann: Annotation, d: Draws) !struct { Im
     return .{ sized, a2 };
 }
 
+/// Same as `apply`, starting directly from a decoded RGB u8 image.
+pub fn applyRgb8(gpa: Allocator, src: img.Image, ann: Annotation, d: Draws) !struct { Image, Annotation } {
+    const cropped, const a1 = try cropRgb8(gpa, src, ann, d.patch);
+    defer gpa.free(cropped.pixels);
+    const sized, const a2 = try resize(gpa, cropped, a1);
+    if (d.flip) flip(sized, a2);
+    photometric(sized, d.photo);
+    return .{ sized, a2 };
+}
+
 test "labelv2 parsing: keypoint weights, ignore regions, empty images dropped" {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
@@ -390,6 +437,13 @@ test "HSV round trip is the identity on in-range colours" {
         const back = toBgr(toHsv(bgr[0], bgr[1], bgr[2]));
         for (bgr, back) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-3);
     }
+}
+
+test "photometric runs the HSV round trip even with no saturation or hue draw" {
+    // BGR (-10, -20, -30) after brightness -30 comes back as (-10, 0, 10), as cv2 does it.
+    var pixels = [_]f32{ 0, 10, 20 }; // RGB storage: BGR (20, 10, 0)
+    photometric(.{ .width = 1, .height = 1, .pixels = &pixels }, .{ .brightness = -30 });
+    for ([_]f32{ 10, 0, -10 }, pixels) |want, got| try std.testing.expectApproxEqAbs(want, got, 1e-4);
 }
 
 test "flip swaps eye identity and mirrors coordinates" {

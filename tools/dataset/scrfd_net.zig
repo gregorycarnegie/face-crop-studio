@@ -7,7 +7,8 @@ const ck = @import("checkpoint.zig");
 const net = @import("scrfd.zig");
 
 pub const ptx = @embedFile("gpu/scrfd_kernels.ptx");
-const lanes = 256; // gpu/scrfd_kernels.zig
+const block_size = 256; // gpu/scrfd_kernels.zig
+const tile_dim = 16; // gpu/scrfd_kernels.zig
 const Buf = cuda.Buffer(f32);
 
 pub const Param = struct {
@@ -25,17 +26,22 @@ const Layer = struct {
     input: usize,
     weight: *Param,
     bias: ?*Param,
-    bn: ?struct { gamma: *Param, beta: *Param, running_mean: Buf, running_var: Buf, mean: Buf, variance: Buf, sqdev: Buf, name: []const u8 },
+    /// `bn_scale`: gamma / sqrt(var + eps) in forward; `bn_bwd_reduce` overwrites it with invstd.
+    bn: ?struct { gamma: *Param, beta: *Param, running_mean: Buf, running_var: Buf, mean: Buf, variance: Buf, bn_scale: Buf, name: []const u8 },
     z: Buf,
 };
 
 const Kernels = struct {
+    conv1x1_fwd: cuda.Function,
+    conv1x1_bwd_data: cuda.Function,
+    conv3x3_dw_fwd: cuda.Function,
+    conv3x3_dw_bwd_data: cuda.Function,
     conv_fwd: cuda.Function,
     conv_bwd_data: cuda.Function,
     conv_bwd_weight: cuda.Function,
-    channel_sum: cuda.Function,
-    scale: cuda.Function,
-    bn_stats: cuda.Function,
+    bias_bwd: cuda.Function,
+    bn_fwd_stats: cuda.Function,
+    bn_eval_params: cuda.Function,
     bn_relu: cuda.Function,
     bn_bwd_reduce: cuda.Function,
     bn_bwd_dx: cuda.Function,
@@ -53,6 +59,12 @@ pub const Net = struct {
     batch: usize,
     size: usize,
     params: std.ArrayList(*Param),
+    /// Contiguous backing storage for all parameters and all per-value gradients:
+    /// enables 2 memset calls in `zeroGrads` and 1 kernel launch in `sgd`.
+    all_param_value: Buf,
+    all_param_grad: Buf,
+    all_param_momentum: Buf,
+    all_val_grad: Buf,
     layers: []?Layer, // per step; null for add/upsample
     /// Per value: its output buffer and the gradient flowing into it.
     out: []Buf,
@@ -61,19 +73,68 @@ pub const Net = struct {
     /// Training forward passes so far (BatchNorm's num_batches_tracked).
     batches: i64 = 0,
 
+    fn sliceBuf(base: Buf, offset: usize, len: usize) Buf {
+        return .{ .ptr = base.ptr + offset * @sizeOf(f32), .len = len };
+    }
+
     pub fn init(gpa: std.mem.Allocator, dev: *const cuda.Device, model: net.Scrfd, batch: usize, size: usize) !Net {
         if (size % 32 != 0) return error.SizeNotMultipleOf32;
-        var self: Net = .{ .dev = dev, .k = undefined, .model = model, .batch = batch, .size = size, .params = .empty, .layers = try gpa.alloc(?Layer, model.steps.len), .out = try gpa.alloc(Buf, model.channels.len), .grad = try gpa.alloc(Buf, model.channels.len), .scratch = undefined };
+        var self: Net = .{
+            .dev = dev,
+            .k = undefined,
+            .model = model,
+            .batch = batch,
+            .size = size,
+            .params = .empty,
+            .all_param_value = undefined,
+            .all_param_grad = undefined,
+            .all_param_momentum = undefined,
+            .all_val_grad = undefined,
+            .layers = try gpa.alloc(?Layer, model.steps.len),
+            .out = try gpa.alloc(Buf, model.channels.len),
+            .grad = try gpa.alloc(Buf, model.channels.len),
+            .scratch = undefined,
+        };
         inline for (comptime std.meta.fieldNames(Kernels)) |name| @field(self.k, name) = try dev.function(name);
+
+        // Compute contiguous sizes for per-value gradients and all trainable parameters.
+        var total_val_elems: usize = 0;
         var largest: usize = 0;
-        for (model.channels, model.scale, 0..) |c, s, v| {
+        for (model.channels, model.scale) |c, s| {
             const side = size / s;
             const elements = batch * c * side * side;
             largest = @max(largest, elements);
+            total_val_elems += elements;
+        }
+        self.all_val_grad = try dev.alloc(f32, total_val_elems);
+        var val_offset: usize = 0;
+        for (model.channels, model.scale, 0..) |c, s, v| {
+            const side = size / s;
+            const elements = batch * c * side * side;
             self.out[v] = try dev.alloc(f32, elements);
-            self.grad[v] = try dev.alloc(f32, elements);
+            self.grad[v] = sliceBuf(self.all_val_grad, val_offset, elements);
+            val_offset += elements;
         }
         self.scratch = try dev.alloc(f32, largest);
+
+        var total_param_elems: usize = 0;
+        for (model.steps) |step| {
+            const s = switch (step) {
+                .conv => |s| s,
+                else => continue,
+            };
+            const c = s.conv;
+            if ((c.bn != null) != c.relu) return error.UnsupportedLayer;
+            total_param_elems += c.weight.len;
+            if (c.bias) |b| total_param_elems += b.len;
+            if (c.bn) |bn| total_param_elems += bn.gamma.len + bn.beta.len;
+        }
+        self.all_param_value = try dev.alloc(f32, total_param_elems);
+        self.all_param_grad = try dev.alloc(f32, total_param_elems);
+        self.all_param_momentum = try dev.alloc(f32, total_param_elems);
+        try dev.zero(self.all_param_momentum);
+        var param_offset: usize = 0;
+
         for (model.steps, self.layers, 1..) |step, *slot, id| {
             slot.* = null;
             const s = switch (step) {
@@ -81,22 +142,20 @@ pub const Net = struct {
                 else => continue,
             };
             const c = s.conv;
-            // bn_relu fuses the two, and the convolutions without BatchNorm are linear.
-            if ((c.bn != null) != c.relu) return error.UnsupportedLayer;
             const side = size / model.scale[id];
-            const weight = try self.param(gpa, try std.fmt.allocPrint(gpa, "{s}.weight", .{c.name}), &.{ c.out, c.in_per_group, c.kernel, c.kernel }, c.weight);
-            const bias = if (c.bias) |b| try self.param(gpa, try std.fmt.allocPrint(gpa, "{s}.bias", .{c.name}), &.{c.out}, b) else null;
+            const weight = try self.param(gpa, &param_offset, try std.fmt.allocPrint(gpa, "{s}.weight", .{c.name}), &.{ c.out, c.in_per_group, c.kernel, c.kernel }, c.weight);
+            const bias = if (c.bias) |b| try self.param(gpa, &param_offset, try std.fmt.allocPrint(gpa, "{s}.bias", .{c.name}), &.{c.out}, b) else null;
             var layer: Layer = .{ .conv = c, .input = s.input, .weight = weight, .bias = bias, .bn = null, .z = if (c.bn != null) try dev.alloc(f32, batch * c.out * side * side) else self.out[id] };
             if (c.bn) |bn| {
                 const bn_name = bnName(gpa, c.name) catch unreachable;
                 layer.bn = .{
-                    .gamma = try self.param(gpa, try std.fmt.allocPrint(gpa, "{s}.weight", .{bn_name}), &.{c.out}, bn.gamma),
-                    .beta = try self.param(gpa, try std.fmt.allocPrint(gpa, "{s}.bias", .{bn_name}), &.{c.out}, bn.beta),
+                    .gamma = try self.param(gpa, &param_offset, try std.fmt.allocPrint(gpa, "{s}.weight", .{bn_name}), &.{c.out}, bn.gamma),
+                    .beta = try self.param(gpa, &param_offset, try std.fmt.allocPrint(gpa, "{s}.bias", .{bn_name}), &.{c.out}, bn.beta),
                     .running_mean = try dev.alloc(f32, c.out),
                     .running_var = try dev.alloc(f32, c.out),
                     .mean = try dev.alloc(f32, c.out),
                     .variance = try dev.alloc(f32, c.out),
-                    .sqdev = try dev.alloc(f32, c.out),
+                    .bn_scale = try dev.alloc(f32, c.out),
                     .name = bn_name,
                 };
                 try dev.upload(f32, layer.bn.?.running_mean, bn.mean);
@@ -104,15 +163,23 @@ pub const Net = struct {
             }
             slot.* = layer;
         }
+        std.debug.assert(param_offset == total_param_elems);
         return self;
     }
 
-    fn param(self: *Net, gpa: std.mem.Allocator, name: []const u8, dims: []const usize, host: []const f32) !*Param {
+    fn param(self: *Net, gpa: std.mem.Allocator, offset: *usize, name: []const u8, dims: []const usize, host: []const f32) !*Param {
         const p = try gpa.create(Param);
-        p.* = .{ .name = name, .value = try self.dev.alloc(f32, host.len), .grad = try self.dev.alloc(f32, host.len), .momentum = try self.dev.alloc(f32, host.len), .shape = try gpa.dupe(usize, dims) };
+        const len = host.len;
+        p.* = .{
+            .name = name,
+            .value = sliceBuf(self.all_param_value, offset.*, len),
+            .grad = sliceBuf(self.all_param_grad, offset.*, len),
+            .momentum = sliceBuf(self.all_param_momentum, offset.*, len),
+            .shape = try gpa.dupe(usize, dims),
+        };
         try self.dev.upload(f32, p.value, host);
-        try self.dev.zero(p.momentum);
         try self.params.append(gpa, p);
+        offset.* += len;
         return p;
     }
 
@@ -134,21 +201,25 @@ pub const Net = struct {
             .conv => {
                 const l = layer.?;
                 const s = self.shape(l, n, id);
-                const total = s.n * s.cout * s.oh * s.ow;
-                try d.launch(self.k.conv_fwd, total, .{ s, self.out[l.input], l.weight.value, if (l.bias) |b| b.value.ptr else @as(cuda.Ptr, 0), l.z });
+                const hw = s.oh * s.ow;
+                const total = s.n * s.cout * hw;
+                const bias_ptr = if (l.bias) |b| b.value.ptr else @as(cuda.Ptr, 0);
+                if (s.k == 1 and s.stride == 1 and s.pad == 0 and s.groups == 1) {
+                    const gx: c_uint = (hw + tile_dim - 1) / tile_dim;
+                    const gy: c_uint = (s.cout + tile_dim - 1) / tile_dim;
+                    try d.launchGrid(self.k.conv1x1_fwd, .{ gx, gy, s.n }, .{ tile_dim, tile_dim, 1 }, .{ s.n, s.cin, s.cout, hw, self.out[l.input], l.weight.value, bias_ptr, l.z });
+                } else if (s.k == 3 and s.pad == 1 and s.groups == s.cin and s.groups == s.cout) {
+                    try d.launch(self.k.conv3x3_dw_fwd, total, .{ s.n, s.cin, s.h, s.w, s.oh, s.ow, s.stride, self.out[l.input], l.weight.value, bias_ptr, l.z });
+                } else {
+                    try d.launch(self.k.conv_fwd, total, .{ s, self.out[l.input], l.weight.value, bias_ptr, l.z });
+                }
                 if (l.bn) |bn| {
-                    const hw = s.oh * s.ow;
                     if (train) {
-                        const m: f32 = @floatFromInt(n * hw);
-                        try d.zero(bn.mean);
-                        try d.launch(self.k.channel_sum, s.cout * lanes, .{ n, s.cout, hw, l.z, @as(cuda.Ptr, 0), bn.mean });
-                        try d.launch(self.k.scale, s.cout, .{ s.cout, 1 / m, bn.mean });
-                        try d.zero(bn.sqdev);
-                        try d.launch(self.k.channel_sum, s.cout * lanes, .{ n, s.cout, hw, l.z, bn.mean, bn.sqdev });
-                        try d.launch(self.k.bn_stats, s.cout, .{ s.cout, m, bn.sqdev, bn.mean, bn.variance, bn.running_mean, bn.running_var });
-                        try d.launch(self.k.bn_relu, total, .{ total, s.cout, hw, l.z, bn.mean, bn.variance, bn.gamma.value, bn.beta.value, self.out[id] });
+                        try d.launchGrid(self.k.bn_fwd_stats, .{ s.cout, 1, 1 }, .{ block_size, 1, 1 }, .{ n, s.cout, hw, l.z, bn.gamma.value, bn.mean, bn.variance, bn.running_mean, bn.running_var, bn.bn_scale });
+                        try d.launch(self.k.bn_relu, total, .{ total, s.cout, hw, l.z, bn.mean, bn.bn_scale, bn.beta.value, self.out[id] });
                     } else {
-                        try d.launch(self.k.bn_relu, total, .{ total, s.cout, hw, l.z, bn.running_mean, bn.running_var, bn.gamma.value, bn.beta.value, self.out[id] });
+                        try d.launch(self.k.bn_eval_params, s.cout, .{ s.cout, bn.running_var, bn.gamma.value, bn.bn_scale });
+                        try d.launch(self.k.bn_relu, total, .{ total, s.cout, hw, l.z, bn.running_mean, bn.bn_scale, bn.beta.value, self.out[id] });
                     }
                 }
             },
@@ -168,8 +239,8 @@ pub const Net = struct {
     /// Zero every gradient: parameters and per-value buffers. Then the loss writes the head
     /// outputs' gradients into `grad[...]` and `backward` takes it from there.
     pub fn zeroGrads(self: *Net) !void {
-        for (self.params.items) |p| try self.dev.zero(p.grad);
-        for (self.grad) |g| try self.dev.zero(g);
+        try self.dev.zero(self.all_param_grad);
+        try self.dev.zero(self.all_val_grad);
     }
 
     pub fn backward(self: *Net, n: u32) !void {
@@ -182,20 +253,30 @@ pub const Net = struct {
                 .conv => {
                     const l = self.layers[i].?;
                     const s = self.shape(l, n, id);
-                    const total = s.n * s.cout * s.oh * s.ow;
                     const hw = s.oh * s.ow;
+                    const total = s.n * s.cout * hw;
                     var g = self.grad[id];
                     if (l.bn) |bn| {
-                        try d.launch(self.k.bn_bwd_reduce, s.cout * lanes, .{ n, s.cout, hw, l.z, self.out[id], self.grad[id], bn.mean, bn.variance, bn.gamma.grad, bn.beta.grad });
-                        try d.launch(self.k.bn_bwd_dx, total, .{ total, s.cout, hw, @as(f32, @floatFromInt(n * hw)), l.z, self.out[id], self.grad[id], bn.mean, bn.variance, bn.gamma.value, bn.gamma.grad, bn.beta.grad, self.scratch });
+                        try d.launchGrid(self.k.bn_bwd_reduce, .{ s.cout, 1, 1 }, .{ block_size, 1, 1 }, .{ n, s.cout, hw, l.z, self.out[id], self.grad[id], bn.mean, bn.variance, bn.gamma.grad, bn.beta.grad, bn.bn_scale });
+                        try d.launch(self.k.bn_bwd_dx, total, .{ total, s.cout, hw, @as(f32, @floatFromInt(n * hw)), l.z, self.out[id], self.grad[id], bn.mean, bn.bn_scale, bn.gamma.value, bn.gamma.grad, bn.beta.grad, self.scratch });
                         g = self.scratch;
                     }
-                    if (l.bias) |b| try d.launch(self.k.channel_sum, s.cout * lanes, .{ n, s.cout, hw, g, @as(cuda.Ptr, 0), b.grad });
-                    const rows: u32 = @max(1, 1024 / s.ow);
+                    if (l.bias) |b| try d.launchGrid(self.k.bias_bwd, .{ s.cout, 1, 1 }, .{ block_size, 1, 1 }, .{ n, s.cout, hw, g, b.grad });
+                    const rows: u32 = @max(1, 2048 / s.ow);
                     const bands = (s.oh + rows - 1) / rows;
                     const weights = s.cout * (s.cin / s.groups) * s.k * s.k;
-                    try d.launch(self.k.conv_bwd_weight, weights * n * bands, .{ s, rows, bands, self.out[l.input], g, l.weight.grad });
-                    if (l.input != 0) try d.launch(self.k.conv_bwd_data, s.n * s.cin * s.h * s.w, .{ s, g, l.weight.value, self.grad[l.input] });
+                    try d.launchGrid(self.k.conv_bwd_weight, .{ weights, bands, 1 }, .{ block_size, 1, 1 }, .{ s, rows, bands, self.out[l.input], g, l.weight.grad });
+                    if (l.input != 0) {
+                        if (s.k == 1 and s.stride == 1 and s.pad == 0 and s.groups == 1) {
+                            const gx: c_uint = (hw + tile_dim - 1) / tile_dim;
+                            const gy: c_uint = (s.cin + tile_dim - 1) / tile_dim;
+                            try d.launchGrid(self.k.conv1x1_bwd_data, .{ gx, gy, s.n }, .{ tile_dim, tile_dim, 1 }, .{ s.n, s.cin, s.cout, hw, g, l.weight.value, self.grad[l.input] });
+                        } else if (s.k == 3 and s.pad == 1 and s.groups == s.cin and s.groups == s.cout) {
+                            try d.launch(self.k.conv3x3_dw_bwd_data, s.n * s.cin * s.h * s.w, .{ s.n, s.cin, s.h, s.w, s.oh, s.ow, s.stride, g, l.weight.value, self.grad[l.input] });
+                        } else {
+                            try d.launch(self.k.conv_bwd_data, s.n * s.cin * s.h * s.w, .{ s, g, l.weight.value, self.grad[l.input] });
+                        }
+                    }
                 },
                 .add => |pair| {
                     const total = self.count(id, n);
@@ -212,10 +293,8 @@ pub const Net = struct {
 
     /// One SGD step over every parameter (`first` seeds the momentum buffers).
     pub fn sgd(self: *Net, lr: f64, momentum: f64, weight_decay: f64, first: bool) !void {
-        for (self.params.items) |p| {
-            const c: u32 = @intCast(p.value.len);
-            try self.dev.launch(self.k.sgd, c, .{ c, p.value, p.grad, p.momentum, @as(f32, @floatCast(lr)), @as(f32, @floatCast(momentum)), @as(f32, @floatCast(weight_decay)), @as(u32, @intFromBool(first)) });
-        }
+        const c: u32 = @intCast(self.all_param_value.len);
+        try self.dev.launch(self.k.sgd, c, .{ c, self.all_param_value, self.all_param_grad, self.all_param_momentum, @as(f32, @floatCast(lr)), @as(f32, @floatCast(momentum)), @as(f32, @floatCast(weight_decay)), @as(u32, @intFromBool(first)) });
     }
 
     /// The state_dict in checkpoint order: each convolution, then its BatchNorm.

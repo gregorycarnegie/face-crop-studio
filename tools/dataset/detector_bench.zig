@@ -125,9 +125,22 @@ fn letterbox(gpa: std.mem.Allocator, image: img.Image) !struct { img.Image, f64 
 pub fn blob(gpa: std.mem.Allocator, image: img.Image, order: [3]usize, mean: [3]f32, scale: f32) ![]f32 {
     const plane = image.width * image.height;
     const out = try gpa.alloc(f32, 3 * plane);
-    for (0..3) |c| for (0..plane) |p| {
-        out[c * plane + p] = (@as(f32, @floatFromInt(image.pixels[p * 3 + order[c]])) - mean[c]) * scale;
-    };
+    const out0 = out[0..plane];
+    const out1 = out[plane .. 2 * plane];
+    const out2 = out[2 * plane .. 3 * plane];
+    const o0 = order[0];
+    const o1 = order[1];
+    const o2 = order[2];
+    const m0 = mean[0];
+    const m1 = mean[1];
+    const m2 = mean[2];
+    const px = image.pixels;
+    for (0..plane) |p| {
+        const base = p * 3;
+        out0[p] = (@as(f32, @floatFromInt(px[base + o0])) - m0) * scale;
+        out1[p] = (@as(f32, @floatFromInt(px[base + o1])) - m1) * scale;
+        out2[p] = (@as(f32, @floatFromInt(px[base + o2])) - m2) * scale;
+    }
     return out;
 }
 
