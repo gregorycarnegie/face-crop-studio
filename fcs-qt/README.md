@@ -348,10 +348,11 @@ packages a 256 px PNG of it.
 6. The gaps fcs-gui still covered (closed 2026-11-15 unless noted): Linux arm64 packages; the
    setup.exe and MSIX built from fcs-qt and install-tested in CI (see Packaging); Qt Quick
    tests and a Windows end-to-end test (see Tests). Still open: a few weeks of 2.4.x in use,
-   the file dialogs on a real Linux desktop (its camera and GPU were checked 2026-11-16), and a
-   real Mac, which CI cannot stand in for.
+   the file dialogs on a real Linux desktop (its camera and GPU were checked 2026-11-16). No
+   real Mac is available, so (decided 2026-11-17) 3.0 ships fcs-qt on macOS labelled as a
+   preview until someone checks it on real hardware.
 7. 3.0: fcs-cli and fcs-qt as the Windows payload of the zip, MSI, setup.exe and MSIX (fcs-qt's
    own MSI goes, the shared one keeps fcs-gui's upgrade code), fcs-qt's packages on macOS and
-   Linux under fcs-gui's names, and fcs-gui removed.
+   Linux under fcs-gui's names (macOS marked as a preview), and fcs-gui removed.
 
 Also worth asking upstream for an image provider API in the bridge, so the C++ file can go.
