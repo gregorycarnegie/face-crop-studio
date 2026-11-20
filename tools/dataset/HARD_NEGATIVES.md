@@ -297,3 +297,29 @@ above attribute to negatives a loss that a negative-free native run shows as wel
 native 80k control is trained to 100 epochs, no short run can be validated, and no training
 design can be credited or blamed for large faces. That run costs ~11.7 h, resuming B's 50-epoch
 run from its epoch 30 (still at lr 1e-2, the full recipe's schedule).
+
+## Where it stopped, 2026-11-20
+
+The 100-epoch control was not needed. Five 80k runs at epoch 30 -- three native (including one
+from an MMDetection-generated init) and two by MMDetection's own trainer -- scored 58.4 to 61.4
+on large faces; the shipped model's run scored 83.0. Same config, label file and environment.
+**The native trainer matches MMDetection, and the shipped model is a lucky draw** (about 1 in 5)
+that traded about 5 points of COCO recall for +22 on large faces. TF32 was the last suspect; it
+was not settled, and no longer matters for that conclusion. A retrain of the current recipe
+will likely land below shipped's 86.5 on large faces, so a new design has to target them.
+
+A design screen at 10 epochs (native, 80k, seed 0; baseline 55.3 large, 77.1 COCO recall at
+0.1 FP per photo):
+
+| Arm | Large faces | COCO @ 0.1 | Verdict |
+|---|---|---|---|
+| Z: `--zoom 0.25`, a quarter of crops zoom on the widest face | 74.8 (+19.5) | 72.5 (-4.6) | large passes, COCO fails |
+| L: `--lr 0.02` | 57.6 | 80.7 (+3.6) | large fails |
+| S: `--batch 16` | 52.9 | 81.5 | large fails |
+
+Zoom crops are the only lever found for large faces; `train_scrfd --zoom` is in the tree. The
+untried next step was pairing it with L to pay back the COCO cost (`--zoom 0.25 --lr 0.02`, and
+`--zoom 0.125`), winners to 30 epochs with two seeds.
+
+**Paused.** Face Crop Studio is a cropping app: people point it at faces, so fewer false
+positives buy little, and the shipped detector stays.

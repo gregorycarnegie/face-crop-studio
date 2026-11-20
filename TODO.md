@@ -9,8 +9,11 @@ lavapipe (Vulkan) on Linux — and `FCS_REQUIRE_GPU=1` makes a missing one fail 
 skip. That is correctness coverage of the shaders on three backends, run on software or
 virtual devices. It says nothing about speed or driver quirks on real hardware.
 
-- [ ] Test on real macOS hardware (Metal via wgpu).
-- [ ] Test on real Linux hardware (Vulkan via wgpu).
+- [ ] Test on real macOS hardware (Metal via wgpu). No real Mac is available; fcs-qt's macOS
+  package ships labelled as a preview until someone checks it.
+- [ ] Check fcs-qt's file dialogs on a real Linux desktop. Detection on Vulkan and the camera
+  were checked there on 2026-11-16 (Ubuntu 26.04, GTX 1080 Ti; WGSL 8 ms against the CPU
+  graph's 18).
 
 ## Detector false positives off its home domain
 
@@ -20,21 +23,16 @@ tomatoes, plates, wheels). At equal false-positive rates it finds the fewest fac
 three. Every one of its 80,000 training photographs contains faces, so it has seen almost no
 face-free scenes.
 
-- [ ] Retrain with face-free hard negatives, without losing large faces. A first attempt
-  (November 2026: 20,000 Open Images photographs with Person, Human face or Human head verified
-  absent, mined by `tools/dataset/oi_negatives.zig`) cut COCO's false positives on no-person
-  photographs from 0.030 to 0.005 per image and raised recall at equal false-positive rates by
-  4-9 points. But on faces at least 45% of the image width its Open Images recall fell from 78.9%
-  to 57.3%, and five of the six bundled sample portraits dropped below 0.5, so it was not shipped.
-  Most of its hard negatives were frame-filling animal and plush-toy close-ups. A balanced second
-  design (15% of those, plus 7,514 extra large-face photographs) kept the false-positive fix but
-  still failed the gates in a short controlled experiment, and short fine-tunes turned out unable
-  to reproduce the large-face loss at all. Full record: `tools/dataset/HARD_NEGATIVES.md`.
-- [ ] Before more negative-data work, find out why large faces are fragile: score attempt 1's
-  model with large faces shrunk into a bigger canvas (scale handling vs face semantics), look at
-  `RandomSquareCrop`'s face-size distribution for positives against negatives, and compare a
-  larger SCRFD variant or a wider stride-32 head. The goal is a detector that tells human faces
-  from face-like objects at every scale, not one that learns which sizes are likely real.
+**Paused (2026-11-20).** People point a cropping app at faces, so fewer false positives buy
+little, and the shipped detector stays. Two hard-negative retrains cut COCO's false positives
+(0.030 -> 0.005 per no-person photo) but lost large faces and did not ship. The investigation
+since found that the native trainer matches MMDetection and that the shipped model's large-face
+recall is a lucky draw, so any retrain has to target large faces. Zoom crops
+(`train_scrfd --zoom`) are the only lever found: +19.5 points on large faces at 10 epochs, for
+-4.6 COCO recall. Full record and the next step: `tools/dataset/HARD_NEGATIVES.md`.
+
+- [ ] If resumed: pay back zoom's COCO cost (`--zoom 0.25 --lr 0.02`, `--zoom 0.125`), then
+  add negatives.
 
 ## CUDA kernel optimisation
 
@@ -42,6 +40,9 @@ After the 2.3.0 work (memory pool, merged split-K heads, graph replay, GPU norma
 the shortlist decode), a 640-wide CUDA detection takes ~1.0 ms on an RTX 4090, and ~0.74 ms of
 it is the kernels themselves. Every kernel is still one thread per output with no tiling, so
 that is where the remaining time is.
+
+**Low priority.** Even halving the pointwise time saves ~0.2 ms per photo, which disappears
+next to decoding and encoding, on a backend that is opt-in.
 
 - [ ] Profile the kernels per step (CUDA events around each launch; there is no Nsight on the
   dev machine). Last breakdown: pointwise convolutions ~0.41 ms, merged heads ~0.15 ms,
@@ -57,7 +58,3 @@ that is where the remaining time is.
 
 - [ ] **Windows** — requires `CODE_SIGN_PFX` (base64-encoded PFX) and `CODE_SIGN_PASSWORD` as repository secrets. Signing is skipped silently if absent.
 - [ ] **macOS** — requires five repo secrets: `APPLE_DEVELOPER_ID_CERT` (base64 of the .p12), `APPLE_DEVELOPER_ID_PASS` (.p12 password), `APPLE_DEVELOPER_ID_NAME` (keychain identity string), `APPLE_NOTARIZE_USER`/`APPLE_NOTARIZE_PASS` (Apple ID + app-specific password), and `APPLE_TEAM_ID`. No code changes needed.
-
-## Competitive feature parity (from Face Crop Jet review)
-
-- [x] **Watch-folder mode** — `fcs-cli --watch <dir>` monitors a directory and runs the existing batch crop/export path on images as they arrive. Shipped; see CHANGELOG.
