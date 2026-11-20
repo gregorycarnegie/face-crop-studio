@@ -310,9 +310,45 @@ pub fn normalise(im: Image, out: []f32) void {
 pub const Draws = struct { patch: Patch, flip: bool, photo: Photo };
 
 /// Draws for an image as decoded: the crop is sized from its pixels, as MMDetection sizes it
-/// from `img.shape`, not from the label header.
-pub fn draw(r: std.Random, im: Image, faces: []const t.Face) Draws {
-    return .{ .patch = drawPatch(r, im.width, im.height, faces), .flip = r.float(f64) < 0.5, .photo = drawPhoto(r) };
+/// from `img.shape`, not from the label header. With probability `zoom` (journal:SCRFD-2:0067,
+/// arm Z) the crop is a `zoomPatch` instead, if that is at least 160 px; `zoom == 0` draws
+/// exactly what MMDetection draws.
+pub fn draw(r: std.Random, im: Image, faces: []const t.Face, zoom: f64) Draws {
+    const zoomed: ?Patch = if (zoom > 0 and faces.len > 0 and r.float(f64) < zoom) zoomPatch(r, faces) else null;
+    // At most 4x upscaling into 640: a zoom on a tiny face is blur no real large face has.
+    const patch = if (zoomed != null and zoomed.?.side >= 160) zoomed.? else drawPatch(r, im.width, im.height, faces);
+    return .{ .patch = patch, .flip = r.float(f64) < 0.5, .photo = drawPhoto(r) };
+}
+
+/// A square crop in which the widest face fills U(0.45, 0.9) of the side, placed at random
+/// with the face inside it (centred on any axis where it does not fit). Grey outside the photo,
+/// as `crop` pads any patch.
+pub fn zoomPatch(r: std.Random, faces: []const t.Face) Patch {
+    var b = faces[0].box;
+    for (faces[1..]) |f| if (f.box[2] - f.box[0] > b[2] - b[0]) {
+        b = f.box;
+    };
+    const fw = b[2] - b[0];
+    const fh = b[3] - b[1];
+    const side = @max(1, @trunc(fw / (0.45 + 0.45 * r.float(f32))));
+    const left = if (side > fw) b[0] - r.float(f32) * (side - fw) else b[0] + (fw - side) / 2;
+    const top = if (side > fh) b[1] - r.float(f32) * (side - fh) else b[1] + (fh - side) / 2;
+    return .{ .left = @intFromFloat(@floor(left)), .top = @intFromFloat(@floor(top)), .side = @intFromFloat(side) };
+}
+
+test "zoomPatch: the widest face fills 45-90% of the crop and lies inside it" {
+    var prng: std.Random.DefaultPrng = .init(1);
+    const faces = [_]t.Face{
+        .{ .box = .{ 10, 10, 30, 34 }, .kps = @splat(.{ 0, 0, 1 }) },
+        .{ .box = .{ 200, 150, 320, 290 }, .kps = @splat(.{ 0, 0, 1 }) },
+    };
+    for (0..1000) |_| {
+        const p = zoomPatch(prng.random(), &faces);
+        const side: f32 = @floatFromInt(p.side);
+        try std.testing.expect(120 / side >= 0.45 - 0.01 and 120 / side <= 0.9 + 0.01);
+        try std.testing.expect(centreInside(faces[1].box, p));
+        try std.testing.expect(@as(f32, @floatFromInt(p.left)) <= 200 and @as(f32, @floatFromInt(p.left)) + side >= 320 - 1);
+    }
 }
 
 /// The whole pipeline after decoding: crop, resize, flip, photometric. Returns the 640x640

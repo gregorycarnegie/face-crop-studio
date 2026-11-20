@@ -142,7 +142,7 @@ fn dumpLoss(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, checkpo
         const e = withEyes(entries, b * 7); // a spread of images that carry eye labels
         const src = try aug.fromRgb8(gpa, try img.load(gpa, io, try std.fs.path.join(gpa, &.{ data, "images", e.name }), .as_stored));
         const faces = try gpa.dupe(targets.Face, e.faces);
-        const im, const ann = try aug.apply(gpa, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces));
+        const im, const ann = try aug.apply(gpa, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces, 0));
         aug.normalise(im, input[b * 3 * plane ..][0 .. 3 * plane]);
         const tg = try targets.targets(gpa, &all, ann.faces, ann.ignores, 0.5);
         @memcpy(label_weight[b * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
@@ -308,6 +308,7 @@ const Prep = struct {
     order: []const usize,
     seed: u64,
     ignore_iof: f32,
+    zoom: f64,
     batch: *Batch,
     next: std.atomic.Value(usize) = .init(0),
     failed: std.atomic.Value(bool) = .init(false),
@@ -331,7 +332,7 @@ fn prepWorker(job: *Prep) void {
             };
             const src = aug.fromRgb8(g, decoded) catch break :blk false;
             const faces = g.dupe(targets.Face, e.faces) catch break :blk false;
-            const im, const ann = aug.apply(g, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces)) catch break :blk false;
+            const im, const ann = aug.apply(g, src, .{ .faces = faces, .ignores = e.ignores }, aug.draw(prng.random(), src, e.faces, job.zoom)) catch break :blk false;
             aug.normalise(im, job.batch.input[slot * 3 * plane ..][0 .. 3 * plane]);
             const tg = targets.targets(g, &all, ann.faces, ann.ignores, job.ignore_iof) catch break :blk false;
             @memcpy(job.batch.label_weight[slot * targets.anchor_count ..][0..targets.anchor_count], tg.label_weight);
@@ -378,6 +379,8 @@ const Options = struct {
     seed: u64 = 0,
     workers: usize = 16,
     max_iters: ?usize = null,
+    /// Share of crops that zoom on the widest face (`--zoom`, `aug.zoomPatch`).
+    zoom: f64 = 0,
 };
 
 /// `epoch` is the number of complete epochs; `partial` marks a stop inside the next one, which
@@ -454,13 +457,13 @@ fn train(gpa: std.mem.Allocator, io: std.Io, dev: *const cuda.Device, o: Options
         var pending: ?std.Thread = null;
         // On any early return the prefetch thread still points into `jobs` and `batches`.
         defer if (pending) |t| t.join();
-        jobs[0] = .{ .io = io, .images = images, .entries = entries, .order = order[0..n], .seed = o.seed *% 1000003 +% epoch *% 7919, .ignore_iof = o.recipe.ignore_iof, .batch = &batches[0] };
+        jobs[0] = .{ .io = io, .images = images, .entries = entries, .order = order[0..n], .seed = o.seed *% 1000003 +% epoch *% 7919, .ignore_iof = o.recipe.ignore_iof, .zoom = o.zoom, .batch = &batches[0] };
         try prepare(&jobs[0], o.workers);
         for (0..per_epoch) |k| {
             const cur = k % 2;
             if (k + 1 < per_epoch) {
                 const nxt = (k + 1) % 2;
-                jobs[nxt] = .{ .io = io, .images = images, .entries = entries, .order = order[(k + 1) * n ..][0..n], .seed = (o.seed *% 1000003 +% epoch *% 7919) ^ ((k + 1) *% 104729), .ignore_iof = o.recipe.ignore_iof, .batch = &batches[nxt] };
+                jobs[nxt] = .{ .io = io, .images = images, .entries = entries, .order = order[(k + 1) * n ..][0..n], .seed = (o.seed *% 1000003 +% epoch *% 7919) ^ ((k + 1) *% 104729), .ignore_iof = o.recipe.ignore_iof, .zoom = o.zoom, .batch = &batches[nxt] };
                 pending = try std.Thread.spawn(.{}, prepare, .{ &jobs[nxt], o.workers });
             }
             const b = &batches[cur];
@@ -537,13 +540,13 @@ pub fn main(init: std.process.Init) !void {
             const v = args[i];
             if (std.mem.eql(u8, arg, "--recipe")) {
                 o.recipe = if (std.mem.eql(u8, v, "80k")) recipes.@"80k" else if (std.mem.eql(u8, v, "curve")) recipes.curve else return error.UnknownRecipe;
-            } else if (std.mem.eql(u8, arg, "--out")) o.out = v else if (std.mem.eql(u8, arg, "--negatives")) o.negatives = v else if (std.mem.eql(u8, arg, "--resume")) o.resume_from = v else if (std.mem.eql(u8, arg, "--init")) o.init_from = v else if (std.mem.eql(u8, arg, "--lr")) lr = try std.fmt.parseFloat(f64, v) else if (std.mem.eql(u8, arg, "--steps")) steps = .{ try std.fmt.parseInt(usize, v[0 .. std.mem.findScalar(u8, v, ',') orelse return error.StepsNeedTwo], 10), try std.fmt.parseInt(usize, v[(std.mem.findScalar(u8, v, ',') orelse return error.StepsNeedTwo) + 1 ..], 10) } else if (std.mem.eql(u8, arg, "--seed")) o.seed = try std.fmt.parseInt(u64, v, 10) else if (std.mem.eql(u8, arg, "--workers")) o.workers = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--epochs")) epochs = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--batch")) batch = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--max-iters")) o.max_iters = try std.fmt.parseInt(usize, v, 10) else return error.UnknownOption;
+            } else if (std.mem.eql(u8, arg, "--out")) o.out = v else if (std.mem.eql(u8, arg, "--negatives")) o.negatives = v else if (std.mem.eql(u8, arg, "--resume")) o.resume_from = v else if (std.mem.eql(u8, arg, "--init")) o.init_from = v else if (std.mem.eql(u8, arg, "--lr")) lr = try std.fmt.parseFloat(f64, v) else if (std.mem.eql(u8, arg, "--steps")) steps = .{ try std.fmt.parseInt(usize, v[0 .. std.mem.findScalar(u8, v, ',') orelse return error.StepsNeedTwo], 10), try std.fmt.parseInt(usize, v[(std.mem.findScalar(u8, v, ',') orelse return error.StepsNeedTwo) + 1 ..], 10) } else if (std.mem.eql(u8, arg, "--seed")) o.seed = try std.fmt.parseInt(u64, v, 10) else if (std.mem.eql(u8, arg, "--workers")) o.workers = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--epochs")) epochs = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--batch")) batch = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--max-iters")) o.max_iters = try std.fmt.parseInt(usize, v, 10) else if (std.mem.eql(u8, arg, "--zoom")) o.zoom = try std.fmt.parseFloat(f64, v) else return error.UnknownOption;
         } else try positional.append(gpa, arg);
     }
     if (positional.items.len != 2) {
         std.debug.print(
             \\usage: train_scrfd <openimages_dir> <labelv2.txt> [--recipe curve|80k] [--out dir] [--epochs N] [--batch N]
-            \\                   [--negatives face_free.txt] [--resume checkpoint.pth | --init checkpoint.pth] [--lr 0.01] [--steps a,b] [--seed 0] [--workers 16] [--max-iters N]
+            \\                   [--negatives face_free.txt] [--resume checkpoint.pth | --init checkpoint.pth] [--lr 0.01] [--steps a,b] [--seed 0] [--workers 16] [--max-iters N] [--zoom 0.25]
             \\       train_scrfd --check <checkpoint.pth> | --dump-grads <checkpoint.pth> <dir> | --dump-loss <checkpoint.pth> <openimages_dir> <dir>
             \\
         , .{});
