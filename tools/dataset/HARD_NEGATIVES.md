@@ -321,5 +321,54 @@ Zoom crops are the only lever found for large faces; `train_scrfd --zoom` is in 
 untried next step was pairing it with L to pay back the COCO cost (`--zoom 0.25 --lr 0.02`, and
 `--zoom 0.125`), winners to 30 epochs with two seeds.
 
-**Paused.** Face Crop Studio is a cropping app: people point it at faces, so fewer false
-positives buy little, and the shipped detector stays.
+Paused the same day (a cropping app: fewer false positives buy little), resumed that evening.
+
+## Zoom plus a higher learning rate, 2026-11-21
+
+Second screen, same format and baseline. Run folders under `zig_runs\proxy`, gate reports
+`gate_e<epoch>.txt` in each:
+
+| Arm | Large faces | COCO @ 0.1 | OI @ 0.1 | Verdict |
+|---|---|---|---|---|
+| ZL: `--zoom 0.25 --lr 0.02` (`screen_ZL_zoom25_lr02`) | 73.2 | 75.2 | 68.1 | passes (COCO by 0.1, inside the noise) |
+| Z12: `--zoom 0.125` (`screen_Z12_zoom125`) | 71.4 | 75.0 | 66.1 | COCO fails by 0.1 |
+
+The higher learning rate wins back 2.7 of zoom's 4.6 COCO points for 1.6 on large faces; ZL beats
+Z12 on all three. ZL went to 30 epochs with two seeds (seed 0 resumed from the screen's epoch 10,
+seed 1 from scratch; the 80k schedule keeps lr at 0.02 until epoch 69):
+
+| ZL, test half | Epoch 10 | Epoch 20 | Epoch 30 |
+|---|---|---|---|
+| Seed 0: large / COCO @ 0.1 / OI @ 0.1 | 73.2 / 75.2 / 68.1 | **70.9 / 82.3 / 70.6** | 87.0 / 64.5 / 71.2 |
+| Seed 1 | 55.9 / 74.8 / 68.0 | 60.6 / 83.4 / 71.7 | 57.7 / 83.0 / 73.9 |
+| Lowest sample-portrait score, seed 0 / seed 1 | 0.64 / 0.16 | 0.65 / 0.12 | 0.75 / 0.18 |
+
+Non-zoom runs at epoch 30: 58.4-61.4 large, 82-83.5 COCO.
+
+1. **Zoom does not remove the seed lottery.** Seed 1 is a non-zoom run on every figure; seed 0 at
+   epoch 30 beats shipped on large faces (+0.5) and is 18 points worse on COCO -- the shipped
+   model's trade, exaggerated. Same flags in both.
+2. **The split shows by epoch 10** (73 against 56 on large faces), so a 10-epoch screen can throw
+   out bad seeds for 1.7 GPU hours each.
+3. **Undecayed checkpoints swing.** Seed 0 was balanced at epoch 20 (+10 large over the non-zoom
+   runs, same COCO, samples pass) and lost 18 COCO points by epoch 30 with no change of learning
+   rate. Compare designs after a decay, not mid-schedule.
+
+**A decay settles it.** Seed 0 resumed for five epochs with two tenfold drops (`--steps 20,23` /
+`30,33`; folders `ZL_s0_e20_decay`, `ZL_s0_e30_decay`):
+
+| Test half | Shipped | B: 25 ep, no zoom, decayed | ZL seed 0, e20 + decay to 25 | ZL seed 0, e30 + decay to 35 |
+|---|---:|---:|---:|---:|
+| Large faces, pooled 622 | 86.5 | 58.4 | 82.3 | **82.6** |
+| COCO recall at 0.1 FP per photo | 88.9 | 83.5 | 86.9 | **87.7** |
+| OI recall at 0.1 unmatched/image | 78.2 | 72.2 | 76.1 | **77.3** (passes) |
+| Lowest sample-portrait score | 0.76 | | 0.71 | 0.75 |
+
+Both decayed checkpoints land in the same place, balanced and within about 4 points of shipped on
+large faces and a point on COCO and Open Images, at a third of the schedule: **+24 large faces over
+the recipe without zoom.** The 30-epoch swing was the undecayed learning rate, not the model.
+
+Seed screen at 10 epochs (large / COCO at 0.1), `screen_ZL_seed<N>`: seed 0 73.2 / 75.2, seed 1
+55.9 / 74.8, seed 2 69.6 / 80.1, seed 3 51.3 / 77.6. Two of four seeds take the large-face mode;
+the other two look like runs without zoom (baseline 55.3). Seed 0 (rule: large >= 70, COCO >= 74)
+is running the full 100-epoch schedule (`ZL_full_seed0`, `chain_seeds.sh`); seed 2 is the backup.

@@ -23,16 +23,19 @@ tomatoes, plates, wheels). At equal false-positive rates it finds the fewest fac
 three. Every one of its 80,000 training photographs contains faces, so it has seen almost no
 face-free scenes.
 
-**Paused (2026-11-20).** People point a cropping app at faces, so fewer false positives buy
-little, and the shipped detector stays. Two hard-negative retrains cut COCO's false positives
-(0.030 -> 0.005 per no-person photo) but lost large faces and did not ship. The investigation
-since found that the native trainer matches MMDetection and that the shipped model's large-face
-recall is a lucky draw, so any retrain has to target large faces. Zoom crops
-(`train_scrfd --zoom`) are the only lever found: +19.5 points on large faces at 10 epochs, for
--4.6 COCO recall. Full record and the next step: `tools/dataset/HARD_NEGATIVES.md`.
+**Resumed (2026-11-20), low priority.** People point a cropping app at faces, so fewer false
+positives buy little, and the shipped detector stays until a retrain passes its gate. Two
+hard-negative retrains cut COCO's false positives (0.030 -> 0.005 per no-person photo) but lost
+large faces. The native trainer matches MMDetection and the shipped model's large-face recall is
+a lucky draw, so any retrain has to target large faces. Zoom crops plus a higher learning rate
+(`train_scrfd --zoom 0.25 --lr 0.02`) win the 10-epoch screen, but at 30 epochs the outcome
+still depends on the seed (one of two seeds took). A good seed, decayed at 35 epochs, reaches
+82.6 large / 87.7 COCO / 77.3 OI against shipped's 86.5 / 88.9 / 78.2. Full record:
+`tools/dataset/HARD_NEGATIVES.md`.
 
-- [ ] If resumed: pay back zoom's COCO cost (`--zoom 0.25 --lr 0.02`, `--zoom 0.125`), then
-  add negatives.
+- [ ] Seeds 2 and 3 screening at 10 epochs; the best passing seed then runs the full 100-epoch
+  schedule and the gate (`zig_runs\proxy\chain_seeds.sh`).
+- [ ] Then add negatives.
 
 ## CUDA kernel optimisation
 
