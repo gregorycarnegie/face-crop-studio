@@ -179,15 +179,36 @@ Rectangle {
         }
     }
 
+    // Saves the `chosen` file URL as `kind` ("report" or "queue"), adding `suffix` (the chosen
+    // filter's extension) to a bare name. The dialogs have no defaultSuffix: Qt's GTK dialog adds
+    // it only after GTK's overwrite check, so a bare name replaced the suffixed file unasked, and
+    // the suffix ignored the filter (JSON saved as .csv). A file only the added extension names
+    // is asked about here; the dialog itself asks about a name typed in full.
+    function saveAs(chosen: string, suffix: string, kind: string) {
+        const url = Studio.withSuffix(chosen, suffix)
+        if (url !== chosen && Studio.fileExists(url)) {
+            replaceDialog.url = url
+            replaceDialog.kind = kind
+            replaceDialog.open()
+        } else {
+            save(url, kind)
+        }
+    }
+    function save(url: string, kind: string) {
+        if (kind === "report")
+            Studio.saveReport(url)
+        else
+            Studio.saveQueueList(url)
+    }
+
     // No preset file name: Qt rejects a name that doesn't exist yet (a startup warning when
     // declared), and Windows' native dialog ignores one set at open time.
     FileDialog {
         id: queueListDialog
         title: qsTr("Save queue list")
         fileMode: FileDialog.SaveFile
-        defaultSuffix: "txt"
         nameFilters: [qsTr("Text files (*.txt)")]
-        onAccepted: Studio.saveQueueList(selectedFile.toString())
+        onAccepted: root.saveAs(selectedFile.toString(), "txt", "queue")
     }
 
     // JSON for a .json name (with success and failure totals), CSV otherwise.
@@ -195,9 +216,26 @@ Rectangle {
         id: reportDialog
         title: qsTr("Save export report")
         fileMode: FileDialog.SaveFile
-        defaultSuffix: "csv"
         nameFilters: [qsTr("CSV (*.csv)"), qsTr("JSON (*.json)")]
-        onAccepted: Studio.saveReport(selectedFile.toString())
+        onAccepted: root.saveAs(selectedFile.toString(), selectedNameFilter.extensions[0] ?? "csv", "report")
+    }
+
+    ChoiceDialog {
+        id: replaceDialog
+
+        property string url
+        property string kind
+
+        title: qsTr("Replace “%1”?").arg(decodeURIComponent(url.substring(url.lastIndexOf("/") + 1)))
+        message: qsTr("A file with that name is already in the folder. Replacing it overwrites its contents.")
+        choices: [
+            { value: "replace", label: qsTr("Replace"), variant: "primary" },
+            { value: "cancel", label: qsTr("Cancel"), variant: "ghost" }
+        ]
+        onChosen: value => {
+            if (value === "replace")
+                root.save(url, kind)
+        }
     }
 
     ChoiceDialog {

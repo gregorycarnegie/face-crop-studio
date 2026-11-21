@@ -90,6 +90,25 @@ const MAPPING_EXTENSIONS: &[&str] = &[
     "csv", "tsv", "xlsx", "xls", "xlsm", "ods", "parquet", "pq", "db", "sqlite", "sqlite3",
 ];
 
+/// Whether the platform's file dialogs match a name filter's case exactly. Qt's GTK dialogs do
+/// (Linux and the BSDs); Windows' and macOS' ignore case.
+const DIALOGS_MATCH_CASE: bool = cfg!(all(unix, not(target_os = "macos")));
+
+/// A file dialog name filter, `Label (*.a *.b)`. With `match_case`, each extension also gets an
+/// upper-case pattern, as cameras and iPhones write `.JPG` and `.HEIC`. GTK shows only the label,
+/// so the longer list doesn't show.
+fn name_filter(label: &str, extensions: &[&str], match_case: bool) -> String {
+    let mut patterns: Vec<String> = extensions.iter().map(|e| format!("*.{e}")).collect();
+    if match_case {
+        patterns.extend(
+            extensions
+                .iter()
+                .map(|e| format!("*.{}", e.to_ascii_uppercase())),
+        );
+    }
+    format!("{label} ({})", patterns.join(" "))
+}
+
 struct DetectJob {
     uid: u64,
     source: Source,
@@ -186,6 +205,7 @@ pub struct Studio {
     previews: Vec<Value>,
     presets: Vec<Value>,
     image_filter: String,
+    mapping_filter: String,
     shapes: Vec<Value>,
     /// `settings`, serialized: QML binds to `Studio.settings.crop.face_height_pct` and the like.
     settings_json: Value,
@@ -277,14 +297,12 @@ impl Default for Studio {
             tilt: 0.0,
             previews: Vec::new(),
             presets,
-            image_filter: format!(
-                "Images ({})",
-                fcs_utils::SUPPORTED_IMAGE_EXTENSIONS
-                    .iter()
-                    .map(|e| format!("*.{e}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
+            image_filter: name_filter(
+                "Images",
+                fcs_utils::SUPPORTED_IMAGE_EXTENSIONS,
+                DIALOGS_MATCH_CASE,
             ),
+            mapping_filter: name_filter("Mapping files", MAPPING_EXTENSIONS, DIALOGS_MATCH_CASE),
             shapes: fcs_utils::shape_catalogue()
                 .into_iter()
                 .map(|(label, shape)| {
@@ -394,6 +412,7 @@ impl Studio {
     qproperty!("previews", Member = previews, Notify = previews_changed);
     qproperty!("presets", Member = presets, Constant);
     qproperty!("imageFilter", Member = image_filter, Constant);
+    qproperty!("mappingFilter", Member = mapping_filter, Constant);
     qproperty!("shapes", Member = shapes, Constant);
     qproperty!(
         "settings",
@@ -855,6 +874,24 @@ impl Studio {
                 studio.export_finished(totals, report, folder_url)
             });
         });
+    }
+
+    /// `url` with `.suffix` added when its file name has no extension, as a save dialog's
+    /// `defaultSuffix` would. The QML adds it here instead: Qt's GTK dialog adds that suffix only
+    /// after GTK's overwrite check, so a bare name silently replaced the suffixed file.
+    #[qslot(qml_name = "withSuffix")]
+    fn with_suffix(&mut self, url: String, suffix: String) -> String {
+        if suffix.is_empty() || pipeline::url_to_path(&url).extension().is_some() {
+            url
+        } else {
+            format!("{url}.{suffix}")
+        }
+    }
+
+    /// Whether `url` names an existing file or folder.
+    #[qslot(qml_name = "fileExists")]
+    fn file_exists(&mut self, url: String) -> bool {
+        pipeline::url_to_path(&url).exists()
     }
 
     /// Save the last export's report to `url`: JSON for a `.json` name, CSV otherwise.
@@ -2379,6 +2416,40 @@ mod tests {
         let _ = fs::remove_dir_all(&out);
     }
 
+    #[test]
+    fn name_filters_add_upper_case_patterns_only_where_dialogs_match_case() {
+        assert_eq!(
+            name_filter("Images", &["jpg", "heic"], false),
+            "Images (*.jpg *.heic)"
+        );
+        assert_eq!(
+            name_filter("Images", &["jpg", "heic"], true),
+            "Images (*.jpg *.heic *.JPG *.HEIC)"
+        );
+        let studio = Studio::default();
+        assert_eq!(studio.image_filter.contains("*.HEIC"), DIALOGS_MATCH_CASE);
+        assert_eq!(studio.mapping_filter.contains("*.CSV"), DIALOGS_MATCH_CASE);
+    }
+
+    #[test]
+    fn a_bare_save_name_takes_the_suffix_and_a_named_extension_is_kept() {
+        let mut studio = Studio::default();
+        let mut suffixed = |url: &str, suffix: &str| studio.with_suffix(url.into(), suffix.into());
+        assert_eq!(
+            suffixed("file:///tmp/rapport%20%C3%A9", "csv"),
+            "file:///tmp/rapport%20%C3%A9.csv"
+        );
+        assert_eq!(
+            suffixed("file:///tmp/report.json", "csv"),
+            "file:///tmp/report.json"
+        );
+        assert_eq!(
+            suffixed("file:///tmp/a.b/report", "txt"),
+            "file:///tmp/a.b/report.txt"
+        );
+        assert_eq!(suffixed("file:///tmp/report", ""), "file:///tmp/report");
+    }
+
     /// tests/qml's mock Studio serves the real factory settings, presets and shapes, so the QML
     /// tests see the data the app does. Rewrite it with FCS_UPDATE_QML_FIXTURE=1.
     #[test]
@@ -2390,7 +2461,9 @@ mod tests {
             "settings": studio.settings_json,
             "presets": studio.presets,
             "shapes": studio.shapes,
-            "imageFilter": studio.image_filter,
+            // Case-matching filters are a platform detail: the fixture is the same everywhere.
+            "imageFilter": name_filter("Images", fcs_utils::SUPPORTED_IMAGE_EXTENSIONS, false),
+            "mappingFilter": name_filter("Mapping files", MAPPING_EXTENSIONS, false),
             "version": studio.version,
         });
         // Outlines come from sin and cos, whose last digits differ between platforms' libms.

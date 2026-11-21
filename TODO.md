@@ -11,9 +11,6 @@ virtual devices. It says nothing about speed or driver quirks on real hardware.
 
 - [ ] Test on real macOS hardware (Metal via wgpu). No real Mac is available; fcs-qt's macOS
   package ships labelled as a preview until someone checks it.
-- [ ] Check fcs-qt's file dialogs on a real Linux desktop. Detection on Vulkan and the camera
-  were checked there on 2026-11-16 (Ubuntu 26.04, GTX 1080 Ti; WGSL 8 ms against the CPU
-  graph's 18).
 
 ## Detector false positives off its home domain
 

@@ -59,6 +59,38 @@ Item {
             compare(Studio.called("remove")[0].args, [0])
         }
 
+        // Qt's GTK save dialog checks for an existing file before adding a defaultSuffix, so the
+        // sidebar adds the suffix itself and asks about a file only that suffix names.
+        function test_a_bare_save_name_takes_the_suffix_and_asks_before_replacing() {
+            const replace = sidebar.data.find(o => o instanceof ChoiceDialog && o.choices.length === 2
+                                              && o.choices[0].value === "replace")
+            const saved = () => Studio.called("saveReport").map(c => c.args[0])
+            sidebar.saveAs("file:///d/new", "json", "report")
+            compare(saved(), ["file:///d/new.json"])
+            sidebar.saveAs("file:///d/list", "txt", "queue")
+            compare(Studio.called("saveQueueList")[0].args, ["file:///d/list.txt"])
+
+            Studio.existingFiles = ["file:///d/old.csv"]
+            sidebar.saveAs("file:///d/old", "csv", "report")
+            tryVerify(() => replace.opened)
+            compare(saved().length, 1)
+            replace.chosen("cancel")
+            replace.close()
+            compare(saved().length, 1)
+
+            sidebar.saveAs("file:///d/old", "csv", "report")
+            tryVerify(() => replace.opened)
+            replace.chosen("replace")
+            replace.close()
+            compare(saved()[1], "file:///d/old.csv")
+
+            // A name typed in full: the dialog has asked already.
+            sidebar.saveAs("file:///d/old.csv", "csv", "report")
+            compare(saved()[2], "file:///d/old.csv")
+            Studio.existingFiles = []
+            tryVerify(() => !replace.visible)
+        }
+
         function test_clicking_a_row_selects_it() {
             Studio.queue = [H.row("a.jpg"), H.row("b.jpg")]
             tryVerify(() => list().itemAtIndex(1) !== null)

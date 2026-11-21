@@ -4,6 +4,7 @@
 
 var data = {
   "imageFilter": "Images (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.avif *.dng *.cr2 *.cr3 *.nef *.arw *.rw2 *.orf *.raf *.srw *.pef *.heic *.heif *.hif)",
+  "mappingFilter": "Mapping files (*.csv *.tsv *.xlsx *.xls *.xlsm *.ods *.parquet *.pq *.db *.sqlite *.sqlite3)",
   "presets": [
     {
       "height": 400,

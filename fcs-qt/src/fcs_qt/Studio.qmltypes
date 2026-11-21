@@ -39,6 +39,7 @@ Module {
         Property { name: "previews"; type: "QVariantList"; read: "previews"; notify: "previewsChanged"; isReadonly: true }
         Property { name: "presets"; type: "QVariantList"; read: "presets"; isReadonly: true; isPropertyConstant: true }
         Property { name: "imageFilter"; type: "QString"; read: "imageFilter"; isReadonly: true; isPropertyConstant: true }
+        Property { name: "mappingFilter"; type: "QString"; read: "mappingFilter"; isReadonly: true; isPropertyConstant: true }
         Property { name: "shapes"; type: "QVariantList"; read: "shapes"; isReadonly: true; isPropertyConstant: true }
         Property { name: "settings"; type: "QVariant"; read: "settings"; notify: "settingsChanged"; isReadonly: true }
         Property { name: "presetName"; type: "QString"; read: "presetName"; notify: "settingsChanged"; isReadonly: true }
@@ -156,6 +157,17 @@ Module {
             Parameter { name: "folderUrl"; type: "QString" }
             Parameter { name: "policy"; type: "QString" }
             Parameter { name: "report"; type: "QString" }
+        }
+        Method {
+            name: "withSuffix"
+            type: "QString"
+            Parameter { name: "url"; type: "QString" }
+            Parameter { name: "suffix"; type: "QString" }
+        }
+        Method {
+            name: "fileExists"
+            type: "bool"
+            Parameter { name: "url"; type: "QString" }
         }
         Method {
             name: "saveReport"

@@ -14,8 +14,7 @@ Item {
     FileDialog {
         id: picker
         title: qsTr("Choose a mapping file")
-        nameFilters: [qsTr("Mapping files (*.csv *.tsv *.xlsx *.xls *.xlsm *.ods *.parquet *.pq *.db *.sqlite *.sqlite3)"),
-                      qsTr("All files (*)")]
+        nameFilters: [Studio.mappingFilter, qsTr("All files (*)")]
         onAccepted: Studio.loadMapping(selectedFile.toString())
     }
 

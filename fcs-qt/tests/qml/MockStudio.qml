@@ -34,6 +34,7 @@ QtObject {
     property var presets: Fixture.data.presets
     property var shapes: Fixture.data.shapes
     property string imageFilter: Fixture.data.imageFilter
+    property string mappingFilter: Fixture.data.mappingFilter
     property string version: Fixture.data.version
     property string qtVersion: "6"
     property var shapeOutline: []
@@ -74,6 +75,9 @@ QtObject {
     function conflicts() { record("conflicts", arguments); return 0 }
     function deleteFace() { record("deleteFace", arguments) }
     function exportTo() { record("exportTo", arguments) }
+    // Files a test treats as already on disk, by URL.
+    property var existingFiles: []
+    function fileExists(url) { record("fileExists", arguments); return existingFiles.indexOf(url) >= 0 }
     function loadMapping() { record("loadMapping", arguments) }
     function openCamera() { record("openCamera", arguments) }
     function paste() { record("paste", arguments) }
@@ -85,6 +89,11 @@ QtObject {
     function rotate() { record("rotate", arguments) }
     function saveQueueList() { record("saveQueueList", arguments) }
     function saveReport() { record("saveReport", arguments) }
+    function withSuffix(url, suffix) {
+        record("withSuffix", arguments)
+        const name = url.substring(url.lastIndexOf("/") + 1)
+        return suffix === "" || name.lastIndexOf(".") > 0 ? url : url + "." + suffix
+    }
     function select() { record("select", arguments) }
     function selectAllFaces() { record("selectAllFaces", arguments) }
     function setCameraLive() { record("setCameraLive", arguments) }

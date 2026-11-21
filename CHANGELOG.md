@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   almost every time the same way; closing now waits for the load, about a second.
 - The status line in Face Crop Studio Qt's photo list ("Finding faces · N to go", "All photos
   ready") is now announced by screen readers; it had no accessible name.
+- Face Crop Studio Qt's file dialogs on Linux hid photos and mapping files whose extension is
+  upper case, such as `.JPG` from cameras and `.HEIC` from iPhones: GTK matches a filter's
+  case exactly. The filters now list the upper-case extensions too.
+- Saving the queue list or an export report on Linux replaced an existing file without asking
+  when the name was typed without its extension (`report` for `report.csv`), and a bare name
+  saved with the JSON filter chosen became a CSV file. The extension now follows the chosen
+  filter, and the app asks before replacing a file that the added extension names.
 - Uninstalling with the Windows setup.exe left `LICENSE`, and so the install folder, behind.
   The uninstaller now removes every file its installer copied, each listed when setup.exe is
   built, plus the files earlier versions installed.
