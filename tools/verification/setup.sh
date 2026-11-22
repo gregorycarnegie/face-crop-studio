@@ -10,7 +10,7 @@ export RUSTUP_HOME="$cache/rustup"
 
 if [ ! -x "$cache/aeneas/aeneas" ]; then
     curl -fsSL --retry 3 -o "$cache/aeneas.tar.gz" \
-        https://github.com/AeneasVerif/aeneas/releases/download/nightly-2026.11.01-ab34bd2/aeneas-linux-x86_64.tar.gz
+        https://github.com/AeneasVerif/aeneas/releases/download/nightly-2026.11.22-2e3d448/aeneas-linux-x86_64.tar.gz
     mkdir -p "$cache/aeneas"
     tar -xzf "$cache/aeneas.tar.gz" -C "$cache/aeneas"
 fi

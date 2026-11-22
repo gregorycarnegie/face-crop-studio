@@ -134,7 +134,7 @@ scripts. Keep this cache on the Linux filesystem under WSL for faster access.
 The generated model is `$FCS_LEAN_CACHE/project/CropRegion.lean` (using that
 default if the variable is unset).
 
-Versions are pinned to Aeneas `nightly-2026.11.01-ab34bd2` (including its matching
+Versions are pinned to Aeneas `nightly-2026.11.22-2e3d448` (including its matching
 Charon), Lean `4.36.0`, and Rust `nightly-2026-09-17`. The verification Rust compiler
 is isolated from the app's normal Rust toolchain. The Aeneas release supplies
 precompiled Aeneas libraries; `lake update` fetches their pinned mathlib dependencies.

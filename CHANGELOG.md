@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated dependencies: clap to 4.6.9, env_logger to 0.11.12, fast_image_resize to 6.2.0,
   notify to 9.0.0, Parquet/Arrow to 60.2.0, pollster to 1.0.3, rusqlite to 0.43.0, walkdir to
   2.5.1, zip to 9.8.1, and vstd to 0.0.0-2026-11-15-0327.
-- The Lean proofs (`tools/verification`) now check with Lean 4.36.0.
+- The Lean proofs (`tools/verification`) now check with Lean 4.36.0 and Aeneas
+  nightly-2026.11.22-2e3d448, the first Aeneas built for it.
 - The dataset tools read and write JPEG, PNG and BMP through a Zig port of stb_image and
   stb_image_write, so building them no longer needs a C compiler or libc.
 
