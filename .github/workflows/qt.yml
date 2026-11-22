@@ -117,16 +117,21 @@ jobs:
         uses: actions/cache@v6
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-dav1d-libheif-nohevc-de265-x64-windows-static-md
+          key: vcpkg-74f5ea45-dav1d-libheif-nohevc-de265-x64-windows-static-md
 
       - name: Install dav1d + libheif (Windows, vcpkg)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
-            git clone https://github.com/microsoft/vcpkg C:\vcpkg
-            & C:\vcpkg\bootstrap-vcpkg.bat
-          }
+          # Pinned, not the runner image's C:\vcpkg: an image update brought dav1d 1.5.4, whose
+          # MSVC stdatomic.h fails on VS 18 (C7780 __has_include_next). 74f5ea45ca has dav1d 1.5.5.
+          # ci.yml, qt.yml and release.yml pin the same commit; bump all three and the cache keys.
+          $vcpkgCommit = '74f5ea45ca78988784b810ad9bbb148ea7ff76d8'
+          if (-not (Test-Path "C:\vcpkg\.git")) { git clone https://github.com/microsoft/vcpkg C:\vcpkg }
+          git -C C:\vcpkg fetch --quiet origin $vcpkgCommit
+          git -C C:\vcpkg checkout --quiet --force $vcpkgCommit
+          if ((git -C C:\vcpkg rev-parse HEAD) -ne $vcpkgCommit) { throw "vcpkg is not at $vcpkgCommit" }
+          & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           & C:\vcpkg\vcpkg.exe install "dav1d:x64-windows-static-md" "libheif[core,libde265]:x64-windows-static-md"
 
       - name: Install native dependencies (macOS)

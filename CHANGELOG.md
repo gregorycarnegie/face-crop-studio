@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated dependencies: clap to 4.6.9, env_logger to 0.11.12, fast_image_resize to 6.2.0,
   notify to 9.0.0, Parquet/Arrow to 60.2.0, pollster to 1.0.3, rusqlite to 0.43.0, walkdir to
   2.5.1, zip to 9.8.1, and vstd to 0.0.0-2026-11-15-0327.
+- The bundled AV1 decoder for AVIF, dav1d, is 1.5.5 on every platform (Linux and macOS
+  builds had 1.5.1, Windows 1.5.4). Windows builds now pin vcpkg to a fixed commit instead of
+  the copy on the build machine, which had stopped building dav1d.
 - The Lean proofs (`tools/verification`) now check with Lean 4.36.0 and Aeneas
   nightly-2026.11.22-2e3d448, the first Aeneas built for it.
 - The dataset tools read and write JPEG, PNG and BMP through a Zig port of stb_image and

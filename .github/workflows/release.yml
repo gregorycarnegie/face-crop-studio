@@ -186,15 +186,20 @@ jobs:
           # marks the package set below — the cache service prefix-matches keys,
           # so a key must not be able to match a cache built from a different
           # package set.
-          key: vcpkg-dav1d-libheif-nohevc-de265-${{ matrix.vcpkg-triplet }}
+          key: vcpkg-74f5ea45-dav1d-libheif-nohevc-de265-${{ matrix.vcpkg-triplet }}
 
       - name: Install dav1d + libheif (vcpkg)
         shell: pwsh
         run: |
-          if (-not (Test-Path "C:\vcpkg\vcpkg.exe")) {
-            git clone https://github.com/microsoft/vcpkg C:\vcpkg
-            & C:\vcpkg\bootstrap-vcpkg.bat
-          }
+          # Pinned, not the runner image's C:\vcpkg: an image update brought dav1d 1.5.4, whose
+          # MSVC stdatomic.h fails on VS 18 (C7780 __has_include_next). 74f5ea45ca has dav1d 1.5.5.
+          # ci.yml, qt.yml and release.yml pin the same commit; bump all three and the cache keys.
+          $vcpkgCommit = '74f5ea45ca78988784b810ad9bbb148ea7ff76d8'
+          if (-not (Test-Path "C:\vcpkg\.git")) { git clone https://github.com/microsoft/vcpkg C:\vcpkg }
+          git -C C:\vcpkg fetch --quiet origin $vcpkgCommit
+          git -C C:\vcpkg checkout --quiet --force $vcpkgCommit
+          if ((git -C C:\vcpkg rev-parse HEAD) -ne $vcpkgCommit) { throw "vcpkg is not at $vcpkgCommit" }
+          & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
           # libheif[core,libde265] means "no default features, plus libde265".
           # The defaults are `hevc` (HEVC *encoding* via x265) and `libde265`
           # (the HEVC decoder). The app only ever decodes HEIC (fcs-utils

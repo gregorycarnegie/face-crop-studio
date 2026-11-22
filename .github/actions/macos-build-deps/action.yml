@@ -8,7 +8,7 @@ description: >-
 inputs:
   dav1d-version:
     description: dav1d release to build from source (AVIF decode).
-    default: "1.5.1"
+    default: "1.5.5"
   de265-version:
     description: libde265 release to build from source (HEVC decode for libheif).
     default: "1.0.15"
