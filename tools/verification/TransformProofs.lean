@@ -61,7 +61,7 @@ theorem active_lanes_spec (block channels : Usize) (hb : block.val * 8 < channel
       (∀ lane : Nat, lane < 8 → (lane < count.val ↔ block.val * 8 + lane < channels.val)) ⦄ := by
   unfold transform.active_lanes
   step*
-  all_goals simp_all
+  simp_all
   intro lane hl
   omega
 

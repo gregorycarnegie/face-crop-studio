@@ -76,7 +76,7 @@ def latestReader (steps : List (Usize × Usize)) (slot : Nat) : Nat → Nat
         simp only [latestReader, hread]
         by_cases ha : j = a.val <;> by_cases hb : j = b.val <;>
           simp_all [List.getElem_set]
-        all_goals omega
+        omega
     · have he : i.val = steps.length := by scalar_tac
       simp_all [WP.spec_ok]
   · exact ⟨hi, hlen, hmap⟩
@@ -88,7 +88,7 @@ def latestReader (steps : List (Usize × Usize)) (slot : Nat) : Nat → Nat
       ∀ j (h : j < last.length), (last.val[j]).val = latestReader steps.val j steps.length ⦄ := by
   unfold slots.readers
   step*
-  all_goals simp_all [latestReader]
+  simp_all [latestReader]
 
 theorem latest_reader_bound (steps : List (Usize × Usize)) (slot n : Nat) :
     latestReader steps slot n ≤ n := by
@@ -214,8 +214,8 @@ theorem empty_schedule_loop_spec (steps : Usize) (frees : alloc.vec.Vec (alloc.v
     have hv : v.length = i.val := by simpa using congrArg List.length hm
     unfold slots.empty_schedule_loop.body
     step*
-    all_goals simp_all [List.replicate_add]
-    all_goals scalar_tac
+    simp_all [List.replicate_add]
+    scalar_tac
   · exact ⟨hi, hmap⟩
 
 @[step] theorem empty_schedule_spec (steps : Usize) :

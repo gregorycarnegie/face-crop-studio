@@ -15,7 +15,7 @@ theorem gpu_output_dim_spec (size pad kernel stride : U32) :
           out.val = (size.val + 2 * pad.val - kernel.val) / stride.val + 1 ∧ 0 < out.val ⦄ := by
   unfold gpu_geometry.output_dim
   step*
-  all_goals simp_all
+  simp_all
   have hm := U32.checked_add_bv_spec i 1#u32
   have hd := Nat.div_le_self (size.val + pad.val * 2 - kernel.val) stride.val
   cases he : U32.checked_add i 1#u32 <;> simp_all [Nat.mul_comm] <;> scalar_tac
@@ -35,7 +35,7 @@ theorem gpu_ceil_div_spec (value divisor : U32) (hd : 0 < divisor.val) :
   unfold gpu_geometry.ceil_div
   step*
   split <;> step*
-  all_goals simp_all
+  simp_all
 
 theorem dispatch_coverage (value divisor count : Nat) (hd : 0 < divisor)
     (hcount : count = value / divisor + (if value % divisor = 0 then 0 else 1)) :
@@ -83,8 +83,8 @@ theorem grouped_channels_spec (input output groups : U32) :
   have ho := Nat.div_add_mod output.val groups.val
   unfold gpu_geometry.grouped_channels
   step*
-  all_goals simp_all [Nat.mul_comm]
-  all_goals omega
+  simp_all [Nat.mul_comm]
+  omega
 
 #print axioms gpu_output_dim_spec
 #print axioms gpu_ceil_div_spec

@@ -15,8 +15,8 @@ theorem clip_extent_spec (requested offset canvas : U32) :
   unfold pixel_copy.clip_extent
   simp only [lift, bind_ok]
   step*
-  all_goals simp_all
-  all_goals scalar_tac
+  simp_all
+  scalar_tac
 
 theorem pixel_row_spec (row column width count lanes : Usize) (length : Nat)
     (hc : column.val + count.val ≤ width.val) (hl : 0 < lanes.val)
@@ -34,7 +34,7 @@ theorem opaque_rgba_spec (rgb : Array U8 3#usize) :
     pixel_copy.opaque_rgba rgb ⦃ rgba => rgba.val = rgb.val ++ [255#u8] ⦄ := by
   unfold pixel_copy.opaque_rgba
   step*
-  all_goals simp_all [Array.make]
+  simp_all [Array.make]
   have hlen : rgb.val.length = 3 := by scalar_tac
   have he : rgb.val = [rgb.val[0], rgb.val[1], rgb.val[2]] := by
     apply List.ext_getElem

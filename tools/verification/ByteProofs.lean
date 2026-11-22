@@ -17,7 +17,7 @@ theorem metadata_span_spec (cursor header payload trailer length : Usize) :
         (0 < header.val + payload.val + trailer.val → cursor.val < next.val) ⦄ := by
   unfold metadata_ranges.span
   step*
-  all_goals scalar_tac
+  scalar_tac
 
 theorem cursor_steps_bounded (cursor : Nat → Nat) (steps length : Nat)
     (hstep : ∀ i, i < steps → cursor i < cursor (i + 1))
@@ -48,7 +48,7 @@ theorem png_text_layout_spec (keyword value : Usize) :
   unfold metadata_ranges.png_text_layout
   step*
   all_goals simp_all [U32.rMax]
-  all_goals scalar_tac
+  scalar_tac
 
 @[simp, scalar_tac_simps] theorem u16_max_usize :
     (UScalar.cast .Usize core.num.U16.MAX).val = 65535 := by

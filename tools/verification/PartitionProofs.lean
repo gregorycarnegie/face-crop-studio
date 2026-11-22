@@ -15,8 +15,8 @@ theorem decode_job_spec (job groups height chunks : Usize)
       ((n.val * groups.val + g.val) * height.val + y.val) * chunks.val + c.val = job.val ⦄ := by
   unfold partition.decode_job
   step*
-  all_goals simp_all only [quotient_remainder]
-  all_goals exact ⟨Nat.mod_lt _ hg, Nat.mod_lt _ hh, Nat.mod_lt _ hc, True.intro⟩
+  simp_all only [quotient_remainder]
+  exact ⟨Nat.mod_lt _ hg, Nat.mod_lt _ hh, Nat.mod_lt _ hc, True.intro⟩
 
 theorem chunk_span_spec (index chunk length : Usize)
     (hc : 0 < chunk.val) (hi : index.val * chunk.val < length.val) :
@@ -26,8 +26,8 @@ theorem chunk_span_spec (index chunk length : Usize)
       start.val < stop.val ∧ stop.val ≤ length.val ⦄ := by
   unfold partition.chunk_span
   step*
-  all_goals simp_all [Nat.add_mul]
-  all_goals omega
+  simp_all [Nat.add_mul]
+  omega
 
 /-- Every column belongs to a chunk, including the last partial chunk. -/
 theorem chunks_cover (x chunk length : Nat) (hc : 0 < chunk) (hx : x < length) :

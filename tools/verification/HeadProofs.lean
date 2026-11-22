@@ -50,7 +50,7 @@ theorem head_ranges_loop_spec (counts : Slice Usize) (ranges : alloc.vec.Vec (Us
         have hr : counts.val[i.val]?.getD 0#usize = count := by
           simp only [List.getElem?_eq_getElem (by scalar_tac : i.val < counts.length), Option.getD_some, ← hc]
         simp_all [headRanges]
-        all_goals scalar_tac
+        scalar_tac
     · have he : i.val = counts.length := by scalar_tac
       simp_all [WP.spec_ok, headsCorrect]
   · exact ⟨hi, hlen, hfirst, hmap⟩

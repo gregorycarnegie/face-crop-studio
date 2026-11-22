@@ -24,7 +24,7 @@ theorem output_dim_spec (input kernel stride pad : Usize) :
         out.val = (input.val + 2 * pad.val - kernel.val) / stride.val + 1 ∧ 0 < out.val ⦄ := by
   unfold geometry.output_dim
   step*
-  all_goals simp_all
+  simp_all
   have hm := Usize.checked_add_bv_spec i1 1#usize
   have hd := Nat.div_le_self (input.val + pad.val * 2 - kernel.val) stride.val
   have hm1 := (1#usize).hmax
@@ -40,7 +40,7 @@ theorem tap_rows_spec (origin height kernel pad : Usize)
         first.val + (k - lo.val) + pad.val = origin.val + k) ⦄ := by
   unfold geometry.tap_rows
   step*
-  all_goals simp_all
+  simp_all
   refine ⟨by omega, ?_, ?_⟩
   · intro k hk
     omega
@@ -150,7 +150,7 @@ theorem column_index_spec (origin offset pad : Usize) (width : Nat)
       ix.val + pad.val = origin.val + offset.val ∧ ix.val < width ⦄ := by
   unfold geometry.column_index
   step*
-  all_goals scalar_tac
+  scalar_tac
 
 theorem input_index_spec (row column block lane : Usize) (width length : Nat)
     (hx : column.val < width) (hj : lane.val < block.val)
@@ -179,8 +179,8 @@ theorem tap_offset_spec (ib ky kernel block : Usize) (blocks : Nat)
     simpa only [Nat.mul_one] using Nat.mul_le_mul_left ((ib.val * kernel.val + ky.val) * kernel.val) (show 1 ≤ block.val by omega)
   unfold geometry.tap_offset
   step*
-  all_goals simp_all [Nat.mul_assoc, Nat.add_mul]
-  all_goals scalar_tac
+  simp_all [Nat.mul_assoc, Nat.add_mul]
+  scalar_tac
 
 theorem weight_index_spec (filter per_block tap kx block lane : Usize) (filters kernel length : Nat)
     (hf : filter.val < filters) (hx : kx.val < kernel) (hj : lane.val < block.val)
@@ -193,8 +193,8 @@ theorem weight_index_spec (filter per_block tap kx block lane : Usize) (filters 
   have h₁ := Nat.mul_le_mul_right per_block.val (show filter.val + 1 ≤ filters by omega)
   unfold geometry.weight_index
   step*
-  all_goals simp_all [Nat.add_mul]
-  all_goals scalar_tac
+  simp_all [Nat.add_mul]
+  scalar_tac
 
 /-- Compose the production row and lane calculations, for NCHW and blocked inputs alike. -/
 theorem input_read_spec (n ib y x block lane batches blocks height width : Usize) (length : Nat)

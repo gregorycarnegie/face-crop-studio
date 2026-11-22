@@ -58,7 +58,7 @@ theorem ort_dim_spec (value : Usize) :
       | some out => out.val = value.val ⦄ := by
   unfold size.ort_dim
   step*
-  all_goals simp_all
+  simp_all
   have h := UScalar.hcast_inBounds_spec .I64 value (by scalar_tac)
   simp only [lift, WP.spec_ok] at h
   scalar_tac

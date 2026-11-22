@@ -16,7 +16,7 @@ attribute [step] checked_elements_spec
         plane.val = h.val * w.val ∧ elements.val = n.val * c.val * plane.val ⦄ := by
   unfold layout.checked_nchw
   step*
-  all_goals simp_all [countCorrect, prefixProduct, Array.to_slice, Array.make, Nat.mul_assoc]
+  simp_all [countCorrect, prefixProduct, Array.to_slice, Array.make, Nat.mul_assoc]
 
 theorem checked_nchw_valid (n c h w : Usize)
     (hp : h.val * w.val ≤ Usize.max) (hc : n.val * c.val ≤ Usize.max)
