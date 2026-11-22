@@ -5,7 +5,7 @@ set -euo pipefail
 test "$(uname -sm)" = "Linux x86_64"
 cache="${FCS_LEAN_CACHE:-$HOME/.cache/fcs-lean-pilot}"
 mkdir -p "$cache"
-export PATH="$cache/lean-4.35.0-linux/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$cache/lean-4.36.0-linux/bin:$HOME/.cargo/bin:$PATH"
 export RUSTUP_HOME="$cache/rustup"
 
 if [ ! -x "$cache/aeneas/aeneas" ]; then
@@ -14,9 +14,9 @@ if [ ! -x "$cache/aeneas/aeneas" ]; then
     mkdir -p "$cache/aeneas"
     tar -xzf "$cache/aeneas.tar.gz" -C "$cache/aeneas"
 fi
-if [ ! -x "$cache/lean-4.35.0-linux/bin/lean" ]; then
+if [ ! -x "$cache/lean-4.36.0-linux/bin/lean" ]; then
     curl -fsSL --retry 3 -o "$cache/lean.tar.zst" \
-        https://github.com/leanprover/lean4/releases/download/v4.35.0/lean-4.35.0-linux.tar.zst
+        https://github.com/leanprover/lean4/releases/download/v4.36.0/lean-4.36.0-linux.tar.zst
     tar --zstd -xf "$cache/lean.tar.zst" -C "$cache"
 fi
 if ! rustup run nightly-2026-09-17 rustc --version >/dev/null 2>&1; then

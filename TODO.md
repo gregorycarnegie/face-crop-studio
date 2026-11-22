@@ -30,9 +30,10 @@ still depends on the seed (one of two seeds took). A good seed, decayed at 35 ep
 82.6 large / 87.7 COCO / 77.3 OI against shipped's 86.5 / 88.9 / 78.2. Full record:
 `tools/dataset/HARD_NEGATIVES.md`.
 
-- [ ] Seeds 2 and 3 screening at 10 epochs; the best passing seed then runs the full 100-epoch
-  schedule and the gate (`zig_runs\proxy\chain_seeds.sh`).
-- [ ] Then add negatives.
+- [x] Full 100-epoch zoom run (`ZL_full_seed0`): matches shipped on every shipped-relative gate,
+  +1.3 OI recall. Kept as the base; the shipped model stays.
+- [ ] Add the balanced negatives to it: seeds 0-2 screening at 10 epochs, best to 100 epochs and
+  the gate (`zig_runs\proxy\chain_neg.sh`).
 
 ## CUDA kernel optimisation
 

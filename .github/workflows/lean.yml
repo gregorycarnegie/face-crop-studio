@@ -31,7 +31,7 @@ jobs:
         with:
           path: |
             ~/.cache/fcs-lean-pilot/aeneas
-            ~/.cache/fcs-lean-pilot/lean-4.35.0-linux
+            ~/.cache/fcs-lean-pilot/lean-4.36.0-linux
             ~/.cache/fcs-lean-pilot/rustup
             ~/.cache/fcs-lean-pilot/.dependencies-ready
           key: lean-crop-${{ runner.os }}-${{ hashFiles('tools/verification/setup.sh') }}

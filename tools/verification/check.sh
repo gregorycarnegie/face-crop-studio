@@ -5,7 +5,7 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 cache="${FCS_LEAN_CACHE:-$HOME/.cache/fcs-lean-pilot}"
 backend="$cache/aeneas/backends/lean"
 build="$cache/project"
-export PATH="$cache/lean-4.35.0-linux/bin:$HOME/.cargo/bin:$PATH"
+export PATH="$cache/lean-4.36.0-linux/bin:$HOME/.cargo/bin:$PATH"
 export RUSTUP_HOME="$cache/rustup"
 export RUSTUP_TOOLCHAIN=nightly-2026-09-17
 export RUST_LOG=warn CHARON_LOG=warn
