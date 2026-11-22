@@ -1,15 +1,24 @@
-# Face Crop Studio
+<p align="center">
+  <img src="fcs-gui/assets/app_logo.svg" alt="Face Crop Studio logo" width="160">
+</p>
 
-GPU accelerated face detection and cropping software built in Rust.
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/readme-title-dark.svg">
+    <img src="docs/diagrams/readme-title-light.svg" alt="Face Crop Studio" height="44">
+  </picture>
+</h1>
 
-🌐 Official Website:
-<https://facecropstudio.com>
+<p align="center">
+  GPU accelerated face detection and cropping software built in Rust.<br>
+  🌐 <a href="https://facecropstudio.com">facecropstudio.com</a>
+</p>
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
 [![Qt](https://img.shields.io/badge/Qt-Experimental-41CD52?logo=qt&logoColor=white)](fcs-qt/README.md)
 ![WESL](https://img.shields.io/badge/WESL-GPU%20Compute-blue?logo=webgpu)
-[![Lean](https://img.shields.io/badge/Lean-Formal%20Proofs-blue)](tools/verification/README.md)
-[![Verus](https://img.shields.io/badge/Verus-Output%20Initialization-blue)](tools/verus/README.md)
+[![Lean](https://img.shields.io/github/actions/workflow/status/gregorycarnegie/face-crop-studio/lean.yml?branch=master&event=push&label=Lean%20%C2%B7%20Formal%20Proofs)](tools/verification/README.md)
+[![Verus](https://img.shields.io/github/actions/workflow/status/gregorycarnegie/face-crop-studio/verus.yml?branch=master&event=push&label=Verus%20%C2%B7%20Output%20Initialization)](tools/verus/README.md)
 [![CUDA](https://img.shields.io/badge/CUDA-Experimental-76B900?logo=nvidia)](docs/CUDA.md)
 [![SCRFD-80k](https://img.shields.io/badge/SCRFD-80k-purple)](tools/dataset/SCRFD_80K.md)
 ![License](https://img.shields.io/badge/code-MIT%20OR%20Apache--2.0-green)
