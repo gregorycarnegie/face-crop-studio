@@ -61,6 +61,8 @@ theorem in_bounds_rect_safe (r : CropRegion) (img_w img_h : U32) :
       r.pad_bottom.val = ((max (y.val + h.val - ih.val) 0) % 4294967296).toNat ⦄ := by
   unfold CropRegion.new
   step*
+  simp_all
+  scalar_tac
 
 #print axioms new_spec
 
