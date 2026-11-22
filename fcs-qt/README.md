@@ -115,13 +115,13 @@ source with linux-build-deps' flags. Without sudo they go in `~/.local/fcs-nativ
 
 ```bash
 prefix=~/.local/fcs-native; src=$(mktemp -d)
-curl -fsSL https://github.com/strukturag/libde265/releases/download/v1.0.15/libde265-1.0.15.tar.gz | tar -xz -C "$src"
-curl -fsSL https://github.com/strukturag/libheif/releases/download/v1.23.0/libheif-1.23.0.tar.gz | tar -xz -C "$src"
-cmake -S "$src/libde265-1.0.15" -B "$src/de265" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+curl -fsSL https://github.com/strukturag/libde265/releases/download/v1.1.3/libde265-1.1.3.tar.gz | tar -xz -C "$src"
+curl -fsSL https://github.com/strukturag/libheif/releases/download/v1.23.7/libheif-1.23.7.tar.gz | tar -xz -C "$src"
+cmake -S "$src/libde265-1.1.3" -B "$src/de265" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF -DENABLE_DECODER=ON -DENABLE_ENCODER=OFF -DENABLE_SDL=OFF
 cmake --build "$src/de265" --parallel && cmake --install "$src/de265"
-cmake -S "$src/libheif-1.23.0" -B "$src/heif" -DCMAKE_PREFIX_PATH="$prefix" \
+cmake -S "$src/libheif-1.23.7" -B "$src/heif" -DCMAKE_PREFIX_PATH="$prefix" \
   -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=OFF -DWITH_EXAMPLES=OFF -DWITH_LIBDE265=ON -DWITH_X265=OFF \
   -DWITH_AOM_ENCODER=OFF -DWITH_AOM_DECODER=OFF -DENABLE_PLUGIN_LOADING=OFF -DWITH_LIBSHARPYUV=OFF

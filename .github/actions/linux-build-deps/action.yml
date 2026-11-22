@@ -11,10 +11,10 @@ inputs:
     default: "1.5.5"
   de265-version:
     description: libde265 release to build from source (HEVC decode for libheif).
-    default: "1.0.15"
+    default: "1.1.3"
   libheif-version:
     description: libheif release to build from source. apt ships 1.12 on 22.04, libheif-rs needs 1.21+.
-    default: "1.23.0"
+    default: "1.23.7"
 
 runs:
   using: composite
@@ -98,7 +98,7 @@ runs:
         curl -fsSL -o /tmp/libde265.tar.gz \
           "https://github.com/strukturag/libde265/releases/download/v${DE265_VERSION}/libde265-${DE265_VERSION}.tar.gz"
         tar -xf /tmp/libde265.tar.gz -C /tmp
-        # CMake 4 refuses libde265 1.0.15's cmake_minimum_required without the policy floor
+        # CMake 4 refused libde265 1.0.x's cmake_minimum_required without this policy floor
         # (macos-build-deps passes it too); CMake 3 ignores it.
         cmake -S "/tmp/libde265-${DE265_VERSION}" -B "/tmp/libde265-${DE265_VERSION}/build" \
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
