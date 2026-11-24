@@ -20,20 +20,23 @@ tomatoes, plates, wheels). At equal false-positive rates it finds the fewest fac
 three. Every one of its 80,000 training photographs contains faces, so it has seen almost no
 face-free scenes.
 
-**Resumed (2026-11-20), low priority.** People point a cropping app at faces, so fewer false
-positives buy little, and the shipped detector stays until a retrain passes its gate. Two
-hard-negative retrains cut COCO's false positives (0.030 -> 0.005 per no-person photo) but lost
-large faces. The native trainer matches MMDetection and the shipped model's large-face recall is
-a lucky draw, so any retrain has to target large faces. Zoom crops plus a higher learning rate
-(`train_scrfd --zoom 0.25 --lr 0.02`) win the 10-epoch screen, but at 30 epochs the outcome
-still depends on the seed (one of two seeds took). A good seed, decayed at 35 epochs, reaches
-82.6 large / 87.7 COCO / 77.3 OI against shipped's 86.5 / 88.9 / 78.2. Full record:
+**Retraining stopped (2026-11-24); the shipped detector stays the default.** People point a
+cropping app at faces, so fewer false positives buy little. Hard negatives alone lost large
+faces; the shipped model's large-face recall turned out to be a lucky draw, and zoom crops
+(`train_scrfd --zoom`) were the lever that matched it. Zoom 0.35 plus the balanced negatives
+(ZLNZ35) missed the gate by 0.01 points on large faces, but in a crop test on 600 fresh photos,
+at a threshold of 0.343 matched to shipped's false-positive rate, it halved missed group faces
+(182 -> 92) and portrait failures (10 -> 5, one of them new). Full record:
 `tools/dataset/HARD_NEGATIVES.md`.
 
-- [x] Full 100-epoch zoom run (`ZL_full_seed0`): matches shipped on every shipped-relative gate,
-  +1.3 OI recall. Kept as the base; the shipped model stays.
-- [ ] Add the balanced negatives to it: seeds 0-2 screening at 10 epochs, best to 100 epochs and
-  the gate (`zig_runs\proxy\chain_neg.sh`).
+- [x] Full 100-epoch zoom run (`ZL_full_seed0`): matches shipped on every shipped-relative gate.
+- [x] Balanced negatives on top (`ZLN_full_seed0`), then zoom 0.35 (`ZLNZ35_full_seed0`): both
+  fail 3 of 9 gates; the user's rule was one more run, then keep shipped.
+- [x] Crop test, shipped vs ZLNZ35 through `fcs-cli --crop`.
+- [ ] Next release candidate: ZLNZ35 at 0.343. Before changing the default, test it with shipped
+  as a fallback when it returns no crop, on new fresh photos with the current build, and review
+  every extra group crop for usability. Shipping it also means a default confidence of about
+  0.34 and handling saved settings at 0.5. Only when the user resumes it.
 
 ## CUDA kernel optimisation
 
