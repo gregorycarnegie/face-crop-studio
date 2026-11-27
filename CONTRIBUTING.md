@@ -52,7 +52,7 @@ their own arithmetic and sampling helpers.
 
 Install the usual Rust and Windows build tools first:
 
-- Rust `1.99.0`, matching the workspace minimum and CI/release toolchain.
+- Rust `1.100.0`, matching the workspace minimum and CI/release toolchain.
 - Visual Studio Build Tools with the C++ desktop workload and Windows SDK.
 - Git.
 - NASM on `PATH`; for example `C:\Program Files\NASM`. Installing it is not

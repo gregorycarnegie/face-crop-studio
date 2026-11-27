@@ -207,7 +207,7 @@ The Windows MSI, NSIS installer, and Store package currently ship x86_64 binarie
 
 ## Prerequisites
 
-- **Rust 1.99.0**: Matches the workspace minimum Rust version and the CI/release toolchain.
+- **Rust 1.100.0**: Matches the workspace minimum Rust version and the CI/release toolchain.
 - **NASM**: You must have [NASM](https://www.nasm.us/) installed and added to your system `PATH` to build the project.
 
 ## Installation (Windows)

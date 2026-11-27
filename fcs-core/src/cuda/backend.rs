@@ -284,8 +284,8 @@ impl CudaDetector {
         let mut scratch = Vec::with_capacity(STEPS.len());
         for (index, step) in STEPS.iter().enumerate() {
             let mut len = 0;
-            for slot in index + 1..index + 1 + self.covers[index] {
-                let n = self.shapes[slot].iter().product::<usize>();
+            for shape in self.shapes.iter().skip(index + 1).take(self.covers[index]) {
+                let n = shape.iter().product::<usize>();
                 views.push((buffers.len(), len, n));
                 len += n;
             }

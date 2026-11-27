@@ -38,7 +38,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.99.0
+          toolchain: 1.100.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -135,7 +135,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.99.0
+          toolchain: 1.100.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2

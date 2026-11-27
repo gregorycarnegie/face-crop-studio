@@ -78,8 +78,8 @@ cargo test --locked --manifest-path fcs-core/Cargo.toml
 cargo test --locked --manifest-path tools/safety/Cargo.toml --release miri_cpu_buffers
 ```
 
-Setup downloads official Verus `0.2026.11.02.8bf68ee`, checks its pinned SHA-256,
-and installs its required Rust `1.99.1` in `cache/verus/rustup`. It restores the
+Setup downloads official Verus `0.2026.11.22.1ce6a59`, checks its pinned SHA-256,
+and installs its required Rust `1.100.0` in `cache/verus/rustup`. It restores the
 calling process's Rust environment and does not change the application's
 toolchain or dependencies. CI runs these commands in
 [`.github/workflows/verus.yml`](../../.github/workflows/verus.yml).

@@ -32,7 +32,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: "1.99.0"
+  RUST_TOOLCHAIN: "1.100.0"
   # 6.12, not 6.10: 6.10.3's qyieldcpu.h calls __yield() undeclared on arm64, which current
   # Xcode clang rejects; 6.12 uses __builtin_arm_yield. 6.12 needs MSVC 2022 on Windows.
   QT_VERSION: "6.12.0"
