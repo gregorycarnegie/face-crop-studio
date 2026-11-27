@@ -243,7 +243,7 @@ pub struct Studio {
 impl Default for Studio {
     fn default() -> Self {
         let settings_path = default_settings_path();
-        // Same file as fcs-gui, so both front ends start from the same crop.
+        // fcs-gui 2.x's file, so an upgrade keeps its settings.
         let settings = AppSettings::load_from_path(&settings_path).unwrap_or_else(|err| {
             warn!(
                 "Failed to load settings from {}: {err}",

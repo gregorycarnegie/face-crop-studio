@@ -1,6 +1,6 @@
 # Architecture Overview
 
-The Face Crop Studio workspace has five application crates and one development-only inference oracle.
+The Face Crop Studio workspace has four application crates and one development-only inference oracle. The desktop app, `fcs-qt`, sits beside it as a standalone crate, since it needs Qt.
 
 ```text
 Root Cargo.toml
@@ -8,8 +8,9 @@ Root Cargo.toml
 ├── fcs-ort      # Development-only ONNX Runtime oracle
 ├── fcs-mapping  # Tabular input mappings
 ├── fcs-utils    # Shared config, quality scoring, enhancement & export helpers
-├── fcs-cli      # Command-line entry point and batch automation
-└── fcs-gui      # eframe/egui desktop application
+└── fcs-cli      # Command-line entry point and batch automation
+
+fcs-qt/          # Qt Quick desktop application (own Cargo.toml; not a member)
 ```
 
 ## How the Crates Talk
@@ -23,7 +24,7 @@ surfaces (and the test suite) identically.
 ```mermaid
 graph TD
     cli["fcs-cli<br/><i>batch automation, CLI flags</i>"]
-    gui["fcs-gui<br/><i>eframe/egui desktop app</i>"]
+    gui["fcs-qt<br/><i>Qt Quick desktop app</i>"]
     core["fcs-core<br/><i>SCRFD detection, crop geometry,<br/>two inference engines</i>"]
     utils["fcs-utils<br/><i>config, quality scoring,<br/>enhancement, export</i>"]
     mapping["fcs-mapping<br/><i>CSV/XLSX/Parquet/SQLite ingestion</i>"]
@@ -44,7 +45,7 @@ graph TD
 | `fcs-core` | `fcs-utils` | Detection and geometry: WGSL and built-in CPU inference, decoding, `calculate_crop_region`. |
 | `fcs-ort` | — | Development-only ONNX Runtime bindings for parity tests and benchmarks. |
 | `fcs-cli` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Synchronous batch front-end with GPU auto-detection and a shared enhancement/shape-mask context. |
-| `fcs-gui` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Desktop front-end; pushes detection/enhancement onto background Rayon tasks and shares wgpu context with eframe. |
+| `fcs-qt` | `fcs-core`, `fcs-utils`, `fcs-mapping` | Desktop front-end on Qt Quick (Qt Bridge for Rust); runs detection and export on worker threads and hands results back to the Qt thread. Standalone crate. |
 
 This document focuses on the crop calculation pipeline introduced in Phase 4 and extended through Phase 9.
 
@@ -63,7 +64,7 @@ This document focuses on the crop calculation pipeline introduced in Phase 4 and
    - `estimate_sharpness` computes Laplacian variance to classify the crop as Low/Medium/High quality. These scores inform automation like `QualityFilter::select_best_index` and filename suffixing.
 5. **Export** – `save_dynamic_image` encodes the image (PNG/JPEG/WebP/TIFF/BMP/AVIF), optionally injects metadata (original EXIF, crop configuration, quality metrics), and writes to disk.
 
-The CLI stitches these steps together in synchronous code paths. The GUI pushes detection and enhancement workloads onto background Rayon tasks to keep the egui frame loop responsive, caching results in `DetectionCacheEntry`s keyed by model configuration.
+The CLI stitches these steps together in synchronous code paths. The desktop app runs detection and export on worker threads, so the Qt Quick window stays responsive.
 
 ## Engine Selection
 
@@ -90,7 +91,7 @@ Eye refinement uses the fixed Rust CPU graph in `eye_refiner/native.rs`. The app
 never loads ONNX Runtime, even when `ORT_DYLIB_PATH` is set. The library is retained only
 as a dev-dependency for tests and benchmarks.
 
-Release packages contain CLI and GUI binaries and the two model files, with no
+Release packages contain the CLI and desktop app binaries (with Qt beside the app) and the two model files, with no
 ONNX Runtime library. `tools/verify_package.zig` runs the packaged CLI from an empty
 working directory, checks detection, verifies changed eye coordinates, and requires an
 exported aligned crop. Windows, macOS, AppImage staging, and extracted .deb packages
@@ -98,7 +99,7 @@ all use this check.
 
 ## Crop History & Undo/Redo
 
-The GUI maintains a circular history buffer (max 100 entries) of `CropSettings` snapshots. Interactions that affect framing—preset switches, slider changes, keyboard nudges—call `push_crop_history`, making undo/redo operations deterministic. This behaviour is covered by the smoke tests in `fcs-gui/src/main.rs`.
+The desktop app keeps up to 50 undo steps per photo, each a snapshot of the photo's faces and their export selection (`UNDO_LIMIT`, `Studio::undo` and `redo` in `fcs-qt/src/studio.rs`).
 
 ## Benchmarks
 
@@ -182,6 +183,6 @@ centre-duplicated boxes at a lowered confidence floor has not been measured.
 | Enhancement pipeline | `fcs-utils/src/enhance.rs`             | Unit + pipeline parity tests                    |
 | Full crop workflow   | `fcs-core/tests/full_crop_workflow.rs` | Integration test from detection to export       |
 | CLI scenarios        | `fcs-cli/tests/*.rs`                   | Snapshot, batch, naming, enhancement workflows  |
-| GUI window           | `fcs-gui/src/app/tests.rs`             | Whole window via egui_kittest: panels, tabs, menus, shortcuts |
+| Desktop app          | `fcs-qt/tests/qml`, `fcs-qt/packaging/e2e.ps1` | Screens against a mock Studio; the packaged app driven through UI Automation |
 
 These layers give confidence that the crop calculation flow remains stable across both user interfaces while providing hooks to measure and iterate on performance.

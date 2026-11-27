@@ -401,7 +401,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       # Clippy runs everywhere: the cfg(target_os) blocks in fcs-utils and
-      # fcs-gui are only linted on the platform that compiles them.
+      # fcs-cli are only linted on the platform that compiles them.
       # --all-targets so tests, benches and examples are linted too, matching
       # the command in CONTRIBUTING.md.
       - name: Clippy
@@ -410,7 +410,9 @@ jobs:
       - name: Check application dependencies exclude ONNX Runtime
         shell: bash
         run: |
-          cargo tree -p fcs-cli -p fcs-gui --all-features --edges normal,build --prefix none > "$RUNNER_TEMP/application-dependencies.txt"
+          cargo tree -p fcs-cli --all-features --edges normal,build --prefix none > "$RUNNER_TEMP/application-dependencies.txt"
+          # fcs-qt is not a workspace member; resolving its tree needs no Qt.
+          cargo tree --manifest-path fcs-qt/Cargo.toml --edges normal,build --prefix none >> "$RUNNER_TEMP/application-dependencies.txt"
           if grep -q '^fcs-ort ' "$RUNNER_TEMP/application-dependencies.txt"; then
             echo "fcs-ort must remain a development-only dependency"
             exit 1

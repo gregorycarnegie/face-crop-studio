@@ -44,7 +44,7 @@ Get-FileHash .\face-crop-studio-windows-x86_64.zip -Algorithm SHA256
 Confirm executables launch:
 
 - `fcs-cli.exe --help`
-- `fcs-gui.exe`
+- `fcs-qt.exe`
 
 ## 4) Publish final release
 

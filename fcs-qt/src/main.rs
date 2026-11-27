@@ -1,5 +1,5 @@
-//! Face Crop Studio on Qt Quick, through Qt Bridge for Rust. An experiment beside the egui
-//! app (fcs-gui): same models, same settings file, a QML front end.
+//! Face Crop Studio's desktop app on Qt Quick, through Qt Bridge for Rust. It replaced the egui
+//! app (fcs-gui) in 3.0 and reads the same settings file.
 
 mod images;
 mod pipeline;

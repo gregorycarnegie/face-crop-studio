@@ -1,6 +1,6 @@
 name: Linux build dependencies
 description: >
-  Installs the native libraries fcs-cli/fcs-gui link against on Linux and exports
+  Installs the native libraries fcs-cli and fcs-qt link against on Linux and exports
   the pkg-config / system-deps environment the build needs. dav1d (AVIF) and
   libheif+libde265 (HEIC) are built from source because apt's versions are older
   than the crates require, so the results are cached under /usr/local.

@@ -27,7 +27,7 @@
         <mxCell id="lg3" value="" style="rounded=0;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="legend">
           <mxGeometry x="10" y="78" width="30" height="16" as="geometry" />
         </mxCell>
-        <mxCell id="lg3t" value="front-end work (fcs-cli, fcs-gui)" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
+        <mxCell id="lg3t" value="front-end work (fcs-cli, fcs-qt)" style="text;html=1;convertToSvg=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="legend">
           <mxGeometry x="50" y="76" width="280" height="20" as="geometry" />
         </mxCell>
         <mxCell id="lg4" value="" style="rounded=0;html=1;convertToSvg=1;dashed=1;fillColor=#fff8ee;strokeColor=#d79b00;" vertex="1" parent="legend">

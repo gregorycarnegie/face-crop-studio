@@ -2,7 +2,7 @@
 lto = true
 codegen-units = 1
 # "unwind" (not "abort") so the catch_unwind panic-safety in batch processing
-# (fcs-gui run_batch_job_panic_safe) actually works in shipped builds: a single
+# (fcs-utils image_utils, around each decode) actually works in shipped builds: a single
 # undecodable file is skipped instead of aborting the whole app.
 panic = "unwind"
 strip = "debuginfo"
@@ -15,12 +15,12 @@ incremental = true
 opt-level = 3
 # Dependencies are built at opt-level 3, so full debuginfo buys little (locals are
 # optimized out) but roughly doubles every PDB. Line tables keep file:line in
-# backtraces. Measured: fcs-gui.pdb 515 MB -> 288 MB, and a `cargo test --no-run`
+# backtraces. Measured: the egui app's PDB 515 MB -> 288 MB, and a `cargo test --no-run`
 # after touching fcs-core 86-92 s -> 65-80 s. Workspace crates keep full debuginfo.
 debug = "line-tables-only"
 
 [workspace]
-members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-ort", "fcs-cli", "fcs-gui"]
+members = ["fcs-core", "fcs-utils", "fcs-mapping", "fcs-ort", "fcs-cli"]
 resolver = "3"
 
 [workspace.package]
@@ -60,15 +60,8 @@ env_logger = "0.11.12"
 log = "0.4.35"
 thiserror = "2.0.21"
 
-# CLI and desktop UI
-arboard = "3.7.0"
+# CLI
 clap = { version = "4.6.9", features = ["derive"] }
-eframe = { version = "0.37.0", features = ["wgpu"] }
-egui = "0.37.0"
-egui_extras = "0.37.0"
-# Test-only harness that drives a real egui app. Kept in lockstep with egui.
-egui_kittest = "0.37.0"
-rfd = "0.18.0"
 # Filesystem events for the CLI's --watch mode. Thin wrapper over the platform
 # APIs (ReadDirectoryChangesW / inotify / FSEvents); the event loop around it is
 # ours, because a create event fires before the file finishes being written.

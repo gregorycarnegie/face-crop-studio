@@ -4,7 +4,7 @@
 
 - Version: `vX.Y.Z`
 - Date: `YYYY-MM-DD`
-- Scope: Windows release binaries (`fcs-cli.exe`, `fcs-gui.exe`)
+- Scope: Windows release binaries (`fcs-cli.exe`, `fcs-qt.exe`)
 
 ## Highlights
 

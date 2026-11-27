@@ -1,9 +1,10 @@
-# fcs-qt: a Qt Quick front end (experiment)
+# fcs-qt: the desktop app
 
-Face Crop Studio's core workflow on Qt Quick/QML through
+Face Crop Studio's desktop app, on Qt Quick/QML through
 [Qt Bridge for Rust](https://doc.qt.io/qtbridge-rust/qtbridge/index.html) (`qtbridge` 0.4.1,
-a Technology Preview). It sits beside the egui app (`fcs-gui`) and uses the same models,
-pipeline and settings file.
+a Technology Preview). It started as an experiment beside the egui app (`fcs-gui`), shipped
+beside it in 2.4.0 and replaced it in 3.0, keeping its models, pipeline and settings file. The
+comparisons with fcs-gui below are from that period.
 
 ![fcs-qt with the sample photos loaded](screenshot.png)
 
@@ -155,32 +156,37 @@ needs the same: `env -u GSETTINGS_SCHEMA_DIR -u GTK_PATH ...`, or a terminal out
 
 Each does a release build and deploys Qt beside it: `windeployqt`, linuxdeploy with its Qt
 plugin, or `macdeployqt`. The QML is compiled into the binary, so each deploy tool scans
-`src/fcs_qt` for imports. Models go where `resolve_data_path` looks, as in fcs-gui's
-packages. Every package carries `NOTICE-Qt.txt` (filled in with the Qt version), the LGPL-3.0
-and GPL-3.0 texts, and Face Crop Studio's own licences. `packaging/smoke.ps1` / `smoke.sh` run
-a package for 20 s with Qt off PATH, from an empty folder. They check that it stayed up,
-loaded the detector from the package and logged no QML or plugin errors. The fcs-qt
-workflow packages, smoke-tests and uploads all three on every push (not on pull requests).
+`src/fcs_qt` for imports. Models go where `resolve_data_path` looks. Every package carries
+`NOTICE-Qt.txt` (filled in with the Qt version), the LGPL-3.0 and GPL-3.0 texts, and Face Crop
+Studio's own licences. `packaging/smoke.ps1` / `smoke.sh` run a package for 20 s with Qt off
+PATH, from an empty folder. They check that it stayed up, loaded the detector from the package
+and logged no QML or plugin errors. The fcs-qt workflow packages, smoke-tests and uploads all
+three on every push (not on pull requests).
 
-Installers: an MSI from the Windows folder (`packaging/fcs-qt.wxs`, WiX v7; the fcs-qt workflow
-builds it, installs it, smoke-tests the installed copy and uninstalls it), and a .deb from the
-AppImage's AppDir, under `/opt/face-crop-studio-qt` with its own Qt and a `Depends` line from
-`dpkg-shlibdeps` (the workflow installs it with apt and smoke-tests `fcs-qt` from PATH). Both
-are their own product ("Face Crop Studio Qt", `face-crop-studio-qt`), so they install beside
-fcs-gui's rather than replacing it. The .dmg holds the .app.
+`package.sh` makes the macOS and Linux release assets: it also builds fcs-cli from the root
+workspace and adds it, the samples and the README, under the names 2.x's packages had
+(`face-crop-studio-<version>-<arch>.AppImage`/`.deb`, `face-crop-studio-<version>-aarch64-apple-darwin.dmg`
+holding `Face Crop Studio.app`, bundle id `dev.facecropstudio.app`). The .deb is the
+`face-crop-studio` package, under `/opt/face-crop-studio` with its own Qt, a `Depends` line from
+`dpkg-shlibdeps`, and `fcs-qt`/`fcs-cli` linked into `/usr/bin`; it replaces 2.4's
+`face-crop-studio-qt` preview package. The workflow installs it with apt and smoke-tests
+`fcs-qt` from PATH, and runs `tools/verify_package.zig` on both packages' fcs-cli. The .dmg's
+volume is labelled a macOS preview until the app is checked on a real Mac.
 
-fcs-gui's setup.exe and MSIX are built from fcs-qt's Windows folder too, by the same scripts
-(`installer/windows/face-crop-studio.nsi` with `GUI_EXE=fcs-qt.exe`, `build_msix.ps1
--Executable fcs-qt.exe`), and the workflow installs, runs and removes each. They keep
-fcs-gui's install directory, registry keys and Store identity, so in 3.0 they upgrade an
-fcs-gui install in place; until then they are CI-only, not release assets. The MSIX is signed
-there with a throwaway certificate; the Store re-signs real uploads.
+Windows: `release.yml` takes `package.ps1`'s folder from `qt.yml` (artifact
+`qt-windows-payload`), adds fcs-cli.exe (static CRT, built there), the samples and README, and
+builds the zip, MSI (`installer/windows/wix/Product.wxs`), setup.exe
+(`installer/windows/face-crop-studio.nsi`) and MSIX (`installer/windows/msix/build_msix.ps1`)
+from it. All three installers keep 2.x's install directory, registry keys, MSI upgrade code and
+Store identity, so they upgrade a 2.x install in place. On every push the fcs-qt workflow builds
+the MSI, setup.exe and MSIX from fcs-qt's folder alone and installs, runs and removes each; the
+MSIX is signed there with a throwaway certificate, and the Store re-signs real uploads.
 
-Not done: signing. The .exe and MSI are unsigned and the .app is signed ad hoc.
-fcs-gui's release builds sign only when the repository has certificates (`CODE_SIGN_PFX`,
-`APPLE_DEVELOPER_ID_*`), and it has none yet. Adding them means adding fcs-qt's signing too, in
-`qt.yml` under `inputs.release`; check then whether the hardened runtime needs
-`com.apple.security.cs.allow-jit` for the QML engine.
+Signing: the release builds sign only when the repository has certificates (`CODE_SIGN_PFX`,
+`APPLE_DEVELOPER_ID_*`), and it has none yet, so the .exe and MSI are unsigned and the .app is
+signed ad hoc. The macOS path (`package.sh` with `APPLE_DEVELOPER_ID_NAME`, the certificate
+imported in `qt.yml` on release runs) is untested; when certificates arrive, check whether the
+hardened runtime needs `com.apple.security.cs.allow-jit` for the QML engine.
 
 Tests beyond `cargo test`: `tests/qml/run.sh` runs the screens under `qmltestrunner` against a
 mock Studio serving the real factory settings (`tests/qml/fixture.js`, which a Rust test keeps
@@ -189,10 +195,11 @@ Automation: six photos, every face found and exported through the real folder di
 clean shutdown.
 
 Releases: `release.yml` runs `qt.yml` with `release: true` (`qt-release`), and its publish job
-waits for it and attaches the `face-crop-studio-qt-*` assets and `SHA256SUMS-qt-*.txt` beside
-fcs-gui's. Every package carries the workspace version, which the About box shows too.
+waits for it and attaches the macOS and Linux assets and their `SHA256SUMS-<platform>.txt`.
+Package names carry the workspace version (a release tag's, for an rc); the About box shows
+the workspace version.
 
-Icons: the .exe embeds fcs-gui's `app_icon.ico` (build.rs), every window gets it at startup
+Icons: the .exe embeds `assets/app_icon.ico` (build.rs), every window gets it at startup
 (`images::install_app_icon`, which also serves it to the header), the .app gets an `.icns` made from `app_logo.svg`, and the Linux
 packages a 256 px PNG of it.
 
@@ -347,12 +354,13 @@ packages a 256 px PNG of it.
    would be the UI overhaul the 3.0 version is reserved for.
 6. The gaps fcs-gui still covered (closed 2026-11-15 unless noted): Linux arm64 packages; the
    setup.exe and MSIX built from fcs-qt and install-tested in CI (see Packaging); Qt Quick
-   tests and a Windows end-to-end test (see Tests). Still open: a few weeks of 2.4.x in use,
-   the file dialogs on a real Linux desktop (its camera and GPU were checked 2026-11-16). No
-   real Mac is available, so (decided 2026-11-17) 3.0 ships fcs-qt on macOS labelled as a
-   preview until someone checks it on real hardware.
-7. 3.0: fcs-cli and fcs-qt as the Windows payload of the zip, MSI, setup.exe and MSIX (fcs-qt's
-   own MSI goes, the shared one keeps fcs-gui's upgrade code), fcs-qt's packages on macOS and
-   Linux under fcs-gui's names (macOS marked as a preview), and fcs-gui removed.
+   tests and a Windows end-to-end test (see Tests). Then two weeks of 2.4.0 with no issue
+   raised, and the file dialogs checked on a real Linux desktop (2026-11-21; its camera and GPU
+   2026-11-16). No real Mac is available, so (decided 2026-11-17) 3.0 ships fcs-qt on macOS
+   labelled as a preview until someone checks it on real hardware.
+7. ~~3.0~~: done 2026-11-27. fcs-cli and fcs-qt as the Windows payload of the zip, MSI,
+   setup.exe and MSIX (fcs-qt's own MSI gone, the shared one keeps fcs-gui's upgrade code),
+   fcs-qt's packages on macOS and Linux under fcs-gui's names (macOS marked as a preview), and
+   fcs-gui removed.
 
 Also worth asking upstream for an image provider API in the bridge, so the C++ file can go.

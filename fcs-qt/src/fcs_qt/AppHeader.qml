@@ -24,7 +24,7 @@ Rectangle {
         anchors.rightMargin: Theme.pad
         spacing: 12
 
-        // The app icon, decoded from fcs-gui's app_icon.ico at startup (images.rs).
+        // The app icon, decoded from assets/app_icon.ico at startup (images.rs).
         Image {
             Layout.preferredWidth: 30
             Layout.preferredHeight: 30

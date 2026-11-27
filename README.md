@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="fcs-gui/assets/app_logo.svg" alt="Face Crop Studio logo" width="160">
+  <img src="assets/app_logo.svg" alt="Face Crop Studio logo" width="160">
 </p>
 
 <h1 align="center">
@@ -26,7 +26,7 @@
 [![CI](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/ci.yml)
 [![Release](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml/badge.svg)](https://github.com/gregorycarnegie/face-crop-studio/actions/workflows/release.yml)
 
-Face Crop Studio is a Rust workspace that wraps a face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and an egui desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Preprocessing runs on the CPU; inference and enhancement support both built-in CPU paths and GPU acceleration via wgpu/WGSL compute shaders.
+Face Crop Studio is a Rust workspace that wraps a face detector with deterministic cropping, quality analysis, enhancement, and export tooling. The project ships both a command-line workflow and a Qt Quick desktop application, backed by shared utilities for image processing, metadata handling, and configuration. Preprocessing runs on the CPU; inference and enhancement support both built-in CPU paths and GPU acceleration via wgpu/WGSL compute shaders.
 
 The detector is **SCRFD-80k**, trained by this project on 80,000 CC BY 2.0 Open Images photographs, so the shipped weights carry no non-commercial restriction. It runs on WGSL compute shaders, falling back to a built-in Rust CPU graph. Neither detection nor eye refinement loads an ONNX Runtime library.
 
@@ -74,7 +74,7 @@ eye refiner, SCRFD-80k still had the lowest eye-line error, at 2.03° median.
 - **`fcs-utils`** – Shared helpers: configuration structs, Laplacian-variance quality scoring, enhancement pipeline (CPU and GPU paths with 7 WGSL compute shaders), and output encoders with metadata support.
 - **`fcs-mapping`** – Tabular ingestion for the batch mapping workflow: reads CSV, Excel, Parquet, and SQLite tables into source-image/output-name pairs. Standalone — it depends on no other workspace crate.
 - **`fcs-cli`** – Command-line frontend aimed at batch processing and automation with optional GPU acceleration (auto-detected, with fallback to CPU). Shares one GPU context across enhancement and shape-mask work in a batch. Example invocations are documented in `docs/cli_recipes.md`.
-- **`fcs-gui`** – eframe/egui desktop experience with live preview, crop adjustments, enhancements, history/undo, and batch export. Shares GPU context with eframe's wgpu backend for efficient rendering and compute. A user guide lives in `docs/gui_crop_guide.md`.
+- **`fcs-qt`** – Qt Quick desktop app (through Qt Bridge for Rust) with live preview, crop adjustments, enhancements, undo, and batch export. Not a workspace member, since it needs Qt 6.10+: building, testing and packaging are in `fcs-qt/README.md`. Replaced the egui app (`fcs-gui`) in 3.0.
 
 ## Architecture Diagrams
 
@@ -111,7 +111,7 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 
 - **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking. Both front-ends call the same runtime (`fcs_utils::EnhancementRuntime`), which falls back to the identical CPU pipeline when no GPU is available.
 - **Custom inference** – Full GPU implementation of the detector in WGSL (Conv2D, pooling, add, upsample, activations), measured within about 1e-05 of ONNX Runtime on one input; the parity tests gate at 2e-3 (CPU graph) and 5e-3 (GPU). It exists so detection works with no external runtime, **not** because it is faster: measured, the two are a tie (`docs/ENGINE_SPEED.md`).
-- **GPU contexts** – The CLI opens one context for enhancement; the GUI shares eframe's. The detector opens its own, under the same settings.
+- **GPU contexts** – The CLI and the desktop app each open one context for enhancement. The detector opens its own, under the same settings.
 - **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. `--no-gpu` (or the GUI's GPU toggle) keeps enhancement *and* detection on the CPU.
 
 **Experimental CUDA Rust:** on compatible NVIDIA GPUs on Windows and Linux,
@@ -233,7 +233,7 @@ The easiest option is the [Microsoft Store](#microsoft-store) listing, which kee
 5. If you downloaded the EXE installer, run `face-crop-studio-windows-x86_64-setup.exe`.
 6. If you downloaded the zip, extract it to a folder of your choice.
 7. Run:
-   - `fcs-gui.exe` for the desktop app
+   - `fcs-qt.exe` for the desktop app
    - `fcs-cli.exe --help` for CLI usage
 
 The release package includes `models/scrfd80k_500m_640.onnx` by default, so detection works out-of-the-box without manually selecting a model path.
@@ -325,7 +325,7 @@ filenames; once the GIFs are added, uncomment the block below to publish them.
 - `cargo run -p fcs-cli -- --input fixtures/ --no-gpu` – Run with CPU-only mode.
 - `cargo run -p fcs-cli -- --watch inbox/ --crop --output-dir out/` – Watch a folder and crop each image as it lands. Files already in `inbox/` are left alone; run the same command with `--input inbox/` to process those.
 - `cargo run -p fcs-cli -- --input portraits/ --crop --eye-line-align --output-dir out/` – Crop with the eyes levelled in every output.
-- `cargo run -p fcs-gui` – Launch the GUI with default settings (auto-detects GPU).
+- `./fcs-qt/dev.ps1 run` (Windows) or `./fcs-qt/dev.sh run` – Launch the desktop app with default settings (auto-detects GPU); needs Qt, see `fcs-qt/README.md`.
 - `cargo bench -p fcs-core crop_enhance` – Measure the crop + enhancement micro-benchmark.
 - `cargo fmt --all && cargo clippy --workspace -- -D warnings` – Formatting and linting hygiene. Note this only lints the platform you are on: code behind `#[cfg(target_os = ...)]` is invisible to the compiler everywhere else, which is why CI runs clippy on all three legs rather than just one. See [Cross-platform linting](#cross-platform-linting).
 
@@ -346,7 +346,7 @@ can only be linted for another platform by invoking the driver on it directly:
 ```sh
 clippy-driver --edition 2024 --target x86_64-unknown-linux-gnu \
     --crate-type bin --emit=metadata -o /tmp/probe.rmeta \
-    -D warnings fcs-gui/build.rs
+    -D warnings fcs-cli/build.rs
 ```
 
 That will not resolve `winresource`, so it is only useful for the non-Windows

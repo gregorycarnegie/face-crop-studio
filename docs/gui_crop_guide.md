@@ -4,7 +4,7 @@ The desktop app bundles a full crop workflow on top of face detection so you can
 
 ## Quick Start
 
-1. Launch the GUI with `cargo run -p fcs-gui` (or run the packaged binary once released).
+1. Launch the app from its package, or from a checkout with `./fcs-qt/dev.ps1 run` (`./fcs-qt/dev.sh run` on macOS and Linux).
 2. Click **Open image…** to select a portrait photo, or simply drag an image from your desktop (or paste one from the clipboard) to load it instantly. Detection will run automatically as soon as the model has been configured.
 3. Detected faces appear in the **Detected Faces** list. Click a thumbnail or the accompanying **Select** button to include a face in the export set. Hold *Shift* and use the number keys (1‑6) to jump between the built-in crop presets.
 4. Hit **Export selected faces** (or press *Enter*) to run the crop, optional enhancements, and save pipeline.

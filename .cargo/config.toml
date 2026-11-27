@@ -2,7 +2,7 @@
 target-dir = "target"
 
 [env]
-RUST_LOG = { value = "info,fcs_core=debug,fcs_gui=debug", force = false }
+RUST_LOG = { value = "info,fcs_core=debug,fcs_qt=debug", force = false }
 RUST_BACKTRACE = { value = "1", force = false }
 # libheif-sys (HEIC) locates the library via the `vcpkg` crate, which needs VCPKG_ROOT.
 # force = false so a contributor with vcpkg elsewhere can override it from their own env.

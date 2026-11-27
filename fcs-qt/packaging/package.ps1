@@ -1,4 +1,5 @@
-# Build a portable fcs-qt folder and zip for Windows, with Qt deployed beside the exe.
+# Build a portable fcs-qt folder and zip for Windows, with Qt deployed beside the exe. release.yml
+# adds fcs-cli, the samples and README to the folder for the release zip, MSI, setup.exe and MSIX.
 #   ./fcs-qt/packaging/package.ps1          -> fcs-qt/dist/face-crop-studio-qt-windows-x86_64(.zip)
 # Needs the models in models/ (as for the other release builds) and what dev.ps1 needs.
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,8 @@ foreach ($model in 'scrfd80k_500m_640.onnx', 'eye_refiner.onnx') {
     Copy-Item "$root\models\$model" "$dist\models\"   # fails loudly if a model is missing
 }
 Copy-Item "$root\LICENSE-MIT", "$root\LICENSE-APACHE" $dist
+# The MSI and setup.exe take their icon from the payload.
+Copy-Item "$root\assets\app_icon.ico" $dist
 Copy-Item "$root\fcs-qt\packaging\licenses\*" "$dist\licenses\"
 $qtVersion = (qmake -query QT_VERSION).Trim()
 (Get-Content "$root\fcs-qt\packaging\NOTICE-Qt.txt" -Raw).
@@ -30,7 +33,7 @@ $qtVersion = (qmake -query QT_VERSION).Trim()
 windeployqt --release --qmldir "$root\fcs-qt\src\fcs_qt" --no-opengl-sw --no-system-dxc-compiler --no-system-d3d-compiler "$dist\fcs-qt.exe"
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-# Qt is built against the dynamic MSVC runtime (fcs-gui links it statically), so ship it
+# Qt is built against the dynamic MSVC runtime (fcs-cli links it statically), so ship it
 # app-locally. Only VS 2022's (14.3x) is new enough for Qt's MSVC 2022 binaries.
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $crt = & $vswhere -latest -products * -find 'VC\Redist\MSVC\14.*\x64\Microsoft.VC14*.CRT' |

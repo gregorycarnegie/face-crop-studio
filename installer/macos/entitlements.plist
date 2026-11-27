@@ -7,6 +7,6 @@
 	<key>com.apple.security.device.camera</key>
 	<true/>
 	<!-- wgpu's Metal backend uses Apple's signed Metal frameworks; no JIT entitlement needed. -->
-	<!-- App is not sandboxed: file pickers via rfd hit the full filesystem the user has access to. -->
+	<!-- App is not sandboxed: Qt's file dialogs reach the full filesystem the user has access to. -->
 </dict>
 </plist>

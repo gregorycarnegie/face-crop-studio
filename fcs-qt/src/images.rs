@@ -106,8 +106,8 @@ unsafe extern "C" {
     fn fcs_set_window_icon(rgba: *const u8, width: i32, height: i32);
 }
 
-/// fcs-gui's icon, which its exe also embeds (the Windows file icon comes from build.rs).
-const APP_ICON: &[u8] = include_bytes!("../../fcs-gui/assets/app_icon.ico");
+/// The app icon, which the exe also embeds (the Windows file icon comes from build.rs).
+const APP_ICON: &[u8] = include_bytes!("../../assets/app_icon.ico");
 
 /// The app icon's largest image.
 fn app_icon() -> image::ImageResult<RgbaImage> {

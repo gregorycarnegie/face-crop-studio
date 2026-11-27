@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Face Crop Studio Qt for Linux on arm64: `face-crop-studio-qt-*-arm64.AppImage` and `.deb`,
-  as fcs-gui already had.
-
 ### Changed
 
+- **The desktop app is now the Qt Quick one, and the egui app (fcs-gui) is gone.** Face Crop
+  Studio Qt shipped beside it as a preview in 2.4.0; it now takes its place in every package,
+  under the names the egui app's had: the `face-crop-studio-windows-x86_64` zip, MSI, setup.exe
+  and Store package, the `face-crop-studio-<version>-<arch>` AppImage and .deb (x86_64 and
+  arm64), and the macOS DMG. The installers upgrade a 2.x installation in place, and the app
+  reads the same settings file (`config/gui_settings.json`). The app's executable is `fcs-qt`
+  (`fcs-qt.exe`); `fcs-cli` is unchanged.
+- macOS: the app is a preview until it has been checked on a real Mac, and the DMG's volume says
+  so. It needs macOS 13 or newer (was 11).
+- Linux: the .deb installs under `/opt/face-crop-studio` with its own Qt, links `fcs-qt` and
+  `fcs-cli` into `/usr/bin`, and replaces 2.4's `face-crop-studio-qt` package. The packages are
+  built on Ubuntu 24.04 (2.x's on 22.04), as Qt's own Linux binaries need, so older
+  distributions may not run them.
+- Windows: 2.4's separate "Face Crop Studio Qt" MSI is not upgraded by this one; uninstall it
+  from Settings if you installed it.
 - Updated dependencies: clap to 4.6.9, env_logger to 0.11.12, fast_image_resize to 6.2.0,
   notify to 9.0.0, Parquet/Arrow to 60.2.0, pollster to 1.0.3, rusqlite to 0.43.0, walkdir to
   2.5.1, zip to 9.8.1, and vstd to 0.0.0-2026-11-15-0327.
@@ -25,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nightly-2026.11.22-2e3d448, the first Aeneas built for it.
 - The dataset tools read and write JPEG, PNG and BMP through a Zig port of stb_image and
   stb_image_write, so building them no longer needs a C compiler or libc.
+
+### Removed
+
+- fcs-gui, the egui desktop app, with its egui, eframe, egui_kittest, rfd and arboard
+  dependencies. Its icons moved to `assets/`.
 
 ### Fixed
 
