@@ -33,6 +33,18 @@ pub(crate) struct CudaDetector {
     idle: Mutex<Vec<Executor>>,
 }
 
+impl Drop for CudaDetector {
+    /// cudarc frees a buffer without making its context current, so on a thread that never ran
+    /// CUDA (fcs-qt drops a replaced engine on a fresh worker) the free fails, and cudarc keeps
+    /// that error on the shared context: every later CUDA call returned INVALID_CONTEXT. Binding
+    /// first lets the fields below free normally.
+    fn drop(&mut self) {
+        if let Err(err) = self.runtime.context.bind_to_thread() {
+            log::warn!("CUDA detector buffers may leak: {err}");
+        }
+    }
+}
+
 /// What a CUDA run hands back for decoding.
 #[derive(Debug)]
 pub(crate) enum Heads {
@@ -600,6 +612,23 @@ mod tests {
         let letterbox = last.context("image fixtures required")?;
         assert!(matches!(cuda.infer(&letterbox, Some(0.0))?, Heads::Maps(_)));
         Ok(())
+    }
+
+    /// Switching to CUDA, away and back again in fcs-qt dropped the first detector on a fresh
+    /// thread, which left the shared context failing every call with INVALID_CONTEXT.
+    #[test]
+    #[ignore = "requires a compatible NVIDIA GPU; run explicitly before shipping CUDA changes"]
+    fn a_detector_dropped_on_another_thread_leaves_cuda_usable() -> Result<()> {
+        let path =
+            fcs_utils::model_path("models/scrfd80k_500m_640.onnx")?.context("model required")?;
+        let first = CudaDetector::load(&path)?;
+        std::thread::spawn(move || drop(first))
+            .join()
+            .expect("drop panicked");
+        let again = std::thread::spawn(move || CudaDetector::load(&path).map(|_| ()))
+            .join()
+            .expect("load panicked");
+        again.context("loading CUDA again after a drop on another thread")
     }
 
     #[test]

@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Switching Face Crop Studio Qt to CUDA Rust, away and back again failed with
+  `CUDA_ERROR_INVALID_CONTEXT` until the app restarted, and leaked the first detector's GPU
+  memory. The detector freed its buffers on a thread where its CUDA context was not current.
 - Face Crop Studio Qt's "Some of these files already exist" prompt before an export counted a
   file named from a mapping three times when quality suffixes were on.
 
