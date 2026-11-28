@@ -7,27 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Face Crop Studio Qt for Linux on arm64: `face-crop-studio-qt-*-arm64.AppImage` and `.deb`,
-  as fcs-gui already had.
-
 ### Changed
 
-- Updated dependencies: clap to 4.6.9, env_logger to 0.11.12, fast_image_resize to 6.2.0,
-  notify to 9.0.0, Parquet/Arrow to 60.2.0, pollster to 1.0.3, rusqlite to 0.43.0, walkdir to
-  2.5.1, zip to 9.8.1, and vstd to 0.0.0-2026-11-15-0327.
+- **The desktop app is now the Qt Quick one, and the egui app (fcs-gui) is gone.** Face Crop
+  Studio Qt shipped beside it as a preview in 2.4.0; it now takes its place in every package,
+  under the names the egui app's had: the `face-crop-studio-windows-x86_64` zip, MSI, setup.exe
+  and Store package, the `face-crop-studio-<version>-<arch>` AppImage and .deb (x86_64 and
+  arm64), and the macOS DMG. The installers upgrade a 2.x installation in place, and the app
+  reads the same settings file (`config/gui_settings.json`). The app's executable is `fcs-qt`
+  (`fcs-qt.exe`); `fcs-cli` is unchanged.
+- macOS: the app is a preview until it has been checked on a real Mac, and the DMG's volume says
+  so. It needs macOS 13 or newer (was 11).
+- Linux: the .deb installs under `/opt/face-crop-studio` with its own Qt, links `fcs-qt` and
+  `fcs-cli` into `/usr/bin`, and replaces 2.4's `face-crop-studio-qt` package. The packages are
+  built on Ubuntu 24.04 (2.x's on 22.04), as Qt's own Linux binaries need, so older
+  distributions may not run them.
+- Windows: 2.4's separate "Face Crop Studio Qt" MSI is not upgraded by this one; uninstall it
+  from Settings if you installed it.
+- Updated dependencies: anyhow to 1.0.105, clap to 4.6.10, crc32fast to 1.5.6, env_logger to
+  0.11.12, fast_image_resize to 6.2.0, notify to 9.0.0, Parquet/Arrow to 60.2.0, pollster to
+  1.0.3, rstest to 0.29.0, rusqlite to 0.43.0, walkdir to 2.5.1, zip to 9.8.2, and vstd to
+  0.0.0-2026-11-22-0344.
 - The bundled image decoders are updated on every platform: libheif to 1.23.7 (HEIC; Linux and
   macOS builds had 1.23.0), which fixes a number of CVEs, libde265 to 1.1.3 (its HEVC decoder;
   was 1.0.15), and dav1d to 1.5.5 (AVIF; was 1.5.1, Windows 1.5.4). Windows builds now pin vcpkg
   to a fixed commit instead of the copy on the build machine, which had stopped building dav1d.
+- Rust 1.100 is now the minimum version and the CI and release toolchain (was 1.99).
+- The Verus proofs (`tools/verus`) now check with Verus 0.2026.11.22.1ce6a59, which runs on
+  Rust 1.100 (was 0.2026.11.02.8bf68ee on 1.99.1).
 - The Lean proofs (`tools/verification`) now check with Lean 4.36.0 and Aeneas
   nightly-2026.11.22-2e3d448, the first Aeneas built for it.
 - The dataset tools read and write JPEG, PNG and BMP through a Zig port of stb_image and
   stb_image_write, so building them no longer needs a C compiler or libc.
 
+### Removed
+
+- fcs-gui, the egui desktop app, with its egui, eframe, egui_kittest, rfd and arboard
+  dependencies. Its icons moved to `assets/`.
+
 ### Fixed
 
+- Switching Face Crop Studio Qt to CUDA Rust, away and back again failed with
+  `CUDA_ERROR_INVALID_CONTEXT` until the app restarted, and leaked the first detector's GPU
+  memory. The detector freed its buffers on a thread where its CUDA context was not current.
 - Face Crop Studio Qt's "Some of these files already exist" prompt before an export counted a
   file named from a mapping three times when quality suffixes were on.
 

@@ -1,6 +1,6 @@
 name: Linux build dependencies
 description: >
-  Installs the native libraries fcs-cli/fcs-gui link against on Linux and exports
+  Installs the native libraries fcs-cli and fcs-qt link against on Linux and exports
   the pkg-config / system-deps environment the build needs. dav1d (AVIF) and
   libheif+libde265 (HEIC) are built from source because apt's versions are older
   than the crates require, so the results are cached under /usr/local.
@@ -108,7 +108,9 @@ runs:
           -DENABLE_DECODER=ON \
           -DENABLE_ENCODER=OFF \
           -DENABLE_SDL=OFF
-        cmake --build "/tmp/libde265-${DE265_VERSION}/build" --parallel
+        # A bare --parallel is an unbounded `make -j`: on the arm64 runner it ran out of memory
+        # compiling libheif and was killed (exit 143). Bound it to the cores.
+        cmake --build "/tmp/libde265-${DE265_VERSION}/build" --parallel "$(nproc)"
         sudo cmake --install "/tmp/libde265-${DE265_VERSION}/build"
         curl -fsSL -o /tmp/libheif.tar.gz \
           "https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz"
@@ -124,7 +126,7 @@ runs:
           -DWITH_AOM_DECODER=OFF \
           -DENABLE_PLUGIN_LOADING=OFF \
           -DWITH_LIBSHARPYUV=OFF
-        cmake --build "/tmp/libheif-${LIBHEIF_VERSION}/build" --parallel
+        cmake --build "/tmp/libheif-${LIBHEIF_VERSION}/build" --parallel "$(nproc)"
         sudo cmake --install "/tmp/libheif-${LIBHEIF_VERSION}/build"
 
     # Runs on cache hits too: the exports have to be present either way, and the

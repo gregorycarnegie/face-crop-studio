@@ -1,16 +1,19 @@
 name: fcs-qt
 
-# The Qt Quick front end, on the three platforms Face Crop Studio ships for. Separate from ci.yml
-# because fcs-qt is not a workspace member (it needs Qt, which the main legs don't install) and
-# only matters when it or the crates it uses change.
+# The Qt Quick front end, on the three platforms Face Crop Studio ships for, and the macOS and
+# Linux release packages (fcs-qt with fcs-cli). Separate from ci.yml because fcs-qt is not a
+# workspace member (it needs Qt, which the main legs don't install).
 on:
   push:
     branches: [ "master" ]
     paths: &paths
       - "fcs-qt/**"
+      - "fcs-cli/**"
       - "fcs-core/**"
       - "fcs-utils/**"
       - "fcs-mapping/**"
+      - "assets/**"
+      - "installer/**"
       - "Cargo.lock"
       - ".github/workflows/qt.yml"
       - ".github/actions/**"
@@ -18,8 +21,9 @@ on:
     branches: [ "master" ]
     paths: *paths
   workflow_dispatch:
-  # release.yml runs this for fcs-qt's release assets, so they are built and checked exactly as
-  # on every push; with `release` the upload is named for its publish job, with checksums.
+  # release.yml runs this for the macOS and Linux release assets and the Windows Qt payload, so
+  # they are built and checked exactly as on every push; with `release` the uploads are named for
+  # its jobs, and the macOS package is signed when the Apple secrets are set.
   workflow_call:
     inputs:
       release:
@@ -28,7 +32,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_TOOLCHAIN: "1.99.0"
+  RUST_TOOLCHAIN: "1.100.0"
   # 6.12, not 6.10: 6.10.3's qyieldcpu.h calls __yield() undeclared on arm64, which current
   # Xcode clang rejects; 6.12 uses __builtin_arm_yield. 6.12 needs MSVC 2022 on Windows.
   QT_VERSION: "6.12.0"
@@ -42,11 +46,14 @@ jobs:
   build:
     name: fcs-qt (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    env:
+      # Evaluated once at job start, so the signing steps skip when the secret is not set.
+      HAS_APPLE_SIGNING: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_CERT')] != '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # `slug` names the leg's checksums and artifact.
+          # `slug` names the leg's checksums and artifact, as the release assets always have.
           - name: Windows
             os: windows-latest
             qt-arch: win64_msvc2022_64
@@ -54,15 +61,14 @@ jobs:
           - name: macOS
             os: macos-latest
             qt-arch: clang_64
-            slug: macos
-          # 24.04, not ci.yml's 22.04: this checks fcs-qt builds, not the release glibc baseline,
-          # and Qt's own 6.10 Linux binaries target newer distributions.
+            slug: macos-arm64
+          # 24.04, not ci.yml's 22.04: Qt's own Linux binaries target newer distributions, so
+          # the packages need what 24.04 has (dpkg-shlibdeps writes the .deb's minimum).
           - name: Linux
             os: ubuntu-24.04
             qt-arch: linux_gcc_64
-            slug: linux
-          # As fcs-gui's arm64 Linux release. aqtinstall needs the host named; it would
-          # otherwise look for x86_64 binaries.
+            slug: linux-x86_64
+          # aqtinstall needs the host named; it would otherwise look for x86_64 binaries.
           - name: Linux ARM64
             os: ubuntu-24.04-arm
             qt-host: linux_arm64
@@ -152,10 +158,13 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy, rustfmt
 
+      # Both: the packages build fcs-cli from the root workspace.
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: fcs-qt
+          workspaces: |
+            fcs-qt
+            .
           key: ${{ matrix.os }}
 
       # ── Checks ───────────────────────────────────────────────────────────
@@ -202,6 +211,17 @@ jobs:
           ./fcs-qt/packaging/package.ps1
           ./fcs-qt/packaging/smoke.ps1 fcs-qt/dist/face-crop-studio-qt-windows-x86_64/fcs-qt.exe
 
+      # The unpacked folder, for release.yml's Windows job to add fcs-cli and build the zip,
+      # MSI, setup.exe and MSIX from.
+      - name: Upload Windows payload
+        if: runner.os == 'Windows' && inputs.release
+        uses: actions/upload-artifact@v7
+        with:
+          name: qt-windows-payload
+          path: fcs-qt/dist/face-crop-studio-qt-windows-x86_64
+          if-no-files-found: error
+          retention-days: 1
+
       # The packaged app driven through UI Automation: six photos, every face found, all of them
       # exported through the real folder dialog, and a clean shutdown.
       - name: End-to-end (Windows)
@@ -217,9 +237,10 @@ jobs:
           path: ${{ runner.temp }}/fcs-qt-e2e-*/failure-*.png
           if-no-files-found: ignore
 
-      # The MSI, from the folder above; then installed, smoke-tested from Program Files and
-      # removed again. Unsigned, as fcs-gui's are while the repository has no certificates.
-      - name: Installer (Windows)
+      # The release MSI (installer/windows/wix), from the folder above; then installed,
+      # smoke-tested from Program Files and removed again. Unsigned while the repository has no
+      # certificates. release.yml builds the shipped one from the same folder plus fcs-cli.
+      - name: MSI (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: pwsh
         run: |
@@ -227,24 +248,23 @@ jobs:
           wix -acceptEula wix7 extension add WixToolset.UI.wixext/7.0.0
           # Face Crop Studio's version, which the About box shows too.
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          $msi = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64.msi"
+          $msi = "$env:RUNNER_TEMP\face-crop-studio.msi"
           wix build -acceptEula wix7 -arch x64 -d SourceDir="$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64" `
-            -d MsiVersion="$version" -ext WixToolset.UI.wixext -o $msi fcs-qt\packaging\fcs-qt.wxs
+            -d MsiVersion="$version" -ext WixToolset.UI.wixext -o $msi installer\windows\wix\Product.wxs
           if ($LASTEXITCODE) { throw "wix build failed ($LASTEXITCODE)" }
 
           $install = Start-Process msiexec -ArgumentList '/i', "`"$msi`"", '/qn', '/l*v', 'msi-install.log' -Wait -PassThru
           if ($install.ExitCode) { Get-Content msi-install.log -Tail 40; throw "install failed ($($install.ExitCode))" }
-          $installed = "$env:ProgramFiles\Face Crop Studio Qt\fcs-qt.exe"
-          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Face Crop Studio Qt.lnk")) { throw 'no Start menu shortcut' }
+          $installed = "$env:ProgramFiles\Face Crop Studio\fcs-qt.exe"
+          if (-not (Test-Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Face Crop Studio\Face Crop Studio.lnk")) { throw 'no Start menu shortcut' }
           ./fcs-qt/packaging/smoke.ps1 $installed
           $remove = Start-Process msiexec -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
           if ($remove.ExitCode) { throw "uninstall failed ($($remove.ExitCode))" }
           if (Test-Path $installed) { throw 'uninstall left fcs-qt.exe behind' }
 
-      # The setup.exe and Store packages fcs-gui ships, built from fcs-qt's folder by the same
-      # scripts, so 3.0 can swap the payload. CI-only for now: each is installed, run and removed.
-      # The MSIX is signed with a throwaway certificate named like the Store publisher; the
-      # Store re-signs real uploads.
+      # The release setup.exe and Store package, built from the same folder by the same scripts
+      # release.yml uses; each is installed, run and removed. The MSIX is signed with a throwaway
+      # certificate named like the Store publisher; the Store re-signs real uploads.
       - name: setup.exe and MSIX (Windows)
         if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: pwsh
@@ -253,13 +273,12 @@ jobs:
           $dist = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64"
 
           choco install nsis --no-progress -y
-          $setup = "$PWD\fcs-qt\dist\face-crop-studio-qt-windows-x86_64-setup.exe"
+          $setup = "$env:RUNNER_TEMP\face-crop-studio-setup.exe"
           & "C:\Program Files (x86)\NSIS\makensis.exe" /V2 "/DAPP_VERSION=$version" "/DDIST_DIR=$dist" `
-            "/DOUT_FILE=$setup" /DGUI_EXE=fcs-qt.exe "/DICON_FILE=$PWD\fcs-gui\assets\app_icon.ico" `
-            installer\windows\face-crop-studio.nsi
+            "/DOUT_FILE=$setup" installer\windows\face-crop-studio.nsi
           if ($LASTEXITCODE) { throw "makensis failed ($LASTEXITCODE)" }
           $dir = "$env:ProgramFiles\Face Crop Studio"
-          # Installed over fcs-gui 2.x's files (release.yml's layout), as the 3.0 upgrade will be:
+          # Installed over fcs-gui 2.x's files (2.x's release layout), as an upgrade from 2.x is:
           # its uninstaller must remove those too.
           New-Item -ItemType Directory -Force "$dir\samples" | Out-Null
           foreach ($f in 'fcs-gui.exe', 'fcs-cli.exe', 'app_icon.ico', 'README.md', 'LICENSE', 'LICENSE-MIT', 'samples\sample_01.jpg', 'samples\README.md') {
@@ -282,7 +301,7 @@ jobs:
           New-Item -ItemType Directory -Force $payload | Out-Null
           New-Item -ItemType Junction -Path "$payload\x86_64" -Target $dist | Out-Null
           ./installer/windows/msix/build_msix.ps1 -Version $version -PayloadRoot $payload `
-            -OutDir "$env:RUNNER_TEMP\msix" -Executable fcs-qt.exe
+            -OutDir "$env:RUNNER_TEMP\msix"
           $msix = (Get-ChildItem "$env:RUNNER_TEMP\msix\*-x64.msix").FullName
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead($msix)
@@ -307,31 +326,88 @@ jobs:
           Remove-AppxPackage $package.PackageFullName
           'setup.exe and MSIX: ok'
 
+      # The version: a tag's for a release run (so an rc is named as one), else the workspace's.
       # xcb-cursor0 is installed so linuxdeploy bundles it: Qt's xcb plugin needs it and many
       # desktops lack it. xvfb gives the smoke run a display.
       - name: Package (Linux)
         if: runner.os == 'Linux' && github.event_name != 'pull_request'
         run: |
           sudo apt-get install -y --no-install-recommends libxcb-cursor0 xvfb
-          ./fcs-qt/packaging/package.sh
+          ./fcs-qt/packaging/package.sh "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
           APPIMAGE_EXTRACT_AND_RUN=1 ./fcs-qt/packaging/smoke.sh \
             xvfb-run -a "$(ls "$PWD"/fcs-qt/dist/*.AppImage)"
           # The .deb as a user gets it: installed with its dependencies, run from PATH.
           sudo apt-get install -y ./fcs-qt/dist/*.deb
           ./fcs-qt/packaging/smoke.sh xvfb-run -a fcs-qt
 
-      # libheif and dav1d are static (macos-build-deps); the check fails if anything in the bundle
-      # still points into Homebrew.
+      - name: Import Developer ID certificate (macOS)
+        # Only on a release run with the certificate configured: a temporary keychain codesign
+        # picks it up from; package.sh selects the identity by APPLE_DEVELOPER_ID_NAME.
+        if: runner.os == 'macOS' && inputs.release && env.HAS_APPLE_SIGNING == 'true'
+        env:
+          APPLE_DEVELOPER_ID_CERT: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_CERT')] }}
+          APPLE_DEVELOPER_ID_PASS: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_PASS')] }}
+          KEYCHAIN_PASS: ${{ github.run_id }}-keychain
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/codesign.keychain-db"
+          echo -n "$APPLE_DEVELOPER_ID_CERT" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_DEVELOPER_ID_PASS" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          rm -f "$CERT_PATH"
+
+      # libheif and dav1d are static (macos-build-deps). The checks fail if anything in the bundle
+      # still points into Homebrew, or either executable loads anything from outside macOS and
+      # the bundle.
       - name: Package (macOS)
         if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        env:
+          APPLE_DEVELOPER_ID_NAME: ${{ inputs.release && secrets[format('{0}', 'APPLE_DEVELOPER_ID_NAME')] || '' }}
+          APPLE_NOTARIZE_USER: ${{ inputs.release && secrets[format('{0}', 'APPLE_NOTARIZE_USER')] || '' }}
+          APPLE_NOTARIZE_PASS: ${{ inputs.release && secrets[format('{0}', 'APPLE_NOTARIZE_PASS')] || '' }}
+          APPLE_TEAM_ID: ${{ inputs.release && secrets[format('{0}', 'APPLE_TEAM_ID')] || '' }}
         run: |
-          brew install librsvg   # rsvg-convert, for the bundle's icon
-          ./fcs-qt/packaging/package.sh
-          app="fcs-qt/dist/Face Crop Studio Qt.app"
+          brew install librsvg create-dmg   # rsvg-convert for the icon; the DMG's layout
+          ./fcs-qt/packaging/package.sh "${{ github.ref_type == 'tag' && github.ref_name || '' }}"
+          app="fcs-qt/dist/Face Crop Studio.app"
           if find "$app" -type f \( -perm -u+x -o -name '*.dylib' \) -exec otool -L {} + 2>/dev/null | grep /opt/homebrew; then
             echo "the bundle still loads libraries from Homebrew (above)" >&2; exit 1
           fi
+          for bin in "$app"/Contents/MacOS/fcs-qt "$app"/Contents/MacOS/fcs-cli; do
+            if otool -L "$bin" | tail -n +2 | grep -vE '^[[:space:]]+(/usr/lib/|/System/Library/|@)'; then
+              echo "$bin loads a library from outside the bundle (above)" >&2; exit 1
+            fi
+          done
           ./fcs-qt/packaging/smoke.sh "$PWD/$app/Contents/MacOS/fcs-qt"
+
+      - uses: mlugg/setup-zig@v2
+        if: runner.os != 'Windows' && github.event_name != 'pull_request'
+        with:
+          version: 0.17.0
+
+      # fcs-cli from the package finds the bundled detector and crops a sample, with no ONNX
+      # Runtime. The .deb's /usr/bin links are absolute, so its copy is checked under /opt.
+      - name: Verify packaged inference without ONNX Runtime
+        if: runner.os != 'Windows' && github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = macOS ]; then
+            App="fcs-qt/dist/Face Crop Studio.app"
+            zig run tools/verify_package.zig -- "$App" "$App/Contents/MacOS/fcs-cli" "$App/Contents/Resources/samples/sample_01.jpg"
+          else
+            AppDir="fcs-qt/dist/face-crop-studio.AppDir"
+            zig run tools/verify_package.zig -- "$AppDir" "$AppDir/usr/bin/fcs-cli" "$AppDir/usr/share/face-crop-studio/samples/sample_01.jpg"
+            DebDir="$RUNNER_TEMP/fcs-deb-smoke"
+            mkdir -p "$DebDir"
+            dpkg-deb -x fcs-qt/dist/*.deb "$DebDir"
+            Opt="$DebDir/opt/face-crop-studio"
+            zig run tools/verify_package.zig -- "$Opt" "$Opt/bin/fcs-cli" "$Opt/share/face-crop-studio/samples/sample_01.jpg"
+          fi
 
       - name: Checksums
         if: github.event_name != 'pull_request'
@@ -341,19 +417,19 @@ jobs:
           shopt -s nullglob
           # Git Bash on Windows has only sha256sum, macOS only shasum.
           sum="$(command -v sha256sum || echo 'shasum -a 256')"
-          $sum *.zip *.msi *.AppImage *.deb *.dmg > "SHA256SUMS-qt-${{ matrix.slug }}.txt"
-          cat SHA256SUMS-qt-*.txt
+          $sum *.zip *.AppImage *.deb *.dmg > "SHA256SUMS-${{ matrix.slug }}.txt"
+          cat SHA256SUMS-*.txt
 
-      # release.yml's publish job collects every "*-release-artifacts*" upload.
+      # release.yml's publish job collects every "*-release-artifacts*" upload. Windows' release
+      # assets come from release.yml's own job (the payload above plus fcs-cli).
       - name: Upload package
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && !(inputs.release && runner.os == 'Windows')
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.release && format('qt-release-artifacts-{0}', matrix.slug) || format('fcs-qt-{0}', matrix.slug) }}
           path: |
-            fcs-qt/dist/SHA256SUMS-qt-*.txt
+            fcs-qt/dist/SHA256SUMS-*.txt
             fcs-qt/dist/*.zip
-            fcs-qt/dist/*.msi
             fcs-qt/dist/*.AppImage
             fcs-qt/dist/*.deb
             fcs-qt/dist/*.dmg

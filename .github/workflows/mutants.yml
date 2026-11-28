@@ -23,7 +23,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # Keep in step with ci.yml.
-  RUST_TOOLCHAIN: "1.99.0"
+  RUST_TOOLCHAIN: "1.100.0"
   ORT_VERSION: "1.24.4"
   EYE_REFINER_SHA256: 16b4ed6e42889c0eb3d6ce5068e399c19f12ad686bd121bcf959db34f8cef976
   EYE_REFINER_URL: https://github.com/gregorycarnegie/face-crop-studio/releases/download/models-eye-refiner-v1.1/eye_refiner.onnx

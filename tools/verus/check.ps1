@@ -36,7 +36,7 @@ $previousRustupHome = $env:RUSTUP_HOME
 $previousToolchain = $env:RUSTUP_TOOLCHAIN
 try {
     $env:RUSTUP_HOME = Join-Path $cache 'rustup'
-    $env:RUSTUP_TOOLCHAIN = '1.99.1-x86_64-pc-windows-msvc'
+    $env:RUSTUP_TOOLCHAIN = '1.100.0-x86_64-pc-windows-msvc'
     foreach ($name in $files.Keys) {
         & $verus --crate-type lib --no-cheating (Write-Wrapper $name (Join-Path $root $files[$name][0]))
         if ($LASTEXITCODE -ne 0) { throw "Production verification failed: $($files[$name][0])" }

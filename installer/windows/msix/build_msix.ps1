@@ -3,8 +3,7 @@
     Builds the Microsoft Store MSIX bundle from already-built Windows payloads.
 
 .DESCRIPTION
-    Mirrors installer/linux/build_linux.sh and installer/macos/build_macos.sh:
-    the release workflow builds the binaries, this script does the packaging.
+    The release workflow builds the binaries; this script does the packaging.
 
     Takes the per-architecture dist directories produced by the windows-release
     matrix, wraps each one in a .msix, bundles them into a single .msixbundle,
@@ -36,9 +35,9 @@ param(
     [Parameter(Mandatory = $true)][string]$PayloadRoot,
     [string]$OutDir = "dist/msix",
 
-    # The front end the Start menu entry runs: fcs-qt.exe for fcs-qt's payload. The CLI alias is
-    # declared only when the payload ships fcs-cli.exe.
-    [string]$Executable = "fcs-gui.exe",
+    # The front end the Start menu entry runs. The CLI alias is declared only when the payload
+    # ships fcs-cli.exe.
+    [string]$Executable = "fcs-qt.exe",
 
     # Partner Center identity. Defaults are the committed production values;
     # override them to build a package for a different Store listing.
@@ -65,10 +64,10 @@ $MsixVersion = "$Version.0"
 $ScriptDir = $PSScriptRoot
 $ManifestTemplate = Join-Path $ScriptDir "AppxManifest.xml.in"
 # Committed rather than generated in CI. Rasterised from the largest rendition
-# in fcs-gui/assets/app_icon.ico (app_logo.svg is 210x263, and MSIX tiles must
+# in assets/app_icon.ico (app_logo.svg is 210x263, and MSIX tiles must
 # be square). To regenerate after an icon change:
 #   uvx --with pillow python -c "from PIL import Image; ico =
-#   Image.open('fcs-gui/assets/app_icon.ico'); ico.size = max(ico.ico.sizes());
+#   Image.open('assets/app_icon.ico'); ico.size = max(ico.ico.sizes());
 #   src = ico.convert('RGBA'); [src.resize((n, n), Image.LANCZOS).save(p) for p,
 #   n in [('Square44x44Logo.png',44),
 #   ('Square44x44Logo.targetsize-24_altform-unplated.png',24),

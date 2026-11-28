@@ -1,4 +1,4 @@
-# Face-free hard negatives for SCRFD-80k: two attempts, neither shipped
+# Face-free hard negatives for SCRFD-80k: none shipped yet
 
 November 2026. The question: SCRFD-80k fires 5-6x as often as RetinaFace on COCO photographs
 with nobody in them -- animal faces, clocks, plates, wheels (`docs/MODEL_COMPARISON.md`). Its
@@ -6,7 +6,8 @@ with nobody in them -- animal faces, clocks, plates, wheels (`docs/MODEL_COMPARI
 without losing faces?
 
 **Short answer: it fixes the false positives and costs faces, and the cost does not stay put.**
-The shipped model is unchanged.
+The shipped model is unchanged; zoom crops plus negatives (ZLNZ35, end of this file) is the next
+release candidate.
 
 ## The negatives
 
@@ -372,3 +373,57 @@ Seed screen at 10 epochs (large / COCO at 0.1), `screen_ZL_seed<N>`: seed 0 73.2
 55.9 / 74.8, seed 2 69.6 / 80.1, seed 3 51.3 / 77.6. Two of four seeds take the large-face mode;
 the other two look like runs without zoom (baseline 55.3). Seed 0 (rule: large >= 70, COCO >= 74)
 is running the full 100-epoch schedule (`ZL_full_seed0`, `chain_seeds.sh`); seed 2 is the backup.
+
+## The full schedule, with and without negatives, 2026-11-22 to 24
+
+Three 100-epoch runs from seed 0 (`--recipe 80k --lr 0.02`), scored by `detector_gate` on the
+test half. ZL is the recipe above; ZLN adds the balanced negatives
+(`labelv2_negatives_balanced.txt`, seed chosen by a 10-epoch screen of seeds 0-2); ZLNZ35 is ZLN
+with `--zoom 0.35`, trained from scratch:
+
+| Test half | Shipped | ZL: zoom 0.25 | ZLN: + negatives | ZLNZ35: + zoom 0.35 | Bar |
+|---|---:|---:|---:|---:|---|
+| Large faces, pooled 622 | 86.5 | 86.2 | 83.3 | 84.1 | >= 84.1 (shipped - 2.4) |
+| OI recall at 0.1 unmatched/image | 78.2 | 79.5 | 78.2 | 79.1 | >= 76.2 |
+| COCO recall at 0.01 FP per photo | 81.9 | 81.9 | 88.5 | 87.9 | public SCRFD-500M 87.1 |
+| COCO recall at 0.1 FP per photo | 88.9 | 89.1 | 91.7 | 92.0 | public SCRFD-500M 93.0 |
+| Test-half FP per no-person photo, 0.1 budget | 0.148 | 0.134 | 0.118 | 0.163 | |
+| Lowest sample-portrait score | 0.76 | 0.75 | 0.76 | 0.73 | >= 0.5 |
+| Gates failed (of 9) | | 4 | 3 | 3 | |
+
+1. **ZL reproduces the shipped model** on every shipped-relative gate, so zoom took the
+   recipe from a 1-in-5 lucky draw to a seed that passes the screen (two of four do).
+2. **Negatives buy COCO recall, not just fewer false positives**: +6.6 points at 0.01 FP per
+   photo, beating public SCRFD-500M there, for 2.9 points on large faces.
+3. **More zoom wins back 0.8 of those points and gives back the false-positive gain.** ZLNZ35
+   missed the large-face gate by 0.01 points (standard error 0.82) and still trails public
+   SCRFD at 0.05 and 0.1 FP per photo. The user's rule was one more full run, then keep shipped.
+
+### Crop test, 2026-11-24
+
+The gate cannot say whether a model misses the only face in photos people bring, so shipped
+and ZLNZ35 went through the real crop pipeline (`fcs-cli --crop`, default settings) on 600
+fresh Open Images train-split photos that no run had touched: 300 portraits (one face, at
+least 30% of the width) and 300 group photos (at least three faces of 4% width or more). Every
+face box human-drawn, none group-of or depiction, CC BY 2.0. Thresholds were fixed before
+scoring: shipped at the app default 0.5, ZLNZ35 at **0.343**, the threshold with the same 38
+detections on COCO's 1,687 no-person photos (at 0.5 it makes 6). Data, crops and side-by-side
+review sheets: `Downloads\face-data\crop_test`.
+
+| | Shipped @ 0.5 | ZLNZ35 @ 0.343 | ZLNZ35 @ 0.5 |
+|---|---:|---:|---:|
+| Portraits with no crop of the face (of 300) | 10 | **5** | 13 |
+| Group faces missed (of 1,338) | 182 | **92** | 185 |
+| Group photos with a miss | 113 | **64** | 116 |
+| Group crops matching no labelled face | **16** | 77 | 20 |
+
+ZLNZ35 fixes six portraits shipped misses and loses one shipped finds (an underwater,
+upside-down child: a genuine regression under the agreed rule of no portrait failure shipped
+gets right). In the seven of 41 group photos checked by eye, most unmatched crops were real
+people Open Images left unboxed; a few were the back or top of a head, or a box off a face.
+The lower threshold is part of the candidate: at 0.5 it is worse on both counts.
+
+**Decision (2026-11-24): the shipped model stays the default and retraining stops.** ZLNZ35 at
+0.343 (`zig_runs\proxy\ZLNZ35_full_seed0\model_e100.onnx`) is the next release candidate. Before
+a default changes: test it with shipped as a fallback when it returns no crop, on new fresh
+photos with the current build, and review every extra group crop for usability.

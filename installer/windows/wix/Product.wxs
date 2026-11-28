@@ -84,7 +84,7 @@
             Id="StartMenuGuiShortcut"
             Name="Face Crop Studio"
             Description="Launch Face Crop Studio"
-            Target="[INSTALLDIR]fcs-gui.exe"
+            Target="[INSTALLDIR]fcs-qt.exe"
             WorkingDirectory="INSTALLDIR"
             Icon="AppIcon.ico" />
           <RegistryValue Root="HKCU" Key="Software\Face Crop Studio" Name="HasStartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
@@ -105,7 +105,7 @@
           Id="DesktopGuiShortcut"
           Name="Face Crop Studio"
           Description="Launch Face Crop Studio"
-          Target="[INSTALLDIR]fcs-gui.exe"
+          Target="[INSTALLDIR]fcs-qt.exe"
           WorkingDirectory="INSTALLDIR"
           Icon="AppIcon.ico" />
         <RegistryValue Root="HKCU" Key="Software\Face Crop Studio" Name="HasDesktopShortcut" Type="integer" Value="1" KeyPath="yes" />

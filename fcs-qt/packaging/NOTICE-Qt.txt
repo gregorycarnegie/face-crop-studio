@@ -1,4 +1,4 @@
-Face Crop Studio (Qt preview) uses Qt and Qt Bridge for Rust
+Face Crop Studio uses Qt and Qt Bridge for Rust
 ==============================================================
 
 Face Crop Studio itself is licensed under MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE).

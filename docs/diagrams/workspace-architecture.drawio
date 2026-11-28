@@ -6,7 +6,7 @@
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
-        <mxCell id="gui" value="&lt;b&gt;fcs-gui&lt;/b&gt;&lt;br&gt;Desktop app · eframe / egui&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;app/ (clipboard · dialogs · history · input · webcam) · core/ · interaction/ · rendering/ · ui/&lt;br&gt;clipboard (arboard) · file dialogs (rfd) · CUDA opt-in warning&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+        <mxCell id="gui" value="&lt;b&gt;fcs-qt&lt;/b&gt;&lt;br&gt;Desktop app · Qt Quick (Qt Bridge for Rust)&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;studio.rs (queue · undo · export · settings) · pipeline.rs · images.rs · QML screens&lt;br&gt;standalone crate (needs Qt 6.10+) · CUDA opt-in warning&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
           <mxGeometry x="160" y="60" width="560" height="130" as="geometry" />
         </mxCell>
         <mxCell id="cli" value="&lt;b&gt;fcs-cli&lt;/b&gt;&lt;br&gt;Command line · clap&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;workflow · watch mode (notify) · webcam benchmark · annotate&lt;br&gt;output paths · GPU setup (--no-gpu · --experimental-cuda)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;convertToSvg=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">

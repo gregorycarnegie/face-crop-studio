@@ -60,8 +60,6 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 
-# Generated at packaging time by installer/linux/build_linux.sh
-installer/linux/face-crop-studio.png
 
 # samply profiles and their symbol sidecars
 *.json.gz

@@ -7,7 +7,7 @@ Thanks for helping improve Face Crop Studio. This repository is a Rust workspace
 - `fcs-utils`: shared configuration, image enhancement, export helpers, and webcam support.
 - `fcs-mapping`: CSV/Excel/Parquet/SQLite ingestion for the batch mapping workflow.
 - `fcs-cli`: command-line workflows for batch processing and automation.
-- `fcs-gui`: the egui/eframe desktop application.
+- `fcs-qt`: the Qt Quick desktop application. A standalone crate, not a workspace member: it needs Qt 6.10+, and `fcs-qt/README.md` covers setup.
 
 ## Quick Start (clone → running GUI)
 
@@ -18,8 +18,9 @@ On a machine that already has the [build tools](#development-setup) below:
 git clone https://github.com/gregorycarnegie/face-crop-studio
 cd face-crop-studio
 
-# 2. Build and launch the desktop app (auto-detects GPU, falls back to CPU)
-cargo run -p fcs-gui
+# 2. Build and launch the desktop app (auto-detects GPU, falls back to CPU; needs Qt,
+#    see fcs-qt/README.md). On macOS and Linux: ./fcs-qt/dev.sh run
+./fcs-qt/dev.ps1 run
 
 # ...or the CLI
 cargo run -p fcs-cli -- --help
@@ -51,7 +52,7 @@ their own arithmetic and sampling helpers.
 
 Install the usual Rust and Windows build tools first:
 
-- Rust `1.99.0`, matching the workspace minimum and CI/release toolchain.
+- Rust `1.100.0`, matching the workspace minimum and CI/release toolchain.
 - Visual Studio Build Tools with the C++ desktop workload and Windows SDK.
 - Git.
 - NASM on `PATH`; for example `C:\Program Files\NASM`. Installing it is not
@@ -144,7 +145,7 @@ Launch the CLI and GUI:
 
 ```powershell
 cargo run -p fcs-cli -- --help
-cargo run -p fcs-gui
+./fcs-qt/dev.ps1 run   # ./fcs-qt/dev.sh run on macOS and Linux
 ```
 
 ## Contribution Workflow

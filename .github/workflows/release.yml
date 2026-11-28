@@ -38,7 +38,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.99.0
+          toolchain: 1.100.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -86,7 +86,8 @@ jobs:
 
   windows-release:
     name: Windows Release Artifacts (${{ matrix.arch }})
-    needs: [shader-validation, prepare-models]
+    # qt-release: fcs-qt.exe with Qt deployed beside it, which this job adds fcs-cli to.
+    needs: [shader-validation, prepare-models, qt-release]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -134,7 +135,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.99.0
+          toolchain: 1.100.0
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -222,7 +223,13 @@ jobs:
           PKG_CONFIG_ALL_STATIC: "1"
           # libheif-sys finds libheif through the `vcpkg` crate, not pkg-config.
           VCPKG_ROOT: C:\vcpkg
-        run: cargo build --release -p fcs-cli -p fcs-gui
+        run: cargo build --release -p fcs-cli
+
+      - name: Download the Qt payload
+        uses: actions/download-artifact@v8
+        with:
+          name: qt-windows-payload
+          path: dist/${{ env.DIST_NAME }}
 
       - name: Sign release binaries
         # Requires CODE_SIGN_PFX (base64-encoded PFX) and CODE_SIGN_PASSWORD
@@ -240,7 +247,7 @@ jobs:
                       Sort-Object FullName -Descending | Select-Object -First 1).FullName
           if (-not $SignTool) { throw "signtool.exe not found" }
 
-          foreach ($bin in @("target\release\fcs-cli.exe", "target\release\fcs-gui.exe")) {
+          foreach ($bin in @("target\release\fcs-cli.exe", "dist\$env:DIST_NAME\fcs-qt.exe")) {
             & $SignTool sign /fd SHA256 /f $CertPath /p $env:CODE_SIGN_PASSWORD `
               /tr http://timestamp.digicert.com /td SHA256 `
               /d "Face Crop Studio" $bin
@@ -253,13 +260,11 @@ jobs:
         shell: pwsh
         run: |
           $DistName = $env:DIST_NAME
+          # The Qt payload already holds fcs-qt.exe, Qt, the models, licences and app_icon.ico.
           $DistDir = "dist/$DistName"
-          New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
-          New-Item -ItemType Directory -Force -Path "$DistDir/models" | Out-Null
 
           Copy-Item target/release/fcs-cli.exe "$DistDir/fcs-cli.exe"
-          Copy-Item target/release/fcs-gui.exe "$DistDir/fcs-gui.exe"
-          Copy-Item fcs-gui/assets/app_icon.ico "$DistDir/app_icon.ico"
+          # This job's checksummed models, over the payload's copies.
           Copy-Item models/eye_refiner.onnx "$DistDir/models/eye_refiner.onnx"
           Copy-Item models/scrfd80k_500m_640.onnx "$DistDir/models/scrfd80k_500m_640.onnx"
           if (Test-Path samples) {
@@ -517,248 +522,21 @@ jobs:
           # explicit form is: msstore publish -i "<path>" -id "<productId>".
           msstore publish "$($Upload.FullName)" -id ${{ vars.MSSTORE_PRODUCT_ID }}
 
-  macos-release:
-    name: macOS Release Artifacts (Apple Silicon)
-    needs: [shader-validation, prepare-models]
-    runs-on: macos-latest
-    env:
-      # Evaluated once at job start so signing/notarization steps can skip
-      # gracefully when the Apple secrets aren't configured.
-      HAS_APPLE_SIGNING: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_CERT')] != '' }}
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Download prepared models
-        uses: actions/download-artifact@v8
-        with:
-          name: release-models
-          path: models
-
-      - name: Verify model checksums
-        uses: ./.github/actions/verify-models
-        with:
-          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
-          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.99.0
-          targets: aarch64-apple-darwin
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-
-      - name: Install build dependencies (Homebrew)
-        run: |
-          brew update
-          # librsvg: rsvg-convert for SVG → PNG iconset generation.
-          # create-dmg: drag-to-Applications DMG layout.
-          # nasm: mozjpeg-sys assembles libjpeg-turbo's SIMD with it and silently falls
-          # back to scalar C when it is missing (see the Windows leg for why that matters).
-          brew install librsvg create-dmg nasm
-
-      # dav1d + libheif as static libraries built from source. Through 2.3.4 they came from
-      # Homebrew as dylibs that build_macos.sh never bundled, so the .app loaded them from
-      # /opt/homebrew and only started where Homebrew had them; Homebrew's libheif also
-      # links GPL x265.
-      - name: Install dav1d + libheif (static, from source)
-        uses: ./.github/actions/macos-build-deps
-
-      - name: Build release binary (aarch64-apple-darwin)
-        run: cargo build --release -p fcs-gui -p fcs-cli --target aarch64-apple-darwin
-
-      - name: Import Developer ID certificate
-        # Mirrors the Windows signing pattern: only runs if the cert secret is
-        # configured. Imports the .p12 into a temporary keychain so codesign
-        # picks it up, then the build script uses APPLE_DEVELOPER_ID_NAME to
-        # select the identity.
-        if: env.HAS_APPLE_SIGNING == 'true'
-        env:
-          APPLE_DEVELOPER_ID_CERT: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_CERT')] }}
-          APPLE_DEVELOPER_ID_PASS: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_PASS')] }}
-          KEYCHAIN_PASS: ${{ github.run_id }}-keychain
-        run: |
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-          KEYCHAIN_PATH="$RUNNER_TEMP/codesign.keychain-db"
-          echo -n "$APPLE_DEVELOPER_ID_CERT" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$APPLE_DEVELOPER_ID_PASS" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
-          rm -f "$CERT_PATH"
-
-      - name: Build .app bundle and DMG
-        env:
-          APPLE_DEVELOPER_ID_NAME: ${{ secrets[format('{0}', 'APPLE_DEVELOPER_ID_NAME')] }}
-          APPLE_NOTARIZE_USER: ${{ secrets[format('{0}', 'APPLE_NOTARIZE_USER')] }}
-          APPLE_NOTARIZE_PASS: ${{ secrets[format('{0}', 'APPLE_NOTARIZE_PASS')] }}
-          APPLE_TEAM_ID: ${{ secrets[format('{0}', 'APPLE_TEAM_ID')] }}
-        run: |
-          RawVersion="${{ github.ref_name }}"
-          Version="${RawVersion#v}"
-          bash installer/macos/build_macos.sh "$Version"
-
-      # verify_package below runs on this runner, where Homebrew is installed, so it cannot
-      # notice a library the bundle loads from outside itself. This can.
-      - name: Verify the bundle loads nothing from outside macOS and itself
-        run: |
-          set -euo pipefail
-          App="dist/macos/Face Crop Studio.app"
-          for bin in "$App"/Contents/MacOS/*; do
-            file "$bin" | grep -q Mach-O || continue
-            echo "$bin:"; otool -L "$bin" | tail -n +2
-            if otool -L "$bin" | tail -n +2 | grep -vE '^[[:space:]]+(/usr/lib/|/System/Library/|@)'; then
-              echo "$bin loads a library from outside the bundle (above)" >&2
-              exit 1
-            fi
-          done
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-
-      - name: Verify packaged inference without ONNX Runtime
-        run: |
-          set -euo pipefail
-          App="dist/macos/Face Crop Studio.app"
-          zig run tools/verify_package.zig -- "$App" "$App/Contents/MacOS/fcs-cli" "$App/Contents/Resources/samples/sample_01.jpg"
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          cd dist/macos
-          shasum -a 256 *.dmg > SHA256SUMS-macos-arm64.txt
-          cat SHA256SUMS-macos-arm64.txt
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: macos-release-artifacts
-          path: |
-            dist/macos/*.dmg
-            dist/macos/SHA256SUMS-macos-arm64.txt
-
-  linux-release:
-    name: Linux Release Artifacts (${{ matrix.arch }})
-    needs: [shader-validation, prepare-models]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Build on 22.04 for broad glibc compatibility (binaries link against
-          # glibc 2.35 and run on Ubuntu 22.04+ and other modern distros).
-          - arch: x86_64
-            runner: ubuntu-22.04
-            appimagetool-arch: x86_64
-          - arch: arm64
-            # Free for public repositories, same glibc baseline as the x64 leg.
-            runner: ubuntu-22.04-arm
-            appimagetool-arch: aarch64
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Download prepared models
-        uses: actions/download-artifact@v8
-        with:
-          name: release-models
-          path: models
-
-      - name: Verify model checksums
-        uses: ./.github/actions/verify-models
-        with:
-          eye-refiner-sha256: ${{ env.EYE_REFINER_SHA256 }}
-          scrfd-sha256: ${{ env.SCRFD_SHA256 }}
-
-      - name: Install build dependencies
-        uses: ./.github/actions/linux-build-deps
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.99.0
-
-      - name: Rust Cache
-        uses: swatinem/rust-cache@v2
-
-      - name: Install cargo-deb
-        run: |
-          cargo install cargo-deb --locked --version 3.7.0
-          cargo deb --version
-
-      - name: Install appimagetool
-        # Extract instead of running directly so we don't need FUSE on the runner.
-        env:
-          APPIMAGETOOL_ARCH: ${{ matrix.appimagetool-arch }}
-        run: |
-          curl -fsSL -o /tmp/appimagetool.AppImage \
-            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-${APPIMAGETOOL_ARCH}.AppImage"
-          chmod +x /tmp/appimagetool.AppImage
-          (cd /tmp && ./appimagetool.AppImage --appimage-extract >/dev/null)
-          sudo mv /tmp/squashfs-root /opt/appimagetool
-          sudo ln -sf /opt/appimagetool/AppRun /usr/local/bin/appimagetool
-
-      - name: Build release binary
-        run: cargo build --release -p fcs-gui -p fcs-cli
-
-      - name: Build AppImage and .deb
-        # build_linux.sh derives the arch slug from uname -m, so both legs use
-        # the same invocation.
-        run: |
-          RawVersion="${{ github.ref_name }}"
-          Version="${RawVersion#v}"
-          bash installer/linux/build_linux.sh "$Version"
-          ls -lh dist/linux
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
-
-      - name: Verify packaged inference without ONNX Runtime
-        run: |
-          set -euo pipefail
-          AppDir="dist/linux/face-crop-studio.AppDir"
-          zig run tools/verify_package.zig -- "$AppDir" "$AppDir/usr/bin/fcs-cli" "$AppDir/usr/share/face-crop-studio/samples/sample_01.jpg"
-          DebDir="$RUNNER_TEMP/fcs-deb-smoke"
-          mkdir -p "$DebDir"
-          dpkg-deb -x dist/linux/*.deb "$DebDir"
-          zig run tools/verify_package.zig -- "$DebDir" "$DebDir/usr/bin/fcs-cli" "$DebDir/usr/share/face-crop-studio/samples/sample_01.jpg"
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          cd dist/linux
-          sha256sum *.AppImage *.deb > "SHA256SUMS-linux-${{ matrix.arch }}.txt"
-          cat "SHA256SUMS-linux-${{ matrix.arch }}.txt"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-release-artifacts-${{ matrix.arch }}
-          path: |
-            dist/linux/*.AppImage
-            dist/linux/*.deb
-            dist/linux/SHA256SUMS-linux-${{ matrix.arch }}.txt
-
-  # fcs-qt, the Qt Quick preview, beside fcs-gui: built, tested, packaged and smoke-tested by its
-  # own workflow, exactly as on every push. Its uploads are named for the publish job below.
+  # fcs-qt, built, tested, packaged and smoke-tested by its own workflow exactly as on every push:
+  # the macOS and Linux release assets, and the Qt payload the Windows job ships. Secrets for the
+  # macOS Developer ID signing.
   qt-release:
     uses: ./.github/workflows/qt.yml
     with:
       release: true
+    secrets: inherit
 
   # One publish step, after the tests and every package. Each platform used to publish its own
   # assets as soon as it finished, so a release could go out with one platform missing -- which
   # happened once, after a macOS packaging failure.
   publish:
     name: Publish GitHub release
-    needs: [tests, windows-release, macos-release, linux-release, qt-release]
+    needs: [tests, windows-release, qt-release]
     # Tag-only, like store-submit. A manual run builds and uploads every artifact as a dry run;
     # without this it would also publish a release named after the branch.
     if: startsWith(github.ref, 'refs/tags/v')

@@ -1,51 +1,127 @@
-# GUI Crop Features Guide
+# Desktop App Guide
 
-The desktop app bundles a full crop workflow on top of face detection so you can preview, fine‑tune, and export professional headshots without juggling multiple tools. This guide walks through the key surfaces available in the left-hand control panel and the associated keyboard shortcuts.
+Face Crop Studio's desktop app finds the faces in your photos, lets you check and adjust them, and exports one cropped portrait per face. Detection runs on your computer; nothing is uploaded.
+
+The window has three parts:
+
+- **Sidebar** (left): the photo queue, the spreadsheet mapping and the activity log.
+- **Canvas** (centre): the current photo with a box around each face.
+- **Inspector** (right): previews of the selected faces, the settings in four tabs (**Crop**, **Shape**, **Enhance** and **Output**) and the export button.
 
 ## Quick Start
 
-1. Launch the GUI with `cargo run -p fcs-gui` (or run the packaged binary once released).
-2. Click **Open image…** to select a portrait photo, or simply drag an image from your desktop (or paste one from the clipboard) to load it instantly. Detection will run automatically as soon as the model has been configured.
-3. Detected faces appear in the **Detected Faces** list. Click a thumbnail or the accompanying **Select** button to include a face in the export set. Hold *Shift* and use the number keys (1‑6) to jump between the built-in crop presets.
-4. Hit **Export selected faces** (or press *Enter*) to run the crop, optional enhancements, and save pipeline.
+1. Launch the app from its installer or package. From a checkout, run `./fcs-qt/dev.ps1 run` on Windows or `./fcs-qt/dev.sh run` on macOS and Linux.
+2. Add photos. Click **Add photos** (`Ctrl+O`), drop files or a whole folder on the window, or paste an image (`Ctrl+V`). The app reads JPEG, PNG, WebP, TIFF, HEIC and camera RAW files.
+3. The app finds the faces in each photo as it arrives, and every face starts out selected. Click a face's number chip to leave that face out of the export.
+4. Pick a size on the **Crop** tab, then click **Export N faces** (`Ctrl+E`) and choose a folder.
 
-## Crop Controls
+## Photo Queue
 
-- **Presets** – Pick from LinkedIn, Passport, Instagram, ID Card, Avatar, or Headshot. Selecting “Custom” enables the width/height inputs for arbitrary sizes.
-- **Face height %** – Target proportion of the output height that should be filled by the detected face. Use the slider or press `+`/`–` for one per cent adjustments (hold *Shift* for ±5).
-- **Positioning mode** – Choose between Center, Rule of Thirds, or Custom. When Custom is active the horizontal/vertical sliders appear; arrow keys nudge by 0.05 (hold *Shift* for 0.1). Values are clamped to ±1.0 and updates are undoable.
-- **Undo / Redo** – `Ctrl+Z` to step back through crop changes, `Ctrl+Y` or `Ctrl+Shift+Z` to redo. The application keeps a bounded history of the last 100 adjustments.
-- **Overlay toggle** – Enable the overlay checkbox in the preview to visualise the calculated crop region. The overlay auto-updates as you tweak settings.
-- **Fill colour padding** – If the crop extends past the source image, the empty pixels are filled with the configured colour. Use the colour picker, hex input, or RGB/HSV spinners to override the default black padding.
+- The **Photos** tab lists every photo with its face count and how many faces are selected (for example `2/3`). While photos are still being processed, the line above the list reads *Finding faces · N to go*.
+- Click a photo to open it. With the list focused, `↑` and `↓` move between photos and `Delete` removes one from the queue. Your files on disk are never touched.
+- **Clear** empties the queue after you confirm. The **⋯** menu next to it saves the queue as a text file, or saves the report of the last export as CSV or JSON.
+- The **Activity** tab logs what the app has done, including errors.
 
-## Face Selection & Quality
+## Faces on the Canvas
 
-- Every detection shows the detector's confidence, Laplacian variance score, and quality bucket (Low/Medium/High). These scores drive automation such as auto-selecting the best face or skipping blurry exports.
-- Use **Select All / Deselect All** to batch toggle the current detections.
-- Quality automation rules live under *Crop ▸ Quality Rules*. You can require a minimum quality level, append `_highq/_medq/_lowq` suffixes, or skip exports if no face reaches High quality.
+- Each face box shows its number. Hover over a box to see its sharpness (low, medium or high) and the detector's confidence.
+- Click a face's number chip to include it in the export or leave it out. With a box focused, `Space` does the same. Below the canvas, **All** and **None** select or clear every face in the photo, and `Ctrl+A` selects every face in every photo.
+- Drag a box to move it, and drag its handles to resize it. The box's toolbar can put it back where the detector found it, or remove it (`Delete` or `Backspace`).
+- **Draw a face** (`D`) adds a face the detector missed: drag over the face, or press `Esc` to cancel. `Esc` also deselects the active box.
+- Undo (`Ctrl+Z`) and redo (`Ctrl+Y` or `Ctrl+Shift+Z`) step through the current photo's box edits and face selection. Setting changes are not part of this history.
+- **Zoom** with the mouse wheel, `Ctrl++` and `Ctrl+-`; `Ctrl+0` fits the photo to the window.
+- **Rotate left**, **Rotate right** and **Straighten** turn the photo, then find its faces again. Straighten waits until you let go of its slider. A re-run replaces any hand edits on that photo.
 
-## Enhancement Pipeline
+## Crop Tab
 
-Every export — single faces and batches — goes through the same enhancement runtime as the CLI, on the GPU shaders when available and the identical CPU pipeline otherwise. Each crop is enhanced, then scored for quality, then shaped and filled, in that order. Neutral slider values leave the crop unchanged.
+- **Output size**: pick a preset (LinkedIn, Passport, Instagram, ID Card, Avatar or Headshot), an aspect ratio (1:1, 4:5 or 3:4), or type an exact width and height. A size that matches no preset shows as *Custom*.
+- **Framing**:
+  - **Face size** sets how much of the crop's height the face fills.
+  - **Position** places the face in the centre, on the rule of thirds, or at your own **Offset X** and **Offset Y**.
+  - **Eye-line align** rotates each crop so the eyes are level.
+- **Padding**: the **Fill colour** paints the area where a crop runs past the edge of the photo.
+- **View and import**:
+  - **Show crop overlay** outlines each face's crop on the photo.
+  - **Auto-orient via EXIF** turns photos upright using the camera's orientation. It applies to photos you add after turning it on.
 
-- Presets (Natural/Vivid/Professional) reconfigure the sliders to sensible defaults. Manual adjustments are always allowed—preset selection simply provides a starting point.
-- Controls cover exposure, brightness, contrast, saturation, sharpness, skin smoothing, red-eye removal, and portrait-style background blur.
-- Press **Reset to defaults** to return to the preset/slider defaults without losing the current crop configuration.
-- **Preview** in the toolbar (or `Space`) swaps the canvas for the selected face exactly as it will be exported — cropped, enhanced, shaped and filled, over a checkerboard where it is transparent — and re-renders as you move crop or enhancement sliders. It follows the lowest-numbered selected face (pick another with the face chips below the canvas). Press `Space` again to go back to the photo to move or resize a box; the preview picks up the edit when you return.
+## Shape Tab
 
-## Metadata & Export
+- Pick a shape for the crops, such as a rectangle, circle or polygon. **Shape settings** shows only the controls that apply to the chosen shape: corner radius, chamfer size, number of sides or points, inner radius, tension, rotation and iterations.
+- **Vignette** darkens the crop's edges toward the **Vignette colour**; set how far it reaches with **Softness** and how strong it is with **Intensity**.
 
-- Configure metadata mode (Preserve, Strip, or Custom) and author custom tags in `key=value` format. Tags are written for PNG/JPEG/WebP exports when the metadata mode allows it.
-- Exports respect the auto-detected format, or the explicit format picker if auto-detect is disabled.
-- **Export crops** saves the selected faces only; **Run batch** processes the whole queue.
-- If an export would replace files already in the folder, you are asked first: **Overwrite**, **Save as new files** (the new crops are named like `photo_face_01(2).jpg`), or **Cancel**.
-- Filename suffixes derived from quality (`_highq`, etc.) are appended when the option is enabled in Quality Rules.
+## Enhance Tab
 
-## Batch Mode
+- **Automatic**:
+  - **Auto colour** balances white and levels before the adjustments below.
+  - **Red-eye removal** removes red eyes caused by camera flash.
+  - **Background blur** softens everything around the face.
+- **Adjust**: exposure, brightness, contrast, saturation, sharpness and skin smoothing. A slider at its neutral value leaves the crop unchanged.
+- **Restore defaults** resets this tab only.
 
-- Use **Load multiple…** to enqueue a directory of images. The batch table tracks progress (Pending/Processing/Completed/Failed) and displays per-image stats.
-- Drag-and-drop a folder from your file explorer (or paste a folder path from the clipboard) to append its supported images to the batch queue without opening the dialogue.
-- Drop a CSV/XLSX/Parquet/SQLite mapping file (or paste its path) to autopopulate the Mapping Import panel so you can combine spreadsheet data with batch exports immediately.
-- Start the batch export from the footer once rules are configured. Progress updates stream live in the status bar.
+Every crop is enhanced first, then scored for quality, then shaped and filled. This is the same pipeline the CLI uses: it runs on the GPU when one is available, and the identical CPU code otherwise.
 
-By combining these surfaces you can rapidly iterate on crop framing, dial in enhancement presets, and export the most flattering results without leaving the app. For deeper technical details see `ARCHITECTURE.md` and the inline documentation in `fcs-core/src/cropper.rs`.
+## Preview
+
+The **Preview** card at the top of the inspector shows the selected faces of the current photo exactly as they will be saved: cropped, enhanced and shaped, over a checkerboard where they are transparent. The card updates as you change settings or edit a box.
+
+## Output Tab
+
+- **Format**: PNG, JPEG, WebP or AVIF. When JPEG is chosen, a **JPEG quality** slider appears.
+- **Metadata**:
+  - **Preserve** keeps the photo's EXIF.
+  - **Custom** writes only the details you choose.
+  - **Strip** writes no metadata at all.
+  - With Preserve or Custom, you can also write the crop settings and the quality metrics into each crop.
+- **Quality rules**:
+  - **Only the best face per photo** exports only the sharpest selected face of each photo.
+  - **Skip photos without a sharp face** leaves out every face of a photo whose best crop is not high quality.
+  - **Add quality to file names** adds `_highq`, `_medq` or `_lowq` to each crop's name.
+  - **Minimum quality** sets the lowest quality that gets exported.
+- **Detection**: faces scored below the **Confidence floor** are ignored.
+- **Processing**: choose the backend that runs detection and enhancement:
+  - **GPU (WGSL)** is the usual choice.
+  - **CUDA** is experimental, needs a supported NVIDIA GPU, and asks you to confirm before turning on.
+  - **CPU** runs with no GPU.
+  - **Respect environment overrides** lets variables such as `WGPU_POWER_PREF` choose the graphics adapter.
+- **Telemetry**: write stage timings to the log, and set the log level.
+- **Report**: save a CSV or JSON report next to the crops, named `face-crop-report`, with one line per photo.
+
+Changing the confidence floor or the backend finds the faces in every photo again, and that discards hand edits.
+
+## Export
+
+- **Export N faces** (`Ctrl+E`) saves every selected face from every photo in the queue to the folder you choose. Its label counts the faces and the line above it counts the photos. While the export runs, the button shows its progress.
+- Crops are named after their photo and face number, for example `photo_face_01.jpg`.
+- If some crops would replace files already in the folder, the app asks first. **Keep both** saves the new crops with a number added (`photo_face_01(2).jpg`). **Replace** overwrites the old files. **Cancel** stops the export.
+
+## Naming Crops from a Spreadsheet
+
+The **Mapping** tab names crops from a table. Choose a CSV, Excel, Parquet or SQLite file, or drop it on the window. Then pick the sheet or table, the column of photo file names, and the column of output names. The tab shows how many queued photos match. A matched photo's crops are saved under its name from the table, and the queue shows that name next to the photo (*· as name*).
+
+## Camera
+
+**Camera** in the header opens your webcam. **Find faces live** detects faces in every frame. **Take snapshot** (`Space`) adds the current frame to the queue as a photo, and **Done** (`Esc`) closes the camera.
+
+## Settings and About
+
+The **⋯** menu in the header has **Restore default settings…**, which resets every setting to how the app ships (your photos stay in the queue), and **About Face Crop Studio**, which shows the version and the Qt licence notice. The app saves its settings when you change them and restores them at the next launch.
+
+## Keyboard Shortcuts
+
+| Keys | Action |
+| --- | --- |
+| `Ctrl+O` | Add photos |
+| `Ctrl+V` | Paste an image |
+| `Ctrl+E` | Export the selected faces |
+| `Ctrl+A` | Select every face in every photo |
+| `Ctrl+Z` / `Ctrl+Y`, `Ctrl+Shift+Z` | Undo / redo box edits in the current photo |
+| `D` | Draw a face the detector missed |
+| `Space` | Include or skip the focused face; take a snapshot in camera view |
+| `Delete`, `Backspace` | Remove the active face; remove the focused photo from the queue |
+| `Esc` | Cancel drawing, deselect the face, or close the camera |
+| `Ctrl++`, `Ctrl+-`, `Ctrl+0` | Zoom in, zoom out, fit to window |
+| `↑` / `↓` | Previous / next photo (photo list focused) |
+
+On macOS, use `Cmd` in place of `Ctrl`.
+
+For the technical side, see [ARCHITECTURE.md](../ARCHITECTURE.md) and [fcs-qt/README.md](../fcs-qt/README.md).

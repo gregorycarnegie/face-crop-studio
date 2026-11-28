@@ -20,11 +20,10 @@ Unicode True
   !error "OUT_FILE define is required"
 !endif
 
-; The front end the shortcuts start. fcs-qt's payload passes fcs-qt.exe, and an icon, since it
-; ships no app_icon.ico. Install directory and registry keys stay the same either way, so one
-; installer upgrades the other in place.
+; The front end the shortcuts start. Install directory and registry keys are 2.x's (fcs-gui.exe),
+; so this installer upgrades a 2.x installation in place.
 !ifndef GUI_EXE
-  !define GUI_EXE "fcs-gui.exe"
+  !define GUI_EXE "fcs-qt.exe"
 !endif
 
 !ifndef ICON_FILE
@@ -159,7 +158,7 @@ Section "Uninstall"
   !include "${UNINSTALL_LIST}"
   !delfile "${UNINSTALL_LIST}"
   ; The patterns below catch files an earlier version installed and this payload lacks.
-  ; shortcut: they know fcs-gui's layout, not Qt's, so going back from fcs-qt to an fcs-gui
+  ; shortcut: they know 2.x's (fcs-gui) layout, not Qt's, so going back from 3.x to a 2.x
   ; installer leaves Qt's files at uninstall; record each payload's list if that is supported.
   Delete "$INSTDIR\*.exe"     ; the front end, fcs-cli.exe, Uninstall.exe
   Delete "$INSTDIR\onnxruntime.dll" ; legacy installations

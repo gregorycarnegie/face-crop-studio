@@ -24,7 +24,7 @@ Rectangle {
         anchors.rightMargin: Theme.pad
         spacing: 12
 
-        // The app icon, decoded from fcs-gui's app_icon.ico at startup (images.rs).
+        // The app icon, decoded from assets/app_icon.ico at startup (images.rs).
         Image {
             Layout.preferredWidth: 30
             Layout.preferredHeight: 30
@@ -45,7 +45,9 @@ Rectangle {
             font.weight: Font.DemiBold
         }
 
+        // Only the macOS build is still a preview: no one has checked it on a real Mac yet.
         Rectangle {
+            visible: Qt.platform.os === "osx"
             implicitWidth: previewLabel.implicitWidth + 14
             implicitHeight: 20
             radius: 10
@@ -54,7 +56,7 @@ Rectangle {
             Text {
                 id: previewLabel
                 anchors.centerIn: parent
-                text: qsTr("Qt preview")
+                text: qsTr("macOS preview")
                 color: Theme.ink3
                 font.pixelSize: Theme.caption
             }
@@ -115,7 +117,8 @@ Rectangle {
         id: aboutDialog
         title: qsTr("Face Crop Studio %1").arg(Studio.version)
         message: qsTr("Face Crop Studio uses a neural network to detect faces and automatically crop portraits at scale. Detection runs on this computer; nothing is uploaded.")
-            + "\n\n" + qsTr("This is the Qt preview of the app. It uses Qt %1 under the GNU LGPL v3; the licence notices ship beside the program.").arg(Studio.qtVersion)
+            + "\n\n" + (Qt.platform.os === "osx" ? qsTr("The macOS app is a preview: it has not been checked on a real Mac yet.") + " " : "")
+            + qsTr("Face Crop Studio uses Qt %1 under the GNU LGPL v3; the licence notices ship beside the program.").arg(Studio.qtVersion)
         choices: [
             { value: "close", label: qsTr("Close"), variant: "primary" },
             { value: "website", label: qsTr("facecropstudio.com"), variant: "ghost" }

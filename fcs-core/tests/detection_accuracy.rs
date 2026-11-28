@@ -133,8 +133,8 @@ fn the_detector_finds_the_annotated_faces() {
 
 /// Every release bundles `samples/` for a first try, and each is one synthetic portrait: at the
 /// default thresholds each must give exactly one face, scored well clear of the threshold.
-/// fcs-gui's batch export test was the only one to run the detector on a sample, so this keeps
-/// that check when fcs-gui goes.
+/// The removed egui app's batch export test was the only one to run the detector on a sample;
+/// this keeps that check.
 #[test]
 fn each_bundled_sample_has_one_face() {
     let Some(detector) = detector() else { return };
