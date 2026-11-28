@@ -15,7 +15,7 @@
 </p>
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
-[![Qt](https://img.shields.io/badge/Qt-Experimental-41CD52?logo=qt&logoColor=white)](fcs-qt/README.md)
+[![Qt](https://img.shields.io/badge/Qt-6.10%2B-41CD52?logo=qt&logoColor=white)](fcs-qt/README.md)
 ![WESL](https://img.shields.io/badge/WESL-GPU%20Compute-blue?logo=webgpu)
 [![Lean](https://img.shields.io/github/actions/workflow/status/gregorycarnegie/face-crop-studio/lean.yml?branch=master&event=push&label=Lean%20%C2%B7%20Formal%20Proofs)](tools/verification/README.md)
 [![Verus](https://img.shields.io/github/actions/workflow/status/gregorycarnegie/face-crop-studio/verus.yml?branch=master&event=push&label=Verus%20%C2%B7%20Output%20Initialization)](tools/verus/README.md)
@@ -95,7 +95,7 @@ High-level views of how the workspace fits together. Each image links to its edi
 
 - **Preset sizing** – LinkedIn, Passport, Instagram, ID Card, Avatar, Headshot, plus an explicit “Custom” mode.
 - **Face height targeting** – Configure how large the face should appear in the final crop (10–100%). The cropper preserves the requested aspect ratio and records any padding needed so crops can extend beyond the source image without distortion.
-- **Padding colour control** – Empty pixels introduced by out-of-bounds crops, and the area outside a crop shape, are filled with a configurable colour (zero alpha keeps them transparent) (CLI `--crop-fill-color`, GUI color picker/hex/RGB/HSV inputs). Black remains the default.
+- **Padding colour control** – Empty pixels introduced by out-of-bounds crops, and the area outside a crop shape, are filled with a configurable colour (zero alpha keeps them transparent) (CLI `--crop-fill-color`, the app's colour picker). Black remains the default.
 - **Positioning modes** – Center, Rule of Thirds, or fully custom offsets with keyboard nudges and undo/redo support.
 - **Eye-line alignment** – Optionally rotates each crop so the subject's eyes sit level (CLI `--eye-line-align`, GUI toggle). A bundled 1.5 M-parameter refiner runs on the built-in Rust CPU engine. In the [paired model comparison](docs/MODEL_COMPARISON.md#eye-alignment), SCRFD-80k plus the refiner achieved 1.18° median eye-line error, with 94.1% of faces within 5° of hand-clicked ground truth. No ONNX Runtime library is needed; if the model is missing or incompatible, the detector's own points are used.
 - **Quality automation** – Laplacian-variance scoring categorises crops into Low/Medium/High. Filters can auto-select the sharpest face, skip soft captures, and append quality suffixes.
@@ -112,10 +112,10 @@ The project includes comprehensive GPU acceleration via wgpu and WGSL compute sh
 - **Enhancement shaders** – 7 WGSL compute pipelines: pixel adjustments (exposure/brightness/contrast/saturation), histogram equalization, Gaussian blur, bilateral filter (skin smoothing), red-eye removal, background blur, and shape masking. Both front-ends call the same runtime (`fcs_utils::EnhancementRuntime`), which falls back to the identical CPU pipeline when no GPU is available.
 - **Custom inference** – Full GPU implementation of the detector in WGSL (Conv2D, pooling, add, upsample, activations), measured within about 1e-05 of ONNX Runtime on one input; the parity tests gate at 2e-3 (CPU graph) and 5e-3 (GPU). It exists so detection works with no external runtime, **not** because it is faster: measured, the two are a tie (`docs/ENGINE_SPEED.md`).
 - **GPU contexts** – The CLI and the desktop app each open one context for enhancement. The detector opens its own, under the same settings.
-- **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. `--no-gpu` (or the GUI's GPU toggle) keeps enhancement *and* detection on the CPU.
+- **Auto-detection** – Both CLI and GUI automatically detect GPU availability and fall back to CPU when necessary. `--no-gpu` (or **CPU** under the app's **Output → Processing**) keeps enhancement *and* detection on the CPU.
 
 **Experimental CUDA Rust:** on compatible NVIDIA GPUs on Windows and Linux,
-enable **Settings → GPU → CUDA Rust (experimental)** and confirm the warning, or pass
+choose **CUDA** under the app's **Output → Processing** and confirm the warning, or pass
 `--experimental-cuda` to the CLI. It is off by default, requires compute capability 8.0+
 and a compatible NVIDIA driver, and accelerates detection, enhancement and crop masking. Unsupported hardware
 cannot enable it; CUDA initialization errors are reported explicitly. macOS and other GPU
@@ -183,7 +183,7 @@ by the widest margin (2.5x) on the fewest cores.
 ## Mapping-driven Workflows
 
 - **Source->Output mappings** - Import CSV/TSV, Excel (XLS/XLSX), Parquet, or SQLite datasets via the CLI with --mapping-file, column selectors, and header/sheet/delimiter/query options.
-- **Live preview in the GUI** - Use the Mapping Import panel to choose a file, pick the source/output columns, and inspect a truncated preview before queueing rows.
+- **Live preview in the GUI** - Use the **Mapping** tab to choose a file, pick the photo and name columns, and check the first rows and how many queued photos match.
 - **Batch-aware overrides** - Batch exports respect mapping-provided output names (including nested folders) while still falling back to the existing naming template when no mapping is configured.
 
 ## Supported Architectures
@@ -247,27 +247,25 @@ Store builds are packaged as full-trust desktop apps, so file access behaves exa
 ## Screenshots
 
 <p align="center">
-  <a href="screenshots/gui-main.png"><img src="screenshots/gui-main.png" alt="Face Crop Studio desktop workspace with a loaded portrait, face detections, crop preview, queue, and export controls" width="900"/></a><br/>
-  <sub><strong>Desktop workspace</strong> - loaded image, detection overlays, crop preview, queue, and export controls.</sub>
+  <a href="screenshots/gui-main.png"><img src="screenshots/gui-main.png" alt="Face Crop Studio desktop app: a queue of six photos, a portrait with its detected face and crop outline, the crop settings, a preview of the cropped face, and the export button" width="900"/></a><br/>
+  <sub><strong>Desktop app</strong> - photo queue, detected face with its crop outline, crop settings, preview, and export.</sub>
 </p>
 
 <div align="center">
 
 <table>
   <tr>
-    <td width="42%" rowspan="2" align="center" valign="top">
-      <a href="screenshots/gui-crop-config.png"><img src="screenshots/gui-crop-config.png" alt="Crop configuration panel showing presets, sizing, shape, padding, and positioning controls" width="240"/></a><br/>
-      <sub><strong>Crop setup</strong><br/>Presets, target sizing, shape, padding, and positioning.</sub>
+    <td width="33%" align="center" valign="top">
+      <a href="screenshots/gui-crop-config.png"><img src="screenshots/gui-crop-config.png" alt="Crop tab showing the size presets, aspect ratio, width and height, and a preview of the cropped face" width="240"/></a><br/>
+      <sub><strong>Crop setup</strong><br/>Size presets, aspect ratio, exact size, and a live preview.</sub>
     </td>
-    <td width="58%" align="center" valign="top">
-      <a href="screenshots/gui-enhancement.png"><img src="screenshots/gui-enhancement.png" alt="Enhancement controls for exposure, brightness, contrast, saturation, sharpening, smoothing, and background blur" width="320"/></a><br/>
-      <sub><strong>Enhancement controls</strong><br/>Post-crop colour, sharpness, smoothing, and blur tuning.</sub>
+    <td width="33%" align="center" valign="top">
+      <a href="screenshots/gui-enhancement.png"><img src="screenshots/gui-enhancement.png" alt="Enhance tab with background blur turned on, exposure, brightness, contrast and saturation sliders, and the preview showing the blurred background" width="240"/></a><br/>
+      <sub><strong>Enhancement controls</strong><br/>Automatic fixes and colour sliders, previewed as you change them.</sub>
     </td>
-  </tr>
-  <tr>
-    <td align="center" valign="top">
-      <a href="screenshots/gui-batch.png"><img src="screenshots/gui-batch.png" alt="Batch processing queue with image status, queue controls, and export buttons" width="320"/></a><br/>
-      <sub><strong>Batch queue</strong><br/>Multi-image queue management and export progress.</sub>
+    <td width="33%" align="center" valign="top">
+      <a href="screenshots/gui-batch.png"><img src="screenshots/gui-batch.png" alt="Photo queue listing six photos with the number of faces found and selected in each" width="240"/></a><br/>
+      <sub><strong>Photo queue</strong><br/>Faces are found as photos arrive; every selected face exports in one go.</sub>
     </td>
   </tr>
 </table>
@@ -401,7 +399,7 @@ recorded as unviable, not missed. For day-to-day work, run it against a couple o
 ## Diagnostics
 
 - CLI: pass `--telemetry` (optionally `--telemetry-level trace`) to log scoped timings under the `fcs::lemetry` target. Use `--telemetry-level off` to disable timing logs for that run.
-- GUI: toggle the **Diagnostics → Telemetry logging** checkbox in the settings panel to emit the same timing traces.
+- GUI: turn on **Log stage timings** under **Output → Telemetry** to emit the same timing traces.
 
 ## Documentation
 
