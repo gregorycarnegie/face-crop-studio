@@ -15,7 +15,8 @@ its layout changes.
   setting visibly in use (e.g. background blur) so the preview shows it.
 - `gui-batch.png` - The sidebar's Photos tab with several photos and their
   face counts.
-- `cli-example.png` - Terminal screenshot of representative CLI run.
+- `cli-example.png` - One `fcs-cli --input … --crop --output-dir …` run on a
+  single portrait: the log lines, the detection JSON and the summary.
 
 The three panel shots are tall crops of the window and sit side by side in the
 README at 240 px wide.
@@ -59,6 +60,15 @@ The current shots were taken this way:
   one, and the click lands on whatever covers that spot.
 - Capture with `PrintWindow(hwnd, dc, 2)`, then crop to
   `DWMWA_EXTENDED_FRAME_BOUNDS` to drop the invisible resize border.
+
+### CLI screenshot
+
+The CLI logs canonical absolute paths, so run it from a neutral folder (the
+current shot used `C:\fcs-demo`, holding `fcs-cli.exe`, `models/` and the
+photo) to keep usernames out of frame. With no `config/gui_settings.json`
+there, it runs on built-in defaults. Set `RUST_LOG=warn,fcs_cli=info` to drop
+the wgpu adapter lines. The current shot is the real output, rendered in a
+monospace font on a terminal background.
 
 ### Recording tools
 

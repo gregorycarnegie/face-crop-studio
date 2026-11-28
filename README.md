@@ -275,7 +275,7 @@ Store builds are packaged as full-trust desktop apps, so file access behaves exa
 <details>
   <summary><strong>CLI automation example</strong></summary>
   <p align="center">
-    <a href="screenshots/cli-example.png"><img src="screenshots/cli-example.png" alt="Terminal run showing Face Crop Studio CLI output, detection metadata, crop coordinates, quality score, and summary" width="900"/></a><br/>
+    <a href="screenshots/cli-example.png"><img src="screenshots/cli-example.png" alt="Terminal run of fcs-cli cropping one portrait: log lines, the detection JSON with face box, eye points and quality score, and the summary" width="900"/></a><br/>
     <sub>Batch-friendly CLI output with detection metadata, crop coordinates, quality scoring, and processing summary.</sub>
   </p>
 </details>
