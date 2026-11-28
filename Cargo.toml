@@ -30,7 +30,7 @@ edition = "2024"
 # in a version that needs a newer rustc than the workflows install.
 rust-version = "1.100"
 license = "MIT OR Apache-2.0"
-version = "2.4.0"
+version = "3.0.0"
 
 # Lint policy lives here rather than only in `clippy -- -D warnings` in CI, so a
 # local `cargo clippy` sees exactly what the pipeline sees. Members opt in with
@@ -179,4 +179,4 @@ rstest = { version = "0.29.0", default-features = false }
 tempfile = "3.27.0"
 # Builds .xlsx fixtures in tests. Already present via calamine, so keep default features
 # off — they would add aes, bzip2, lzma and friends for compression the fixtures never use.
-zip = { version = "9.8.2", default-features = false }
+zip = { version = "9.9.0", default-features = false }

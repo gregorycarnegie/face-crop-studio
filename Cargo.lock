@@ -1335,7 +1335,7 @@ checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
 name = "fcs-cli"
-version = "2.4.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-core"
-version = "2.4.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-mapping"
-version = "2.4.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-ort"
-version = "2.4.0"
+version = "3.0.0"
 dependencies = [
  "libloading 0.9.1",
  "log",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "fcs-utils"
-version = "2.4.0"
+version = "3.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -5092,9 +5092,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.8.2"
+version = "9.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d8dbe089cf6b0448b78f5fc50139ab5aaa40d08ac07cdc1baf2c13add35fcce"
+checksum = "07db37dec4a7c468df4723fba4cadb4822d1d0f10dbea367100b6a6881b2a9c9"
 dependencies = [
  "constant_time_eq 0.6.1",
  "crc32fast",

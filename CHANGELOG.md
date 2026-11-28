@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-28
+
 ### Changed
 
 - **The desktop app is now the Qt Quick one, and the egui app (fcs-gui) is gone.** Face Crop
@@ -2735,7 +2737,8 @@ First public release. Windows release binaries (`fcs-cli.exe`, `fcs-gui.exe`).
 
 [#4]: https://github.com/gregorycarnegie/face-crop-studio/issues/4
 
-[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/gregorycarnegie/face-crop-studio/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.4.0...v3.0.0
 [2.4.0]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.4...v2.4.0
 [2.3.4]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/gregorycarnegie/face-crop-studio/compare/v2.3.2...v2.3.3
