@@ -32,6 +32,12 @@ exclude_globs = [
     # Same reason as the CLI's webcam module: the capture tests are #[ignore]d
     # without a camera, so its mutants all survive.
     "fcs-utils/src/webcam.rs",
+    # Every test of the CUDA detector is #[ignore]d without an NVIDIA GPU, and no CI runner
+    # has one. Measure it by hand on CUDA hardware, ignored tests included:
+    #   cargo mutants -j1 -p fcs-core --no-config --gitignore false --file backend.rs -- --lib -- --include-ignored cuda::
+    # (--no-config drops this exclusion; --gitignore false still copies models/ for the tests.)
+    # 2026-11-28, RTX 4090: PR #19's three mutants (Drop -> (), capture's `index + 1`) all caught.
+    "fcs-core/src/cuda/**",
 ]
 
 # The auto timeout is baseline_test_time * 5, and the baseline runs alone while
